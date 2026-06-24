@@ -23,6 +23,7 @@ use scroll::{Phase, Scroller};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +154,14 @@ impl ApplicationHandler<UserEvent> for App {
         let attrs = Window::default_attributes()
             .with_title("Launchpad")
             .with_transparent(true)
+            // Drop the classic HWND back buffer (WS_EX_NOREDIRECTIONBITMAP) so
+            // the DWM composites only our DirectComposition swap chain. Without
+            // this, alpha=0 pixels are filled with the window's white
+            // background brush and transparency reads as solid white.
+            .with_no_redirection_bitmap(true)
+            // Borderless: the glass tiles own the visuals, so we drop the OS
+            // title bar / frame. Closing via Esc/Alt-F4.
+            .with_decorations(false)
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
 
@@ -213,6 +222,16 @@ impl ApplicationHandler<UserEvent> for App {
 
                 if key_code == winit::keyboard::KeyCode::Escape {
                     event_loop.exit();
+                    return;
+                }
+
+                // M toggles the OS window frame on/off for easier debugging
+                // (grab edges to resize, title bar to move) without rebuilding.
+                if key_code == winit::keyboard::KeyCode::KeyM {
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.toggle_decorations();
+                        self.request_redraw();
+                    }
                     return;
                 }
 

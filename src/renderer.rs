@@ -43,6 +43,8 @@ pub struct Renderer {
     pub surface: Surface<'static>,
     pub config: SurfaceConfiguration,
     pipeline: RenderPipeline,
+    /// Current decorations state (borderless by default, toggle with M).
+    decorated: bool,
     /// Static per-tile instance data.
     instance_buffer: Buffer,
     /// Per-frame uniform data (viewport + scroll).
@@ -82,8 +84,23 @@ impl Renderer {
         layout: &GridLayout,
         event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // On Windows we render to a transparent winit window. The default DX12
+        // swapchain (DxgiFromHwnd) can't carry per-pixel alpha to the DWM, so
+        // the window's clear areas read as black instead of see-through.
+        // DirectComposition (DxgiFromVisual) composes the swapchain through a
+        // DComp visual, which is what makes real transparency work. Allow an
+        // explicit override via WGPU_DX12_PRESENTATION_SYSTEM for debugging.
+        let mut dx12 = wgpu::Dx12BackendOptions::from_env_or_default();
+        if wgpu::Dx12SwapchainKind::from_env().is_none() {
+            dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
+
         let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: default_backends(),
+            backend_options: wgpu::BackendOptions {
+                dx12,
+                ..wgpu::BackendOptions::from_env_or_default()
+            },
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
@@ -370,6 +387,7 @@ impl Renderer {
             surface,
             config,
             pipeline,
+            decorated: false,
             instance_buffer,
             uniform_buffer,
             uniform_bind_group,
@@ -429,6 +447,17 @@ impl Renderer {
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
         self.liquid_glass.handle_debug_key(key)
+    }
+
+    /// Toggle the OS window frame on/off. Borderless by default; press M to
+    /// bring back the title bar + resize edges while debugging.
+    pub fn toggle_decorations(&mut self) {
+        self.decorated = !self.decorated;
+        self.window.set_decorations(self.decorated);
+        eprintln!(
+            "window decorations: {}",
+            if self.decorated { "on" } else { "off" }
+        );
     }
 
     pub fn notify_window_moved(&mut self) {
@@ -605,7 +634,7 @@ fn default_backends() -> Backends {
 }
 
 fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
-    if available.contains(&CompositeAlphaMode::PreMultiplied) {
+    let selected = if available.contains(&CompositeAlphaMode::PreMultiplied) {
         CompositeAlphaMode::PreMultiplied
     } else if available.contains(&CompositeAlphaMode::PostMultiplied) {
         CompositeAlphaMode::PostMultiplied
@@ -613,7 +642,12 @@ fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
         CompositeAlphaMode::Auto
     } else {
         CompositeAlphaMode::Opaque
-    }
+    };
+    eprintln!(
+        "surface alpha_mode: {:?} (available: {:?})",
+        selected, available
+    );
+    selected
 }
 
 fn create_backdrop_capture(
