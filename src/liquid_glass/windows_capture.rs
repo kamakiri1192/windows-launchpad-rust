@@ -1,4 +1,4 @@
-use super::capture::{BackdropCapture, CaptureStatus};
+use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
 use crate::UserEvent;
 use windows::core::Interface;
 use winit::event_loop::EventLoopProxy;
@@ -161,6 +161,7 @@ struct WindowsGraphicsCapture {
     _session: windows::Graphics::Capture::GraphicsCaptureSession,
     frame_arrived_token: i64,
     staging: Option<StagingTexture>,
+    shared: Option<SharedTexture>,
     last_frame: Option<Vec<u8>>,
     fallback_reason: Option<String>,
 }
@@ -169,6 +170,13 @@ struct StagingTexture {
     texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
     width: u32,
     height: u32,
+}
+
+struct SharedTexture {
+    texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    width: u32,
+    height: u32,
+    imported: bool,
 }
 
 impl WindowsGraphicsCapture {
@@ -239,6 +247,7 @@ impl WindowsGraphicsCapture {
             _session: session,
             frame_arrived_token,
             staging: None,
+            shared: None,
             last_frame: None,
             fallback_reason: None,
         })
@@ -257,8 +266,107 @@ impl WindowsGraphicsCapture {
         self._session = session;
         self.frame_arrived_token = frame_arrived_token;
         self.staging = None;
+        self.shared = None;
         self.last_frame = None;
         self.fallback_reason = None;
+        Ok(())
+    }
+
+    fn try_latest_frame_texture(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<GpuCaptureFrame>, String> {
+        let mut frame = match self.frame_pool.TryGetNextFrame() {
+            Ok(frame) => frame,
+            Err(_) => return Ok(None),
+        };
+        while let Ok(newer_frame) = self.frame_pool.TryGetNextFrame() {
+            frame = newer_frame;
+        }
+
+        let content_size = frame.ContentSize().map_err(|e| e.to_string())?;
+        if content_size.Width <= 0 || content_size.Height <= 0 {
+            return Ok(None);
+        }
+
+        let surface = frame.Surface().map_err(|e| e.to_string())?;
+        let access: windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess =
+            surface.cast().map_err(|e| e.to_string())?;
+        let source: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D =
+            unsafe { access.GetInterface().map_err(|e| e.to_string())? };
+
+        let capture_w = content_size.Width as u32;
+        let capture_h = content_size.Height as u32;
+        let crop = self.window_crop(capture_w, capture_h)?;
+        let width = width.max(1);
+        let height = height.max(1);
+        self.ensure_shared(width, height)?;
+
+        let shared = self
+            .shared
+            .as_mut()
+            .ok_or("shared texture was not created")?;
+        copy_crop_to_shared(&self.context, &source, &shared.texture, crop, width, height);
+
+        if shared.imported {
+            return Ok(Some(GpuCaptureFrame::Updated));
+        }
+
+        let texture = import_shared_texture(device, &shared.texture, width, height)?;
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        shared.imported = true;
+        Ok(Some(GpuCaptureFrame::New { texture, view }))
+    }
+
+    fn ensure_shared(&mut self, width: u32, height: u32) -> Result<(), String> {
+        if self
+            .shared
+            .as_ref()
+            .map(|s| s.width == width && s.height == height)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_FLAG,
+            D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+        };
+
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0).0 as u32,
+            MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32,
+        };
+
+        let mut texture: Option<ID3D11Texture2D> = None;
+        unsafe {
+            self.device
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .map_err(|e| e.to_string())?;
+        }
+
+        self.shared = Some(SharedTexture {
+            texture: texture.ok_or("CreateTexture2D returned no shared texture")?,
+            width,
+            height,
+            imported: false,
+        });
         Ok(())
     }
 
@@ -354,12 +462,33 @@ impl WindowsGraphicsCapture {
     }
 
     fn window_crop(&self, capture_w: u32, capture_h: u32) -> Result<CropRect, String> {
-        use windows::Win32::Foundation::{RECT, SIZE};
-        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
-        use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+        use windows::Win32::Foundation::{POINT, RECT, SIZE};
+        use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MONITORINFO};
+        use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-        let mut window_rect = RECT::default();
-        unsafe { GetWindowRect(self.hwnd, &mut window_rect).map_err(|e| e.to_string())? };
+        let mut client_rect = RECT::default();
+        unsafe { GetClientRect(self.hwnd, &mut client_rect).map_err(|e| e.to_string())? };
+        let mut top_left = POINT {
+            x: client_rect.left,
+            y: client_rect.top,
+        };
+        let mut bottom_right = POINT {
+            x: client_rect.right,
+            y: client_rect.bottom,
+        };
+        unsafe {
+            if !ClientToScreen(self.hwnd, &mut top_left).as_bool()
+                || !ClientToScreen(self.hwnd, &mut bottom_right).as_bool()
+            {
+                return Err("ClientToScreen failed".to_string());
+            }
+        }
+        let window_rect = RECT {
+            left: top_left.x,
+            top: top_left.y,
+            right: bottom_right.x,
+            bottom: bottom_right.y,
+        };
 
         let mut monitor_info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -453,6 +582,92 @@ impl Drop for WindowsGraphicsCapture {
     }
 }
 
+fn copy_crop_to_shared(
+    context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    source: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    dest: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    crop: CropRect,
+    width: u32,
+    height: u32,
+) {
+    use windows::Win32::Graphics::Direct3D11::{ID3D11Resource, D3D11_BOX};
+
+    let src_resource: ID3D11Resource = match source.cast() {
+        Ok(resource) => resource,
+        Err(_) => return,
+    };
+    let dst_resource: ID3D11Resource = match dest.cast() {
+        Ok(resource) => resource,
+        Err(_) => return,
+    };
+    let src_box = D3D11_BOX {
+        left: crop.left,
+        top: crop.top,
+        front: 0,
+        right: (crop.left + width).min(crop.right),
+        bottom: (crop.top + height).min(crop.bottom),
+        back: 1,
+    };
+    unsafe {
+        context.CopySubresourceRegion(&dst_resource, 0, 0, 0, 0, &src_resource, 0, Some(&src_box));
+        context.Flush();
+    }
+}
+
+fn import_shared_texture(
+    device: &wgpu::Device,
+    texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    width: u32,
+    height: u32,
+) -> Result<wgpu::Texture, String> {
+    use wgpu::hal::api::Dx12;
+    use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
+    use windows::Win32::Graphics::Dxgi::IDXGIResource;
+
+    let dxgi_resource: IDXGIResource = texture.cast().map_err(|e| e.to_string())?;
+    let handle = unsafe { dxgi_resource.GetSharedHandle().map_err(|e| e.to_string())? };
+    if handle.is_invalid() {
+        return Err("D3D11 shared texture handle is invalid".to_string());
+    }
+
+    let hal_device =
+        unsafe { device.as_hal::<Dx12>() }.ok_or("wgpu device is not using the DX12 backend")?;
+    let mut resource = None::<ID3D12Resource>;
+    unsafe {
+        hal_device
+            .raw_device()
+            .OpenSharedHandle(handle, &mut resource)
+            .map_err(|e| e.to_string())?;
+    }
+    let resource = resource.ok_or("OpenSharedHandle returned no D3D12 resource")?;
+
+    let desc = wgpu::TextureDescriptor {
+        label: Some("liquid glass shared WGC backdrop"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    };
+    let hal_texture = unsafe {
+        <Dx12 as wgpu::hal::Api>::Device::texture_from_raw(
+            resource,
+            wgpu::TextureFormat::Bgra8Unorm,
+            desc.dimension,
+            desc.size,
+            desc.mip_level_count,
+            desc.sample_count,
+        )
+    };
+    Ok(unsafe { device.create_texture_from_hal::<Dx12>(hal_texture, &desc) })
+}
+
 impl BackdropCapture for WindowsGraphicsCapture {
     fn status(&self) -> CaptureStatus {
         if let Some(reason) = self.fallback_reason.as_ref() {
@@ -471,6 +686,24 @@ impl BackdropCapture for WindowsGraphicsCapture {
                 self.fallback_reason = Some(format!(
                     "window moved to another monitor; capture refresh failed: {err}"
                 ));
+            }
+        }
+    }
+
+    fn latest_frame_texture(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Option<GpuCaptureFrame> {
+        match self.try_latest_frame_texture(device, width, height) {
+            Ok(frame) => {
+                self.fallback_reason = None;
+                frame
+            }
+            Err(err) => {
+                self.fallback_reason = Some(format!("GPU capture path failed: {err}"));
+                None
             }
         }
     }

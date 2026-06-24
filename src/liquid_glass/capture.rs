@@ -15,7 +15,23 @@ impl CaptureStatus {
 pub trait BackdropCapture {
     fn status(&self) -> CaptureStatus;
     fn on_window_moved(&mut self) {}
+    fn latest_frame_texture(
+        &mut self,
+        _device: &wgpu::Device,
+        _width: u32,
+        _height: u32,
+    ) -> Option<GpuCaptureFrame> {
+        None
+    }
     fn latest_frame_rgba(&mut self, width: u32, height: u32) -> Option<Vec<u8>>;
+}
+
+pub enum GpuCaptureFrame {
+    New {
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+    },
+    Updated,
 }
 
 #[derive(Debug)]

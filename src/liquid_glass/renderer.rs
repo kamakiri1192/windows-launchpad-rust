@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use wgpu::util::DeviceExt;
 
-use super::capture::{BackdropCapture, CaptureStatus};
+use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::grid::GridLayout;
@@ -115,6 +115,8 @@ pub struct LiquidGlassRenderer {
     geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
+    gpu_backdrop_texture: Option<wgpu::Texture>,
+    using_gpu_backdrop: bool,
     blur_texture: wgpu::Texture,
     blur_view: wgpu::TextureView,
     blur_temp_texture: wgpu::Texture,
@@ -422,6 +424,8 @@ impl LiquidGlassRenderer {
             geometry_view,
             backdrop_texture,
             backdrop_view,
+            gpu_backdrop_texture: None,
+            using_gpu_backdrop: false,
             blur_texture,
             blur_view,
             blur_temp_texture,
@@ -467,6 +471,8 @@ impl LiquidGlassRenderer {
         self.geometry_view = geometry_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
+        self.gpu_backdrop_texture = None;
+        self.using_gpu_backdrop = false;
         self.blur_texture = blur_texture;
         self.blur_view = blur_view;
         self.blur_temp_texture = blur_temp_texture;
@@ -487,6 +493,44 @@ impl LiquidGlassRenderer {
             &self.blur_bind_group_layout,
             &self.blur_v_uniform_buffer,
             &self.blur_temp_view,
+            &self.sampler,
+        );
+        self.final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.uniform_buffer,
+            &self.backdrop_view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+    }
+
+    fn bind_backdrop_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
+        self.blur_h_bind_group = create_blur_bind_group(
+            device,
+            &self.blur_bind_group_layout,
+            &self.blur_h_uniform_buffer,
+            view,
+            &self.sampler,
+        );
+        self.final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.uniform_buffer,
+            view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+    }
+
+    fn bind_cpu_backdrop(&mut self, device: &wgpu::Device) {
+        self.blur_h_bind_group = create_blur_bind_group(
+            device,
+            &self.blur_bind_group_layout,
+            &self.blur_h_uniform_buffer,
+            &self.backdrop_view,
             &self.sampler,
         );
         self.final_bind_group = create_final_bind_group(
@@ -599,7 +643,18 @@ impl LiquidGlassRenderer {
         let mut upload_time = Duration::ZERO;
         if self.should_capture(defer_backdrop_capture) {
             let capture_started = Instant::now();
-            if let Some(frame) = self.capture.latest_frame_rgba(width, height) {
+            if let Some(gpu_frame) = self.capture.latest_frame_texture(device, width, height) {
+                capture_time = capture_started.elapsed();
+                if let GpuCaptureFrame::New { texture, view } = gpu_frame {
+                    if !self.using_gpu_backdrop {
+                        eprintln!("liquid glass capture path: GPU shared texture");
+                    }
+                    self.bind_backdrop_view(device, &view);
+                    self.gpu_backdrop_texture = Some(texture);
+                    self.using_gpu_backdrop = true;
+                }
+                captured = true;
+            } else if let Some(frame) = self.capture.latest_frame_rgba(width, height) {
                 capture_time = capture_started.elapsed();
                 let upload_started = Instant::now();
                 queue.write_texture(
@@ -622,6 +677,12 @@ impl LiquidGlassRenderer {
                     },
                 );
                 upload_time = upload_started.elapsed();
+                if self.using_gpu_backdrop {
+                    eprintln!("liquid glass capture path: CPU texture upload fallback");
+                    self.bind_cpu_backdrop(device);
+                    self.gpu_backdrop_texture = None;
+                    self.using_gpu_backdrop = false;
+                }
                 captured = true;
             } else {
                 capture_time = capture_started.elapsed();

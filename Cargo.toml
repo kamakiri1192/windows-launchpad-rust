@@ -21,6 +21,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
@@ -31,8 +32,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-# Release: スムーズさ優先。LTO でバイナリも小さく。
+# Release: keep optimized rendering without LTO; this avoids rustc/MSVC
+# STATUS_ACCESS_VIOLATION crashes seen in wgpu/naga linker-plugin-lto builds.
 [profile.release]
-lto = "thin"
+lto = false
 codegen-units = 1
 panic = "abort"

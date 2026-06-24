@@ -17,16 +17,16 @@ impl Default for LiquidGlassParams {
     fn default() -> Self {
         Self {
             enabled: true,
-            thickness: 18.0,
-            refractive_index: 1.32,
-            chromatic_aberration: 0.045,
-            blur_radius: 12.0,
-            saturation: 1.22,
-            glass_color: [1.0, 1.0, 1.0, 0.08],
-            light_direction: normalize2([-0.5, -0.8]),
-            light_intensity: 0.9,
-            ambient_strength: 0.35,
-            blend: 18.0,
+            thickness: 26.0,
+            refractive_index: 1.42,
+            chromatic_aberration: 0.075,
+            blur_radius: 16.0,
+            saturation: 1.34,
+            glass_color: [0.94, 0.98, 1.0, 0.045],
+            light_direction: normalize2([-0.45, -0.9]),
+            light_intensity: 1.25,
+            ambient_strength: 0.28,
+            blend: 26.0,
         }
     }
 }

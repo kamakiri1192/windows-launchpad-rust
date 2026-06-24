@@ -83,7 +83,7 @@ impl Renderer {
         event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let instance = Instance::new(wgpu::InstanceDescriptor {
-            backends: Backends::DX12 | Backends::VULKAN,
+            backends: default_backends(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
@@ -590,6 +590,17 @@ fn select_present_mode(available: &[PresentMode]) -> PresentMode {
         PresentMode::AutoVsync
     } else {
         PresentMode::Fifo
+    }
+}
+
+fn default_backends() -> Backends {
+    #[cfg(windows)]
+    {
+        Backends::DX12
+    }
+    #[cfg(not(windows))]
+    {
+        Backends::DX12 | Backends::VULKAN
     }
 }
 
