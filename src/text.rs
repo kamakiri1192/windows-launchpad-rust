@@ -73,7 +73,7 @@ pub struct Label {
 /// Intermediate record from the layout phase.
 struct PlacedGlyph {
     physical: PhysicalGlyph,
-    /// On-screen top-left of the glyph's *baseline point* (content px).
+    /// On-screen glyph origin before applying the raster image placement.
     x: f32,
     y: f32,
 }
@@ -97,6 +97,9 @@ const ATLAS_W: u32 = 1024;
 const ATLAS_H: u32 = 1024;
 /// 1px padding between glyphs to avoid bleeding at UV edges.
 const PAD: u32 = 1;
+const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
+const LABEL_FONT_SIZE: f32 = 14.0;
+const LABEL_LINE_HEIGHT: f32 = 18.0;
 
 impl TextRenderer {
     pub fn new() -> Self {
@@ -135,11 +138,9 @@ impl TextRenderer {
     // -- Phase 1: cosmic-text layout --------------------------------------
 
     fn layout_phase(&mut self, labels: &[Label], scale_factor: f32) -> Vec<PlacedGlyph> {
-        let font_size = 13.0; // logical px — small label like macOS Launchpad
-        let line_height = 16.0;
-        let metrics = Metrics::new(font_size, line_height);
+        let metrics = Metrics::new(LABEL_FONT_SIZE, LABEL_LINE_HEIGHT);
         let attrs = Attrs::new()
-            .family(Family::SansSerif)
+            .family(Family::Name(LABEL_FONT_FAMILY))
             .color(Color::rgba(255, 255, 255, 255));
 
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
@@ -151,7 +152,7 @@ impl TextRenderer {
             // cosmic-text lays out in logical px; we scale to physical.
             buffer.set_size(
                 Some(label.max_width / scale_factor),
-                Some(line_height * 2.0 / scale_factor),
+                Some(LABEL_LINE_HEIGHT * 2.0 / scale_factor),
             );
             buffer.set_text(&label.text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
@@ -161,15 +162,17 @@ impl TextRenderer {
                 if line_i >= 2 {
                     break;
                 }
-                let baseline_phys = label.y + (run.line_y * scale_factor);
+                let label_width = label.max_width / scale_factor;
+                let centered_x = ((label_width - run.line_w) * 0.5).max(0.0);
+                let line_origin = (
+                    label.x + centered_x * scale_factor,
+                    label.y + run.line_y * scale_factor,
+                );
                 for glyph in run.glyphs.iter() {
-                    let physical = glyph.physical((0.0, 0.0), scale_factor);
-                    let px = physical.x;
-                    out.push(PlacedGlyph {
-                        physical,
-                        x: label.x + px as f32,
-                        y: baseline_phys,
-                    });
+                    let physical = glyph.physical(line_origin, scale_factor);
+                    let x = physical.x as f32;
+                    let y = physical.y as f32;
+                    out.push(PlacedGlyph { physical, x, y });
                 }
             }
         }
@@ -217,15 +220,8 @@ impl TextRenderer {
             let image = self
                 .swash
                 .get_image(&mut self.font_system, physical.cache_key);
-            let image = match image.as_ref() {
-                Some(img) => img,
-                None => return None,
-            };
-            (
-                image.content,
-                image.data.clone(),
-                image.placement,
-            )
+            let image = image.as_ref()?;
+            (image.content, image.data.clone(), image.placement)
         };
 
         let w = placement.width;
@@ -277,12 +273,25 @@ impl TextRenderer {
     ) {
         use cosmic_text::SwashContent;
         match content {
-            SwashContent::Mask | SwashContent::SubpixelMask => {
+            SwashContent::Mask => {
                 // Single-channel alpha → white glyph with coverage alpha.
                 for y in 0..h {
                     for x in 0..w {
                         let a = data[(y * w + x) as usize];
                         self.write_pixel(dst_x + x, dst_y + y, 255, 255, 255, a);
+                    }
+                }
+            }
+            SwashContent::SubpixelMask => {
+                let mut i = 0;
+                for y in 0..h {
+                    for x in 0..w {
+                        let r = data[i] as u16;
+                        let g = data[i + 1] as u16;
+                        let b = data[i + 2] as u16;
+                        let a = ((r + g + b) / 3) as u8;
+                        self.write_pixel(dst_x + x, dst_y + y, 255, 255, 255, a);
+                        i += 4;
                     }
                 }
             }
