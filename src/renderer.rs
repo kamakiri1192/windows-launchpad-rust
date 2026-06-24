@@ -15,12 +15,16 @@ use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use wgpu::{
-    Backends, Buffer, BufferAddress, Color, Device, Instance, Limits, PresentMode, Queue,
-    RenderPipeline, Surface, SurfaceConfiguration, TextureFormat, TextureViewDescriptor,
+    Backends, Buffer, BufferAddress, Color, CompositeAlphaMode, Device, Instance, Limits,
+    PresentMode, Queue, RenderPipeline, Surface, SurfaceConfiguration, TextureFormat,
+    TextureViewDescriptor,
 };
 
 use crate::grid::{GridLayout, TileInstance};
+use crate::liquid_glass::capture::FallbackCapture;
+use crate::liquid_glass::LiquidGlassRenderer;
 use crate::text::GlyphQuad;
+use crate::UserEvent;
 
 /// Uniform block mirrored in WGSL. Kept 16 bytes for alignment.
 #[repr(C)]
@@ -48,6 +52,7 @@ pub struct Renderer {
     /// Current sRGB surface format (saved for future MSAA / gamma work).
     #[allow(dead_code)]
     surface_format: TextureFormat,
+    liquid_glass: LiquidGlassRenderer,
 
     // -- Text rendering -------------------------------------------------
     text_pipeline: RenderPipeline,
@@ -63,6 +68,7 @@ pub struct Renderer {
 pub struct DrawArgs {
     pub scroll_x: f32,
     pub viewport: (u32, u32),
+    pub defer_backdrop_capture: bool,
 }
 
 impl Renderer {
@@ -74,6 +80,7 @@ impl Renderer {
     pub async fn new(
         window: winit::window::Window,
         layout: &GridLayout,
+        event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: Backends::DX12 | Backends::VULKAN,
@@ -130,7 +137,7 @@ impl Renderer {
             height: size.height.max(1).min(max_dim),
             present_mode: select_present_mode(&caps.present_modes),
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: select_alpha_mode(&caps.alpha_modes),
             view_formats: vec![],
         };
         surface.configure(&device, &config);
@@ -345,6 +352,17 @@ impl Renderer {
             cache: None,
         });
 
+        let capture = create_backdrop_capture(&window, event_proxy);
+        let liquid_glass = LiquidGlassRenderer::new(
+            &device,
+            &queue,
+            surface_format,
+            config.width,
+            config.height,
+            layout,
+            capture,
+        );
+
         Ok(Self {
             window,
             device,
@@ -357,6 +375,7 @@ impl Renderer {
             uniform_bind_group,
             instance_count,
             surface_format,
+            liquid_glass,
             text_pipeline,
             text_instance_buffer: None,
             text_instance_count: 0,
@@ -377,6 +396,12 @@ impl Renderer {
         self.config.width = width.min(max);
         self.config.height = height.min(max);
         self.surface.configure(&self.device, &self.config);
+        self.liquid_glass.resize(
+            &self.device,
+            &self.queue,
+            self.config.width,
+            self.config.height,
+        );
     }
 
     #[allow(dead_code)]
@@ -398,6 +423,16 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
+        self.liquid_glass
+            .rebuild_shapes(&self.device, layout, self.config.width as f32);
+    }
+
+    pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
+        self.liquid_glass.handle_debug_key(key)
+    }
+
+    pub fn notify_window_moved(&mut self) {
+        self.liquid_glass.notify_window_moved();
     }
 
     /// Upload the glyph atlas texture from the given RGBA buffer.
@@ -441,7 +476,7 @@ impl Renderer {
     }
 
     /// Render one frame.
-    pub fn render(&self, args: &DrawArgs) {
+    pub fn render(&mut self, args: &DrawArgs) {
         // Update uniforms (tiny, every frame).
         self.queue.write_buffer(
             &self.uniform_buffer,
@@ -476,6 +511,40 @@ impl Renderer {
             });
 
         {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("surface clear pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            drop(pass);
+        }
+
+        self.liquid_glass.render(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &view,
+            args.scroll_x,
+            args.defer_backdrop_capture,
+        );
+
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tile pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -483,12 +552,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(Color {
-                            r: 0.108,
-                            g: 0.110,
-                            b: 0.118,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -526,5 +590,51 @@ fn select_present_mode(available: &[PresentMode]) -> PresentMode {
         PresentMode::AutoVsync
     } else {
         PresentMode::Fifo
+    }
+}
+
+fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
+    if available.contains(&CompositeAlphaMode::PreMultiplied) {
+        CompositeAlphaMode::PreMultiplied
+    } else if available.contains(&CompositeAlphaMode::PostMultiplied) {
+        CompositeAlphaMode::PostMultiplied
+    } else if available.contains(&CompositeAlphaMode::Auto) {
+        CompositeAlphaMode::Auto
+    } else {
+        CompositeAlphaMode::Opaque
+    }
+}
+
+fn create_backdrop_capture(
+    window: &winit::window::Window,
+    event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+) -> Box<dyn crate::liquid_glass::capture::BackdropCapture> {
+    #[cfg(windows)]
+    {
+        match crate::liquid_glass::windows_capture::create_monitor_capture(window, event_proxy) {
+            Ok(capture) => capture,
+            Err(err) => {
+                match crate::liquid_glass::windows_capture::enable_system_backdrop_fallback(window)
+                {
+                    Ok(()) => eprintln!("liquid glass fallback: DWM system backdrop enabled"),
+                    Err(fallback_err) => {
+                        eprintln!(
+                            "liquid glass fallback: DWM system backdrop failed: {fallback_err}"
+                        )
+                    }
+                }
+                Box::new(FallbackCapture::new(format!(
+                    "Windows.Graphics.Capture initialization failed: {err}"
+                )))
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (window, event_proxy);
+        Box::new(FallbackCapture::new(
+            "Windows.Graphics.Capture is only available on Windows",
+        ))
     }
 }
