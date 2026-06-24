@@ -58,6 +58,7 @@ pub struct GridLayout {
     /// Tile side length in physical px.
     pub tile_size: f32,
     pub gap: f32,
+    pub row_gap: f32,
     pub margin_top: f32,
     pub margin_left: f32,
 }
@@ -70,6 +71,7 @@ impl Default for GridLayout {
             page_count: 3,
             tile_size: 84.0,
             gap: 22.0,
+            row_gap: 48.0,
             margin_top: 96.0,
             margin_left: 0.0, // recomputed per-viewport to center the grid
         }
@@ -85,8 +87,8 @@ impl GridLayout {
     /// Recompute the left margin so the grid is centered horizontally in a
     /// viewport of `width` px. Returns an updated layout.
     pub fn centered(mut self, width: f32) -> Self {
-        let grid_w = self.cols as f32 * self.tile_size
-            + (self.cols.saturating_sub(1)) as f32 * self.gap;
+        let grid_w =
+            self.cols as f32 * self.tile_size + (self.cols.saturating_sub(1)) as f32 * self.gap;
         self.margin_left = ((width - grid_w) * 0.5).max(0.0);
         self
     }
@@ -115,8 +117,9 @@ impl GridLayout {
             for r in 0..self.rows {
                 for c in 0..self.cols {
                     let idx = p * per_page + r * self.cols + c;
-                    let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
-                    let y = self.margin_top + r as f32 * (self.tile_size + self.gap);
+                    let x =
+                        page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
+                    let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
                     let (r_, g_, b_) = hsl_to_rgb((idx as f32) * 0.0273, 0.62, 0.58);
                     out.push(TileInstance {
                         x,
@@ -146,8 +149,9 @@ impl GridLayout {
             for r in 0..self.rows {
                 for c in 0..self.cols {
                     let idx = p * per_page + r * self.cols + c;
-                    let tile_x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
-                    let tile_y = self.margin_top + r as f32 * (self.tile_size + self.gap);
+                    let tile_x =
+                        page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
+                    let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
                     let label_w = self.tile_size + 20.0; // a little wider than the tile
                     let label_x = tile_x + (self.tile_size - label_w) * 0.5;
                     // 12px below the tile bottom.
@@ -219,8 +223,12 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     let p = 2.0 * l - q;
     let f = |t: f32| {
         let mut t = t;
-        if t < 0.0 { t += 1.0; }
-        if t > 1.0 { t -= 1.0; }
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
         if t < 1.0 / 6.0 {
             p + (q - p) * 6.0 * t
         } else if t < 0.5 {
@@ -252,8 +260,11 @@ mod tests {
         let inst = g.build_instances(vw);
         let p0 = inst[0].x;
         let p1 = inst[7 * 5].x; // first tile of page 1
-        // Page 1's first tile must be exactly one viewport to the right.
-        assert!((p1 - p0 - vw).abs() < 1e-2, "pages spaced by viewport width");
+                                // Page 1's first tile must be exactly one viewport to the right.
+        assert!(
+            (p1 - p0 - vw).abs() < 1e-2,
+            "pages spaced by viewport width"
+        );
     }
 
     #[test]
