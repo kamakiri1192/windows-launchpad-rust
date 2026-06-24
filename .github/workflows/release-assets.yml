@@ -1,0 +1,49 @@
+name: Release Assets
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-assets-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows-binary:
+    name: Build and attach Windows binary
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup default 1.89.0
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package binary
+        id: package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}" -replace '[\\/:*?"<>|]', '-'
+          $dist = "dist"
+          $assetPath = "$dist/launchpad-windows-$tag-windows-x86_64.zip"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target\release\launchpad-windows.exe" "$dist\launchpad-windows.exe"
+          Compress-Archive -Path "$dist\launchpad-windows.exe" -DestinationPath $assetPath -Force
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "asset_path=$assetPath"
+
+      - name: Attach binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.asset_path }}
