@@ -32,14 +32,6 @@ struct GlassUniforms {
     debug_flags: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlurUniforms {
-    texel_step: [f32; 2],
-    radius: f32,
-    _pad: f32,
-}
-
 #[derive(Debug)]
 struct RenderStats {
     last_report_at: Instant,
@@ -119,8 +111,8 @@ pub struct LiquidGlassRenderer {
     using_gpu_backdrop: bool,
     blur_texture: wgpu::Texture,
     blur_view: wgpu::TextureView,
-    blur_temp_texture: wgpu::Texture,
-    blur_temp_view: wgpu::TextureView,
+    /// Pyramids L1=1/2, L2=1/4, L3=1/8 (src for downsample, dst for upsample).
+    blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
     sampler: wgpu::Sampler,
     geometry_pipeline: wgpu::RenderPipeline,
     blur_downsample_pipeline: wgpu::RenderPipeline,
@@ -130,13 +122,14 @@ pub struct LiquidGlassRenderer {
     blur_bind_group_layout: wgpu::BindGroupLayout,
     final_bind_group_layout: wgpu::BindGroupLayout,
     geometry_bind_group: wgpu::BindGroup,
-    blur_h_bind_group: wgpu::BindGroup,
-    blur_v_bind_group: wgpu::BindGroup,
+    /// Downsample bind groups: index i reads level i (level 0 == backdrop) and
+    /// writes blur_levels[i]. Recreated when the backdrop source view changes.
+    blur_down_bind_groups: [wgpu::BindGroup; 3],
+    /// Upsample bind groups: index i reads blur_levels[i+1] and writes
+    /// blur_levels[i] (or the full-res blur texture for i == 2).
+    blur_up_bind_groups: [wgpu::BindGroup; 3],
     final_bind_group: wgpu::BindGroup,
-    blur_h_uniform_buffer: wgpu::Buffer,
-    blur_v_uniform_buffer: wgpu::Buffer,
     texture_size: (u32, u32),
-    blur_size: (u32, u32),
     last_capture_at: Option<Instant>,
     last_geometry_key: Option<GeometryKey>,
     stats: RenderStats,
@@ -181,11 +174,17 @@ impl LiquidGlassRenderer {
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
-        let (blur_texture, blur_view) = create_blur_texture(device, width, height, "blur texture");
-        let (blur_temp_texture, blur_temp_view) =
-            create_blur_texture(device, width, height, "blur temp texture");
+        // Final blur output is full-res: the final shader samples it without
+        // any resolution-mismatch stretch.
+        let (blur_texture, blur_view) =
+            create_blur_texture_raw(device, width, height, 0, "blur texture");
+        // L1=1/2, L2=1/4, L3=1/8 pyramid levels used by both down and up passes.
+        let blur_levels = [
+            create_blur_texture_raw(device, width, height, 1, "blur level 1"),
+            create_blur_texture_raw(device, width, height, 2, "blur level 2"),
+            create_blur_texture_raw(device, width, height, 3, "blur level 3"),
+        ];
         upload_initial_backdrop(queue, &backdrop_texture, width, height);
-        let blur_size = blur_extent(width, height);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("liquid glass sampler"),
@@ -231,29 +230,8 @@ impl LiquidGlassRenderer {
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("liquid glass blur bgl"),
-                entries: &[
-                    blur_uniform_entry(0),
-                    texture_entry(1, true),
-                    sampler_entry(2),
-                ],
+                entries: &[texture_entry(0, true), sampler_entry(1)],
             });
-
-        let blur_h_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("liquid glass blur horizontal uniforms"),
-            contents: bytemuck::bytes_of(&blur_uniforms(
-                [1.0 / width.max(1) as f32, 0.0],
-                params.blur_radius,
-            )),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let blur_v_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("liquid glass blur vertical uniforms"),
-            contents: bytemuck::bytes_of(&blur_uniforms(
-                [0.0, 1.0 / blur_size.1.max(1) as f32],
-                params.blur_radius,
-            )),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
 
         let geometry_bind_group = create_geometry_bind_group(
             device,
@@ -270,18 +248,12 @@ impl LiquidGlassRenderer {
             &geometry_view,
             &blur_view,
         );
-        let blur_h_bind_group = create_blur_bind_group(
+        let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
             device,
             &blur_bind_group_layout,
-            &blur_h_uniform_buffer,
             &backdrop_view,
-            &sampler,
-        );
-        let blur_v_bind_group = create_blur_bind_group(
-            device,
-            &blur_bind_group_layout,
-            &blur_v_uniform_buffer,
-            &blur_temp_view,
+            &blur_levels,
+            &blur_view,
             &sampler,
         );
 
@@ -428,8 +400,7 @@ impl LiquidGlassRenderer {
             using_gpu_backdrop: false,
             blur_texture,
             blur_view,
-            blur_temp_texture,
-            blur_temp_view,
+            blur_levels,
             sampler,
             geometry_pipeline,
             blur_downsample_pipeline,
@@ -439,13 +410,10 @@ impl LiquidGlassRenderer {
             blur_bind_group_layout,
             final_bind_group_layout,
             geometry_bind_group,
-            blur_h_bind_group,
-            blur_v_bind_group,
+            blur_down_bind_groups,
+            blur_up_bind_groups,
             final_bind_group,
-            blur_h_uniform_buffer,
-            blur_v_uniform_buffer,
             texture_size: (width.max(1), height.max(1)),
-            blur_size,
             last_capture_at: None,
             last_geometry_key: None,
             stats: RenderStats::new(),
@@ -461,11 +429,14 @@ impl LiquidGlassRenderer {
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
-        let (blur_texture, blur_view) = create_blur_texture(device, width, height, "blur texture");
-        let (blur_temp_texture, blur_temp_view) =
-            create_blur_texture(device, width, height, "blur temp texture");
+        let (blur_texture, blur_view) =
+            create_blur_texture_raw(device, width, height, 0, "blur texture");
+        let blur_levels = [
+            create_blur_texture_raw(device, width, height, 1, "blur level 1"),
+            create_blur_texture_raw(device, width, height, 2, "blur level 2"),
+            create_blur_texture_raw(device, width, height, 3, "blur level 3"),
+        ];
         upload_initial_backdrop(queue, &backdrop_texture, width, height);
-        let blur_size = blur_extent(width, height);
 
         self.geometry_texture = geometry_texture;
         self.geometry_view = geometry_view;
@@ -475,26 +446,19 @@ impl LiquidGlassRenderer {
         self.using_gpu_backdrop = false;
         self.blur_texture = blur_texture;
         self.blur_view = blur_view;
-        self.blur_temp_texture = blur_temp_texture;
-        self.blur_temp_view = blur_temp_view;
+        self.blur_levels = blur_levels;
         self.texture_size = (width, height);
-        self.blur_size = blur_size;
         self.last_geometry_key = None;
-        self.update_blur_uniforms(queue);
-        self.blur_h_bind_group = create_blur_bind_group(
+        let (down, up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
-            &self.blur_h_uniform_buffer,
             &self.backdrop_view,
+            &self.blur_levels,
+            &self.blur_view,
             &self.sampler,
         );
-        self.blur_v_bind_group = create_blur_bind_group(
-            device,
-            &self.blur_bind_group_layout,
-            &self.blur_v_uniform_buffer,
-            &self.blur_temp_view,
-            &self.sampler,
-        );
+        self.blur_down_bind_groups = down;
+        self.blur_up_bind_groups = up;
         self.final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
@@ -507,13 +471,18 @@ impl LiquidGlassRenderer {
     }
 
     fn bind_backdrop_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
-        self.blur_h_bind_group = create_blur_bind_group(
+        // The downsample[0] source is the backdrop; rebuild the down/up
+        // pyramid bind groups for this view, plus the final bind group.
+        let (down, up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
-            &self.blur_h_uniform_buffer,
             view,
+            &self.blur_levels,
+            &self.blur_view,
             &self.sampler,
         );
+        self.blur_down_bind_groups = down;
+        self.blur_up_bind_groups = up;
         self.final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
@@ -526,22 +495,9 @@ impl LiquidGlassRenderer {
     }
 
     fn bind_cpu_backdrop(&mut self, device: &wgpu::Device) {
-        self.blur_h_bind_group = create_blur_bind_group(
-            device,
-            &self.blur_bind_group_layout,
-            &self.blur_h_uniform_buffer,
-            &self.backdrop_view,
-            &self.sampler,
-        );
-        self.final_bind_group = create_final_bind_group(
-            device,
-            &self.final_bind_group_layout,
-            &self.uniform_buffer,
-            &self.backdrop_view,
-            &self.sampler,
-            &self.geometry_view,
-            &self.blur_view,
-        );
+        // Clone the view so the immutable borrow ends before we mutate `self`.
+        let view = self.backdrop_view.clone();
+        self.bind_backdrop_view(device, &view);
     }
 
     pub fn rebuild_shapes(&mut self, device: &wgpu::Device, layout: &GridLayout, viewport_w: f32) {
@@ -695,13 +651,20 @@ impl LiquidGlassRenderer {
             self.capture_status = next_status;
         }
 
-        self.update_blur_uniforms(queue);
+        let blur_levels = self.blur_level_count();
 
-        {
+        // Downsample: backdrop -> L1 -> L2 -> L3 (only as deep as the radius needs).
+        for i in 0..blur_levels {
+            let dst = &self.blur_levels[i].1;
+            let label = match i {
+                0 => "liquid glass blur downsample L0->L1",
+                1 => "liquid glass blur downsample L1->L2",
+                _ => "liquid glass blur downsample L2->L3",
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass blur horizontal pass"),
+                label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.blur_temp_view,
+                    view: dst,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -715,15 +678,28 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.blur_downsample_pipeline);
-            pass.set_bind_group(0, &self.blur_h_bind_group, &[]);
+            pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
             pass.draw(0..3, 0..1);
         }
 
-        {
+        // Upsample: L3 -> L2 -> L1 -> full-res blur (reverse order).
+        // up index i reads blur_levels[i+1] (or the full-res src for the last
+        // hop) and writes blur_levels[i] (or the full-res blur texture for i==2).
+        for i in 0..blur_levels {
+            let dst = if i == blur_levels - 1 {
+                &self.blur_view
+            } else {
+                &self.blur_levels[i].1
+            };
+            let label = match i {
+                0 => "liquid glass blur upsample L3->L2",
+                1 => "liquid glass blur upsample L2->L1",
+                _ => "liquid glass blur upsample L1->full",
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass blur vertical pass"),
+                label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.blur_view,
+                    view: dst,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -737,7 +713,7 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.blur_upsample_pipeline);
-            pass.set_bind_group(0, &self.blur_v_bind_group, &[]);
+            pass.set_bind_group(0, &self.blur_up_bind_groups[i], &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -816,24 +792,23 @@ impl LiquidGlassRenderer {
         }
     }
 
-    fn update_blur_uniforms(&self, queue: &wgpu::Queue) {
-        let (width, _) = self.texture_size;
-        let (_, blur_h) = self.blur_size;
-        let radius = if self.debug.disable_blur {
-            0.0
+    /// How many pyramid levels to run this frame.
+    ///
+    /// Maps blur_radius to pyramid depth so weak blurs stay cheap and large
+    /// radii stay smooth. Returns 0 when blur is disabled (final shader then
+    /// bypasses the blur texture via its `blur_radius < 0.5` check).
+    fn blur_level_count(&self) -> usize {
+        if self.debug.disable_blur {
+            return 0;
+        }
+        let radius = self.params.blur_radius;
+        if radius < 6.0 {
+            1
+        } else if radius < 16.0 {
+            2
         } else {
-            self.params.blur_radius
-        };
-        queue.write_buffer(
-            &self.blur_h_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&blur_uniforms([1.0 / width.max(1) as f32, 0.0], radius)),
-        );
-        queue.write_buffer(
-            &self.blur_v_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&blur_uniforms([0.0, 1.0 / blur_h.max(1) as f32], radius)),
-        );
+            3
+        }
     }
 }
 
@@ -876,14 +851,6 @@ fn uniforms_from_params(
         max_displacement: params.thickness * 10.0,
         shape_count,
         debug_flags: debug.flags(),
-    }
-}
-
-fn blur_uniforms(texel_step: [f32; 2], radius: f32) -> BlurUniforms {
-    BlurUniforms {
-        texel_step,
-        radius,
-        _pad: 0.0,
     }
 }
 
@@ -949,18 +916,21 @@ fn create_backdrop_texture(
     (texture, view)
 }
 
-fn create_blur_texture(
+/// Create a blur texture for a pyramid level. `level` selects the size:
+/// 0 = full-res (final output), 1 = 1/2, 2 = 1/4, 3 = 1/8.
+fn create_blur_texture_raw(
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    level: u32,
     label: &'static str,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    let (width, height) = blur_extent(width, height);
+    let (lw, lh) = blur_level_extent(width, height, level);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
-            width,
-            height,
+            width: lw,
+            height: lh,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -974,8 +944,15 @@ fn create_blur_texture(
     (texture, view)
 }
 
-fn blur_extent(width: u32, height: u32) -> (u32, u32) {
-    ((width / 2).max(1), (height / 2).max(1))
+/// Pyramid size for a given level (0 = full-res, 1 = 1/2, 2 = 1/4, 3 = 1/8).
+fn blur_level_extent(width: u32, height: u32, level: u32) -> (u32, u32) {
+    let mut w = width.max(1);
+    let mut h = height.max(1);
+    for _ in 0..level.min(3) {
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+    }
+    (w, h)
 }
 
 fn upload_initial_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) {
@@ -1009,19 +986,6 @@ fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
             min_binding_size: NonZeroU64::new(std::mem::size_of::<GlassUniforms>() as u64),
-        },
-        count: None,
-    }
-}
-
-fn blur_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: NonZeroU64::new(std::mem::size_of::<BlurUniforms>() as u64),
         },
         count: None,
     }
@@ -1108,10 +1072,10 @@ fn create_final_bind_group(
     })
 }
 
+/// Build a single blur bind group: [0]=source texture, [1]=sampler.
 fn create_blur_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    uniforms: &wgpu::Buffer,
     source_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
@@ -1121,18 +1085,45 @@ fn create_blur_bind_group(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: uniforms.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
                 resource: wgpu::BindingResource::TextureView(source_view),
             },
             wgpu::BindGroupEntry {
-                binding: 2,
+                binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
     })
+}
+
+/// Build all six pyramid bind groups for one frame's worth of blur.
+///
+/// - `down[i]` reads source `i` (backdrop for i==0, else `levels[i-1]`) and
+///   writes `levels[i]`.
+/// - `up[i]` reads `levels[2-i]` and writes `levels[1-i]` (or the full-res
+///   `blur_view` for i==2).
+fn create_blur_pyramid_bind_groups(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    backdrop_view: &wgpu::TextureView,
+    levels: &[(wgpu::Texture, wgpu::TextureView); 3],
+    blur_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> ([wgpu::BindGroup; 3], [wgpu::BindGroup; 3]) {
+    // Down sources: backdrop, L1, L2.
+    let down = [
+        create_blur_bind_group(device, layout, backdrop_view, sampler),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler),
+    ];
+    // Up sources: L3, L2, L1 (reverse). Each writes the next level up; the
+    // last hop writes the full-res blur texture.
+    let up = [
+        create_blur_bind_group(device, layout, &levels[2].1, sampler),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler),
+    ];
+    let _ = blur_view;
+    (down, up)
 }
 
 fn fullscreen_vertex_state(shader: &wgpu::ShaderModule) -> wgpu::VertexState<'_> {

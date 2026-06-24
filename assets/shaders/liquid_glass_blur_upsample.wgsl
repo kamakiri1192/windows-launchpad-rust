@@ -1,12 +1,13 @@
-struct BlurUniforms {
-    texel_step: vec2<f32>,
-    radius: f32,
-    _pad: f32,
-};
+// Dual-Kawase upsample pass (Marius Bjørge style).
+// Reads the lower-resolution source level and writes the next level up
+// (double width/height), again with a mild H+V blur folded into the taps.
+//
+// 9-tap bilinear 3x3 kernel sampled on the low-res source. Weights are the
+// classic 1-2-1 box-binomial (sum = 1) so the result stays energy-preserving
+// across many pyramid levels.
 
-@group(0) @binding(0) var<uniform> u: BlurUniforms;
-@group(0) @binding(1) var source_texture: texture_2d<f32>;
-@group(0) @binding(2) var source_sampler: sampler;
+@group(0) @binding(0) var source_texture: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -34,16 +35,30 @@ fn sample_source(uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let radius = max(u.radius, 0.0);
-    if radius < 0.5 {
-        return sample_source(in.uv);
-    }
+    // texel size of the *source* texture (the lower-resolution level).
+    let src_size = textureDimensions(source_texture, 0);
+    let texel = vec2<f32>(1.0) / vec2<f32>(f32(src_size.x), f32(src_size.y));
 
-    let step = u.texel_step * radius * 0.22;
-    var color = sample_source(in.uv) * 0.227027;
-    color += sample_source(in.uv + step * 1.384615) * 0.316216;
-    color += sample_source(in.uv - step * 1.384615) * 0.316216;
-    color += sample_source(in.uv + step * 3.230769) * 0.070270;
-    color += sample_source(in.uv - step * 3.230769) * 0.070270;
-    return color;
+    // Align the 3x3 phase with the downsample pass for a symmetric round trip.
+    let uv = in.uv - texel * 0.5;
+
+    let tl = sample_source(uv + vec2<f32>(-1.0, -1.0) * texel);
+    let tm = sample_source(uv + vec2<f32>( 0.0, -1.0) * texel);
+    let tr = sample_source(uv + vec2<f32>( 1.0, -1.0) * texel);
+    let ml = sample_source(uv + vec2<f32>(-1.0,  0.0) * texel);
+    let mm = sample_source(uv);
+    let mr = sample_source(uv + vec2<f32>( 1.0,  0.0) * texel);
+    let bl = sample_source(uv + vec2<f32>(-1.0,  1.0) * texel);
+    let bm = sample_source(uv + vec2<f32>( 0.0,  1.0) * texel);
+    let br = sample_source(uv + vec2<f32>( 1.0,  1.0) * texel);
+
+    // 1-2-1 binomial per axis => 3x3 separable weights summing to 1.
+    let w_c = vec4<f32>(1.0, 2.0, 1.0, 2.0);
+    let w_r = vec4<f32>(4.0, 2.0, 1.0, 2.0);
+
+    let top = tl * w_c.x + tm * w_c.y + tr * w_c.z;
+    let mid = ml * w_c.w + mm * w_r.x + mr * w_r.y;
+    let bot = bl * w_r.z + bm * w_r.w + br * w_c.z;
+
+    return (top + mid + bot) * (1.0 / 16.0);
 }

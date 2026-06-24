@@ -1,12 +1,9 @@
-struct BlurUniforms {
-    texel_step: vec2<f32>,
-    radius: f32,
-    _pad: f32,
-};
+// Dual-Kawase downsample pass (Marius Bjørge 13-tap).
+// Reads a source at higher resolution and writes the next pyramid level
+// (half width/height) with a mild H+V blur baked into the 13 samples.
 
-@group(0) @binding(0) var<uniform> u: BlurUniforms;
-@group(0) @binding(1) var source_texture: texture_2d<f32>;
-@group(0) @binding(2) var source_sampler: sampler;
+@group(0) @binding(0) var source_texture: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -34,16 +31,33 @@ fn sample_source(uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let radius = max(u.radius, 0.0);
-    if radius < 0.5 {
-        return sample_source(in.uv);
-    }
+    // texel size of the *source* texture (higher resolution level).
+    let src_size = textureDimensions(source_texture, 0);
+    let texel = vec2<f32>(1.0) / vec2<f32>(f32(src_size.x), f32(src_size.y));
 
-    let step = u.texel_step * radius * 0.22;
-    var color = sample_source(in.uv) * 0.227027;
-    color += sample_source(in.uv + step * 1.384615) * 0.316216;
-    color += sample_source(in.uv - step * 1.384615) * 0.316216;
-    color += sample_source(in.uv + step * 3.230769) * 0.070270;
-    color += sample_source(in.uv - step * 3.230769) * 0.070270;
-    return color;
+    // Sample at half-texel offset so the 13-tap kernel straddles 2x2 source
+    // blocks symmetrically (reduces temporal shimmer on motion).
+    let uv = in.uv + texel * 0.5;
+
+    let a = sample_source(uv + vec2<f32>(-0.875, -0.875) * texel);
+    let b = sample_source(uv + vec2<f32>( 0.875, -0.875) * texel);
+    let c = sample_source(uv + vec2<f32>(-0.875,  0.875) * texel);
+    let d = sample_source(uv + vec2<f32>( 0.875,  0.875) * texel);
+
+    let e = sample_source(uv + vec2<f32>(-2.0,   0.0)  * texel);
+    let f = sample_source(uv + vec2<f32>( 2.0,   0.0)  * texel);
+    let g = sample_source(uv + vec2<f32>( 0.0,  -2.0)  * texel);
+    let h = sample_source(uv + vec2<f32>( 0.0,   2.0)  * texel);
+
+    let i = sample_source(uv + vec2<f32>(-3.0,  -3.0)  * texel);
+    let j = sample_source(uv + vec2<f32>( 3.0,  -3.0)  * texel);
+    let k = sample_source(uv + vec2<f32>(-3.0,   3.0)  * texel);
+    let l = sample_source(uv + vec2<f32>( 3.0,   3.0)  * texel);
+
+    // Weights tuned for a near-Gaussian result after a down+up round trip.
+    let center = (a + b + c + d) * 0.5;
+    let cross  = (e + f + g + h) * 0.125;
+    let diag   = (i + j + k + l) * 0.0625;
+
+    return center + cross + diag;
 }
