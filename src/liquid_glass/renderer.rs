@@ -653,68 +653,87 @@ impl LiquidGlassRenderer {
 
         let blur_levels = self.blur_level_count();
 
-        // Downsample: backdrop -> L1 -> L2 -> L3 (only as deep as the radius needs).
+        // Each blur pass runs in its OWN command encoder. wgpu groups all
+        // passes in a single encoder into one "usage scope", and a texture
+        // may not be both RESOURCE and COLOR_TARGET within that scope. Since a
+        // dual-Kawase pyramid feeds each pass's output into the next pass's
+        // input (L2 is written by down then read by up), we must split scopes
+        // by submitting one encoder per pass.
+        let _ = encoder; // the caller's encoder is used only for geometry/final.
+
+        // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
+        // backdrop for i==0 else levels[i-1], and writes levels[i].
         for i in 0..blur_levels {
             let dst = &self.blur_levels[i].1;
-            let label = match i {
-                0 => "liquid glass blur downsample L0->L1",
-                1 => "liquid glass blur downsample L1->L2",
-                _ => "liquid glass blur downsample L2->L3",
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(label),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dst,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let label = format!("liquid glass blur downsample L{i}->L{}", i + 1);
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(label.as_str()),
             });
-            pass.set_pipeline(&self.blur_downsample_pipeline);
-            pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
-            pass.draw(0..3, 0..1);
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: dst,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blur_downsample_pipeline);
+                pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
         }
 
-        // Upsample: L3 -> L2 -> L1 -> full-res blur (reverse order).
-        // up index i reads blur_levels[i+1] (or the full-res src for the last
-        // hop) and writes blur_levels[i] (or the full-res blur texture for i==2).
-        for i in 0..blur_levels {
-            let dst = if i == blur_levels - 1 {
+        // Upsample: L(k-1) -> L(k-2) -> ... -> L1 -> full-res blur.
+        // up pass j reads levels[k-1-j] (bind index 3-k+j in the fixed
+        // [L3,L2,L1] bind array) and writes levels[k-2-j], or the full-res
+        // blur texture for the final hop (j == k-1).
+        for j in 0..blur_levels {
+            let dst = if j == blur_levels - 1 {
                 &self.blur_view
             } else {
-                &self.blur_levels[i].1
+                &self.blur_levels[blur_levels - 2 - j].1
             };
-            let label = match i {
-                0 => "liquid glass blur upsample L3->L2",
-                1 => "liquid glass blur upsample L2->L1",
-                _ => "liquid glass blur upsample L1->full",
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(label),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dst,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let bind_idx = 3 - blur_levels + j;
+            let label = format!(
+                "liquid glass blur upsample L{}->L{}",
+                blur_levels - j,
+                blur_levels - 1 - j
+            );
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(label.as_str()),
             });
-            pass.set_pipeline(&self.blur_upsample_pipeline);
-            pass.set_bind_group(0, &self.blur_up_bind_groups[i], &[]);
-            pass.draw(0..3, 0..1);
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: dst,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blur_upsample_pipeline);
+                pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
         }
 
         let geometry_key = self.geometry_key(scroll_x);
