@@ -1,0 +1,14 @@
+# Rust build output
+/target/
+
+# Logs
+*.log
+
+# Windows cruft
+Thumbs.db
+Desktop.ini
+/nul
+
+# Editor settings
+.vscode/
+.idea/

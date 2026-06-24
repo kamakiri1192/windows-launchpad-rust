@@ -1,0 +1,21 @@
+[package]
+name = "launchpad-windows"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "A GPU-accelerated, macOS Launchpad-style app launcher for Windows."
+
+[dependencies]
+wgpu = "29"
+winit = "0.30"
+pollster = "0.4"
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.29"
+env_logger = "0.11"
+cosmic-text = "0.19"
+
+# Release: スムーズさ優先。LTO でバイナリも小さく。
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
