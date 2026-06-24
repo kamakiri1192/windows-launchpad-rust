@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Launchpad (Windows) — MVP entry point.
 //!
 //! Wires winit's event loop to the wgpu renderer and the scroll physics.
@@ -9,6 +11,7 @@
 //! settles, we stop requesting frames to keep CPU/GPU idle.
 
 mod grid;
+mod liquid_glass;
 mod renderer;
 mod scroll;
 mod text;
@@ -19,11 +22,17 @@ use renderer::{DrawArgs, Renderer};
 use scroll::{Phase, Scroller};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UserEvent {
+    BackdropFrameArrived,
+}
 
 /// Owns the renderer (which owns the window) plus the scroll state.
 struct App {
+    event_proxy: EventLoopProxy<UserEvent>,
     renderer: Option<Renderer>,
     scroller: Option<Scroller>,
     text: Option<text::TextRenderer>,
@@ -37,8 +46,9 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(event_proxy: EventLoopProxy<UserEvent>) -> Self {
         Self {
+            event_proxy,
             renderer: None,
             scroller: None,
             text: None,
@@ -129,23 +139,47 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::BackdropFrameArrived => self.request_redraw(),
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_some() {
             return;
         }
         let attrs = Window::default_attributes()
             .with_title("Launchpad")
+            .with_transparent(true)
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
 
         let window = event_loop.create_window(attrs).expect("create window");
+        #[cfg(windows)]
+        {
+            if std::env::var_os("LAUNCHPAD_ALLOW_SCREENSHOT").is_some() {
+                eprintln!("capture exclusion skipped: LAUNCHPAD_ALLOW_SCREENSHOT is set");
+            } else {
+                let exclusion = liquid_glass::windows_capture::exclude_window_from_capture(&window);
+                if exclusion.attempted && !exclusion.success {
+                    eprintln!("capture exclusion failed: {}", exclusion.message);
+                } else if exclusion.attempted {
+                    eprintln!("capture exclusion: {}", exclusion.message);
+                }
+            }
+        }
         self.scale_factor = window.scale_factor() as f32;
         let (w, _h) = (window.inner_size().width, window.inner_size().height);
         self.layout = grid::GridLayout::default().centered(w as f32);
 
-        let renderer =
-            pollster::block_on(Renderer::new(window, &self.layout)).expect("init renderer");
+        let renderer = pollster::block_on(Renderer::new(
+            window,
+            &self.layout,
+            self.event_proxy.clone(),
+        ))
+        .expect("init renderer");
         let bounds = self.layout.bounds(w as f32);
         let scroller = Scroller::new(bounds);
         let text = text::TextRenderer::new();
@@ -169,10 +203,23 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed
-                    && event.physical_key == winit::keyboard::KeyCode::Escape
-                {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+
+                let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key else {
+                    return;
+                };
+
+                if key_code == winit::keyboard::KeyCode::Escape {
                     event_loop.exit();
+                    return;
+                }
+
+                if let Some(r) = self.renderer.as_mut() {
+                    if r.handle_liquid_glass_key(key_code) {
+                        self.request_redraw();
+                    }
                 }
             }
             WindowEvent::Resized(new_size) => {
@@ -188,6 +235,12 @@ impl ApplicationHandler for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor as f32;
                 self.relayout();
+                self.request_redraw();
+            }
+            WindowEvent::Moved(_) => {
+                if let Some(r) = self.renderer.as_mut() {
+                    r.notify_window_moved();
+                }
                 self.request_redraw();
             }
             WindowEvent::CursorLeft { .. } => {
@@ -227,11 +280,13 @@ impl ApplicationHandler for App {
                 let now = Instant::now();
                 let vp = self.viewport_phys();
                 let animating;
-                if let (Some(r), Some(s)) = (self.renderer.as_ref(), self.scroller.as_mut()) {
+                if let (Some(r), Some(s)) = (self.renderer.as_mut(), self.scroller.as_mut()) {
+                    let dragging = s.phase == Phase::Dragging;
                     s.tick(now);
                     r.render(&DrawArgs {
                         scroll_x: s.position,
                         viewport: vp,
+                        defer_backdrop_capture: dragging,
                     });
                     animating = s.is_animating();
                 } else {
@@ -245,9 +300,9 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Keep the loop pumping while animating; otherwise winit blocks until
-        // the next event (good for idle CPU).
+        // the next input or WGC FrameArrived user event.
         let animating = self
             .scroller
             .as_ref()
@@ -256,15 +311,18 @@ impl ApplicationHandler for App {
         if animating {
             self.request_redraw();
         }
+        event_loop.set_control_flow(ControlFlow::Wait);
     }
 }
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    let event_loop = EventLoop::new().expect("create event loop");
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = App::new();
+    let mut app = App::new(event_loop.create_proxy());
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("event loop error: {e}");
         std::process::exit(1);
