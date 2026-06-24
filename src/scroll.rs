@@ -56,10 +56,7 @@ impl ScrollBounds {
     #[inline]
     pub fn snap_target(&self, pos: f32) -> f32 {
         let p = (pos / self.page_extent).round();
-        let p = p.clamp(
-            -((self.page_count.saturating_sub(1)) as f32),
-            0.0,
-        );
+        let p = p.clamp(-((self.page_count.saturating_sub(1)) as f32), 0.0);
         p * self.page_extent
     }
 }
@@ -155,7 +152,9 @@ impl Scroller {
         // overshoot feel scales with window size, exactly like iOS.
         self.cfg.rubber_dimension = bounds.page_extent;
         // Re-clamp current position into the new range and re-snap if idle.
-        let clamped = self.position.clamp(self.bounds.min_pos(), self.bounds.max_pos());
+        let clamped = self
+            .position
+            .clamp(self.bounds.min_pos(), self.bounds.max_pos());
         if clamped != self.position {
             self.position = clamped;
         }
@@ -280,9 +279,7 @@ impl Scroller {
                 self.velocity += acc * dt;
                 self.position += self.velocity * dt;
 
-                if dx.abs() < self.cfg.settle_eps
-                    && self.velocity.abs() < self.cfg.settle_eps
-                {
+                if dx.abs() < self.cfg.settle_eps && self.velocity.abs() < self.cfg.settle_eps {
                     self.position = self.settle_target;
                     self.velocity = 0.0;
                     self.phase = Phase::Idle;

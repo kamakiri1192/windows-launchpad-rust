@@ -231,7 +231,11 @@ impl Renderer {
         let (aw, ah) = crate::text::TextRenderer::atlas_dimensions();
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
-            size: wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: aw,
+                height: ah,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -387,11 +391,13 @@ impl Renderer {
     pub fn rebuild_instances(&mut self, layout: &GridLayout) {
         let instances = layout.build_instances(self.config.width as f32);
         self.instance_count = instances.len() as u32;
-        self.instance_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance buffer"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
+        self.instance_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("instance buffer"),
+                contents: bytemuck::cast_slice(&instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
     }
 
     /// Upload the glyph atlas texture from the given RGBA buffer.
@@ -410,7 +416,11 @@ impl Renderer {
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -421,14 +431,13 @@ impl Renderer {
             self.text_instance_buffer = None;
             return;
         }
-        self.text_instance_buffer = Some(
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("text instance buffer"),
-                    contents: bytemuck::cast_slice(quads),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }),
-        );
+        self.text_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("text instance buffer"),
+                contents: bytemuck::cast_slice(quads),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
     }
 
     /// Render one frame.
@@ -445,7 +454,8 @@ impl Renderer {
         );
 
         let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 eprintln!("surface outdated/lost; skipping frame");
                 return;

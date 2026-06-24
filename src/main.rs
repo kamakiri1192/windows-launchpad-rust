@@ -144,7 +144,8 @@ impl ApplicationHandler for App {
         let (w, _h) = (window.inner_size().width, window.inner_size().height);
         self.layout = grid::GridLayout::default().centered(w as f32);
 
-        let renderer = pollster::block_on(Renderer::new(window, &self.layout)).expect("init renderer");
+        let renderer =
+            pollster::block_on(Renderer::new(window, &self.layout)).expect("init renderer");
         let bounds = self.layout.bounds(w as f32);
         let scroller = Scroller::new(bounds);
         let text = text::TextRenderer::new();
@@ -226,9 +227,7 @@ impl ApplicationHandler for App {
                 let now = Instant::now();
                 let vp = self.viewport_phys();
                 let animating;
-                if let (Some(r), Some(s)) =
-                    (self.renderer.as_ref(), self.scroller.as_mut())
-                {
+                if let (Some(r), Some(s)) = (self.renderer.as_ref(), self.scroller.as_mut()) {
                     s.tick(now);
                     r.render(&DrawArgs {
                         scroll_x: s.position,
