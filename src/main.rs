@@ -27,12 +27,17 @@ use icons::LoadedIcons;
 use renderer::{DrawArgs, Renderer};
 use scroll::{Phase, Scroller};
 use winit::application::ApplicationHandler;
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
 const CLICK_SLOP_PHYS: f32 = 8.0;
+const INITIAL_WINDOW_WIDTH: f64 = 1280.0;
+const INITIAL_WINDOW_HEIGHT: f64 = 800.0;
+const MIN_WINDOW_WIDTH: f64 = 640.0;
+const MIN_WINDOW_HEIGHT: f64 = 480.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum UserEvent {
@@ -231,6 +236,25 @@ impl App {
     }
 }
 
+fn initial_window_position(event_loop: &ActiveEventLoop) -> Option<PhysicalPosition<i32>> {
+    let monitor = event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next())?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let scale_factor = monitor.scale_factor();
+
+    let window_width = (INITIAL_WINDOW_WIDTH * scale_factor).round() as i64;
+    let window_height = (INITIAL_WINDOW_HEIGHT * scale_factor).round() as i64;
+    let x = monitor_position.x as i64 + (monitor_size.width as i64 - window_width) / 2;
+    let y = monitor_position.y as i64 + (monitor_size.height as i64 - window_height) / 2;
+
+    Some(PhysicalPosition::new(
+        x.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        y.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+    ))
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
@@ -242,7 +266,7 @@ impl ApplicationHandler<UserEvent> for App {
         if self.renderer.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("Launchpad")
             .with_transparent(true)
             // Drop the classic HWND back buffer (WS_EX_NOREDIRECTIONBITMAP) so
@@ -253,8 +277,15 @@ impl ApplicationHandler<UserEvent> for App {
             // Borderless: the glass tiles own the visuals, so we drop the OS
             // title bar / frame. Closing via Esc/Alt-F4.
             .with_decorations(false)
-            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
+            .with_inner_size(LogicalSize::new(
+                INITIAL_WINDOW_WIDTH,
+                INITIAL_WINDOW_HEIGHT,
+            ))
+            .with_min_inner_size(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+
+        if let Some(position) = initial_window_position(event_loop) {
+            attrs = attrs.with_position(position);
+        }
 
         let window = event_loop.create_window(attrs).expect("create window");
         #[cfg(windows)]
