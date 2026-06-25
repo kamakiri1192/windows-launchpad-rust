@@ -105,6 +105,20 @@ impl Default for GridLayout {
 }
 
 impl GridLayout {
+    /// Build a layout sized to hold `app_count` apps. `page_count` grows with
+    /// the app count so every app is reachable by scrolling (the old hard-coded
+    /// 3 pages = 105 tiles silently dropped apps beyond page 3). Always keeps
+    /// at least one page; pads to a full final page.
+    pub fn for_app_count(app_count: usize) -> Self {
+        let base = Self::default();
+        let per_page = base.cols * base.rows;
+        // At least 3 pages (keeps the default look when few apps), more if the
+        // app list overflows. div_ceil → ceil(app_count / per_page).
+        let needed = app_count.div_ceil(per_page);
+        let page_count = needed.max(3);
+        Self { page_count, ..base }
+    }
+
     /// Total tiles across all pages.
     pub fn total_tiles(&self) -> usize {
         self.cols * self.rows * self.page_count
@@ -591,5 +605,22 @@ mod tests {
         let apps: Vec<OwnedApp> = vec![];
         let inst = g.build_instances(vw, &view(&apps));
         assert!(inst.iter().all(|t| t.icon_index == -1.0));
+    }
+
+    #[test]
+    fn for_app_count_grows_pages_beyond_default() {
+        // 7×5 = 35 apps/page. 3 default pages hold 105.
+        let per_page = 7 * 5;
+        // Few apps → at least the default 3 pages.
+        assert_eq!(GridLayout::for_app_count(10).page_count, 3);
+        assert_eq!(GridLayout::for_app_count(0).page_count, 3);
+        // Exactly fits default → still 3.
+        assert_eq!(GridLayout::for_app_count(per_page * 3).page_count, 3);
+        // One beyond default capacity → a 4th page.
+        assert_eq!(GridLayout::for_app_count(per_page * 3 + 1).page_count, 4);
+        // 132 apps → ceil(132/35) = 4 pages.
+        assert_eq!(GridLayout::for_app_count(132).page_count, 4);
+        // total_tiles grows accordingly so all apps get a slot.
+        assert!(GridLayout::for_app_count(132).total_tiles() >= 132);
     }
 }

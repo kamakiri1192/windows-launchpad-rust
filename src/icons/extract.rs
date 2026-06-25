@@ -36,9 +36,9 @@ use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     FOLDERID_CommonStartMenu, FOLDERID_StartMenu, ILFree, IShellItemImageFactory, IShellLinkW,
-    SHCreateItemFromIDList, SHGetFileInfoW, SHGetImageList, SHGetKnownFolderPath, ShellLink,
-    KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON, SHGFI_SYSICONINDEX,
-    SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
+    SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW, SHGetImageList,
+    SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON,
+    SHGFI_SYSICONINDEX, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
@@ -69,61 +69,79 @@ pub fn enumerate_start_menu() -> Vec<Shortcut> {
 
 /// Extract the best-available icon for a single `.lnk` file as an RGBA bitmap.
 ///
-/// Resolves the shortcut's **target** (so the shortcut-arrow overlay doesn't
-/// appear), then pulls the largest icon the shell can provide for that target
-/// — preferring 256px jumbo, then 48px extra-large, then 32px large.
+/// Strategy (best first, each a real improvement over the old single-path
+/// image-list pull that produced squished/wrong/missing icons):
 ///
-/// Returns `None` on any failure (missing icon, GDI error); the caller simply
-/// drops that tile back to the fallback color.
+///   1. **`IShellItemImageFactory` on the `.lnk` itself.** This is the
+///      shell's authoritative renderer: it returns a thumbnail-quality 256px
+///      bitmap for *any* shell item, including UWP/Store apps and shortcuts
+///      whose target is a shell object referenced by IDList (e.g. the Win11
+///      Task Manager shortcut, Control Panel items). It never returns a
+///      mismatched-resolution image-list placeholder, so it fixes both
+///      "missing" (Task Manager) and "squished/wrong" (cold image-list) cases.
+///   2. **Image-list pull from the system icon index** (the old primary path),
+///      kept as a fallback for the rare machine/factory failure. We no longer
+///      apply the unreliable `find_exe_by_shortcut_name` white-icon heuristic,
+///      which was the main source of *wrong* icons (it guessed an exe by name
+///      with no verification).
+///   3. **Factory on the resolved target path** as a last resort.
+///
+/// Returns `None` only if every step fails; the caller drops that tile back to
+/// the fallback color.
 pub fn extract_icon_from_lnk(lnk: &Path) -> Option<DecodedIcon> {
-    // A .lnk can carry its icon in two places:
-    //   1. An explicit IconLocation (Discord, Chrome, Slack — Electron apps
-    //      whose launcher exe has a generic icon, with the real icon pointed
-    //      at by the shortcut's own IconLocation field).
-    //   2. The target executable's own icon (most native apps).
-    //
-    // We query the .lnk FIRST for the system icon index: when the shortcut has
-    // an explicit IconLocation, the index reflects that icon; otherwise it
-    // reflects the target's icon. Either way we then pull it from the jumbo
-    // image list for maximum resolution. Only if the .lnk yields a generic
-    // icon do we fall back to resolving the target explicitly.
+    // (1) Authoritative: render the .lnk as a shell item. SIIGBF_BIGGERSIZEOK
+    // lets the factory return an icon larger than the requested 256 when a
+    // better asset exists; we then normalize to 128 downstream.
+    if let Some(icon) = factory_icon_for_path(lnk) {
+        return Some(icon);
+    }
 
+    // (2) Image-list fallback (old primary path). Resolution may be lower but
+    // it's the next-best shell-provided icon. No name-based exe guessing.
     let link = load_shell_link(lnk);
     let resolved_target = link.as_ref().and_then(resolve_link_target);
-
-    // (1) Index the .lnk itself and pull the best image-list icon.
     if let Some(h) = get_path_hicon(lnk) {
         let _guard = IconGuard(h);
         if let Some(icon) = hicon_to_rgba(h) {
-            if is_mostly_white_icon(&icon) {
-                if let Some(target) = find_exe_by_shortcut_name(lnk) {
-                    if let Some(h) = get_path_hicon(&target) {
-                        let _guard = IconGuard(h);
-                        if let Some(exe_icon) = hicon_to_rgba(h) {
-                            if !is_mostly_white_icon(&exe_icon) {
-                                return Some(exe_icon);
-                            }
-                        }
-                    }
-                }
-
-                if let Some(target) = resolved_target.as_deref() {
-                    if let Some(h) = get_path_hicon(target) {
-                        let _guard = IconGuard(h);
-                        if let Some(target_icon) = hicon_to_rgba(h) {
-                            return Some(target_icon);
-                        }
-                    }
-                }
+            if !is_mostly_white_icon(&icon) {
+                return Some(icon);
             }
-            return Some(icon);
         }
     }
 
-    // (2) Resolve the target and index that instead.
-    let hicon = get_path_hicon(resolved_target.as_deref().unwrap_or(lnk))?;
-    let _guard = IconGuard(hicon);
-    hicon_to_rgba(hicon)
+    // (3) Resolve the target explicitly and render that.
+    if let Some(target) = resolved_target.as_deref() {
+        if let Some(icon) = factory_icon_for_path(target) {
+            return Some(icon);
+        }
+        if let Some(h) = get_path_hicon(target) {
+            let _guard = IconGuard(h);
+            if let Some(icon) = hicon_to_rgba(h) {
+                return Some(icon);
+            }
+        }
+    }
+
+    None
+}
+
+/// Render a shell item at `path` to a 256px RGBA bitmap via
+/// `IShellItemImageFactory`. Works for `.lnk`, `.exe`, and shell-object paths
+/// the image-list path can't handle (UWP, IDList targets). Owns the returned
+/// `HBITMAP` and frees it.
+fn factory_icon_for_path(path: &Path) -> Option<DecodedIcon> {
+    let wide = path_to_wide(path)?;
+    // Pinning the return type infers the `T` generic of
+    // SHCreateItemFromParsingName (it has 3 generics: T + 2 param types, and
+    // Rust requires all-or-none via turbofish, so we let inference do P0/P1).
+    // SAFETY: takes a NUL-terminated wide path; wide lives across the call.
+    let factory: IShellItemImageFactory =
+        unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None) }.ok()?;
+    let flags = SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP;
+    // SAFETY: factory is valid; GetImage writes an HBITMAP we must DeleteObject.
+    let bitmap = unsafe { factory.GetImage(SIZE { cx: 256, cy: 256 }, flags) }.ok()?;
+    let _guard = BitmapGuard(bitmap);
+    hbitmap_to_rgba(bitmap)
 }
 
 // ---- shortcut target resolution ----------------------------------------
@@ -233,6 +251,10 @@ pub fn file_mtime(path: &Path) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
 }
 
+/// Name-based exe guesser. **Not used by the live extractor** (it produced
+/// wrong icons by guessing an exe path with no verification); kept only for
+/// the `#[ignore]`d diagnostic probe test.
+#[allow(dead_code)]
 fn find_exe_by_shortcut_name(lnk: &Path) -> Option<PathBuf> {
     let stem = lnk.file_stem()?.to_string_lossy();
     let exe_name = normalized_exe_name(&stem)?;
@@ -486,10 +508,20 @@ fn hbitmap_to_rgba(bitmap: HBITMAP) -> Option<DecodedIcon> {
     // Bottom-up → top-down: reverse row order in place.
     flip_rows(&mut pixels, w, h);
 
+    // Detect a *dead* alpha channel: some icon bitmaps (notably those produced
+    // by IShellItemImageFactory for certain assets, or mask-only HICONs whose
+    // transparency lives in hbmMask rather than the color plane's alpha) come
+    // back with every alpha byte == 0 even though the RGB is the real icon.
+    // Treating those as fully transparent blanks the cell (the "missing icon"
+    // symptom). If alpha is uniformly zero but there is visible RGB content,
+    // treat the bitmap as opaque (alpha = 255 everywhere) so the icon shows.
+    let alpha_all_zero = pixels.chunks_exact(4).all(|c| c[3] == 0);
+
     // BGRA → RGBA, and straighten premultiplied alpha so the atlas stores
     // straight alpha (the icon shader will re-premultiply on sample).
     for chunk in pixels.chunks_exact_mut(4) {
         let (b, g, r, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+        let a = if alpha_all_zero { 255 } else { a };
         if a == 0 {
             chunk.copy_from_slice(&[0, 0, 0, 0]);
         } else if a == 255 {

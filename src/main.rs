@@ -194,7 +194,9 @@ impl App {
     /// label + icon instance buffers to the GPU.
     fn relayout(&mut self) {
         let (w, _h) = self.viewport_phys();
-        self.layout = grid::GridLayout::default().centered(w as f32);
+        // Size pages to the current app count so every app is reachable by
+        // scrolling (the grid grows pages as apps are added).
+        self.layout = grid::GridLayout::for_app_count(self.registry.len()).centered(w as f32);
         let bounds = self.layout.bounds(w as f32);
         if let Some(s) = self.scroller.as_mut() {
             s.set_bounds(bounds);
@@ -269,36 +271,77 @@ impl App {
             return;
         };
         // `write_icon` may grow the CPU atlas if the slot is beyond the current
-        // capacity. Detect that so we can re-upload the *whole* atlas to the
-        // GPU (and reallocate the texture) instead of a partial cell write that
-        // would overrun the old texture bounds. This is the Phase-5 grow path.
+        // capacity. A grow recomputes *every* slot's UV (the cell grid gains
+        // columns), so any app whose UV we cached before the grow now points at
+        // the wrong cell → overlapping icons. When that happens we must
+        // re-sync every app's UV from the new atlas before redrawing.
         let (gpu_w, gpu_h) = self
             .renderer
             .as_ref()
             .map(|r| r.icon_atlas_size())
             .unwrap_or((0, 0));
-        let (x, y, uv) = self.atlas.write_icon(slot, &image);
+        let (x, y, this_uv) = self.atlas.write_icon(slot, &image);
         let atlas_grew = (self.atlas.width(), self.atlas.height()) != (gpu_w, gpu_h) || gpu_w == 0;
+
         if atlas_grew {
-            // Full re-upload at the new dimensions.
+            // Full re-upload at the new dimensions, then re-sync every app's
+            // UV from the freshly-grown atlas so none sample a stale cell.
             if let Some(r) = self.renderer.as_mut() {
                 r.upload_icon_atlas(self.atlas.rgba(), self.atlas.width(), self.atlas.height());
             }
+            self.resync_registry_uvs();
         } else if let Some(r) = self.renderer.as_ref() {
             // Same dimensions → cheap single-cell update.
             r.write_icon_cell(&image.rgba, x, y, image.w, image.h);
         }
+        // Optional diagnostic: dump the atlas after every icon apply so we can
+        // inspect the final packed layout for overlapping cells. Enabled by
+        // env var. We always overwrite the same file → final state wins.
+        if std::env::var_os("LAUNCHPAD_DUMP_ATLAS").is_some() {
+            dump_atlas_png(&self.atlas);
+        }
+
         let state = if from_cache {
             IconState::Cached
         } else {
             IconState::Loaded
         };
+        // Use the post-grow UV (resync already updated the registry; for the
+        // non-grow path this is just the UV write_icon returned).
+        let new_uv = self.atlas.uv(slot).unwrap_or(this_uv);
         self.registry.update(app_id, |rec| {
-            rec.uv = Some(uv);
+            rec.uv = Some(new_uv);
             rec.icon_state = state;
         });
-        // Refresh icon instances so the new UV is uploaded. Cheap (hundreds of
-        // f32s) and keeps the draw call in sync with the atlas.
+        // Refresh icon instances so the new UVs are uploaded. Cheap (hundreds
+        // of f32s) and keeps the draw call in sync with the atlas.
+        self.rebuild_icon_instances();
+        self.request_redraw();
+    }
+
+    /// After an atlas grow, rewrite every app's cached UV from the new atlas
+    /// layout. Without this, apps loaded before the grow keep stale UVs and
+    /// sample the wrong cell, producing overlapping/garbled icons.
+    fn resync_registry_uvs(&mut self) {
+        // Collect (id, slot) first to avoid borrowing self.registry twice.
+        let entries: Vec<(AppId, u32)> = self
+            .registry
+            .apps()
+            .iter()
+            .map(|r| (r.app_id.clone(), r.slot))
+            .collect();
+        for (id, slot) in entries {
+            if let Some(uv) = self.atlas.uv(slot) {
+                self.registry.update(&id, |rec| {
+                    rec.uv = Some(uv);
+                });
+            }
+        }
+    }
+
+    /// Rebuild the icon-instance buffer from the current registry + layout and
+    /// push it to the GPU. Called whenever any app's UV may have changed.
+    fn rebuild_icon_instances(&mut self) {
         let owned = self.grid_apps_owned();
         let apps: Vec<grid::GridApp<'_>> = owned
             .iter()
@@ -312,7 +355,6 @@ impl App {
         if let Some(r) = self.renderer.as_mut() {
             r.set_icon_instances(&icon_instances);
         }
-        self.request_redraw();
     }
 
     /// Mark an app's icon as failed (placeholder stays), logging the error.
@@ -358,55 +400,58 @@ impl App {
             }
         }
 
-        // Now decide cache-vs-extract per app.
-        for (id, entry) in &new_snapshot {
-            let probe = CacheProbe {
-                app_id: id,
-                link_mtime: entry.link_mtime,
-                target_path: &entry.target_path,
-                target_mtime: entry.target_mtime,
-                icon_location: &entry.icon_location,
-                icon_index: entry.icon_index,
-            };
-            match self.cache.get_if_valid(&probe) {
-                Ok(Some(cached)) => {
-                    // Valid cache: apply immediately, mark Cached. Still queue
-                    // nothing — but we *could* revalidate in the background.
-                    // For now trust the cache fully (Phase 3 behavior).
-                    let rec_state = self.registry.get(id).map(|r| r.icon_state);
-                    if !matches!(rec_state, Some(IconState::Loaded | IconState::Cached)) {
-                        self.apply_cached_icon(id, cached);
-                        cached_applied += 1;
-                    }
-                }
-                _ => {
-                    // Miss or stale: queue extraction (unless already loading).
-                    let already_loading = matches!(
-                        self.registry.get(id).map(|r| r.icon_state),
-                        Some(IconState::Loading) | Some(IconState::Loaded)
-                    );
-                    if !already_loading {
-                        self.registry.update(id, |rec| {
-                            rec.icon_state = IconState::Loading;
-                        });
-                        requests.push(IconRequest {
-                            app_id: id.clone(),
-                            name: entry.name.clone(),
-                            link_path: PathBuf::from(&entry.link_path),
-                            link_mtime: entry.link_mtime,
-                            target_path: entry.target_path.clone(),
-                            target_mtime: entry.target_mtime,
-                            icon_location: entry.icon_location.clone(),
-                            icon_index: entry.icon_index,
-                            reason: if is_initial {
-                                IconReason::Fresh
-                            } else {
-                                IconReason::Updated
-                            },
-                        });
-                    }
-                }
+        // Display order = sorted by display name (matches the registry's sort).
+        // Process in this order so cache hits for the FIRST PAGE land first —
+        // the user sees the visible page's icons populate before off-screen
+        // pages. This is the cache-read prioritization: we don't load all icons
+        // at once in arbitrary map order; the visible page wins.
+        let per_page = self.layout.cols * self.layout.rows;
+        let mut display_order: Vec<&AppId> = new_snapshot.keys().collect();
+        display_order.sort_by(|a, b| {
+            let na = new_snapshot[*a].name.to_lowercase();
+            let nb = new_snapshot[*b].name.to_lowercase();
+            na.cmp(&nb)
+        });
+
+        // Pass 1: apply cached icons for the first page first.
+        for id in display_order.iter().take(per_page) {
+            cached_applied += self.apply_cache_if_available(id, &new_snapshot[id]);
+        }
+        // Pass 2: apply cached icons for the remaining pages.
+        for id in display_order.iter().skip(per_page) {
+            cached_applied += self.apply_cache_if_available(id, &new_snapshot[id]);
+        }
+
+        // Pass 3: queue extraction requests in display order (first-page misses
+        // are extracted before off-screen misses, so the visible page fills in
+        // first).
+        for id in display_order {
+            let entry = &new_snapshot[id];
+            let already_loading = matches!(
+                self.registry.get(id).map(|r| r.icon_state),
+                Some(IconState::Loading | IconState::Loaded | IconState::Cached)
+            );
+            if already_loading {
+                continue;
             }
+            self.registry.update(id, |rec| {
+                rec.icon_state = IconState::Loading;
+            });
+            requests.push(IconRequest {
+                app_id: id.clone(),
+                name: entry.name.clone(),
+                link_path: PathBuf::from(&entry.link_path),
+                link_mtime: entry.link_mtime,
+                target_path: entry.target_path.clone(),
+                target_mtime: entry.target_mtime,
+                icon_location: entry.icon_location.clone(),
+                icon_index: entry.icon_index,
+                reason: if is_initial {
+                    IconReason::Fresh
+                } else {
+                    IconReason::Updated
+                },
+            });
         }
 
         if cached_applied > 0 {
@@ -421,7 +466,8 @@ impl App {
         self.relayout();
         self.request_redraw();
 
-        // Dispatch extraction requests to the worker.
+        // Dispatch extraction requests to the worker (first page already
+        // first, thanks to the display-order sort above).
         if !requests.is_empty() {
             self.timer.mark_with(
                 prefix::ICON_WORKER,
@@ -436,6 +482,30 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Apply a cached icon for `id` if the cache holds a valid entry and the
+    /// app isn't already loaded. Returns 1 if applied, 0 otherwise.
+    fn apply_cache_if_available(&mut self, id: &AppId, entry: &SnapshotEntry) -> usize {
+        let probe = CacheProbe {
+            app_id: id,
+            link_mtime: entry.link_mtime,
+            target_path: &entry.target_path,
+            target_mtime: entry.target_mtime,
+            icon_location: &entry.icon_location,
+            icon_index: entry.icon_index,
+        };
+        let rec_state = self.registry.get(id).map(|r| r.icon_state);
+        if matches!(rec_state, Some(IconState::Loaded | IconState::Cached)) {
+            return 0;
+        }
+        match self.cache.get_if_valid(&probe) {
+            Ok(Some(cached)) => {
+                self.apply_cached_icon(id, cached);
+                1
+            }
+            _ => 0,
         }
     }
 
@@ -903,6 +973,28 @@ fn forward_inbox(
             }
         })
         .expect("spawn inbox-forwarder");
+}
+
+/// Diagnostic helper: write the current CPU-side icon atlas to
+/// `target/atlas-dump.png` so we can eyeball that cells don't overlap after a
+/// grow. Only runs when `LAUNCHPAD_DUMP_ATLAS` is set.
+fn dump_atlas_png(atlas: &IconAtlas) {
+    let path = std::path::Path::new("target/atlas-dump.png");
+    match image::save_buffer(
+        path,
+        atlas.rgba(),
+        atlas.width(),
+        atlas.height(),
+        image::ColorType::Rgba8,
+    ) {
+        Ok(()) => eprintln!(
+            "icon-atlas: dumped {}x{} atlas to {}",
+            atlas.width(),
+            atlas.height(),
+            path.display(),
+        ),
+        Err(e) => eprintln!("icon-atlas: dump failed: {e}"),
+    }
 }
 
 fn main() {
