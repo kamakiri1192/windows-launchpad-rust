@@ -21,6 +21,9 @@
 use crate::icons::AppEntry;
 use crate::scroll::ScrollBounds;
 
+const LABEL_CLICK_EXTRA_X: f32 = 10.0;
+const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
+
 /// One drawable tile, matching the WGSL `@location(0..3)` instance attributes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -102,6 +105,73 @@ impl GridLayout {
             page_extent: viewport_w,
             page_count: self.page_count,
         }
+    }
+
+    /// Return the app index under a screen-space pointer, if it hits a real app cell.
+    ///
+    /// `screen_x` / `screen_y` are physical window pixels. The renderer draws
+    /// each tile at `content_x + scroll_x`, so hit testing maps back with
+    /// `content_x = screen_x - scroll_x`. The clickable region intentionally
+    /// includes the label area, not just the icon square, because this is an app
+    /// launcher rather than a pure icon atlas demo.
+    pub fn hit_test_app(
+        &self,
+        viewport_w: f32,
+        screen_x: f32,
+        screen_y: f32,
+        scroll_x: f32,
+        app_count: usize,
+    ) -> Option<usize> {
+        if viewport_w <= 0.0
+            || !viewport_w.is_finite()
+            || !screen_x.is_finite()
+            || !screen_y.is_finite()
+            || !scroll_x.is_finite()
+        {
+            return None;
+        }
+
+        let content_x = screen_x - scroll_x;
+        if content_x < 0.0 {
+            return None;
+        }
+
+        let page = (content_x / viewport_w).floor() as usize;
+        if page >= self.page_count {
+            return None;
+        }
+
+        let x_in_page = content_x - page as f32 * viewport_w - self.margin_left;
+        let y_in_grid = screen_y - self.margin_top;
+        if y_in_grid < 0.0 {
+            return None;
+        }
+
+        let step_x = self.tile_size + self.gap;
+        let step_y = self.tile_size + self.row_gap;
+        let col = ((x_in_page + LABEL_CLICK_EXTRA_X) / step_x).floor() as usize;
+        let row = (y_in_grid / step_y).floor() as usize;
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+
+        let tile_x = col as f32 * step_x;
+        let tile_y = row as f32 * step_y;
+        let in_tile = x_in_page >= tile_x
+            && x_in_page <= tile_x + self.tile_size
+            && y_in_grid >= tile_y
+            && y_in_grid <= tile_y + self.tile_size;
+        let in_label = x_in_page >= tile_x - LABEL_CLICK_EXTRA_X
+            && x_in_page <= tile_x + self.tile_size + LABEL_CLICK_EXTRA_X
+            && y_in_grid >= tile_y + self.tile_size
+            && y_in_grid <= tile_y + self.tile_size + LABEL_CLICK_EXTRA_Y;
+        if !in_tile && !in_label {
+            return None;
+        }
+
+        let per_page = self.cols * self.rows;
+        let index = page * per_page + row * self.cols + col;
+        (index < app_count).then_some(index)
     }
 
     /// Produce the flat list of tile instances for the current layout.
@@ -378,6 +448,60 @@ mod tests {
             (inst[0].x - expected_left).abs() < 1e-2,
             "first tile x should center the grid"
         );
+    }
+
+    #[test]
+    fn hit_test_finds_first_tile() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size * 0.5;
+
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), Some(0));
+    }
+
+    #[test]
+    fn hit_test_includes_label_area() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size + 24.0;
+
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), Some(0));
+    }
+
+    #[test]
+    fn hit_test_ignores_space_between_app_cells() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + g.tile_size + g.gap * 0.5;
+        let y = g.margin_top + g.tile_size * 0.5;
+
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), None);
+    }
+
+    #[test]
+    fn hit_test_accounts_for_scroll_position() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let per_page = g.cols * g.rows;
+        let screen_x = g.margin_left + g.tile_size * 0.5;
+        let screen_y = g.margin_top + g.tile_size * 0.5;
+
+        assert_eq!(
+            g.hit_test_app(vw, screen_x, screen_y, -vw, g.total_tiles()),
+            Some(per_page)
+        );
+    }
+
+    #[test]
+    fn hit_test_ignores_empty_slots() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size * 0.5;
+
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, 0), None);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! Wires winit's event loop to the wgpu renderer and the scroll physics.
 //! Operation:
 //!   - Left-drag horizontally → page swipe with rubber-band + spring snap.
+//!   - Click an app icon → launch its Start Menu shortcut.
 //!   - Esc → quit.
 //!
 //! The window keeps redrawing only while the scroller is animating; when it
@@ -13,11 +14,13 @@
 mod grid;
 mod icon_pipeline;
 mod icons;
+mod launch;
 mod liquid_glass;
 mod renderer;
 mod scroll;
 mod text;
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use icons::LoadedIcons;
@@ -29,9 +32,19 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
+const CLICK_SLOP_PHYS: f32 = 8.0;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum UserEvent {
     BackdropFrameArrived,
+}
+
+/// The app picked by a click: enough to launch it later without holding a
+/// borrow on `loaded_icons`. Resolved at pointer-up, acted on after dismiss.
+#[derive(Debug, Clone)]
+struct AppLaunch {
+    name: String,
+    link_path: PathBuf,
 }
 
 /// Owns the renderer (which owns the window) plus the scroll state.
@@ -44,12 +57,17 @@ struct App {
     /// Loaded Start Menu apps + packed icon atlas. `None` until the first
     /// `resumed` (lazy-loaded so the window appears before icon extraction).
     loaded_icons: Option<LoadedIcons>,
-    /// Logical→physical scale factor, for converting pointer deltas.
+    /// Logical→physical scale factor for text layout only. Winit cursor events
+    /// already arrive in physical pixels.
     scale_factor: f32,
-    /// Last known pointer x in logical px.
-    pointer_logical_x: f32,
+    /// Last known pointer x in physical px.
+    pointer_phys_x: f32,
+    /// Last known pointer y in physical px.
+    pointer_phys_y: f32,
     /// Pointer x at drag start (physical px).
     drag_start_x: f32,
+    /// Pointer y at drag start (physical px).
+    drag_start_y: f32,
 }
 
 impl App {
@@ -62,8 +80,10 @@ impl App {
             layout: grid::GridLayout::default(),
             loaded_icons: None,
             scale_factor: 1.0,
-            pointer_logical_x: 0.0,
+            pointer_phys_x: 0.0,
+            pointer_phys_y: 0.0,
             drag_start_x: 0.0,
+            drag_start_y: 0.0,
         }
     }
 
@@ -150,19 +170,18 @@ impl App {
         self.loaded_icons = Some(loaded);
     }
 
-    fn handle_drag_start(&mut self, x_logical: f32) {
-        let x = x_logical * self.scale_factor;
-        self.drag_start_x = x;
+    fn handle_drag_start(&mut self, x_phys: f32, y_phys: f32) {
+        self.drag_start_x = x_phys;
+        self.drag_start_y = y_phys;
         if let Some(s) = self.scroller.as_mut() {
-            s.drag_start(x);
+            s.drag_start(x_phys);
         }
         self.request_redraw();
     }
 
-    fn handle_drag_move(&mut self, x_logical: f32) {
-        let x = x_logical * self.scale_factor;
+    fn handle_drag_move(&mut self, x_phys: f32) {
         if let Some(s) = self.scroller.as_mut() {
-            s.drag_move(x);
+            s.drag_move(x_phys);
         }
         self.request_redraw();
     }
@@ -172,6 +191,37 @@ impl App {
             s.drag_end();
         }
         self.request_redraw();
+    }
+
+    fn handle_pointer_release(&mut self) -> Option<AppLaunch> {
+        let x = self.pointer_phys_x;
+        let y = self.pointer_phys_y;
+        let dx = x - self.drag_start_x;
+        let dy = y - self.drag_start_y;
+        let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
+
+        let launch = is_click.then(|| self.resolve_clicked_app(x, y)).flatten();
+        self.handle_drag_end();
+        launch
+    }
+
+    /// Hit-test the pointer against the grid and return the clicked app's
+    /// launch info (name + shortcut path) without yet spawning the process.
+    /// Splitting "pick" from "launch" lets us dismiss the launcher first and
+    /// run the (tens-of-ms) `ShellExecuteW` afterwards, so the dismiss feels
+    /// instantaneous instead of blocking on target-app startup.
+    fn resolve_clicked_app(&self, x_phys: f32, y_phys: f32) -> Option<AppLaunch> {
+        let loaded = self.loaded_icons.as_ref()?;
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let app_index =
+            self.layout
+                .hit_test_app(w as f32, x_phys, y_phys, scroll_x, loaded.apps.len())?;
+        let app = loaded.apps.get(app_index)?;
+        Some(AppLaunch {
+            name: app.name.clone(),
+            link_path: app.link_path.clone(),
+        })
     }
 
     fn request_redraw(&self) {
@@ -319,7 +369,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.pointer_logical_x = position.x as f32;
+                self.pointer_phys_x = position.x as f32;
+                self.pointer_phys_y = position.y as f32;
                 let dragging = self
                     .scroller
                     .as_ref()
@@ -335,9 +386,32 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        self.handle_drag_start(self.pointer_logical_x);
+                        self.handle_drag_start(self.pointer_phys_x, self.pointer_phys_y);
                     }
-                    ElementState::Released => self.handle_drag_end(),
+                    ElementState::Released => {
+                        if let Some(app) = self.handle_pointer_release() {
+                            // Dismiss first, launch second. `set_visible(false)`
+                            // hands the hide straight to the DWM (a few ms),
+                            // while `ShellExecuteW` resolves the shortcut and
+                            // spawns the target (tens to hundreds of ms). Doing
+                            // them in this order makes the launcher feel like it
+                            // vanishes the instant you click, instead of freezing
+                            // on screen until the target app starts.
+                            if let Some(r) = self.renderer.as_ref() {
+                                r.window.set_visible(false);
+                            }
+                            event_loop.exit();
+                            match launch::open_shortcut(&app.link_path) {
+                                Ok(()) => eprintln!("launched {}", app.name),
+                                Err(err) => eprintln!(
+                                    "failed to launch {} ({}): {}",
+                                    app.name,
+                                    app.link_path.display(),
+                                    err
+                                ),
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {

@@ -12,14 +12,12 @@ use super::normalize::{normalize, DecodedIcon};
 use super::{IconAtlas, UvRect};
 
 /// One launcher entry: display name, optional icon UV rect (in the atlas), and
-/// the on-disk `.lnk` path (used later to launch the app).
+/// the on-disk `.lnk` path used to open the selected app.
 #[derive(Debug, Clone)]
 pub struct AppEntry {
     pub name: String,
     /// `None` when icon extraction failed → renderer shows the color tile.
     pub uv: Option<UvRect>,
-    /// Reserved for the future "launch app" action.
-    #[allow(dead_code)]
     pub link_path: PathBuf,
 }
 
