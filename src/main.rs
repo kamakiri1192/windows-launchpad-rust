@@ -5,6 +5,7 @@
 //! Wires winit's event loop to the wgpu renderer and the scroll physics.
 //! Operation:
 //!   - Left-drag horizontally → page swipe with rubber-band + spring snap.
+//!   - Click an app icon → launch its Start Menu shortcut.
 //!   - Esc → quit.
 //!
 //! The window keeps redrawing only while the scroller is animating; when it
@@ -13,6 +14,7 @@
 mod grid;
 mod icon_pipeline;
 mod icons;
+mod launch;
 mod liquid_glass;
 mod renderer;
 mod scroll;
@@ -28,6 +30,8 @@ use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
+
+const CLICK_SLOP_PHYS: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum UserEvent {
@@ -48,8 +52,12 @@ struct App {
     scale_factor: f32,
     /// Last known pointer x in logical px.
     pointer_logical_x: f32,
+    /// Last known pointer y in logical px.
+    pointer_logical_y: f32,
     /// Pointer x at drag start (physical px).
     drag_start_x: f32,
+    /// Pointer y at drag start (physical px).
+    drag_start_y: f32,
 }
 
 impl App {
@@ -63,7 +71,9 @@ impl App {
             loaded_icons: None,
             scale_factor: 1.0,
             pointer_logical_x: 0.0,
+            pointer_logical_y: 0.0,
             drag_start_x: 0.0,
+            drag_start_y: 0.0,
         }
     }
 
@@ -150,9 +160,11 @@ impl App {
         self.loaded_icons = Some(loaded);
     }
 
-    fn handle_drag_start(&mut self, x_logical: f32) {
+    fn handle_drag_start(&mut self, x_logical: f32, y_logical: f32) {
         let x = x_logical * self.scale_factor;
+        let y = y_logical * self.scale_factor;
         self.drag_start_x = x;
+        self.drag_start_y = y;
         if let Some(s) = self.scroller.as_mut() {
             s.drag_start(x);
         }
@@ -172,6 +184,50 @@ impl App {
             s.drag_end();
         }
         self.request_redraw();
+    }
+
+    fn handle_pointer_release(&mut self) {
+        let x = self.pointer_logical_x * self.scale_factor;
+        let y = self.pointer_logical_y * self.scale_factor;
+        let dx = x - self.drag_start_x;
+        let dy = y - self.drag_start_y;
+        let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
+
+        if is_click {
+            self.launch_app_at(x, y);
+        }
+
+        self.handle_drag_end();
+    }
+
+    fn launch_app_at(&self, x_phys: f32, y_phys: f32) {
+        let Some(loaded) = self.loaded_icons.as_ref() else {
+            return;
+        };
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let Some(app_index) = self.layout.hit_test_app(
+            w as f32,
+            x_phys,
+            y_phys,
+            scroll_x,
+            loaded.apps.len(),
+        ) else {
+            return;
+        };
+        let Some(app) = loaded.apps.get(app_index) else {
+            return;
+        };
+
+        match launch::open_shortcut(&app.link_path) {
+            Ok(()) => eprintln!("launched {}", app.name),
+            Err(err) => eprintln!(
+                "failed to launch {} ({}): {}",
+                app.name,
+                app.link_path.display(),
+                err
+            ),
+        }
     }
 
     fn request_redraw(&self) {
@@ -320,6 +376,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.pointer_logical_x = position.x as f32;
+                self.pointer_logical_y = position.y as f32;
                 let dragging = self
                     .scroller
                     .as_ref()
@@ -335,9 +392,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        self.handle_drag_start(self.pointer_logical_x);
+                        self.handle_drag_start(self.pointer_logical_x, self.pointer_logical_y);
                     }
-                    ElementState::Released => self.handle_drag_end(),
+                    ElementState::Released => self.handle_pointer_release(),
                 }
             }
             WindowEvent::RedrawRequested => {
