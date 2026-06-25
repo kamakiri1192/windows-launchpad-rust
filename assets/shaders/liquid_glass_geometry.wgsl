@@ -76,38 +76,37 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
     return d;
 }
 
-fn encode_displacement(v: vec2<f32>) -> vec2<f32> {
-    let max_d = max(u.max_displacement, 1.0);
-    return clamp(v / max_d * 0.5 + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
-}
-
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
+    let shadow_margin = 72.0;
     let pixel = frag_coord.xy;
     let sd = scene_sdf(pixel);
-    let alpha = 1.0 - smoothstep(-2.0, 0.0, sd);
 
-    if alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
-        return vec4<f32>(0.0);
+    if sd > shadow_margin {
+        return vec4<f32>(0.0, 0.0, 0.0, shadow_margin + 1.0);
+    }
+
+    if sd >= 0.0 || u.thickness <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, sd);
     }
 
     let dx = dpdx(sd);
     let dy = dpdy(sd);
-    let n_cos = max(u.thickness + sd, 0.0) / u.thickness;
+    let n_cos = clamp((u.thickness + sd) / u.thickness, 0.0, 1.0);
     let n_sin = sqrt(max(0.0, 1.0 - n_cos * n_cos));
     let normal = normalize(vec3<f32>(dx * n_cos, dy * n_cos, n_sin));
 
     let x = u.thickness + sd;
     let sqrt_term = sqrt(max(0.0, u.thickness * u.thickness - x * x));
     let height = select(sqrt_term, u.thickness, sd < -u.thickness);
-    let base_height = u.thickness * 8.0;
+    let base_height = u.thickness * 5.6;
     let incident = vec3<f32>(0.0, 0.0, -1.0);
     let inv_ri = 1.0 / max(u.refractive_index, 1.001);
     let refracted = refract(incident, normal, inv_ri);
     let ray_len = (height + base_height) / max(0.001, abs(refracted.z));
-    let displacement = refracted.xy * ray_len;
+    let edge_safety = smoothstep(0.0, 2.0, -sd);
+    let displacement = refracted.xy * ray_len * edge_safety;
     let normalized_height = clamp(height / max(u.thickness, 1.0), 0.0, 1.0);
 
-    let encoded = encode_displacement(displacement);
-    return vec4<f32>(encoded, normalized_height, alpha);
+    return vec4<f32>(displacement, normalized_height, sd);
 }

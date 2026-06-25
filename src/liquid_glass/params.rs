@@ -17,16 +17,16 @@ impl Default for LiquidGlassParams {
     fn default() -> Self {
         Self {
             enabled: true,
-            thickness: 26.0,
-            refractive_index: 1.42,
-            chromatic_aberration: 0.075,
-            blur_radius: 16.0,
-            saturation: 1.34,
-            glass_color: [0.94, 0.98, 1.0, 0.045],
+            thickness: 18.0,
+            refractive_index: 1.28,
+            chromatic_aberration: 0.028,
+            blur_radius: 18.0,
+            saturation: 1.18,
+            glass_color: [0.94, 0.98, 1.0, 0.035],
             light_direction: normalize2([-0.45, -0.9]),
-            light_intensity: 1.25,
-            ambient_strength: 0.28,
-            blend: 26.0,
+            light_intensity: 0.92,
+            ambient_strength: 0.22,
+            blend: 18.0,
         }
     }
 }
@@ -41,6 +41,8 @@ pub struct DebugOptions {
     pub disable_chromatic_aberration: bool,
     pub disable_edge_lighting: bool,
     pub disable_blur: bool,
+    pub show_shadow_only: bool,
+    pub show_spill_only: bool,
 }
 
 impl DebugOptions {
@@ -54,6 +56,8 @@ impl DebugOptions {
         flags |= (self.disable_chromatic_aberration as u32) << 5;
         flags |= (self.disable_edge_lighting as u32) << 6;
         flags |= (self.disable_blur as u32) << 7;
+        flags |= (self.show_shadow_only as u32) << 8;
+        flags |= (self.show_spill_only as u32) << 9;
         flags
     }
 }

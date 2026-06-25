@@ -155,6 +155,8 @@ struct WindowsGraphicsCapture {
     event_proxy: EventLoopProxy<UserEvent>,
     device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    video_device: windows::Win32::Graphics::Direct3D11::ID3D11VideoDevice,
+    video_context: windows::Win32::Graphics::Direct3D11::ID3D11VideoContext,
     _winrt_device: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice,
     _item: windows::Graphics::Capture::GraphicsCaptureItem,
     frame_pool: windows::Graphics::Capture::Direct3D11CaptureFramePool,
@@ -162,6 +164,7 @@ struct WindowsGraphicsCapture {
     frame_arrived_token: i64,
     staging: Option<StagingTexture>,
     shared: Option<SharedTexture>,
+    video_processor: Option<VideoProcessorState>,
     last_frame: Option<Vec<u8>>,
     fallback_reason: Option<String>,
 }
@@ -177,6 +180,24 @@ struct SharedTexture {
     width: u32,
     height: u32,
     imported: bool,
+}
+
+struct VideoProcessorState {
+    enumerator: windows::Win32::Graphics::Direct3D11::ID3D11VideoProcessorEnumerator,
+    processor: windows::Win32::Graphics::Direct3D11::ID3D11VideoProcessor,
+    input_width: u32,
+    input_height: u32,
+    output_width: u32,
+    output_height: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VideoScaleRequest {
+    source_width: u32,
+    source_height: u32,
+    crop: CropRect,
+    output_width: u32,
+    output_height: u32,
 }
 
 impl WindowsGraphicsCapture {
@@ -227,6 +248,8 @@ impl WindowsGraphicsCapture {
 
         let device = device.ok_or("D3D11CreateDevice did not return a device")?;
         let context = context.ok_or("D3D11CreateDevice did not return a context")?;
+        let video_device = device.cast().map_err(|e| e.to_string())?;
+        let video_context = context.cast().map_err(|e| e.to_string())?;
         let dxgi_device: IDXGIDevice = device.cast().map_err(|e| e.to_string())?;
         let inspectable = unsafe {
             CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device).map_err(|e| e.to_string())?
@@ -241,6 +264,8 @@ impl WindowsGraphicsCapture {
             event_proxy,
             device,
             context,
+            video_device,
+            video_context,
             _winrt_device: winrt_device,
             _item: item,
             frame_pool,
@@ -248,6 +273,7 @@ impl WindowsGraphicsCapture {
             frame_arrived_token,
             staging: None,
             shared: None,
+            video_processor: None,
             last_frame: None,
             fallback_reason: None,
         })
@@ -267,6 +293,7 @@ impl WindowsGraphicsCapture {
         self.frame_arrived_token = frame_arrived_token;
         self.staging = None;
         self.shared = None;
+        self.video_processor = None;
         self.last_frame = None;
         self.fallback_reason = None;
         Ok(())
@@ -304,12 +331,32 @@ impl WindowsGraphicsCapture {
         let height = height.max(1);
         self.ensure_shared(width, height)?;
 
+        let shared_texture = self
+            .shared
+            .as_ref()
+            .ok_or("shared texture was not created")?
+            .texture
+            .clone();
+        if crop.width() == width && crop.height() == height {
+            copy_crop_to_shared(&self.context, &source, &shared_texture, crop);
+        } else {
+            self.scale_crop_to_shared(
+                &source,
+                &shared_texture,
+                VideoScaleRequest {
+                    source_width: capture_w,
+                    source_height: capture_h,
+                    crop,
+                    output_width: width,
+                    output_height: height,
+                },
+            )?;
+        }
+
         let shared = self
             .shared
             .as_mut()
             .ok_or("shared texture was not created")?;
-        copy_crop_to_shared(&self.context, &source, &shared.texture, crop, width, height);
-
         if shared.imported {
             return Ok(Some(GpuCaptureFrame::Updated));
         }
@@ -331,8 +378,9 @@ impl WindowsGraphicsCapture {
         }
 
         use windows::Win32::Graphics::Direct3D11::{
-            ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_FLAG,
-            D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+            D3D11_CPU_ACCESS_FLAG, D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_DEFAULT,
         };
         use windows::Win32::Graphics::Dxgi::Common::{
             DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -349,7 +397,7 @@ impl WindowsGraphicsCapture {
                 Quality: 0,
             },
             Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
             CPUAccessFlags: D3D11_CPU_ACCESS_FLAG(0).0 as u32,
             MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32,
         };
@@ -368,6 +416,102 @@ impl WindowsGraphicsCapture {
             imported: false,
         });
         Ok(())
+    }
+
+    fn ensure_video_processor(
+        &mut self,
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+    ) -> Result<(), String> {
+        if self
+            .video_processor
+            .as_ref()
+            .map(|vp| {
+                vp.input_width == input_width
+                    && vp.input_height == input_height
+                    && vp.output_width == output_width
+                    && vp.output_height == output_height
+            })
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+            D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_RATIONAL;
+
+        let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            InputFrameRate: DXGI_RATIONAL {
+                Numerator: 60,
+                Denominator: 1,
+            },
+            InputWidth: input_width,
+            InputHeight: input_height,
+            OutputFrameRate: DXGI_RATIONAL {
+                Numerator: 60,
+                Denominator: 1,
+            },
+            OutputWidth: output_width,
+            OutputHeight: output_height,
+            Usage: D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+        };
+
+        let enumerator = unsafe {
+            self.video_device
+                .CreateVideoProcessorEnumerator(&desc)
+                .map_err(|e| format!("CreateVideoProcessorEnumerator failed: {e}"))?
+        };
+        let processor = unsafe {
+            self.video_device
+                .CreateVideoProcessor(&enumerator, 0)
+                .map_err(|e| format!("CreateVideoProcessor failed: {e}"))?
+        };
+
+        self.video_processor = Some(VideoProcessorState {
+            enumerator,
+            processor,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+        });
+        Ok(())
+    }
+
+    fn scale_crop_to_shared(
+        &mut self,
+        source: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+        dest: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+        request: VideoScaleRequest,
+    ) -> Result<(), String> {
+        self.ensure_video_processor(
+            request.source_width,
+            request.source_height,
+            request.output_width,
+            request.output_height,
+        )?;
+        let processor = self
+            .video_processor
+            .as_ref()
+            .ok_or("video processor was not created")?;
+        let result = blit_crop_with_video_processor(
+            &self.video_device,
+            &self.video_context,
+            processor,
+            source,
+            dest,
+            request,
+        );
+        unsafe {
+            self.context.Flush();
+        }
+        result
     }
 
     fn try_latest_frame_rgba(
@@ -587,8 +731,6 @@ fn copy_crop_to_shared(
     source: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
     dest: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
     crop: CropRect,
-    width: u32,
-    height: u32,
 ) {
     use windows::Win32::Graphics::Direct3D11::{ID3D11Resource, D3D11_BOX};
 
@@ -604,14 +746,145 @@ fn copy_crop_to_shared(
         left: crop.left,
         top: crop.top,
         front: 0,
-        right: (crop.left + width).min(crop.right),
-        bottom: (crop.top + height).min(crop.bottom),
+        right: crop.right,
+        bottom: crop.bottom,
         back: 1,
     };
     unsafe {
         context.CopySubresourceRegion(&dst_resource, 0, 0, 0, 0, &src_resource, 0, Some(&src_box));
         context.Flush();
     }
+}
+
+fn blit_crop_with_video_processor(
+    video_device: &windows::Win32::Graphics::Direct3D11::ID3D11VideoDevice,
+    video_context: &windows::Win32::Graphics::Direct3D11::ID3D11VideoContext,
+    processor: &VideoProcessorState,
+    source: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    dest: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    request: VideoScaleRequest,
+) -> Result<(), String> {
+    use std::mem::ManuallyDrop;
+    use std::ptr::null_mut;
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Direct3D11::{
+        ID3D11Resource, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
+        D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
+        D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
+        D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D,
+        D3D11_VPOV_DIMENSION_TEXTURE2D,
+    };
+
+    let src_resource: ID3D11Resource = source.cast().map_err(|e| e.to_string())?;
+    let dst_resource: ID3D11Resource = dest.cast().map_err(|e| e.to_string())?;
+
+    let input_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+        FourCC: 0,
+        ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
+            Texture2D: D3D11_TEX2D_VPIV {
+                MipSlice: 0,
+                ArraySlice: 0,
+            },
+        },
+    };
+    let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
+    unsafe {
+        video_device
+            .CreateVideoProcessorInputView(
+                &src_resource,
+                &processor.enumerator,
+                &input_desc,
+                Some(&mut input_view),
+            )
+            .map_err(|e| format!("CreateVideoProcessorInputView failed: {e}"))?;
+    }
+
+    let output_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+        ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+            Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+        },
+    };
+    let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
+    unsafe {
+        video_device
+            .CreateVideoProcessorOutputView(
+                &dst_resource,
+                &processor.enumerator,
+                &output_desc,
+                Some(&mut output_view),
+            )
+            .map_err(|e| format!("CreateVideoProcessorOutputView failed: {e}"))?;
+    }
+
+    let source_rect = RECT {
+        left: request.crop.left as i32,
+        top: request.crop.top as i32,
+        right: request.crop.right as i32,
+        bottom: request.crop.bottom as i32,
+    };
+    let dest_rect = RECT {
+        left: 0,
+        top: 0,
+        right: request.output_width as i32,
+        bottom: request.output_height as i32,
+    };
+    let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
+        Enable: true.into(),
+        OutputIndex: 0,
+        InputFrameOrField: 0,
+        PastFrames: 0,
+        FutureFrames: 0,
+        ppPastSurfaces: null_mut(),
+        pInputSurface: ManuallyDrop::new(input_view),
+        ppFutureSurfaces: null_mut(),
+        ppPastSurfacesRight: null_mut(),
+        pInputSurfaceRight: ManuallyDrop::new(None),
+        ppFutureSurfacesRight: null_mut(),
+    };
+
+    let result = unsafe {
+        video_context.VideoProcessorSetStreamFrameFormat(
+            &processor.processor,
+            0,
+            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+        );
+        video_context.VideoProcessorSetStreamSourceRect(
+            &processor.processor,
+            0,
+            true,
+            Some(&source_rect),
+        );
+        video_context.VideoProcessorSetStreamDestRect(
+            &processor.processor,
+            0,
+            true,
+            Some(&dest_rect),
+        );
+        video_context.VideoProcessorSetOutputTargetRect(
+            &processor.processor,
+            true,
+            Some(&dest_rect),
+        );
+        video_context
+            .VideoProcessorBlt(
+                &processor.processor,
+                output_view
+                    .as_ref()
+                    .ok_or("video processor output view was not created")?,
+                0,
+                std::slice::from_ref(&stream),
+            )
+            .map_err(|e| format!("VideoProcessorBlt failed: {e}"))
+    };
+
+    unsafe {
+        ManuallyDrop::drop(&mut stream.pInputSurface);
+        ManuallyDrop::drop(&mut stream.pInputSurfaceRight);
+    }
+    result
 }
 
 fn import_shared_texture(
@@ -702,7 +975,11 @@ impl BackdropCapture for WindowsGraphicsCapture {
                 frame
             }
             Err(err) => {
-                self.fallback_reason = Some(format!("GPU capture path failed: {err}"));
+                let reason = format!("GPU capture path failed: {err}");
+                if self.fallback_reason.as_deref() != Some(reason.as_str()) {
+                    eprintln!("liquid glass capture: GPU texture fallback: {err}");
+                }
+                self.fallback_reason = Some(reason);
                 None
             }
         }

@@ -532,6 +532,8 @@ impl LiquidGlassRenderer {
             }
             KeyCode::KeyE => self.debug.disable_edge_lighting = !self.debug.disable_edge_lighting,
             KeyCode::KeyL => self.debug.disable_blur = !self.debug.disable_blur,
+            KeyCode::KeyS => self.debug.show_shadow_only = !self.debug.show_shadow_only,
+            KeyCode::KeyP => self.debug.show_spill_only = !self.debug.show_spill_only,
             KeyCode::KeyV => self.params.enabled = !self.params.enabled,
             KeyCode::Digit1 => self.params.thickness = (self.params.thickness - 2.0).max(6.0),
             KeyCode::Digit2 => self.params.thickness = (self.params.thickness + 2.0).min(48.0),
