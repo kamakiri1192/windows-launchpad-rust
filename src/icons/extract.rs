@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use windows::core::{Interface, PCWSTR};
+use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, SIZE};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
@@ -28,24 +28,24 @@ use windows::Win32::Storage::FileSystem::{
     FindClose, FindFirstFileW, FindNextFileW, FILE_ATTRIBUTE_DIRECTORY, WIN32_FIND_DATAW,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IBindCtx, IPersistFile,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    FOLDERID_CommonStartMenu, FOLDERID_StartMenu, ILFree, IShellItemImageFactory, IShellLinkW,
-    SHCreateItemFromIDList, SHGetFileInfoW, SHGetImageList, SHGetKnownFolderPath, ShellLink,
-    KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON, SHGFI_SYSICONINDEX,
-    SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
+    FOLDERID_CommonStartMenu, FOLDERID_StartMenu, ILFree, IShellItem, IShellItemImageFactory,
+    IShellLinkW, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW,
+    SHGetImageList, SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS,
+    SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+    SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
 use super::DecodedIcon;
 
-/// One enumerated shortcut: its display name (derived from the file stem) and
-/// the `.lnk` path on disk.
+/// One enumerated shortcut: its Shell display name and the `.lnk` path on disk.
 #[derive(Debug, Clone)]
 pub struct Shortcut {
     pub name: String,
@@ -58,6 +58,7 @@ pub struct Shortcut {
 /// kept in encounter order. Errors are logged and skipped so a single
 /// unreadable folder can't blank the whole grid.
 pub fn enumerate_start_menu() -> Vec<Shortcut> {
+    let _com = ComScope::new();
     let mut out = Vec::new();
     for folder in [FOLDERID_StartMenu, FOLDERID_CommonStartMenu] {
         if let Some(path) = known_folder_path(folder) {
@@ -532,7 +533,7 @@ fn flip_rows(rgba: &mut [u8], w: u32, h: u32) {
 fn known_folder_path(folder: windows::core::GUID) -> Option<PathBuf> {
     // SAFETY: folder is a well-known GUID; htoken=None uses the current user.
     let pwstr = unsafe { SHGetKnownFolderPath(&folder, KNOWN_FOLDER_FLAG(0), None) }.ok()?;
-    let wide = unsafe { pwstr.to_string() }.ok()?;
+    let wide = take_pwstr_string(pwstr)?;
     Some(PathBuf::from(wide))
 }
 
@@ -561,13 +562,9 @@ fn collect_lnks(root: &Path, out: &mut Vec<Shortcut>) {
                 if is_dir {
                     stack.push(full);
                 } else if name.to_ascii_lowercase().ends_with(".lnk") {
-                    let stem = full
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(&name)
-                        .to_string();
+                    let stem = file_stem_or_name(&full, &name);
                     out.push(Shortcut {
-                        name: stem,
+                        name: localized_display_name(&full).unwrap_or(stem),
                         path: full,
                     });
                 }
@@ -583,6 +580,32 @@ fn collect_lnks(root: &Path, out: &mut Vec<Shortcut>) {
 /// `dwFileAttributes` mask for the directory bit, redefined locally because
 /// the crate's `FILE_ATTRIBUTE_DIRECTORY` constant route is verbose.
 const FILE_ATTRIBUTE_ATTRIBUTES_MASK: u32 = FILE_ATTRIBUTE_DIRECTORY.0;
+
+fn localized_display_name(path: &Path) -> Option<String> {
+    let wide = path_to_wide(path)?;
+    let item: IShellItem =
+        unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>) }.ok()?;
+    let name = unsafe { item.GetDisplayName(SIGDN_NORMALDISPLAY) }.ok()?;
+    normalize_shortcut_display_name(take_pwstr_string(name)?)
+}
+
+fn normalize_shortcut_display_name(name: String) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        None
+    } else if trimmed.to_ascii_lowercase().ends_with(".lnk") {
+        Some(trimmed[..trimmed.len() - 4].to_string())
+    } else {
+        Some(name)
+    }
+}
+
+fn file_stem_or_name(path: &Path, name: &str) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name)
+        .to_string()
+}
 
 fn is_dots(name: &[u16]) -> bool {
     let n = name.iter().position(|&c| c == 0).unwrap_or(name.len());
@@ -603,6 +626,15 @@ fn path_to_wide(path: &Path) -> Option<Vec<u16>> {
 fn wide_to_string(buf: &[u16]) -> String {
     let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     String::from_utf16_lossy(&buf[..n])
+}
+
+fn take_pwstr_string(pwstr: PWSTR) -> Option<String> {
+    if pwstr.is_null() {
+        return None;
+    }
+    let s = unsafe { pwstr.to_string() }.ok();
+    unsafe { CoTaskMemFree(Some(pwstr.as_ptr().cast())) };
+    s
 }
 
 // ---- RAII guards -------------------------------------------------------
@@ -664,9 +696,11 @@ impl Drop for FindGuard {
 ///
 /// Shell APIs (SHGetFileInfo etc.) technically work without explicit COM init,
 /// but `SHGetKnownFolderPath` requires it. We initialize STA to match the
-/// single-threaded UI context; nested init returns RPC_E_CHANGED_MODE which we
-/// treat as "already initialized" and ignore.
-pub struct ComScope;
+/// single-threaded UI context. If COM is already initialized differently on the
+/// current thread, we leave that apartment untouched.
+pub struct ComScope {
+    should_uninitialize: bool,
+}
 impl ComScope {
     /// Initialize COM for the current thread. The returned guard uninitializes
     /// on drop; if you don't need teardown, the `Ok(())` branch is harmless to
@@ -678,12 +712,16 @@ impl ComScope {
         if r.is_err() && r != windows::Win32::Foundation::RPC_E_CHANGED_MODE {
             eprintln!("CoInitializeEx failed: {r:?}");
         }
-        Self
+        Self {
+            should_uninitialize: r.is_ok(),
+        }
     }
 }
 impl Drop for ComScope {
     fn drop(&mut self) {
-        unsafe { CoUninitialize() };
+        if self.should_uninitialize {
+            unsafe { CoUninitialize() };
+        }
     }
 }
 
@@ -710,6 +748,27 @@ mod tests {
         assert!(is_dots(&[b'.' as u16, 0]));
         assert!(is_dots(&[b'.' as u16, b'.' as u16, 0]));
         assert!(!is_dots(&[b'a' as u16, 0]));
+    }
+
+    #[test]
+    fn file_stem_or_name_strips_lnk_extension() {
+        assert_eq!(
+            file_stem_or_name(Path::new("C:\\Start\\Example.lnk"), "Example.lnk"),
+            "Example"
+        );
+    }
+
+    #[test]
+    fn normalize_shortcut_display_name_strips_visible_lnk_extension() {
+        assert_eq!(
+            normalize_shortcut_display_name("Example.LNK".to_string()).as_deref(),
+            Some("Example")
+        );
+    }
+
+    #[test]
+    fn normalize_shortcut_display_name_rejects_blank_names() {
+        assert_eq!(normalize_shortcut_display_name("   ".to_string()), None);
     }
 
     #[test]
