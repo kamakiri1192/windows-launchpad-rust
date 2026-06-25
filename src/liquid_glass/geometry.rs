@@ -50,7 +50,7 @@ pub fn shapes_from_layout(layout: &GridLayout, viewport_w: f32) -> Vec<GlassShap
 
     shapes.extend(
         layout
-            .build_instances(viewport_w)
+            .build_instances(viewport_w, &[])
             .iter()
             .map(shape_from_tile),
     );

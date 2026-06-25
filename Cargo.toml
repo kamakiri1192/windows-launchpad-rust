@@ -13,6 +13,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 glam = "0.29"
 env_logger = "0.11"
 cosmic-text = "0.19"
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg"] }
 windows = { version = "0.62", features = [
     "Foundation",
     "Graphics_Capture",
@@ -26,9 +27,15 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Environment",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

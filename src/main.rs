@@ -11,6 +11,8 @@
 //! settles, we stop requesting frames to keep CPU/GPU idle.
 
 mod grid;
+mod icon_pipeline;
+mod icons;
 mod liquid_glass;
 mod renderer;
 mod scroll;
@@ -18,6 +20,7 @@ mod text;
 
 use std::time::Instant;
 
+use icons::LoadedIcons;
 use renderer::{DrawArgs, Renderer};
 use scroll::{Phase, Scroller};
 use winit::application::ApplicationHandler;
@@ -38,6 +41,9 @@ struct App {
     scroller: Option<Scroller>,
     text: Option<text::TextRenderer>,
     layout: grid::GridLayout,
+    /// Loaded Start Menu apps + packed icon atlas. `None` until the first
+    /// `resumed` (lazy-loaded so the window appears before icon extraction).
+    loaded_icons: Option<LoadedIcons>,
     /// Logical→physical scale factor, for converting pointer deltas.
     scale_factor: f32,
     /// Last known pointer x in logical px.
@@ -54,6 +60,7 @@ impl App {
             scroller: None,
             text: None,
             layout: grid::GridLayout::default(),
+            loaded_icons: None,
             scale_factor: 1.0,
             pointer_logical_x: 0.0,
             drag_start_x: 0.0,
@@ -80,10 +87,18 @@ impl App {
             s.set_bounds(bounds);
         }
 
+        // The app list (empty until icons finish loading) drives tile colors,
+        // labels, and icon instances.
+        let apps: &[icons::AppEntry] = self
+            .loaded_icons
+            .as_ref()
+            .map(|li| li.apps.as_slice())
+            .unwrap_or(&[]);
+
         // Build glyph quads from labels via the text renderer, then upload.
         let scale = self.scale_factor;
         let dirty = if let Some(t) = self.text.as_mut() {
-            let labels = self.layout.build_labels(w as f32);
+            let labels = self.layout.build_labels(w as f32, apps);
             let quads = t.layout_labels(&labels, scale);
             let dirty = t.atlas_dirty;
             // Upload quads + atlas to the renderer.
@@ -105,8 +120,34 @@ impl App {
 
         // Rebuild the GPU tile instance buffer so tiles re-center on the new size.
         if let Some(r) = self.renderer.as_mut() {
-            r.rebuild_instances(&self.layout);
+            r.rebuild_instances(&self.layout, apps);
+
+            // Build per-icon instances (one per tile that has an icon UV) and
+            // upload them. The atlas itself is uploaded once, when it first
+            // becomes available (see load_icons_if_needed).
+            let icon_instances = self.layout.build_icon_instances(w as f32, apps);
+            r.set_icon_instances(&icon_instances);
         }
+    }
+
+    /// Load Start Menu icons synchronously on first need, then upload the
+    /// atlas. Idempotent: a no-op once already loaded. Called from `resumed`.
+    fn load_icons_if_needed(&mut self) {
+        if self.loaded_icons.is_some() {
+            return;
+        }
+        let loaded = icons::load_all_icons();
+        eprintln!(
+            "loaded {} apps, {} with icons (atlas {}x{})",
+            loaded.apps.len(),
+            loaded.apps.iter().filter(|a| a.uv.is_some()).count(),
+            loaded.atlas.width,
+            loaded.atlas.height,
+        );
+        if let Some(r) = self.renderer.as_mut() {
+            r.upload_icon_atlas(&loaded.atlas.rgba, loaded.atlas.width, loaded.atlas.height);
+        }
+        self.loaded_icons = Some(loaded);
     }
 
     fn handle_drag_start(&mut self, x_logical: f32) {
@@ -196,6 +237,10 @@ impl ApplicationHandler<UserEvent> for App {
         self.renderer = Some(renderer);
         self.scroller = Some(scroller);
         self.text = Some(text);
+        // Load Start Menu icons + atlas before the first layout so the initial
+        // frame already shows real icons. This is synchronous (one-time cost
+        // at startup); scrolling later touches none of it.
+        self.load_icons_if_needed();
         // Lay out the initial labels and upload to the GPU.
         self.relayout();
         self.request_redraw();
