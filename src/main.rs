@@ -20,6 +20,7 @@ mod renderer;
 mod scroll;
 mod text;
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use icons::LoadedIcons;
@@ -36,6 +37,14 @@ const CLICK_SLOP_PHYS: f32 = 8.0;
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum UserEvent {
     BackdropFrameArrived,
+}
+
+/// The app picked by a click: enough to launch it later without holding a
+/// borrow on `loaded_icons`. Resolved at pointer-up, acted on after dismiss.
+#[derive(Debug, Clone)]
+struct AppLaunch {
+    name: String,
+    link_path: PathBuf,
 }
 
 /// Owns the renderer (which owns the window) plus the scroll state.
@@ -184,49 +193,35 @@ impl App {
         self.request_redraw();
     }
 
-    fn handle_pointer_release(&mut self) -> bool {
+    fn handle_pointer_release(&mut self) -> Option<AppLaunch> {
         let x = self.pointer_phys_x;
         let y = self.pointer_phys_y;
         let dx = x - self.drag_start_x;
         let dy = y - self.drag_start_y;
         let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
 
-        let launched = is_click && self.launch_app_at(x, y);
+        let launch = is_click.then(|| self.resolve_clicked_app(x, y)).flatten();
         self.handle_drag_end();
-        launched
+        launch
     }
 
-    fn launch_app_at(&self, x_phys: f32, y_phys: f32) -> bool {
-        let Some(loaded) = self.loaded_icons.as_ref() else {
-            return false;
-        };
+    /// Hit-test the pointer against the grid and return the clicked app's
+    /// launch info (name + shortcut path) without yet spawning the process.
+    /// Splitting "pick" from "launch" lets us dismiss the launcher first and
+    /// run the (tens-of-ms) `ShellExecuteW` afterwards, so the dismiss feels
+    /// instantaneous instead of blocking on target-app startup.
+    fn resolve_clicked_app(&self, x_phys: f32, y_phys: f32) -> Option<AppLaunch> {
+        let loaded = self.loaded_icons.as_ref()?;
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
-        let Some(app_index) =
+        let app_index =
             self.layout
-                .hit_test_app(w as f32, x_phys, y_phys, scroll_x, loaded.apps.len())
-        else {
-            return false;
-        };
-        let Some(app) = loaded.apps.get(app_index) else {
-            return false;
-        };
-
-        match launch::open_shortcut(&app.link_path) {
-            Ok(()) => {
-                eprintln!("launched {}", app.name);
-                true
-            }
-            Err(err) => {
-                eprintln!(
-                    "failed to launch {} ({}): {}",
-                    app.name,
-                    app.link_path.display(),
-                    err
-                );
-                false
-            }
-        }
+                .hit_test_app(w as f32, x_phys, y_phys, scroll_x, loaded.apps.len())?;
+        let app = loaded.apps.get(app_index)?;
+        Some(AppLaunch {
+            name: app.name.clone(),
+            link_path: app.link_path.clone(),
+        })
     }
 
     fn request_redraw(&self) {
@@ -394,11 +389,27 @@ impl ApplicationHandler<UserEvent> for App {
                         self.handle_drag_start(self.pointer_phys_x, self.pointer_phys_y);
                     }
                     ElementState::Released => {
-                        if self.handle_pointer_release() {
+                        if let Some(app) = self.handle_pointer_release() {
+                            // Dismiss first, launch second. `set_visible(false)`
+                            // hands the hide straight to the DWM (a few ms),
+                            // while `ShellExecuteW` resolves the shortcut and
+                            // spawns the target (tens to hundreds of ms). Doing
+                            // them in this order makes the launcher feel like it
+                            // vanishes the instant you click, instead of freezing
+                            // on screen until the target app starts.
                             if let Some(r) = self.renderer.as_ref() {
                                 r.window.set_visible(false);
                             }
                             event_loop.exit();
+                            match launch::open_shortcut(&app.link_path) {
+                                Ok(()) => eprintln!("launched {}", app.name),
+                                Err(err) => eprintln!(
+                                    "failed to launch {} ({}): {}",
+                                    app.name,
+                                    app.link_path.display(),
+                                    err
+                                ),
+                            }
                         }
                     }
                 }
