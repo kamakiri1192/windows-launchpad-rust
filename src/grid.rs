@@ -21,6 +21,9 @@
 use crate::icons::AppEntry;
 use crate::scroll::ScrollBounds;
 
+const LABEL_CLICK_EXTRA_X: f32 = 10.0;
+const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
+
 /// One drawable tile, matching the WGSL `@location(0..3)` instance attributes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -104,11 +107,13 @@ impl GridLayout {
         }
     }
 
-    /// Return the app index under a screen-space pointer, if it hits a real app tile.
+    /// Return the app index under a screen-space pointer, if it hits a real app cell.
     ///
-    /// `screen_x` / `screen_y` are physical window pixels. `scroll_x` is the
-    /// current scroller position; the renderer displays `content_x - scroll_x`,
-    /// so hit testing maps back with `content_x = screen_x + scroll_x`.
+    /// `screen_x` / `screen_y` are physical window pixels. The renderer draws
+    /// each tile at `content_x + scroll_x`, so hit testing maps back with
+    /// `content_x = screen_x - scroll_x`. The clickable region intentionally
+    /// includes the label area, not just the icon square, because this is an app
+    /// launcher rather than a pure icon atlas demo.
     pub fn hit_test_app(
         &self,
         viewport_w: f32,
@@ -126,7 +131,7 @@ impl GridLayout {
             return None;
         }
 
-        let content_x = screen_x + scroll_x;
+        let content_x = screen_x - scroll_x;
         if content_x < 0.0 {
             return None;
         }
@@ -138,13 +143,13 @@ impl GridLayout {
 
         let x_in_page = content_x - page as f32 * viewport_w - self.margin_left;
         let y_in_grid = screen_y - self.margin_top;
-        if x_in_page < 0.0 || y_in_grid < 0.0 {
+        if y_in_grid < 0.0 {
             return None;
         }
 
         let step_x = self.tile_size + self.gap;
         let step_y = self.tile_size + self.row_gap;
-        let col = (x_in_page / step_x).floor() as usize;
+        let col = ((x_in_page + LABEL_CLICK_EXTRA_X) / step_x).floor() as usize;
         let row = (y_in_grid / step_y).floor() as usize;
         if col >= self.cols || row >= self.rows {
             return None;
@@ -152,7 +157,10 @@ impl GridLayout {
 
         let tile_x = col as f32 * step_x;
         let tile_y = row as f32 * step_y;
-        if x_in_page > tile_x + self.tile_size || y_in_grid > tile_y + self.tile_size {
+        let within_x = x_in_page >= tile_x - LABEL_CLICK_EXTRA_X
+            && x_in_page <= tile_x + self.tile_size + LABEL_CLICK_EXTRA_X;
+        let within_y = y_in_grid >= tile_y && y_in_grid <= tile_y + self.tile_size + LABEL_CLICK_EXTRA_Y;
+        if !within_x || !within_y {
             return None;
         }
 
@@ -448,10 +456,20 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_ignores_tile_gaps() {
+    fn hit_test_includes_label_area() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
-        let x = g.margin_left + g.tile_size + g.gap * 0.5;
+        let x = g.margin_left + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size + 24.0;
+
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), Some(0));
+    }
+
+    #[test]
+    fn hit_test_ignores_space_between_app_cells() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + g.tile_size + LABEL_CLICK_EXTRA_X + 1.0;
         let y = g.margin_top + g.tile_size * 0.5;
 
         assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), None);
@@ -466,7 +484,7 @@ mod tests {
         let screen_y = g.margin_top + g.tile_size * 0.5;
 
         assert_eq!(
-            g.hit_test_app(vw, screen_x, screen_y, vw, g.total_tiles()),
+            g.hit_test_app(vw, screen_x, screen_y, -vw, g.total_tiles()),
             Some(per_page)
         );
     }
@@ -506,6 +524,6 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let inst = g.build_instances(vw, &[]);
-        assert!(inst.iter().all(|t| t.icon_index == -1.0));
+        assert!(inst.iter().all(|t| tile.icon_index == -1.0));
     }
 }
