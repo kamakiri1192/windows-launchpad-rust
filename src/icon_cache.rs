@@ -32,9 +32,14 @@ use crate::startup_timer::{self, prefix};
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Bumped when the *extraction* itself changes (new normalization target size,
-/// different alpha handling, etc.) so previously-extracted pixels are discarded
-/// even if the `.lnk` is byte-identical.
-pub const EXTRACTION_VERSION: u32 = 1;
+/// different alpha handling, a different extraction strategy, etc.) so
+/// previously-extracted pixels are discarded even if the `.lnk` is
+/// byte-identical.
+///
+/// v2: invalidates icons cached during the IShellItemImageFactory-primary
+/// experiment (which produced blank icons for Blender/Discord). Bumping forces
+/// a full re-extraction with the restored main image-list strategy.
+pub const EXTRACTION_VERSION: u32 = 2;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).
