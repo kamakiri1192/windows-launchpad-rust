@@ -58,16 +58,18 @@ from shader problems when the glass looks wrong.
 | Key | Flag | What it shows |
 |-----|------|---------------|
 | `B` | show_backdrop_texture        | The raw captured backdrop, fullscreen opaque |
-| `G` | show_geometry_texture        | The geometry texture RGB (displacement XY + height) |
-| `D` | show_displacement            | The displacement vectors (R, G, 0.5) |
-| `A` | show_alpha_mask              | The glass alpha mask as grayscale |
+| `G` | show_geometry_texture        | Signed distance and normalized height from the geometry texture |
+| `D` | show_displacement            | The raw displacement vectors visualized around neutral gray |
+| `A` | show_alpha_mask              | The glass inside mask derived from signed distance |
 | `F` | show_final_glass_only        | The final glass render only (no tiles/text on top) |
 | `C` | disable_chromatic_aberration | Turn chromatic aberration off |
 | `E` | disable_edge_lighting        | Turn edge lighting / specular off |
 | `L` | disable_blur                 | Turn the blur pyramid off (final samples the sharp backdrop) |
+| `S` | show_shadow_only             | Isolate the adaptive outside drop shadow |
+| `P` | show_spill_only              | Isolate the environmental spill outside the glass |
 
 Debug flags are bit-packed into `debug_flags` in the stderr log (bit 0 = `B`,
-bit 1 = `G`, ... bit 7 = `L`).
+bit 1 = `G`, ... bit 7 = `L`, bit 8 = `S`, bit 9 = `P`).
 
 ## Transparency notes (Windows)
 

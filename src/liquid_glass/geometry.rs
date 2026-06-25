@@ -1,4 +1,4 @@
-use crate::grid::{GridLayout, TileInstance};
+use crate::grid::GridLayout;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,7 +26,7 @@ impl GlassShape {
 }
 
 pub fn shapes_from_layout(layout: &GridLayout, viewport_w: f32) -> Vec<GlassShape> {
-    let mut shapes = Vec::with_capacity(layout.page_count + layout.total_tiles());
+    let mut shapes = Vec::with_capacity(layout.page_count);
     let grid_w =
         layout.cols as f32 * layout.tile_size + (layout.cols.saturating_sub(1)) as f32 * layout.gap;
     let grid_h = layout.rows as f32 * layout.tile_size
@@ -48,18 +48,5 @@ pub fn shapes_from_layout(layout: &GridLayout, viewport_w: f32) -> Vec<GlassShap
         ));
     }
 
-    shapes.extend(
-        layout
-            .build_instances(viewport_w, &[])
-            .iter()
-            .map(shape_from_tile),
-    );
     shapes
-}
-
-fn shape_from_tile(tile: &TileInstance) -> GlassShape {
-    let center = [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5];
-    let halo_size = tile.size + 18.0;
-    let size = [halo_size, halo_size];
-    GlassShape::rounded_rect(center, size, tile.radius + 9.0)
 }
