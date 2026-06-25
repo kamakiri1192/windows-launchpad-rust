@@ -21,6 +21,7 @@ use wgpu::{
 };
 
 use crate::grid::{GridLayout, TileInstance};
+use crate::icon_pipeline::IconInstance;
 use crate::liquid_glass::capture::FallbackCapture;
 use crate::liquid_glass::LiquidGlassRenderer;
 use crate::text::GlyphQuad;
@@ -65,6 +66,13 @@ pub struct Renderer {
     /// Copy of the bind group layout (for texture/sampler + uniform).
     #[allow(dead_code)]
     text_bgl: wgpu::BindGroupLayout,
+
+    // -- Icon rendering -------------------------------------------------
+    icon_pipeline: RenderPipeline,
+    icon_instance_buffer: Option<Buffer>,
+    icon_instance_count: u32,
+    icon_atlas_texture: wgpu::Texture,
+    icon_atlas_bind_group: wgpu::BindGroup,
 }
 
 pub struct DrawArgs {
@@ -231,8 +239,9 @@ impl Renderer {
             cache: None,
         });
 
-        // Instance buffer: written once.
-        let instances = layout.build_instances(config.width as f32);
+        // Instance buffer: written once. Empty app list here — `rebuild_instances`
+        // (called from App::relayout after icons load) supplies the real one.
+        let instances = layout.build_instances(config.width as f32, &[]);
         let instance_count = instances.len() as u32;
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instance buffer"),
@@ -369,6 +378,101 @@ impl Renderer {
             cache: None,
         });
 
+        // ---- Icon pipeline + atlas --------------------------------------
+        // The atlas starts as a 1×1 placeholder; the real atlas is uploaded
+        // once the launcher's icon set is loaded (see upload_icon_atlas).
+        let icon_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("icon atlas placeholder"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // sRGB-encoded: icon pixels are stored as sRGB bytes, so sampling
+            // auto-decodes to linear for correct compositing onto the sRGB
+            // surface. Using plain Rgba8Unorm would double-apply gamma and wash
+            // colors out.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let icon_atlas_view = icon_atlas_texture.create_view(&TextureViewDescriptor::default());
+        // The icon sampler matches the glyph sampler: clamp + linear.
+        let icon_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("icon atlas sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        // Reuse the text bind group layout: uniform[0] + texture[1] + sampler[2].
+        let icon_atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("icon atlas bg"),
+            layout: &text_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&icon_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&icon_sampler),
+                },
+            ],
+        });
+        let icon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("icon shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader_icon.wgsl").into()),
+        });
+        let icon_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("icon pipeline layout"),
+            bind_group_layouts: &[Some(&text_bgl)],
+            immediate_size: 0,
+        });
+        let icon_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("icon pipeline"),
+            layout: Some(&icon_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &icon_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[IconInstance::LAYOUT],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &icon_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    // The icon shader outputs premultiplied alpha (rgb*a, a).
+                    // PREMULTIPLIED_ALPHA_BLENDING = src.rgb*1 + dst.rgb*(1-src.a),
+                    // which is correct for premultiplied output. ALPHA_BLENDING
+                    // would double-multiply by alpha and wash colors out.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let capture = create_backdrop_capture(&window, event_proxy);
         let liquid_glass = LiquidGlassRenderer::new(
             &device,
@@ -400,6 +504,11 @@ impl Renderer {
             atlas_texture,
             atlas_bind_group,
             text_bgl,
+            icon_pipeline,
+            icon_instance_buffer: None,
+            icon_instance_count: 0,
+            icon_atlas_texture,
+            icon_atlas_bind_group,
         })
     }
 
@@ -431,8 +540,8 @@ impl Renderer {
     ///
     /// Call after a resize (or any change to tile data) so the GPU sees the
     /// new tile positions. The buffer is reallocated to fit.
-    pub fn rebuild_instances(&mut self, layout: &GridLayout) {
-        let instances = layout.build_instances(self.config.width as f32);
+    pub fn rebuild_instances(&mut self, layout: &GridLayout, apps: &[crate::icons::AppEntry]) {
+        let instances = layout.build_instances(self.config.width as f32, apps);
         self.instance_count = instances.len() as u32;
         self.instance_buffer = self
             .device
@@ -499,6 +608,102 @@ impl Renderer {
             &wgpu::util::BufferInitDescriptor {
                 label: Some("text instance buffer"),
                 contents: bytemuck::cast_slice(quads),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
+    /// Upload the icon atlas, replacing the 1×1 placeholder created in `new`.
+    ///
+    /// Reallocates the texture to match `(w, h)` and rebuilds the bind group
+    /// that points the icon pipeline at it. Call once after icons are loaded;
+    /// safe to call again if the atlas changes (e.g. app list refresh).
+    pub fn upload_icon_atlas(&mut self, rgba: &[u8], w: u32, h: u32) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("icon atlas"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // sRGB-encoded: icon pixels are stored as sRGB bytes, so sampling
+            // auto-decodes to linear for correct compositing onto the sRGB
+            // surface. Using plain Rgba8Unorm would double-apply gamma and wash
+            // colors out.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("icon atlas sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        // Rebind: same layout as text (uniform[0] + texture[1] + sampler[2]).
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("icon atlas bg"),
+            layout: &self.text_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        self.icon_atlas_texture = texture;
+        self.icon_atlas_bind_group = bind_group;
+    }
+
+    /// Replace the per-icon instance buffer (one entry per tile with an icon).
+    pub fn set_icon_instances(&mut self, instances: &[IconInstance]) {
+        self.icon_instance_count = instances.len() as u32;
+        if instances.is_empty() {
+            self.icon_instance_buffer = None;
+            return;
+        }
+        self.icon_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("icon instance buffer"),
+                contents: bytemuck::cast_slice(instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             },
         ));
@@ -596,7 +801,17 @@ impl Renderer {
             // 6 verts per quad (two tris), instance_count quads.
             pass.draw(0..6, 0..self.instance_count);
 
-            // Text labels: same pass, second draw call. Uses the same
+            // Icons: drawn over the color tiles before the labels. Samples the
+            // icon atlas through the shared (uniform + texture + sampler) bind
+            // group. Tiles without an icon simply aren't in this buffer.
+            if let Some(buf) = self.icon_instance_buffer.as_ref() {
+                pass.set_pipeline(&self.icon_pipeline);
+                pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..self.icon_instance_count);
+            }
+
+            // Text labels: same pass, third draw call. Uses the same
             // uniform (scroll/viewport) plus the atlas texture.
             if let Some(buf) = self.text_instance_buffer.as_ref() {
                 pass.set_pipeline(&self.text_pipeline);
