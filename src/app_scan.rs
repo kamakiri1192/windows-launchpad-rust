@@ -23,6 +23,7 @@ use crate::icons::extract::{self, enumerate_start_menu};
 /// `.lnk` can't blank the whole grid. The map is keyed by stable `AppId` so two
 /// scans of the same set compare equal regardless of iteration order.
 pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
+    let _com = extract::ComScope::new();
     let shortcuts = enumerate_start_menu();
     let mut out = BTreeMap::new();
     for sc in shortcuts {
