@@ -250,8 +250,9 @@ impl IconCache {
             )?;
             tx.execute("DELETE FROM retain", [])?;
             for chunk in present.chunks(500) {
+                // Each value tuple must be parenthesized: VALUES (?1),(?2),…
                 let placeholders = (0..chunk.len())
-                    .map(|i| format!("?{}", i + 1))
+                    .map(|i| format!("(?{})", i + 1))
                     .collect::<Vec<_>>()
                     .join(",");
                 let params: Vec<&str> = chunk.iter().map(|id| id.as_ref()).collect();
@@ -526,6 +527,44 @@ mod tests {
         c.put(&entry("app2", 10)).unwrap();
         c.forget(&id("app1")).unwrap();
         assert_eq!(c.count(), 1);
+    }
+
+    #[test]
+    fn retain_and_touch_keeps_present_and_drops_others() {
+        // Regression guard: the multi-row VALUES syntax must be valid SQL
+        // (earlier version emitted `VALUES ?1,?2,…` → syntax error).
+        let c = cache();
+        c.put(&entry("keep1", 10)).unwrap();
+        c.put(&entry("keep2", 10)).unwrap();
+        c.put(&entry("gone", 10)).unwrap();
+        assert_eq!(c.count(), 3);
+
+        c.retain_and_touch(&[id("keep1"), id("keep2")])
+            .expect("retain_and_touch must not error");
+
+        assert_eq!(c.count(), 2, "absent id should be GC'd");
+        assert!(c.get_if_valid(&probe(&id("keep1"), 10)).unwrap().is_some());
+        assert!(c.get_if_valid(&probe(&id("gone"), 10)).unwrap().is_none());
+    }
+
+    #[test]
+    fn retain_and_touch_handles_large_sets() {
+        // Exercise the 500-id chunking with a set bigger than one chunk.
+        let c = cache();
+        let mut present = Vec::new();
+        for i in 0..750 {
+            let e = entry(&format!("app{i}"), 1);
+            c.put(&e).unwrap();
+            present.push(e.app_id.clone());
+        }
+        // Add some rows that should be dropped.
+        c.put(&entry("extra1", 1)).unwrap();
+        c.put(&entry("extra2", 1)).unwrap();
+        assert_eq!(c.count(), 752);
+
+        c.retain_and_touch(&present)
+            .expect("no SQL error across chunks");
+        assert_eq!(c.count(), 750, "extras GC'd; all present kept");
     }
 
     #[test]
