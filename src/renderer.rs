@@ -551,7 +551,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
         self.liquid_glass
-            .rebuild_shapes(&self.device, layout, self.config.width as f32);
+            .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {

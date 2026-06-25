@@ -1,4 +1,4 @@
-use crate::grid::{GridLayout, TileInstance};
+use crate::grid::{GridApp, GridLayout, TileInstance};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,8 +25,12 @@ impl GlassShape {
     }
 }
 
-pub fn shapes_from_layout(layout: &GridLayout, viewport_w: f32) -> Vec<GlassShape> {
-    let mut shapes = Vec::with_capacity(layout.page_count + layout.total_tiles());
+pub fn shapes_from_layout(
+    layout: &GridLayout,
+    viewport_w: f32,
+    apps: &[GridApp<'_>],
+) -> Vec<GlassShape> {
+    let mut shapes = Vec::with_capacity(layout.page_count + apps.len().min(layout.total_tiles()));
     let grid_w =
         layout.cols as f32 * layout.tile_size + (layout.cols.saturating_sub(1)) as f32 * layout.gap;
     let grid_h = layout.rows as f32 * layout.tile_size
@@ -50,7 +54,7 @@ pub fn shapes_from_layout(layout: &GridLayout, viewport_w: f32) -> Vec<GlassShap
 
     shapes.extend(
         layout
-            .build_instances(viewport_w, &[])
+            .build_instances(viewport_w, apps)
             .iter()
             .map(shape_from_tile),
     );

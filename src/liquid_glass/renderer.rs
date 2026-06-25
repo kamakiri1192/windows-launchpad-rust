@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
-use crate::grid::GridLayout;
+use crate::grid::{GridApp, GridLayout};
 
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -168,7 +168,7 @@ impl LiquidGlassRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let shapes = shapes_from_layout(layout, width as f32);
+        let shapes = shapes_from_layout(layout, width as f32, &[]);
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
 
@@ -500,8 +500,14 @@ impl LiquidGlassRenderer {
         self.bind_backdrop_view(device, &view);
     }
 
-    pub fn rebuild_shapes(&mut self, device: &wgpu::Device, layout: &GridLayout, viewport_w: f32) {
-        let shapes = shapes_from_layout(layout, viewport_w);
+    pub fn rebuild_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &GridLayout,
+        viewport_w: f32,
+        apps: &[GridApp<'_>],
+    ) {
+        let shapes = shapes_from_layout(layout, viewport_w, apps);
         self.shape_buffer = create_shape_buffer(device, &shapes);
         self.shape_count = shapes.len() as u32;
         self.geometry_bind_group = create_geometry_bind_group(
