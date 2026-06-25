@@ -19,7 +19,7 @@ use cosmic_text::{
 };
 
 /// A drawable glyph quad, matching the WGSL instance attributes for the text
-/// pipeline. 32 bytes for clean GPU alignment.
+/// pipeline. 48 bytes for clean GPU alignment.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlyphQuad {
@@ -33,17 +33,26 @@ pub struct GlyphQuad {
     pub v0: f32,
     pub u1: f32,
     pub v1: f32,
+    /// Non-premultiplied RGBA tint applied in the fragment shader.
+    pub color: [f32; 4],
 }
 
 impl GlyphQuad {
-    pub const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+    pub const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GlyphQuad>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &GlyphQuad::ATTRIBS,
     };
+
+    fn with_offset_and_color(mut self, dx: f32, dy: f32, color: [f32; 4]) -> Self {
+        self.x += dx;
+        self.y += dy;
+        self.color = color;
+        self
+    }
 }
 
 /// One entry in the atlas: where the glyph bitmap lives (in pixels).
@@ -100,6 +109,14 @@ const PAD: u32 = 1;
 const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
 const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
+const LABEL_TEXT_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+/// Soft, layered shadow in logical px: (x offset, y offset, alpha).
+const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
+    (0.0, 1.0, 0.30),
+    (0.0, 2.0, 0.14),
+    (-0.7, 1.2, 0.10),
+    (0.7, 1.2, 0.10),
+];
 
 impl TextRenderer {
     pub fn new() -> Self {
@@ -132,7 +149,7 @@ impl TextRenderer {
     /// units the rest of the renderer uses). Pass the window's scale factor.
     pub fn layout_labels(&mut self, labels: &[Label], scale_factor: f32) -> Vec<GlyphQuad> {
         let placed = self.layout_phase(labels, scale_factor);
-        self.raster_phase(placed)
+        self.raster_phase(placed, scale_factor)
     }
 
     // -- Phase 1: cosmic-text layout --------------------------------------
@@ -182,8 +199,8 @@ impl TextRenderer {
 
     // -- Phase 2: rasterize into the atlas, emit quads --------------------
 
-    fn raster_phase(&mut self, placed: Vec<PlacedGlyph>) -> Vec<GlyphQuad> {
-        let mut quads = Vec::with_capacity(placed.len());
+    fn raster_phase(&mut self, placed: Vec<PlacedGlyph>, scale_factor: f32) -> Vec<GlyphQuad> {
+        let mut glyphs = Vec::with_capacity(placed.len());
         for g in placed {
             let entry = match self.ensure_glyph(&g.physical) {
                 Some(e) => e,
@@ -194,7 +211,7 @@ impl TextRenderer {
             //   y = pen_y - placement.top   (swash Y is up-positive)
             let bx = g.x + entry.off_x as f32;
             let by = g.y - entry.off_y as f32;
-            quads.push(GlyphQuad {
+            glyphs.push(GlyphQuad {
                 x: bx,
                 y: by,
                 w: entry.w as f32,
@@ -203,8 +220,21 @@ impl TextRenderer {
                 v0: entry.y as f32 / ATLAS_H as f32,
                 u1: (entry.x + entry.w) as f32 / ATLAS_W as f32,
                 v1: (entry.y + entry.h) as f32 / ATLAS_H as f32,
+                color: LABEL_TEXT_COLOR,
             });
         }
+
+        let mut quads = Vec::with_capacity(glyphs.len() * (LABEL_SHADOW_LAYERS.len() + 1));
+        for glyph in glyphs.iter().copied() {
+            for &(dx, dy, alpha) in LABEL_SHADOW_LAYERS {
+                quads.push(glyph.with_offset_and_color(
+                    dx * scale_factor,
+                    dy * scale_factor,
+                    [0.0, 0.0, 0.0, alpha],
+                ));
+            }
+        }
+        quads.extend(glyphs);
         quads
     }
 

@@ -3,7 +3,7 @@
 // One quad (two triangles) per glyph instance. The quad's screen position is
 // offset by the same per-frame `scroll_x` as the tiles, so labels scroll in
 // lockstep with icons. The fragment samples the glyph atlas and uses its
-// alpha as coverage, painting the glyph white (Launchpad-style labels).
+// alpha as coverage for each instance tint.
 
 struct Uniforms {
     viewport: vec2<f32>,
@@ -18,6 +18,7 @@ struct Uniforms {
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
 };
 
 @vertex
@@ -25,6 +26,7 @@ fn vs_main(
     @builtin(vertex_index) vi: u32,
     @location(0) xywh: vec4<f32>,  // (x, y, w, h) top-left + size, content px
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
+    @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
@@ -53,12 +55,14 @@ fn vs_main(
         // (the glyph's top row), which the CPU placed at atlas y = entry.y.
         mix(uvrect.w, uvrect.y, c.y),
     );
+    out.color = color;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
-    // Atlas stores RGBA; alpha is coverage. Paint white with that alpha.
-    return vec4<f32>(1.0, 1.0, 1.0, sampled.a);
+    // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
+    // the pipeline's standard alpha blending.
+    return vec4<f32>(in.color.rgb, sampled.a * in.color.a);
 }
