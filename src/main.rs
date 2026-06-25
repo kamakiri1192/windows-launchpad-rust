@@ -206,13 +206,10 @@ impl App {
         };
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
-        let Some(app_index) = self.layout.hit_test_app(
-            w as f32,
-            x_phys,
-            y_phys,
-            scroll_x,
-            loaded.apps.len(),
-        ) else {
+        let Some(app_index) =
+            self.layout
+                .hit_test_app(w as f32, x_phys, y_phys, scroll_x, loaded.apps.len())
+        else {
             return;
         };
         let Some(app) = loaded.apps.get(app_index) else {
