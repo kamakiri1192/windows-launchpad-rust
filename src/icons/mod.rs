@@ -1,6 +1,7 @@
 //! Icon loading, normalization, and atlas packing for the launcher grid.
 //!
-//! Pipeline:
+//! **Historical synchronous pipeline** (kept for the `IconAtlas::pack` tests and
+//! as a reference for the extraction strategy):
 //!   1. [`extract`] enumerates Start Menu `.lnk` files and pulls an `HICON`
 //!      from each, converting it to a `DecodedIcon` (raw RGBA).
 //!   2. [`normalize`] resizes every icon to a fixed `TARGET`×`TARGET` square.
@@ -8,14 +9,18 @@
 //!      UV rect of each entry, which the GPU icon pipeline samples.
 //!   4. [`loader`] orchestrates the above and returns the app list + atlas.
 //!
-//! All decoding happens **once at startup**. The atlas is uploaded to a single
-//! GPU texture; per-frame icon rendering is just a UV lookup + sample, so
-//! scrolling adds zero icon cost (same approach as macOS Launchpad).
+//! The **live** launcher no longer uses [`IconAtlas`] / [`loader`]; it uses the
+//! async, fixed-slot [`crate::icon_atlas::IconAtlas`] plus the icon worker,
+//! SQLite cache, and app registry. Those older pieces are kept here with
+//! `#[allow(dead_code)]` so the extraction logic and its tests stay available.
+
+#![allow(dead_code)]
 
 pub mod extract;
 pub mod loader;
 pub mod normalize;
 
+#[allow(unused_imports)] // legacy pipeline surface; kept for reference/tests
 pub use loader::{load_all_icons, AppEntry, LoadedIcons};
 #[allow(unused_imports)] // public API surface for icon decoding callers
 pub use normalize::{normalize, DecodedIcon, TARGET};

@@ -52,3 +52,15 @@ src/
 - スクロール量は每フレーム更新される 16 バイトの uniform だけで伝達され、
   バス負荷を最小化します。
 - 物理は半陰的 Euler 積分 + `dt` サブステップ分割で、60/120/144Hz で同じ感触を保ちます。
+
+## 起動高速化とアイコンキャッシュ
+
+起動体験を根本的に改善するため、初回描画をアイコン抽出から分離し、
+アイコン抽出をバックグラウンドworker化、SQLiteキャッシュによる2回目以降の
+即時表示、起動中のStart Menu差分反映、固定slot方式のicon atlasを実装しています。
+詳細は以下のドキュメントを参照してください。
+
+- [docs/STARTUP_PERFORMANCE.md](docs/STARTUP_PERFORMANCE.md) — 起動パイプラインの変更点、
+  UIスレッドとworkerの責務、起動時間ログ
+- [docs/ICON_CACHE.md](docs/ICON_CACHE.md) — SQLiteキャッシュの保存先・スキーマ・無効化条件
+- [docs/APP_REFRESH.md](docs/APP_REFRESH.md) — 起動中のStart Menu差分検出と追加/更新/削除対応

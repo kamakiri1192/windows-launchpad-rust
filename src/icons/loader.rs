@@ -1,9 +1,13 @@
 //! Orchestrate the full icon pipeline: enumerate → extract → normalize → pack.
 //!
-//! The result is [`LoadedIcons`], which the renderer turns into a GPU texture
-//! and per-tile instance data. Everything here runs synchronously at startup;
-//! failures degrade gracefully (the offending tile falls back to the HSL color
-//! tile from `grid.rs`).
+//! **Legacy synchronous path.** Retained for reference and the
+//! `IconAtlas::pack` unit tests; the live launcher now uses the async
+//! [`crate::icon_worker`] + [`crate::icon_cache`] + [`crate::app_registry`]
+//! pipeline (see `docs/STARTUP_PERFORMANCE.md`). This whole module is
+//! `#[allow(dead_code)]` so it stays compilable without polluting the build
+//! with warnings.
+
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 

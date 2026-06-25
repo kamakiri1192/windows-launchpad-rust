@@ -9,6 +9,20 @@ the Liquid Glass effect at runtime. Press the key while the window has focus.
 |-----|--------|
 | `Esc` | Quit the app |
 | `M`   | Toggle the OS window frame on/off (borderless by default; bring the title bar + resize edges back for debugging) |
+| `R`   | Clear the icon cache and re-extract every icon live (recover from a corrupted/stale cache without restarting) |
+
+## Icon cache reset (CLI)
+
+You can also wipe the on-disk cache before launch — handy if the launcher
+won't start cleanly or you want a guaranteed cold extraction:
+
+```
+cargo run --release -- --reset-cache
+```
+
+`--reset-cache` deletes `%LOCALAPPDATA%\Launchpad\cache.sqlite3` (and its
+WAL/SHM sidecars) before the cache is opened, so the next launch rebuilds it
+from scratch. The `R` key does the equivalent at runtime without restarting.
 
 ## Scrolling
 

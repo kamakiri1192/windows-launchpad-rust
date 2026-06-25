@@ -19,10 +19,30 @@
 //! ```
 
 use crate::icons::AppEntry;
+use crate::icons::UvRect;
 use crate::scroll::ScrollBounds;
 
 const LABEL_CLICK_EXTRA_X: f32 = 10.0;
 const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
+
+/// Minimal view of one app that the layout needs: a label and an optional
+/// atlas UV. This decouples [`GridLayout`] from whichever concrete app-list
+/// type owns the full records (old `AppEntry`, new `AppRecord`, …), so the
+/// grid code doesn't churn when the registry changes.
+#[derive(Debug, Clone, Copy)]
+pub struct GridApp<'a> {
+    pub name: &'a str,
+    pub uv: Option<UvRect>,
+}
+
+impl<'a> From<&'a AppEntry> for GridApp<'a> {
+    fn from(a: &'a AppEntry) -> Self {
+        Self {
+            name: &a.name,
+            uv: a.uv,
+        }
+    }
+}
 
 /// One drawable tile, matching the WGSL `@location(0..3)` instance attributes.
 #[repr(C)]
@@ -85,6 +105,20 @@ impl Default for GridLayout {
 }
 
 impl GridLayout {
+    /// Build a layout sized to hold `app_count` apps. `page_count` grows with
+    /// the app count so every app is reachable by scrolling (the old hard-coded
+    /// 3 pages = 105 tiles silently dropped apps beyond page 3). Always keeps
+    /// at least one page; pads to a full final page.
+    pub fn for_app_count(app_count: usize) -> Self {
+        let base = Self::default();
+        let per_page = base.cols * base.rows;
+        // At least 3 pages (keeps the default look when few apps), more if the
+        // app list overflows. div_ceil → ceil(app_count / per_page).
+        let needed = app_count.div_ceil(per_page);
+        let page_count = needed.max(3);
+        Self { page_count, ..base }
+    }
+
     /// Total tiles across all pages.
     pub fn total_tiles(&self) -> usize {
         self.cols * self.rows * self.page_count
@@ -185,7 +219,7 @@ impl GridLayout {
     /// takes its icon index from `apps[i]` if present (and if that app has an
     /// icon UV); otherwise it falls back to the HSL color tile with
     /// `icon_index = -1`.
-    pub fn build_instances(&self, viewport_w: f32, apps: &[AppEntry]) -> Vec<TileInstance> {
+    pub fn build_instances(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<TileInstance> {
         let per_page = self.cols * self.rows;
         let mut out = Vec::with_capacity(self.total_tiles());
         for p in 0..self.page_count {
@@ -236,7 +270,7 @@ impl GridLayout {
     pub fn build_icon_instances(
         &self,
         viewport_w: f32,
-        apps: &[AppEntry],
+        apps: &[GridApp<'_>],
     ) -> Vec<crate::icon_pipeline::IconInstance> {
         let per_page = self.cols * self.rows;
         let mut out = Vec::with_capacity(self.total_tiles());
@@ -275,7 +309,7 @@ impl GridLayout {
     /// Each label sits below its tile, horizontally centered, with a max
     /// width slightly wider than the tile so two lines can fit. The label
     /// text comes from `apps[i].name` when available, otherwise a dummy name.
-    pub fn build_labels(&self, viewport_w: f32, apps: &[AppEntry]) -> Vec<crate::text::Label> {
+    pub fn build_labels(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<crate::text::Label> {
         let per_page = self.cols * self.rows;
         let mut out = Vec::with_capacity(self.total_tiles());
         for p in 0..self.page_count {
@@ -292,7 +326,7 @@ impl GridLayout {
                     let label_y = tile_y + self.tile_size + 8.0;
                     let name = apps
                         .get(idx)
-                        .map(|a| a.name.as_str())
+                        .map(|a| a.name)
                         .unwrap_or_else(|| DUMMY_NAMES[idx % DUMMY_NAMES.len()]);
                     out.push(crate::text::Label {
                         text: name.to_string(),
@@ -391,14 +425,51 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Owned app-list helper for tests (so `GridApp` borrows stable storage).
+    struct OwnedApp {
+        name: String,
+        uv: Option<UvRect>,
+    }
+
     /// Build a minimal app list of `n` entries, half with icons (UV set),
     /// half without — exercises both code paths.
-    fn fake_apps(n: usize) -> Vec<AppEntry> {
+    fn fake_apps(n: usize) -> Vec<OwnedApp> {
+        (0..n)
+            .map(|i| OwnedApp {
+                name: format!("App{i}"),
+                uv: if i % 2 == 0 {
+                    Some(UvRect {
+                        u0: 0.0,
+                        v0: 0.0,
+                        u1: 0.1,
+                        v1: 0.1,
+                    })
+                } else {
+                    None
+                },
+            })
+            .collect()
+    }
+
+    /// Map owned apps to borrowed grid views.
+    fn view<'a>(apps: &'a [OwnedApp]) -> Vec<GridApp<'a>> {
+        apps.iter()
+            .map(|a| GridApp {
+                name: a.name.as_str(),
+                uv: a.uv,
+            })
+            .collect()
+    }
+
+    // Keep the legacy AppEntry builder around so the public `From<&AppEntry>`
+    // impl stays exercised (and compiles even when unused by other tests).
+    #[allow(dead_code)]
+    fn fake_app_entries(n: usize) -> Vec<AppEntry> {
         (0..n)
             .map(|i| AppEntry {
                 name: format!("App{i}"),
                 uv: if i % 2 == 0 {
-                    Some(crate::icons::UvRect {
+                    Some(UvRect {
                         u0: 0.0,
                         v0: 0.0,
                         u1: 0.1,
@@ -415,9 +486,10 @@ mod tests {
     #[test]
     fn counts_match() {
         let g = GridLayout::default().centered(1280.0);
+        let apps = fake_apps(g.total_tiles());
         assert_eq!(g.total_tiles(), 7 * 5 * 3);
         assert_eq!(
-            g.build_instances(1280.0, &fake_apps(g.total_tiles())).len(),
+            g.build_instances(1280.0, &view(&apps)).len(),
             g.total_tiles()
         );
     }
@@ -426,7 +498,8 @@ mod tests {
     fn pages_are_offset_by_one_viewport() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
-        let inst = g.build_instances(vw, &fake_apps(g.total_tiles()));
+        let apps = fake_apps(g.total_tiles());
+        let inst = g.build_instances(vw, &view(&apps));
         let p0 = inst[0].x;
         let p1 = inst[7 * 5].x; // first tile of page 1
                                 // Page 1's first tile must be exactly one viewport to the right.
@@ -441,7 +514,8 @@ mod tests {
         // The first tile of page 0 sits at margin_left, which centers the grid.
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
-        let inst = g.build_instances(vw, &fake_apps(g.total_tiles()));
+        let apps = fake_apps(g.total_tiles());
+        let inst = g.build_instances(vw, &view(&apps));
         let grid_w = g.cols as f32 * g.tile_size + (g.cols - 1) as f32 * g.gap;
         let expected_left = (vw - grid_w) * 0.5;
         assert!(
@@ -509,7 +583,7 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps = fake_apps(g.total_tiles());
-        let inst = g.build_instances(vw, &apps);
+        let inst = g.build_instances(vw, &view(&apps));
         // fake_apps gives even indices an icon (uv.is_some()).
         for (i, tile) in inst.iter().enumerate() {
             if apps[i].uv.is_some() {
@@ -528,7 +602,25 @@ mod tests {
         // Empty app list → every tile is a dummy color tile with icon_index -1.
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
-        let inst = g.build_instances(vw, &[]);
+        let apps: Vec<OwnedApp> = vec![];
+        let inst = g.build_instances(vw, &view(&apps));
         assert!(inst.iter().all(|t| t.icon_index == -1.0));
+    }
+
+    #[test]
+    fn for_app_count_grows_pages_beyond_default() {
+        // 7×5 = 35 apps/page. 3 default pages hold 105.
+        let per_page = 7 * 5;
+        // Few apps → at least the default 3 pages.
+        assert_eq!(GridLayout::for_app_count(10).page_count, 3);
+        assert_eq!(GridLayout::for_app_count(0).page_count, 3);
+        // Exactly fits default → still 3.
+        assert_eq!(GridLayout::for_app_count(per_page * 3).page_count, 3);
+        // One beyond default capacity → a 4th page.
+        assert_eq!(GridLayout::for_app_count(per_page * 3 + 1).page_count, 4);
+        // 132 apps → ceil(132/35) = 4 pages.
+        assert_eq!(GridLayout::for_app_count(132).page_count, 4);
+        // total_tiles grows accordingly so all apps get a slot.
+        assert!(GridLayout::for_app_count(132).total_tiles() >= 132);
     }
 }
