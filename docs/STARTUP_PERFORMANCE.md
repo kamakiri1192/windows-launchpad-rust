@@ -127,6 +127,8 @@ app-refresh: app list refresh (added=1 updated=2 removed=0) in 2ms (total 12052m
 - `cached icon apply`
 - `atlas + GPU texture upload`
 - `extracted icon` (per item, with `app_id=` and ms)
+- `normalized icon` (per item, the resize → TARGET step, with `app_id=` and ms)
+- `icon extraction total` (per batch, when the worker queue drains: `(<n> icons, extract=<ms>, total=<ms>)`)
 - `queue extraction`
 - `initial scan` / `detected diff` / `app list refresh` (refresh watcher)
 

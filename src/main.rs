@@ -268,8 +268,24 @@ impl App {
         let Some(slot) = self.registry.get(app_id).map(|r| r.slot) else {
             return;
         };
+        // `write_icon` may grow the CPU atlas if the slot is beyond the current
+        // capacity. Detect that so we can re-upload the *whole* atlas to the
+        // GPU (and reallocate the texture) instead of a partial cell write that
+        // would overrun the old texture bounds. This is the Phase-5 grow path.
+        let (gpu_w, gpu_h) = self
+            .renderer
+            .as_ref()
+            .map(|r| r.icon_atlas_size())
+            .unwrap_or((0, 0));
         let (x, y, uv) = self.atlas.write_icon(slot, &image);
-        if let Some(r) = self.renderer.as_ref() {
+        let atlas_grew = (self.atlas.width(), self.atlas.height()) != (gpu_w, gpu_h) || gpu_w == 0;
+        if atlas_grew {
+            // Full re-upload at the new dimensions.
+            if let Some(r) = self.renderer.as_mut() {
+                r.upload_icon_atlas(self.atlas.rgba(), self.atlas.width(), self.atlas.height());
+            }
+        } else if let Some(r) = self.renderer.as_ref() {
+            // Same dimensions → cheap single-cell update.
             r.write_icon_cell(&image.rgba, x, y, image.w, image.h);
         }
         let state = if from_cache {

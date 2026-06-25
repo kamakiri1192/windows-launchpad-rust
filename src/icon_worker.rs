@@ -80,41 +80,98 @@ fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender
     let _com = ComScope::new();
     let timer = startup_timer::get();
 
-    for req in rx {
-        // Process inside a catch_unwind so a panic in extraction can't kill
-        // the worker thread (and leave the UI waiting forever).
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            process_one(&req, &cache, &timer)
-        }));
-        let result = match outcome {
-            Ok(Ok(image)) => IconResult::Loaded {
-                app_id: req.app_id.clone(),
-                image,
-            },
-            Ok(Err(err)) => IconResult::Failed {
-                app_id: req.app_id.clone(),
-                error: err,
-            },
-            Err(_) => IconResult::Failed {
-                app_id: req.app_id.clone(),
-                error: "icon worker panicked".to_string(),
-            },
+    use std::time::Duration;
+    // Grace period after the queue drains during which a new request still
+    // counts as part of the same "batch" (so we don't fragment one logical
+    // startup scan into many totals). Anything arriving after this emits a
+    // fresh total for the next batch.
+    const BATCH_GRACE: Duration = Duration::from_millis(500);
+
+    // Per-batch accumulator for the "icon extraction total" timing mark.
+    let mut batch_start: Option<std::time::Instant> = None;
+    let mut batch_extract_ms: u128 = 0;
+    let mut batch_count: u32 = 0;
+
+    loop {
+        let next = if batch_start.is_some() {
+            // Mid-batch: wait briefly for more requests before closing it out.
+            rx.recv_timeout(BATCH_GRACE)
+        } else {
+            // Idle: block indefinitely for the next batch to start.
+            match rx.recv() {
+                Ok(m) => Ok(m),
+                Err(_) => break,
+            }
         };
-        if results.send(result).is_err() {
-            // UI went away; stop the worker.
-            break;
+
+        match next {
+            Ok(req) => {
+                if batch_start.is_none() {
+                    batch_start = Some(std::time::Instant::now());
+                }
+                let extract_t0 = std::time::Instant::now();
+                // Process inside a catch_unwind so a panic in extraction can't
+                // kill the worker (and leave the UI waiting forever).
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    process_one(&req, &cache, &timer)
+                }));
+                batch_extract_ms += extract_t0.elapsed().as_millis();
+                batch_count += 1;
+
+                let result = match outcome {
+                    Ok(Ok(image)) => IconResult::Loaded {
+                        app_id: req.app_id.clone(),
+                        image,
+                    },
+                    Ok(Err(err)) => IconResult::Failed {
+                        app_id: req.app_id.clone(),
+                        error: err,
+                    },
+                    Err(_) => IconResult::Failed {
+                        app_id: req.app_id.clone(),
+                        error: "icon worker panicked".to_string(),
+                    },
+                };
+                if results.send(result).is_err() {
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Queue drained → close out the batch with a total mark.
+                if let Some(start) = batch_start {
+                    timer.mark_with(
+                        prefix::ICON_WORKER,
+                        "icon extraction total",
+                        format!(
+                            "({} icons, extract={}ms, total={}ms)",
+                            batch_count,
+                            batch_extract_ms,
+                            start.elapsed().as_millis()
+                        ),
+                    );
+                }
+                batch_start = None;
+                batch_extract_ms = 0;
+                batch_count = 0;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }
 
 /// Extract + normalize + cache one icon. Returns the normalized image on
 /// success. Errors are logged with the app_id and propagated.
+///
+/// Emits two distinct timing marks per the startup-logging spec: an
+/// `icon-worker: extracted icon` mark covering the Shell/GDI extraction, and
+/// an `icon-worker: normalized icon` mark covering the resize-to-TARGET step.
 fn process_one(
     req: &IconRequest,
     cache: &IconCache,
     timer: &startup_timer::StartupTimer,
 ) -> Result<DecodedIcon, String> {
-    let start = std::time::Instant::now();
+    // (1) Extraction: Shell/GDI/COM → raw RGBA. This is the expensive part.
+    let extract_start = std::time::Instant::now();
     let raw = extract::extract_icon_from_lnk(&req.link_path).ok_or_else(|| {
         format!(
             "no icon for app_id={} path={}",
@@ -122,12 +179,27 @@ fn process_one(
             req.link_path.display()
         )
     })?;
-    let image = normalize(&raw);
-    let dur = start.elapsed();
     timer.mark_with(
         prefix::ICON_WORKER,
         "extracted icon",
-        format!("app_id={} ({}ms)", req.app_id, dur.as_millis()),
+        format!(
+            "app_id={} ({}ms)",
+            req.app_id,
+            extract_start.elapsed().as_millis()
+        ),
+    );
+
+    // (2) Normalization: resize → TARGET×TARGET straight-alpha square.
+    let normalize_start = std::time::Instant::now();
+    let image = normalize(&raw);
+    timer.mark_with(
+        prefix::ICON_WORKER,
+        "normalized icon",
+        format!(
+            "app_id={} ({}ms)",
+            req.app_id,
+            normalize_start.elapsed().as_millis()
+        ),
     );
 
     // Best-effort cache write; a failure is logged but doesn't fail the
