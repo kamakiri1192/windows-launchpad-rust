@@ -157,10 +157,15 @@ impl GridLayout {
 
         let tile_x = col as f32 * step_x;
         let tile_y = row as f32 * step_y;
-        let within_x = x_in_page >= tile_x - LABEL_CLICK_EXTRA_X
-            && x_in_page <= tile_x + self.tile_size + LABEL_CLICK_EXTRA_X;
-        let within_y = y_in_grid >= tile_y && y_in_grid <= tile_y + self.tile_size + LABEL_CLICK_EXTRA_Y;
-        if !within_x || !within_y {
+        let in_tile = x_in_page >= tile_x
+            && x_in_page <= tile_x + self.tile_size
+            && y_in_grid >= tile_y
+            && y_in_grid <= tile_y + self.tile_size;
+        let in_label = x_in_page >= tile_x - LABEL_CLICK_EXTRA_X
+            && x_in_page <= tile_x + self.tile_size + LABEL_CLICK_EXTRA_X
+            && y_in_grid >= tile_y + self.tile_size
+            && y_in_grid <= tile_y + self.tile_size + LABEL_CLICK_EXTRA_Y;
+        if !in_tile && !in_label {
             return None;
         }
 
@@ -469,7 +474,7 @@ mod tests {
     fn hit_test_ignores_space_between_app_cells() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
-        let x = g.margin_left + g.tile_size + LABEL_CLICK_EXTRA_X + 1.0;
+        let x = g.margin_left + g.tile_size + g.gap * 0.5;
         let y = g.margin_top + g.tile_size * 0.5;
 
         assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), None);
@@ -524,6 +529,6 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let inst = g.build_instances(vw, &[]);
-        assert!(inst.iter().all(|t| tile.icon_index == -1.0));
+        assert!(inst.iter().all(|t| t.icon_index == -1.0));
     }
 }
