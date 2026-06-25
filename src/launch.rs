@@ -9,7 +9,8 @@ pub fn open_shortcut(path: &Path) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let operation = wide_null("open");
-    let file = wide_null(&path.to_string_lossy());
+    let path_text = path.to_string_lossy();
+    let file = wide_null(path_text.as_ref());
 
     // SAFETY: all PCWSTR arguments point to NUL-terminated UTF-16 buffers that
     // live for the duration of the call. ShellExecuteW returns synchronously.
@@ -26,7 +27,7 @@ pub fn open_shortcut(path: &Path) -> Result<(), String> {
 
     // ShellExecuteW reports success with any value greater than 32. Values at
     // or below 32 are historical SE_ERR_* / Win32 error codes.
-    let code = result.0 as isize;
+    let code = result.0 as usize;
     if code > 32 {
         Ok(())
     } else {
