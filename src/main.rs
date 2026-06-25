@@ -48,12 +48,13 @@ struct App {
     /// Loaded Start Menu apps + packed icon atlas. `None` until the first
     /// `resumed` (lazy-loaded so the window appears before icon extraction).
     loaded_icons: Option<LoadedIcons>,
-    /// Logical→physical scale factor, for converting pointer deltas.
+    /// Logical→physical scale factor for text layout only. Winit cursor events
+    /// already arrive in physical pixels.
     scale_factor: f32,
-    /// Last known pointer x in logical px.
-    pointer_logical_x: f32,
-    /// Last known pointer y in logical px.
-    pointer_logical_y: f32,
+    /// Last known pointer x in physical px.
+    pointer_phys_x: f32,
+    /// Last known pointer y in physical px.
+    pointer_phys_y: f32,
     /// Pointer x at drag start (physical px).
     drag_start_x: f32,
     /// Pointer y at drag start (physical px).
@@ -70,8 +71,8 @@ impl App {
             layout: grid::GridLayout::default(),
             loaded_icons: None,
             scale_factor: 1.0,
-            pointer_logical_x: 0.0,
-            pointer_logical_y: 0.0,
+            pointer_phys_x: 0.0,
+            pointer_phys_y: 0.0,
             drag_start_x: 0.0,
             drag_start_y: 0.0,
         }
@@ -160,21 +161,18 @@ impl App {
         self.loaded_icons = Some(loaded);
     }
 
-    fn handle_drag_start(&mut self, x_logical: f32, y_logical: f32) {
-        let x = x_logical * self.scale_factor;
-        let y = y_logical * self.scale_factor;
-        self.drag_start_x = x;
-        self.drag_start_y = y;
+    fn handle_drag_start(&mut self, x_phys: f32, y_phys: f32) {
+        self.drag_start_x = x_phys;
+        self.drag_start_y = y_phys;
         if let Some(s) = self.scroller.as_mut() {
-            s.drag_start(x);
+            s.drag_start(x_phys);
         }
         self.request_redraw();
     }
 
-    fn handle_drag_move(&mut self, x_logical: f32) {
-        let x = x_logical * self.scale_factor;
+    fn handle_drag_move(&mut self, x_phys: f32) {
         if let Some(s) = self.scroller.as_mut() {
-            s.drag_move(x);
+            s.drag_move(x_phys);
         }
         self.request_redraw();
     }
@@ -187,8 +185,8 @@ impl App {
     }
 
     fn handle_pointer_release(&mut self) -> bool {
-        let x = self.pointer_logical_x * self.scale_factor;
-        let y = self.pointer_logical_y * self.scale_factor;
+        let x = self.pointer_phys_x;
+        let y = self.pointer_phys_y;
         let dx = x - self.drag_start_x;
         let dy = y - self.drag_start_y;
         let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
@@ -376,8 +374,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.pointer_logical_x = position.x as f32;
-                self.pointer_logical_y = position.y as f32;
+                self.pointer_phys_x = position.x as f32;
+                self.pointer_phys_y = position.y as f32;
                 let dragging = self
                     .scroller
                     .as_ref()
@@ -393,7 +391,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        self.handle_drag_start(self.pointer_logical_x, self.pointer_logical_y);
+                        self.handle_drag_start(self.pointer_phys_x, self.pointer_phys_y);
                     }
                     ElementState::Released => {
                         if self.handle_pointer_release() {
