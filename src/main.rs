@@ -365,6 +365,80 @@ impl App {
         });
     }
 
+    /// Manually reset the icon cache + re-extract every icon live (R key).
+    ///
+    /// Wipes the on-disk SQLite cache, clears every atlas cell back to
+    /// transparent, resets each app's icon state to `Missing`, then re-queues
+    /// the whole app set against the worker — so the visible page refills
+    /// progressively without restarting the launcher. The current snapshot
+    /// (names/targets/mtimes) is reused, so no Start Menu rescan is needed.
+    fn reset_icons(&mut self) {
+        eprintln!("icon-cache: manual reset requested — clearing cache + re-extracting");
+
+        // (1) Wipe the on-disk cache so the next probe is always a miss.
+        match self.cache.clear_all() {
+            Ok(n) => eprintln!("icon-cache: cleared {n} cached rows"),
+            Err(e) => eprintln!("icon-cache: clear_all failed: {e}"),
+        }
+
+        // (2) Clear every atlas slot and push the blanked atlas to the GPU so
+        // stale icons vanish immediately.
+        let max_slot = self.registry.max_slot();
+        for slot in 0..=max_slot {
+            self.atlas.clear_slot(slot);
+        }
+        if let Some(r) = self.renderer.as_mut() {
+            r.upload_icon_atlas(self.atlas.rgba(), self.atlas.width(), self.atlas.height());
+        }
+
+        // (3) Reset every app's icon state + drop its UV so placeholders show.
+        let ids: Vec<AppId> = self
+            .registry
+            .apps()
+            .iter()
+            .map(|r| r.app_id.clone())
+            .collect();
+        for id in &ids {
+            self.registry.update(id, |rec| {
+                rec.uv = None;
+                rec.icon_state = IconState::Missing;
+            });
+        }
+        self.rebuild_icon_instances();
+        self.request_redraw();
+
+        // (4) Re-queue extraction requests in display order (first page first)
+        // using the cached snapshot, so the worker re-extracts everything.
+        if let Some(handle) = self._worker.as_ref() {
+            let mut queued = 0usize;
+            for id in &ids {
+                let Some(entry) = self.snapshot.get(id) else {
+                    continue;
+                };
+                self.registry.update(id, |rec| {
+                    rec.icon_state = IconState::Loading;
+                });
+                let req = IconRequest {
+                    app_id: id.clone(),
+                    name: entry.name.clone(),
+                    link_path: PathBuf::from(&entry.link_path),
+                    link_mtime: entry.link_mtime,
+                    target_path: entry.target_path.clone(),
+                    target_mtime: entry.target_mtime,
+                    icon_location: entry.icon_location.clone(),
+                    icon_index: entry.icon_index,
+                    reason: IconReason::Fresh,
+                };
+                if handle.requests.send(req).is_err() {
+                    eprintln!("icon-worker: request channel closed during reset");
+                    break;
+                }
+                queued += 1;
+            }
+            eprintln!("icon-cache: re-queued {queued} icons for extraction");
+        }
+    }
+
     /// Populate the registry from a snapshot, applying cached icons where
     /// valid and queueing extraction requests for the rest. Called on the
     /// initial scan and on each refresh diff.
@@ -824,6 +898,13 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
 
+                // R clears the icon cache and re-extracts every icon live, so
+                // you can recover from a corrupted cache without restarting.
+                if key_code == winit::keyboard::KeyCode::KeyR {
+                    self.reset_icons();
+                    return;
+                }
+
                 if let Some(r) = self.renderer.as_mut() {
                     if r.handle_liquid_glass_key(key_code) {
                         self.request_redraw();
@@ -1003,6 +1084,19 @@ fn main() {
     startup_timer::install(timer.clone());
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+
+    // `--reset-cache`: delete the SQLite cache file before opening so the next
+    // launch rebuilds it from scratch. Useful if the cache is corrupted or you
+    // want to force a clean re-extraction without editing EXTRACTION_VERSION.
+    let reset_cache_requested = std::env::args().any(|a| a == "--reset-cache");
+    if reset_cache_requested {
+        let path = icon_cache::default_db_path();
+        eprintln!("icon-cache: --reset-cache: removing {}", path.display());
+        let _ = std::fs::remove_file(&path);
+        // WAL/SHM sidecars too, if present.
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
 
     // Open (or rebuild) the SQLite cache before the event loop starts so it's
     // ready for the first scan. This is cheap (a few ms) and never blocks on

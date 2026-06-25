@@ -225,6 +225,15 @@ impl IconCache {
         Ok(())
     }
 
+    /// Delete every cached icon row. Used by the manual reset (R key / CLI
+    /// `--reset-cache`) to force a full re-extraction. Returns the number of
+    /// rows deleted.
+    pub fn clear_all(&self) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        let n = conn.execute("DELETE FROM icons", [])?;
+        Ok(n)
+    }
+
     /// Bump `last_seen_at` for a set of ids that are still present, and delete
     /// any cached row whose id isn't in `present` (used after a rescan to GC
     /// stale rows). Runs in one transaction.
