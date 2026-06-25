@@ -1,0 +1,177 @@
+name: PR Windows Binary
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - ready_for_review
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-windows-binary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-pc-windows-msvc
+  BIN_NAME: launchpad-windows
+
+jobs:
+  build:
+    name: Build PR review binary
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'build:windows-binary')
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Build the pull request head commit that reviewers are checking.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-binary-${{ env.TARGET }}
+
+      - name: Build release binary
+        shell: pwsh
+        run: cargo build --release --locked --target $env:TARGET
+
+      - name: Package review artifact
+        id: package
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $shortSha = $env:PR_HEAD_SHA.Substring(0, 7)
+          if ($env:PR_NUMBER -eq "manual") {
+            $artifactName = "$env:BIN_NAME-manual-$shortSha-windows-x64"
+          } else {
+            $artifactName = "$env:BIN_NAME-pr-$env:PR_NUMBER-$shortSha-windows-x64"
+          }
+
+          $packageDir = "dist\$artifactName"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          $exePath = "target\$env:TARGET\release\$env:BIN_NAME.exe"
+          if (!(Test-Path $exePath)) {
+            throw "Binary not found: $exePath"
+          }
+
+          Copy-Item $exePath "$packageDir\$env:BIN_NAME.exe"
+          if (Test-Path README.md) {
+            Copy-Item README.md "$packageDir\README.md"
+          }
+
+          @"
+          Repository: $env:GITHUB_REPOSITORY
+          Workflow: $env:GITHUB_WORKFLOW
+          PR: $env:PR_NUMBER
+          Commit: $env:PR_HEAD_SHA
+          Target: $env:TARGET
+          Built at UTC: $((Get-Date).ToUniversalTime().ToString("o"))
+          Purpose: PR review artifact. Not an official release.
+          "@ | Set-Content -Encoding UTF8 "$packageDir\BUILD_INFO.txt"
+
+          $zipPath = "dist\$artifactName.zip"
+          Compress-Archive -Path "$packageDir\*" -DestinationPath $zipPath -Force
+
+          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+          "artifact_path=$zipPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload review artifact
+        id: upload_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Add artifact link to step summary
+        shell: pwsh
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+        run: |
+          @"
+          ## Windows review binary
+
+          - Artifact: [$env:ARTIFACT_NAME]($env:ARTIFACT_URL)
+          - Retention: 7 days
+          - Purpose: PR review artifact. Not an official release.
+          "@ >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Comment artifact link on PR
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MARKER: '<!-- pr-windows-binary-artifact -->'
+        with:
+          script: |
+            const marker = process.env.MARKER;
+            const artifactName = process.env.ARTIFACT_NAME;
+            const artifactUrl = process.env.ARTIFACT_URL;
+            const shortSha = process.env.PR_HEAD_SHA.slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const downloadUrl = artifactUrl || runUrl;
+
+            const body = [
+              marker,
+              '✅ Windows review binary has been built.',
+              '',
+              `- Artifact: [${artifactName}](${downloadUrl})`,
+              `- Workflow run: [PR Windows Binary](${runUrl})`,
+              `- Commit: \`${shortSha}\``,
+              '- Retention: 7 days',
+              '',
+              'This is a temporary PR review artifact, not an official release.',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
