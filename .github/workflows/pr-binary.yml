@@ -20,7 +20,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  REVIEW_BINARY_LABEL: build:windows-binary
   TARGET: x86_64-pc-windows-msvc
   BIN_NAME: launchpad-windows
 
