@@ -186,23 +186,21 @@ impl App {
         self.request_redraw();
     }
 
-    fn handle_pointer_release(&mut self) {
+    fn handle_pointer_release(&mut self) -> bool {
         let x = self.pointer_logical_x * self.scale_factor;
         let y = self.pointer_logical_y * self.scale_factor;
         let dx = x - self.drag_start_x;
         let dy = y - self.drag_start_y;
         let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
 
-        if is_click {
-            self.launch_app_at(x, y);
-        }
-
+        let launched = is_click && self.launch_app_at(x, y);
         self.handle_drag_end();
+        launched
     }
 
-    fn launch_app_at(&self, x_phys: f32, y_phys: f32) {
+    fn launch_app_at(&self, x_phys: f32, y_phys: f32) -> bool {
         let Some(loaded) = self.loaded_icons.as_ref() else {
-            return;
+            return false;
         };
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
@@ -210,20 +208,26 @@ impl App {
             self.layout
                 .hit_test_app(w as f32, x_phys, y_phys, scroll_x, loaded.apps.len())
         else {
-            return;
+            return false;
         };
         let Some(app) = loaded.apps.get(app_index) else {
-            return;
+            return false;
         };
 
         match launch::open_shortcut(&app.link_path) {
-            Ok(()) => eprintln!("launched {}", app.name),
-            Err(err) => eprintln!(
-                "failed to launch {} ({}): {}",
-                app.name,
-                app.link_path.display(),
-                err
-            ),
+            Ok(()) => {
+                eprintln!("launched {}", app.name);
+                true
+            }
+            Err(err) => {
+                eprintln!(
+                    "failed to launch {} ({}): {}",
+                    app.name,
+                    app.link_path.display(),
+                    err
+                );
+                false
+            }
         }
     }
 
@@ -391,7 +395,14 @@ impl ApplicationHandler<UserEvent> for App {
                     ElementState::Pressed => {
                         self.handle_drag_start(self.pointer_logical_x, self.pointer_logical_y);
                     }
-                    ElementState::Released => self.handle_pointer_release(),
+                    ElementState::Released => {
+                        if self.handle_pointer_release() {
+                            if let Some(r) = self.renderer.as_ref() {
+                                r.window.set_visible(false);
+                            }
+                            event_loop.exit();
+                        }
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
