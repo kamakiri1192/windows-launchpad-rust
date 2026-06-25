@@ -540,7 +540,7 @@ impl Renderer {
     ///
     /// Call after a resize (or any change to tile data) so the GPU sees the
     /// new tile positions. The buffer is reallocated to fit.
-    pub fn rebuild_instances(&mut self, layout: &GridLayout, apps: &[crate::icons::AppEntry]) {
+    pub fn rebuild_instances(&mut self, layout: &GridLayout, apps: &[crate::grid::GridApp<'_>]) {
         let instances = layout.build_instances(self.config.width as f32, apps);
         self.instance_count = instances.len() as u32;
         self.instance_buffer = self
@@ -622,27 +622,33 @@ impl Renderer {
         if w == 0 || h == 0 {
             return;
         }
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("icon atlas"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // sRGB-encoded: icon pixels are stored as sRGB bytes, so sampling
-            // auto-decodes to linear for correct compositing onto the sRGB
-            // surface. Using plain Rgba8Unorm would double-apply gamma and wash
-            // colors out.
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let reallocated =
+            self.icon_atlas_texture.width() != w || self.icon_atlas_texture.height() != h;
+        if reallocated {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("icon atlas"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // sRGB-encoded: icon pixels are stored as sRGB bytes, so sampling
+                // auto-decodes to linear for correct compositing onto the sRGB
+                // surface. Using plain Rgba8Unorm would double-apply gamma and wash
+                // colors out.
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.icon_atlas_texture = texture;
+            self.rebind_icon_atlas();
+        }
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture: &self.icon_atlas_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -659,7 +665,52 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        let view = texture.create_view(&TextureViewDescriptor::default());
+    }
+
+    /// Update a single icon's pixels in the existing atlas texture (fixed-slot
+    /// design). `(x, y)` is the icon's top-left inside the texture (including
+    /// the cell padding); `w`/`h` is the icon bitmap size. Cheaper than a full
+    /// `upload_icon_atlas` re-blit and leaves all other UVs untouched.
+    pub fn write_icon_cell(&self, rgba: &[u8], x: u32, y: u32, w: u32, h: u32) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.icon_atlas_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Current icon-atlas texture dimensions, so callers can tell whether a
+    /// full re-upload (reallocate) is needed vs. a partial cell write.
+    pub fn icon_atlas_size(&self) -> (u32, u32) {
+        (
+            self.icon_atlas_texture.width(),
+            self.icon_atlas_texture.height(),
+        )
+    }
+
+    /// Rebuild the icon atlas bind group against the current texture. Used
+    /// after `icon_atlas_texture` is reallocated.
+    fn rebind_icon_atlas(&mut self) {
+        let view = self
+            .icon_atlas_texture
+            .create_view(&TextureViewDescriptor::default());
         let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("icon atlas sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -670,8 +721,7 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        // Rebind: same layout as text (uniform[0] + texture[1] + sampler[2]).
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.icon_atlas_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("icon atlas bg"),
             layout: &self.text_bgl,
             entries: &[
@@ -689,8 +739,6 @@ impl Renderer {
                 },
             ],
         });
-        self.icon_atlas_texture = texture;
-        self.icon_atlas_bind_group = bind_group;
     }
 
     /// Replace the per-icon instance buffer (one entry per tile with an icon).

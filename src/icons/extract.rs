@@ -161,6 +161,78 @@ fn resolve_link_target(link: &IShellLinkW) -> Option<PathBuf> {
     Some(PathBuf::from(expanded))
 }
 
+/// Resolved `.lnk` metadata used for cache keying and snapshot diffing.
+///
+/// All fields are cheap, owned strings. `target_path` / `icon_location` are
+/// environment-expanded so two equivalent spellings compare equal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LnkMetadata {
+    /// Resolved target path (expanded), or `""` if unresolvable.
+    pub target_path: String,
+    /// Shell IconLocation field (expanded), or `""` if the icon lives in the
+    /// target exe.
+    pub icon_location: String,
+    /// Icon index inside `icon_location` (or the target when no location set).
+    pub icon_index: i32,
+}
+
+/// Load a `.lnk` and pull its target path + icon location/index.
+///
+/// This is the cache-key side of icon extraction: the *bytes* come from
+/// [`extract_icon_from_lnk`], but these metadata drive whether a cached icon is
+/// still valid. Kept separate so a cache probe can run without paying for GDI.
+pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
+    let link = load_shell_link(lnk)?;
+
+    let target_path = resolve_link_target(&link)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    // IconLocation: wide buffer + out param for the index.
+    let mut icon_buf = [0u16; 260];
+    let mut icon_index_i32: i32 = 0;
+    // SAFETY: icon_buf is a 260-wide writable buffer.
+    let icon_location = unsafe { link.GetIconLocation(&mut icon_buf, &mut icon_index_i32) }
+        .ok()
+        .map(|_| wide_to_string(&icon_buf))
+        .unwrap_or_default();
+
+    Some(LnkMetadata {
+        target_path,
+        icon_location: if icon_location.is_empty() {
+            icon_location
+        } else {
+            expand_env(&icon_location)
+        },
+        icon_index: icon_index_i32,
+    })
+}
+
+/// Last-modified time of a file as a `u64` Windows file-time, or `0` if it
+/// can't be read. Used purely for equality comparison in cache invalidation.
+pub fn file_mtime(path: &Path) -> u64 {
+    use windows::Win32::Storage::FileSystem::{GetFileAttributesExW, GET_FILEEX_INFO_LEVELS};
+
+    let Some(wide) = path_to_wide(path) else {
+        return 0;
+    };
+    let mut data = windows::Win32::Storage::FileSystem::WIN32_FILE_ATTRIBUTE_DATA::default();
+    // SAFETY: wide is NUL-terminated; data outlives the call.
+    let ok = unsafe {
+        GetFileAttributesExW(
+            PCWSTR(wide.as_ptr()),
+            GET_FILEEX_INFO_LEVELS(0),
+            &mut data as *mut _ as *mut core::ffi::c_void,
+        )
+    }
+    .is_ok();
+    if !ok {
+        return 0;
+    }
+    let ft = data.ftLastWriteTime;
+    ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
+}
+
 fn find_exe_by_shortcut_name(lnk: &Path) -> Option<PathBuf> {
     let stem = lnk.file_stem()?.to_string_lossy();
     let exe_name = normalized_exe_name(&stem)?;

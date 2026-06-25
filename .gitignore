@@ -12,3 +12,6 @@ Desktop.ini
 # Editor settings
 .vscode/
 .idea/
+
+# Local agent/tool settings
+.codex/
