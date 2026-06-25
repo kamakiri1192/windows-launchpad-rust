@@ -4,6 +4,16 @@ use std::path::Path;
 
 #[cfg(windows)]
 pub fn open_shortcut(path: &Path) -> Result<(), String> {
+    match shell_execute(path) {
+        Ok(()) => Ok(()),
+        Err(shell_err) => open_via_explorer(path).map_err(|explorer_err| {
+            format!("{shell_err}; explorer.exe fallback failed: {explorer_err}")
+        }),
+    }
+}
+
+#[cfg(windows)]
+fn shell_execute(path: &Path) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -33,6 +43,15 @@ pub fn open_shortcut(path: &Path) -> Result<(), String> {
     } else {
         Err(format!("ShellExecuteW failed with code {code}"))
     }
+}
+
+#[cfg(windows)]
+fn open_via_explorer(path: &Path) -> Result<(), String> {
+    std::process::Command::new("explorer.exe")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(not(windows))]
