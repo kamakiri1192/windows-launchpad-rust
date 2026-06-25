@@ -1,0 +1,104 @@
+name: PR Windows Binary
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - ready_for_review
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-windows-binary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  REVIEW_BINARY_LABEL: build:windows-binary
+  TARGET: x86_64-pc-windows-msvc
+  BIN_NAME: launchpad-windows
+
+jobs:
+  build:
+    name: Build PR review binary
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'build:windows-binary')
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Build the pull request head commit that reviewers are checking.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-binary-${{ env.TARGET }}
+
+      - name: Build release binary
+        shell: pwsh
+        run: cargo build --release --locked --target $env:TARGET
+
+      - name: Package review artifact
+        id: package
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $shortSha = $env:PR_HEAD_SHA.Substring(0, 7)
+          if ($env:PR_NUMBER -eq "manual") {
+            $artifactName = "$env:BIN_NAME-manual-$shortSha-windows-x64"
+          } else {
+            $artifactName = "$env:BIN_NAME-pr-$env:PR_NUMBER-$shortSha-windows-x64"
+          }
+
+          $packageDir = "dist\$artifactName"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          $exePath = "target\$env:TARGET\release\$env:BIN_NAME.exe"
+          if (!(Test-Path $exePath)) {
+            throw "Binary not found: $exePath"
+          }
+
+          Copy-Item $exePath "$packageDir\$env:BIN_NAME.exe"
+          if (Test-Path README.md) {
+            Copy-Item README.md "$packageDir\README.md"
+          }
+
+          @"
+          Repository: $env:GITHUB_REPOSITORY
+          Workflow: $env:GITHUB_WORKFLOW
+          PR: $env:PR_NUMBER
+          Commit: $env:PR_HEAD_SHA
+          Target: $env:TARGET
+          Built at UTC: $((Get-Date).ToUniversalTime().ToString("o"))
+          Purpose: PR review artifact. Not an official release.
+          "@ | Set-Content -Encoding UTF8 "$packageDir\BUILD_INFO.txt"
+
+          $zipPath = "dist\$artifactName.zip"
+          Compress-Archive -Path "$packageDir\*" -DestinationPath $zipPath -Force
+
+          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+          "artifact_path=$zipPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 7
