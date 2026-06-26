@@ -12,6 +12,13 @@ struct Uniforms {
     // Horizontal content offset (px). Negative scrolls right.
     scroll_x: f32,
     _pad: f32,
+    // Fixed page-frame center (physical px).
+    frame_center: vec2<f32>,
+    // Fixed page-frame half-size (physical px).
+    frame_half_size: vec2<f32>,
+    // Fixed page-frame corner radius (physical px) + pad.
+    frame_radius: f32,
+    frame_pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -94,14 +101,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // 1px AA edge on the squircle mask.
     let aa = 1.0;
     let mask = smoothstep(aa, -aa, d);
-    if mask <= 0.001 {
+
+    // Clip the squircle mask to the fixed page frame's rounded rect.
+    let local = in.pos.xy - u.frame_center;
+    let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
+    let frame_alpha = smoothstep(aa, -aa, fd);
+    let a = mask * frame_alpha;
+    if a <= 0.001 {
         discard;
     }
 
     // Sample straight-alpha from the atlas, then premultiply for correct
     // blending (the pipeline uses PREMULTIPLIED_ALPHA_BLENDING over the tiles).
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
-    let rgb = sampled.rgb;
-    let a = sampled.a * mask;
-    return vec4<f32>(rgb * a, a);
+    let out_a = sampled.a * a;
+    return vec4<f32>(sampled.rgb * out_a, out_a);
 }

@@ -25,6 +25,24 @@ use crate::scroll::ScrollBounds;
 const LABEL_CLICK_EXTRA_X: f32 = 10.0;
 const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
 
+// --- Fixed page-frame geometry --------------------------------------------
+// Single source of truth for the glass panel that surrounds the tiles. These
+// tune the panel's extra padding around the grid and its corner radius. They
+// are shared by `GridLayout::frame_panel_rect`, the liquid-glass shape build,
+// and the GPU-side rounded-rect clip in the tile/icon/text shaders.
+/// Extra height the panel adds to the raw grid height (incl. label rows).
+pub const FRAME_EXTRA_HEIGHT: f32 = 52.0;
+/// Extra height the panel adds *beyond* `FRAME_EXTRA_HEIGHT`.
+pub const FRAME_PADDING_HEIGHT: f32 = 72.0;
+/// Extra width the panel adds around the grid.
+pub const FRAME_PADDING_WIDTH: f32 = 112.0;
+/// Inset from the viewport edge the panel keeps (minimum gutter).
+pub const FRAME_VIEWPORT_GUTTER: f32 = 48.0;
+/// How far the panel's top sits above the first tile row (margin_top offset).
+pub const FRAME_TOP_OFFSET: f32 = 34.0;
+/// Corner radius of the page frame.
+pub const FRAME_CORNER_RADIUS: f32 = 54.0;
+
 /// Minimal view of one app that the layout needs: a label and an optional
 /// atlas UV. This decouples [`GridLayout`] from whichever concrete app-list
 /// type owns the full records (old `AppEntry`, new `AppRecord`, …), so the
@@ -136,6 +154,35 @@ impl GridLayout {
             page_extent: viewport_w,
             page_count: self.page_count,
         }
+    }
+
+    /// Raw grid width (cols of tiles + gaps) in physical pixels.
+    pub fn grid_w(&self) -> f32 {
+        self.cols as f32 * self.tile_size + (self.cols.saturating_sub(1)) as f32 * self.gap
+    }
+
+    /// Raw grid height (rows of tiles + gaps + label allowance) in physical px.
+    pub fn grid_h(&self) -> f32 {
+        self.rows as f32 * self.tile_size
+            + (self.rows.saturating_sub(1)) as f32 * self.row_gap
+            + FRAME_EXTRA_HEIGHT
+    }
+
+    /// Return the fixed page-frame panel rectangle in content/screen pixels.
+    /// This is the single source of truth for the glass panel that surrounds
+    /// the tiles and stays put while tiles scroll beneath.
+    ///
+    /// Returns `(center_x, center_y, width, height)` in physical pixels.
+    pub fn frame_panel_rect(&self, viewport_w: f32) -> (f32, f32, f32, f32) {
+        let grid_w = self.grid_w();
+        let grid_h = self.grid_h();
+        let panel_w = (grid_w + FRAME_PADDING_WIDTH)
+            .min(viewport_w - FRAME_VIEWPORT_GUTTER)
+            .max(grid_w);
+        let panel_h = grid_h + FRAME_PADDING_HEIGHT;
+        let center_x = self.margin_left + grid_w * 0.5;
+        let center_y = self.margin_top - FRAME_TOP_OFFSET + panel_h * 0.5;
+        (center_x, center_y, panel_w, panel_h)
     }
 
     /// Return the app index under a screen-space pointer, if it hits a real app cell.

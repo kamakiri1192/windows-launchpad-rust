@@ -10,8 +10,15 @@ struct Uniforms {
     viewport: vec2<f32>,
     // Horizontal content offset (px). Negative scrolls right.
     scroll_x: f32,
-    // Padding to keep the struct 16 bytes.
+    // Padding to keep the struct 16-byte aligned.
     _pad: f32,
+    // Fixed page-frame center (physical px).
+    frame_center: vec2<f32>,
+    // Fixed page-frame half-size (physical px).
+    frame_half_size: vec2<f32>,
+    // Fixed page-frame corner radius (physical px) + pad.
+    frame_radius: f32,
+    frame_pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -29,6 +36,7 @@ struct VsOut {
     @location(1) size_r: vec2<f32>,
     @location(2) color: vec3<f32>,
 };
+
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -92,8 +100,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if alpha <= 0.001 {
         discard;
     }
+    // Clip to the fixed page frame so tiles never spill past its rounded edge.
+    let a = clip_to_frame(in.pos.xy, alpha);
+    if a <= 0.001 {
+        discard;
+    }
     // Subtle top→bottom sheen for a touch of depth.
     let sheen = mix(1.08, 0.86, clamp(in.uv.y / in.size_r.x + 0.5, 0.0, 1.0));
     let col = in.color * sheen;
-    return vec4<f32>(col, alpha);
+    return vec4<f32>(col, a);
+}
+
+// Clip `alpha` against the fixed page frame's rounded rect. `frag` is the
+// fragment's physical-pixel position. Returns the (possibly zeroed) alpha.
+fn clip_to_frame(frag: vec2<f32>, alpha: f32) -> f32 {
+    let local = frag - u.frame_center;
+    let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
+    // 1px AA edge around the frame border.
+    let faa = 1.0;
+    return min(alpha, smoothstep(faa, -faa, fd));
 }

@@ -67,11 +67,29 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
     let count = min(u.shape_count, arrayLength(&shapes));
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
-        let center = vec2<f32>(shape.center.x + u.scroll_x, shape.center.y);
+        // shape_type == 1u marks fixed shapes (the page frame) that ignore scroll.
+        let cx = select(shape.center.x + u.scroll_x, shape.center.x, shape.shape_type == 1u);
+        let center = vec2<f32>(cx, shape.center.y);
         let local = pixel - center;
         let half_size = shape.size * 0.5;
         let shape_d = sdf_rrect(local, half_size, shape.radius);
         d = smooth_union(d, shape_d, u.blend);
+    }
+    return d;
+}
+
+// Signed distance to the fixed page frame (the first fixed shape). Tiles'
+// halos are clipped to this so they never spill past the frame while scrolling.
+fn frame_sdf(pixel: vec2<f32>) -> f32 {
+    let count = min(u.shape_count, arrayLength(&shapes));
+    var d = 1.0e6;
+    for (var i = 0u; i < count; i = i + 1u) {
+        let shape = shapes[i];
+        if shape.shape_type == 1u {
+            let local = pixel - shape.center;
+            d = sdf_rrect(local, shape.size * 0.5, shape.radius);
+            return d;
+        }
     }
     return d;
 }
@@ -87,7 +105,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let sd = scene_sdf(pixel);
     let alpha = 1.0 - smoothstep(-2.0, 0.0, sd);
 
-    if alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
+    // Clip the whole glass composite (frame + halos) to the fixed page frame so
+    // scrolling halos never bleed past the frame's rounded edge.
+    let fd = frame_sdf(pixel);
+    let clipped_alpha = alpha * (1.0 - smoothstep(-2.0, 0.0, fd));
+
+    if clipped_alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
         return vec4<f32>(0.0);
     }
 
@@ -109,5 +132,5 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let normalized_height = clamp(height / max(u.thickness, 1.0), 0.0, 1.0);
 
     let encoded = encode_displacement(displacement);
-    return vec4<f32>(encoded, normalized_height, alpha);
+    return vec4<f32>(encoded, normalized_height, clipped_alpha);
 }
