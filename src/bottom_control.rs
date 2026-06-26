@@ -66,6 +66,11 @@ const KIND_CLOSE: f32 = 3.0;
 /// returning to the search pill.
 pub const INDICATOR_HOLD: Duration = Duration::from_millis(1800);
 
+/// Cross-fade duration for the search pill ↔ page indicator swap. Snappy —
+/// the indicator is a transient info flash, so it should pop in and out
+/// quickly rather than slowly cross-fading.
+pub const INDICATOR_CROSSFADE: f32 = 0.18;
+
 /// Time for the pill → field expand animation, in seconds. iOS-ish: a touch
 /// slower than before so the sideways growth feels deliberate, not snappy.
 pub const EXPAND_DURATION: f32 = 0.42;
@@ -328,12 +333,12 @@ impl BottomControl {
             Mode::Pill => {
                 // Ease content back toward the pill visual.
                 self.step_expand(0.0, dt, COLLAPSE_DURATION);
-                self.step_indicator(0.0, dt, INDICATOR_HOLD.as_secs_f32() * 0.5);
+                self.step_indicator(0.0, dt, INDICATOR_CROSSFADE);
                 false
             }
             Mode::Indicator => {
                 self.step_expand(0.0, dt, COLLAPSE_DURATION);
-                self.step_indicator(1.0, dt, INDICATOR_HOLD.as_secs_f32() * 0.5);
+                self.step_indicator(1.0, dt, INDICATOR_CROSSFADE);
                 // Retire to the pill when the hold elapses.
                 match self.indicator_until {
                     Some(until) if now >= until => {
@@ -1017,5 +1022,33 @@ mod tests {
         let period: f32 = CARET_BLINK_PERIOD;
         let one_sec: f32 = 1.0;
         assert!(period >= one_sec, "blink period {period}s is too fast");
+    }
+
+    #[test]
+    fn indicator_crossfade_is_snappy() {
+        // The pill ↔ indicator swap should complete in ~INDICATOR_CROSSFADE
+        // seconds, much faster than the old slow cross-fade. Drive it
+        // explicitly to verify the timing.
+        let mut c = bc();
+        let t0 = Instant::now();
+        c.on_page_change(t0);
+        // Tick through the fade-in at 60 Hz; it should reach ~1.0 quickly.
+        let mut indicator_at_quarter = 0.0;
+        for i in 1..=60 {
+            let t = t0 + Duration::from_millis(i * 16);
+            c.tick(t, 1.0 / 60.0);
+            // Sample ~one INDICATOR_CROSSFADE (0.18s ≈ 11 frames) in.
+            if i == 11 {
+                indicator_at_quarter = c.indicator;
+            }
+            if c.indicator > 0.999 {
+                break;
+            }
+        }
+        // After one cross-fade duration (0.18s) it should be essentially done.
+        assert!(
+            indicator_at_quarter > 0.9,
+            "indicator only reached {indicator_at_quarter} after one crossfade duration; swap too slow"
+        );
     }
 }
