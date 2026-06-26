@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[test]
 fn all_wgsl_shaders_compile_with_wgpu_validation() {
@@ -31,8 +34,7 @@ fn all_wgsl_shaders_compile_with_wgpu_validation() {
 
         let mut failures = Vec::new();
         for path in shader_paths {
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+            let source = fs::read_to_string(&path).expect("failed to read WGSL shader");
             let label = path
                 .strip_prefix(&manifest_dir)
                 .unwrap_or(&path)
@@ -58,17 +60,14 @@ fn all_wgsl_shaders_compile_with_wgpu_validation() {
 }
 
 async fn request_adapter(instance: &wgpu::Instance) -> wgpu::Adapter {
-    match instance.request_adapter(&adapter_options(false)).await {
-        Ok(adapter) => adapter,
-        Err(primary_error) => instance
-            .request_adapter(&adapter_options(true))
-            .await
-            .unwrap_or_else(|fallback_error| {
-                panic!(
-                    "failed to request a wgpu adapter for WGSL validation; primary: {primary_error}; fallback: {fallback_error}"
-                )
-            }),
+    if let Ok(adapter) = instance.request_adapter(&adapter_options(false)).await {
+        return adapter;
     }
+
+    instance
+        .request_adapter(&adapter_options(true))
+        .await
+        .expect("failed to request a wgpu adapter for WGSL validation")
 }
 
 fn adapter_options(force_fallback_adapter: bool) -> wgpu::RequestAdapterOptions<'static> {
@@ -80,12 +79,8 @@ fn adapter_options(force_fallback_adapter: bool) -> wgpu::RequestAdapterOptions<
 }
 
 fn collect_wgsl_files(dir: &Path, output: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(dir).unwrap_or_else(|err| {
-        panic!("failed to read shader directory {}: {err}", dir.display())
-    }) {
-        let path = entry
-            .unwrap_or_else(|err| panic!("failed to read shader directory entry: {err}"))
-            .path();
+    for entry in fs::read_dir(dir).expect("failed to read shader directory") {
+        let path = entry.expect("failed to read shader directory entry").path();
 
         if path.is_dir() {
             collect_wgsl_files(&path, output);
