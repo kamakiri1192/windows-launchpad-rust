@@ -318,45 +318,6 @@ fn app_color(idx: usize) -> (f32, f32, f32) {
     hsl_to_rgb((idx as f32) * 0.0273, 0.62, 0.58)
 }
 
-/// macOS-Launchpad-flavored dummy app names (Japanese), cycled across tiles.
-const DUMMY_NAMES: &[&str] = &[
-    "メモ",
-    "設定",
-    "写真",
-    "メール",
-    "マップ",
-    "カレンダー",
-    "時計",
-    "天気",
-    "リマインダー",
-    "メッセージ",
-    "FaceTime",
-    "App Store",
-    "Safari",
-    "音楽",
-    "Podcasts",
-    "TV",
-    "ホーム",
-    "ヘルス",
-    "Wallet",
-    "計算機",
-    "ボイスメモ",
-    "コンパス",
-    "ショートカット",
-    "翻訳",
-    "ファイル",
-    "ヒント",
-    "プレビュー",
-    "テキストエディット",
-    "グラブ",
-    "ディスクユーティリティ",
-    "アクティビティモニタ",
-    "システム環境設定",
-    "メール",
-    "連絡先",
-    "メモ",
-];
-
 /// HSL → linear-ish RGB (simple conversion, good enough for placeholder art).
 fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     let h = h.rem_euclid(1.0);
