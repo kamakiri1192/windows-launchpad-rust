@@ -551,7 +551,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
         self.liquid_glass
-            .rebuild_shapes(&self.device, layout, self.config.width as f32);
+            .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -843,29 +843,38 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-            // 6 verts per quad (two tris), instance_count quads.
-            pass.draw(0..6, 0..self.instance_count);
+            // Color tiles. Skip entirely when there are no instances: an empty
+            // vertex buffer has no valid slice, and `draw` with zero instances
+            // is a no-op anyway.
+            if self.instance_count > 0 {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+                // 6 verts per quad (two tris), instance_count quads.
+                pass.draw(0..6, 0..self.instance_count);
+            }
 
             // Icons: drawn over the color tiles before the labels. Samples the
             // icon atlas through the shared (uniform + texture + sampler) bind
             // group. Tiles without an icon simply aren't in this buffer.
-            if let Some(buf) = self.icon_instance_buffer.as_ref() {
-                pass.set_pipeline(&self.icon_pipeline);
-                pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
-                pass.set_vertex_buffer(0, buf.slice(..));
-                pass.draw(0..6, 0..self.icon_instance_count);
+            if self.icon_instance_count > 0 {
+                if let Some(buf) = self.icon_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.icon_instance_count);
+                }
             }
 
             // Text labels: same pass, third draw call. Uses the same
             // uniform (scroll/viewport) plus the atlas texture.
-            if let Some(buf) = self.text_instance_buffer.as_ref() {
-                pass.set_pipeline(&self.text_pipeline);
-                pass.set_bind_group(0, &self.atlas_bind_group, &[]);
-                pass.set_vertex_buffer(0, buf.slice(..));
-                pass.draw(0..6, 0..self.text_instance_count);
+            if self.text_instance_count > 0 {
+                if let Some(buf) = self.text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.text_pipeline);
+                    pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.text_instance_count);
+                }
             }
         }
 

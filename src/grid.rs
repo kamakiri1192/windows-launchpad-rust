@@ -106,16 +106,13 @@ impl Default for GridLayout {
 
 impl GridLayout {
     /// Build a layout sized to hold `app_count` apps. `page_count` grows with
-    /// the app count so every app is reachable by scrolling (the old hard-coded
-    /// 3 pages = 105 tiles silently dropped apps beyond page 3). Always keeps
-    /// at least one page; pads to a full final page.
+    /// the app count so every app is reachable by scrolling. Always keeps at
+    /// least one page, but does not create blank trailing pages.
     pub fn for_app_count(app_count: usize) -> Self {
         let base = Self::default();
         let per_page = base.cols * base.rows;
-        // At least 3 pages (keeps the default look when few apps), more if the
-        // app list overflows. div_ceil → ceil(app_count / per_page).
         let needed = app_count.div_ceil(per_page);
-        let page_count = needed.max(3);
+        let page_count = needed.max(1);
         Self { page_count, ..base }
     }
 
@@ -208,57 +205,40 @@ impl GridLayout {
         (index < app_count).then_some(index)
     }
 
-    /// Produce the flat list of tile instances for the current layout.
+    /// Produce the flat list of tile instances for real apps in the current layout.
     ///
     /// Each page is laid out within its own viewport-wide "slot": the grid is
     /// centered via `margin_left`, and page `p` starts at `p * viewport_w`.
     /// Because the scroller also moves one viewport per page, every page is
     /// centered on screen at rest — regardless of window size.
     ///
-    /// Tiles are filled left-to-right, top-to-bottom across pages. Each tile
-    /// takes its icon index from `apps[i]` if present (and if that app has an
-    /// icon UV); otherwise it falls back to the HSL color tile with
-    /// `icon_index = -1`.
+    /// Tiles are filled left-to-right, top-to-bottom across pages. Apps without
+    /// loaded icon UVs still get color fallback tiles. Empty slots after the
+    /// last app are skipped.
     pub fn build_instances(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<TileInstance> {
         let per_page = self.cols * self.rows;
-        let mut out = Vec::with_capacity(self.total_tiles());
-        for p in 0..self.page_count {
-            // Each page occupies one viewport width; the grid is centered
-            // inside it by `margin_left`, so it sits at viewport center.
+        let app_count = apps.len().min(self.total_tiles());
+        let mut out = Vec::with_capacity(app_count);
+        for (idx, app) in apps.iter().take(app_count).enumerate() {
+            let p = idx / per_page;
+            let row_in_page = idx % per_page;
+            let r = row_in_page / self.cols;
+            let c = row_in_page % self.cols;
             let page_origin_x = (p as f32) * viewport_w;
-            for r in 0..self.rows {
-                for c in 0..self.cols {
-                    let idx = p * per_page + r * self.cols + c;
-                    let x =
-                        page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
-                    let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
-
-                    // App at this slot, if any.
-                    let (r_, g_, b_, icon_index) = match apps.get(idx) {
-                        Some(app) => {
-                            let (r, g, b) = app_color(idx);
-                            // icon_index >= 0 only if the app has an icon.
-                            let ii = if app.uv.is_some() { idx as f32 } else { -1.0 };
-                            (r, g, b, ii)
-                        }
-                        None => {
-                            // No app for this slot: dummy color tile, no icon.
-                            let (r, g, b) = hsl_to_rgb((idx as f32) * 0.0273, 0.62, 0.58);
-                            (r, g, b, -1.0)
-                        }
-                    };
-                    out.push(TileInstance {
-                        x,
-                        y,
-                        size: self.tile_size,
-                        radius: 19.0,
-                        r: r_,
-                        g: g_,
-                        b: b_,
-                        icon_index,
-                    });
-                }
-            }
+            let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
+            let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
+            let (r_, g_, b_) = app_color(idx);
+            let icon_index = if app.uv.is_some() { idx as f32 } else { -1.0 };
+            out.push(TileInstance {
+                x,
+                y,
+                size: self.tile_size,
+                radius: 19.0,
+                r: r_,
+                g: g_,
+                b: b_,
+                icon_index,
+            });
         }
         out
     }
@@ -273,33 +253,29 @@ impl GridLayout {
         apps: &[GridApp<'_>],
     ) -> Vec<crate::icon_pipeline::IconInstance> {
         let per_page = self.cols * self.rows;
-        let mut out = Vec::with_capacity(self.total_tiles());
-        for p in 0..self.page_count {
+        let app_count = apps.len().min(self.total_tiles());
+        let mut out = Vec::with_capacity(app_count);
+        for (idx, app) in apps.iter().take(app_count).enumerate() {
+            let Some(uv) = app.uv else {
+                continue;
+            };
+            let p = idx / per_page;
+            let row_in_page = idx % per_page;
+            let r = row_in_page / self.cols;
+            let c = row_in_page % self.cols;
             let page_origin_x = (p as f32) * viewport_w;
-            for r in 0..self.rows {
-                for c in 0..self.cols {
-                    let idx = p * per_page + r * self.cols + c;
-                    let Some(app) = apps.get(idx) else {
-                        continue;
-                    };
-                    let Some(uv) = app.uv else {
-                        continue;
-                    };
-                    let x =
-                        page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
-                    let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
-                    out.push(crate::icon_pipeline::IconInstance {
-                        x,
-                        y,
-                        size: self.tile_size,
-                        radius: 19.0,
-                        u0: uv.u0,
-                        v0: uv.v0,
-                        u1: uv.u1,
-                        v1: uv.v1,
-                    });
-                }
-            }
+            let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
+            let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
+            out.push(crate::icon_pipeline::IconInstance {
+                x,
+                y,
+                size: self.tile_size,
+                radius: 19.0,
+                u0: uv.u0,
+                v0: uv.v0,
+                u1: uv.u1,
+                v1: uv.v1,
+            });
         }
         out
     }
@@ -308,34 +284,28 @@ impl GridLayout {
     ///
     /// Each label sits below its tile, horizontally centered, with a max
     /// width slightly wider than the tile so two lines can fit. The label
-    /// text comes from `apps[i].name` when available, otherwise a dummy name.
+    /// text comes from `apps[i].name`; empty slots after the last app are skipped.
     pub fn build_labels(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<crate::text::Label> {
         let per_page = self.cols * self.rows;
-        let mut out = Vec::with_capacity(self.total_tiles());
-        for p in 0..self.page_count {
+        let app_count = apps.len().min(self.total_tiles());
+        let mut out = Vec::with_capacity(app_count);
+        for (idx, app) in apps.iter().take(app_count).enumerate() {
+            let p = idx / per_page;
+            let row_in_page = idx % per_page;
+            let r = row_in_page / self.cols;
+            let c = row_in_page % self.cols;
             let page_origin_x = (p as f32) * viewport_w;
-            for r in 0..self.rows {
-                for c in 0..self.cols {
-                    let idx = p * per_page + r * self.cols + c;
-                    let tile_x =
-                        page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
-                    let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
-                    let label_w = self.tile_size + 20.0; // a little wider than the tile
-                    let label_x = tile_x + (self.tile_size - label_w) * 0.5;
-                    // 12px below the tile bottom.
-                    let label_y = tile_y + self.tile_size + 8.0;
-                    let name = apps
-                        .get(idx)
-                        .map(|a| a.name)
-                        .unwrap_or_else(|| DUMMY_NAMES[idx % DUMMY_NAMES.len()]);
-                    out.push(crate::text::Label {
-                        text: name.to_string(),
-                        x: label_x,
-                        y: label_y,
-                        max_width: label_w,
-                    });
-                }
-            }
+            let tile_x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
+            let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
+            let label_w = self.tile_size + 20.0; // a little wider than the tile
+            let label_x = tile_x + (self.tile_size - label_w) * 0.5;
+            let label_y = tile_y + self.tile_size + 8.0;
+            out.push(crate::text::Label {
+                text: app.name.to_string(),
+                x: label_x,
+                y: label_y,
+                max_width: label_w,
+            });
         }
         out
     }
@@ -347,45 +317,6 @@ impl GridLayout {
 fn app_color(idx: usize) -> (f32, f32, f32) {
     hsl_to_rgb((idx as f32) * 0.0273, 0.62, 0.58)
 }
-
-/// macOS-Launchpad-flavored dummy app names (Japanese), cycled across tiles.
-const DUMMY_NAMES: &[&str] = &[
-    "メモ",
-    "設定",
-    "写真",
-    "メール",
-    "マップ",
-    "カレンダー",
-    "時計",
-    "天気",
-    "リマインダー",
-    "メッセージ",
-    "FaceTime",
-    "App Store",
-    "Safari",
-    "音楽",
-    "Podcasts",
-    "TV",
-    "ホーム",
-    "ヘルス",
-    "Wallet",
-    "計算機",
-    "ボイスメモ",
-    "コンパス",
-    "ショートカット",
-    "翻訳",
-    "ファイル",
-    "ヒント",
-    "プレビュー",
-    "テキストエディット",
-    "グラブ",
-    "ディスクユーティリティ",
-    "アクティビティモニタ",
-    "システム環境設定",
-    "メール",
-    "連絡先",
-    "メモ",
-];
 
 /// HSL → linear-ish RGB (simple conversion, good enough for placeholder art).
 fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
@@ -598,29 +529,37 @@ mod tests {
     }
 
     #[test]
-    fn missing_app_falls_back_to_no_icon() {
-        // Empty app list → every tile is a dummy color tile with icon_index -1.
+    fn empty_app_list_draws_no_tiles() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps: Vec<OwnedApp> = vec![];
         let inst = g.build_instances(vw, &view(&apps));
-        assert!(inst.iter().all(|t| t.icon_index == -1.0));
+        assert!(inst.is_empty());
     }
 
     #[test]
-    fn for_app_count_grows_pages_beyond_default() {
-        // 7×5 = 35 apps/page. 3 default pages hold 105.
+    fn partial_final_page_draws_only_real_apps() {
+        let vw = 1280.0;
         let per_page = 7 * 5;
-        // Few apps → at least the default 3 pages.
-        assert_eq!(GridLayout::for_app_count(10).page_count, 3);
-        assert_eq!(GridLayout::for_app_count(0).page_count, 3);
-        // Exactly fits default → still 3.
+        let app_count = per_page + 3;
+        let g = GridLayout::for_app_count(app_count).centered(vw);
+        let apps = fake_apps(app_count);
+
+        assert_eq!(g.page_count, 2);
+        assert_eq!(g.build_instances(vw, &view(&apps)).len(), app_count);
+        assert_eq!(g.build_labels(vw, &view(&apps)).len(), app_count);
+    }
+
+    #[test]
+    fn for_app_count_uses_only_needed_pages() {
+        let per_page = 7 * 5;
+        assert_eq!(GridLayout::for_app_count(10).page_count, 1);
+        assert_eq!(GridLayout::for_app_count(0).page_count, 1);
+        assert_eq!(GridLayout::for_app_count(per_page).page_count, 1);
+        assert_eq!(GridLayout::for_app_count(per_page + 1).page_count, 2);
         assert_eq!(GridLayout::for_app_count(per_page * 3).page_count, 3);
-        // One beyond default capacity → a 4th page.
         assert_eq!(GridLayout::for_app_count(per_page * 3 + 1).page_count, 4);
-        // 132 apps → ceil(132/35) = 4 pages.
         assert_eq!(GridLayout::for_app_count(132).page_count, 4);
-        // total_tiles grows accordingly so all apps get a slot.
         assert!(GridLayout::for_app_count(132).total_tiles() >= 132);
     }
 }

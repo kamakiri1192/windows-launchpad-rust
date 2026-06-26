@@ -179,20 +179,15 @@ impl App {
             .unwrap_or((1280, 800))
     }
 
-    /// Build an owned snapshot of the current registry in display order,
-    /// padded out to the full grid so empty tiles render as placeholders.
+    /// Build an owned snapshot of the current registry in display order.
     /// Returns owned data so it doesn't hold a borrow on `self` while the
     /// renderer mutates.
     fn grid_apps_owned(&self) -> Vec<(String, Option<icons::UvRect>)> {
-        let total = self.layout.total_tiles();
-        let mut out: Vec<(String, Option<icons::UvRect>)> = Vec::with_capacity(total);
-        for rec in self.registry.apps() {
-            out.push((rec.name.clone(), rec.uv));
-        }
-        while out.len() < total {
-            out.push((String::new(), None));
-        }
-        out
+        self.registry
+            .apps()
+            .iter()
+            .map(|rec| (rec.name.clone(), rec.uv))
+            .collect()
     }
 
     /// Recompute layout/bounds for the current window size and push tile +
