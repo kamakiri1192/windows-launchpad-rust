@@ -27,13 +27,20 @@ use crate::liquid_glass::LiquidGlassRenderer;
 use crate::text::GlyphQuad;
 use crate::UserEvent;
 
-/// Uniform block mirrored in WGSL. Kept 16 bytes for alignment.
+/// Uniform block mirrored in WGSL.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     viewport: [f32; 2],
     scroll_x: f32,
     _pad: f32,
+    /// Fixed page-frame center in physical px.
+    frame_center: [f32; 2],
+    /// Fixed page-frame half-size in physical px.
+    frame_half_size: [f32; 2],
+    /// Fixed page-frame corner radius in physical px.
+    frame_radius: f32,
+    frame_pad: f32,
 }
 
 pub struct Renderer {
@@ -73,6 +80,11 @@ pub struct Renderer {
     icon_instance_count: u32,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
+
+    // -- Frame clip for tiles ------------------------------------------
+    // Fixed page-frame geometry in physical px, fed to the tile/icon/text
+    // shaders so they clip to the frame's rounded rect. `(cx, cy, hw, hh, r)`.
+    frame_clip: (f32, f32, f32, f32, f32),
 }
 
 pub struct DrawArgs {
@@ -184,7 +196,8 @@ impl Renderer {
             label: Some("uniform bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // The fragment stage also reads the uniforms (frame clip rect).
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -250,6 +263,7 @@ impl Renderer {
         });
 
         // Initial uniform upload.
+        let frame = frame_clip(layout, size.width);
         queue.write_buffer(
             &uniform_buffer,
             0,
@@ -257,6 +271,10 @@ impl Renderer {
                 viewport: [size.width as f32, size.height as f32],
                 scroll_x: 0.0,
                 _pad: 0.0,
+                frame_center: [frame.0, frame.1],
+                frame_half_size: [frame.2, frame.3],
+                frame_radius: frame.4,
+                frame_pad: 0.0,
             }),
         );
 
@@ -294,7 +312,8 @@ impl Renderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    // The fragment stage also reads the uniforms (frame clip rect).
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -509,6 +528,7 @@ impl Renderer {
             icon_instance_count: 0,
             icon_atlas_texture,
             icon_atlas_bind_group,
+            frame_clip: frame_clip(layout, size.width),
         })
     }
 
@@ -552,6 +572,7 @@ impl Renderer {
             });
         self.liquid_glass
             .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
+        self.frame_clip = frame_clip(layout, self.config.width);
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -760,6 +781,7 @@ impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
         // Update uniforms (tiny, every frame).
+        let frame = self.frame_clip;
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -767,6 +789,10 @@ impl Renderer {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
                 scroll_x: args.scroll_x,
                 _pad: 0.0,
+                frame_center: [frame.0, frame.1],
+                frame_half_size: [frame.2, frame.3],
+                frame_radius: frame.4,
+                frame_pad: 0.0,
             }),
         );
 
@@ -903,6 +929,14 @@ fn default_backends() -> Backends {
     {
         Backends::DX12 | Backends::VULKAN
     }
+}
+
+/// Frame clip geometry for the tile/icon/text shaders: `(cx, cy, hw, hh, r)`
+/// — center, half-size, and corner radius of the fixed page frame, in physical
+/// px. Single source is `GridLayout::frame_panel_rect`.
+fn frame_clip(layout: &GridLayout, viewport_w: u32) -> (f32, f32, f32, f32, f32) {
+    let (cx, cy, w, h) = layout.frame_panel_rect(viewport_w.max(1) as f32);
+    (cx, cy, w * 0.5, h * 0.5, crate::grid::FRAME_CORNER_RADIUS)
 }
 
 fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
