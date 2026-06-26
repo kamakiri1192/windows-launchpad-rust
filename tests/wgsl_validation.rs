@@ -41,12 +41,12 @@ fn all_wgsl_shaders_compile_with_wgpu_validation() {
                 .display()
                 .to_string();
 
-            device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let _module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(&label),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
             });
-            if let Some(error) = device.pop_error_scope().await {
+            if let Some(error) = error_scope.pop().await {
                 failures.push(format!("{label}:\n{error}"));
             }
         }
