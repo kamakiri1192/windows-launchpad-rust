@@ -67,8 +67,9 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
     let count = min(u.shape_count, arrayLength(&shapes));
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
-        // shape_type == 1u marks fixed shapes (the page frame) that ignore scroll.
-        let cx = select(shape.center.x + u.scroll_x, shape.center.x, shape.shape_type == 1u);
+        // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
+        // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
+        let cx = select(shape.center.x + u.scroll_x, shape.center.x, shape.shape_type != 0u);
         let center = vec2<f32>(cx, shape.center.y);
         let local = pixel - center;
         let half_size = shape.size * 0.5;
@@ -78,7 +79,7 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
     return d;
 }
 
-// Signed distance to the fixed page frame (the first fixed shape). Tiles'
+// Signed distance to the fixed page frame (the shape_type == 1 shape). Tiles'
 // halos are clipped to this so they never spill past the frame while scrolling.
 fn frame_sdf(pixel: vec2<f32>) -> f32 {
     let count = min(u.shape_count, arrayLength(&shapes));
@@ -94,6 +95,20 @@ fn frame_sdf(pixel: vec2<f32>) -> f32 {
     return d;
 }
 
+// Signed distance to the bottom control (the shape_type == 2 shape). It lives
+// outside the page frame and must NOT be clipped to it.
+fn control_sdf(pixel: vec2<f32>) -> f32 {
+    let count = min(u.shape_count, arrayLength(&shapes));
+    for (var i = 0u; i < count; i = i + 1u) {
+        let shape = shapes[i];
+        if shape.shape_type == 2u {
+            let local = pixel - shape.center;
+            return sdf_rrect(local, shape.size * 0.5, shape.radius);
+        }
+    }
+    return 1.0e6;
+}
+
 fn encode_displacement(v: vec2<f32>) -> vec2<f32> {
     let max_d = max(u.max_displacement, 1.0);
     return clamp(v / max_d * 0.5 + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
@@ -105,10 +120,15 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let sd = scene_sdf(pixel);
     let alpha = 1.0 - smoothstep(-2.0, 0.0, sd);
 
-    // Clip the whole glass composite (frame + halos) to the fixed page frame so
+    // Clip the scrolling glass (frame + halos) to the fixed page frame so
     // scrolling halos never bleed past the frame's rounded edge.
     let fd = frame_sdf(pixel);
-    let clipped_alpha = alpha * (1.0 - smoothstep(-2.0, 0.0, fd));
+    let frame_clipped = alpha * (1.0 - smoothstep(-2.0, 0.0, fd));
+    // The bottom control lives outside the frame; it is clipped only to its
+    // own capsule, never to the frame.
+    let cd = control_sdf(pixel);
+    let control_alpha = alpha * (1.0 - smoothstep(-2.0, 0.0, cd));
+    let clipped_alpha = max(frame_clipped, control_alpha);
 
     if clipped_alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
         return vec4<f32>(0.0);

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 
 use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
-use super::geometry::{shapes_from_layout, GlassShape};
+use super::geometry::{shapes_from_layout, with_control, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::grid::{GridApp, GridLayout};
 
@@ -103,6 +103,12 @@ pub struct LiquidGlassRenderer {
     uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     shape_count: u32,
+    /// The base shapes (frame + tile halos) without the bottom control. Kept
+    /// so the shape buffer can be rebuilt when only the control changes.
+    base_shapes: Vec<GlassShape>,
+    /// The optional bottom-control capsule appended after the base shapes.
+    /// `None` = no control; `Some(s)` = appended as the last shape.
+    control_shape: Option<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
@@ -392,6 +398,8 @@ impl LiquidGlassRenderer {
             uniform_buffer,
             shape_buffer,
             shape_count,
+            base_shapes: Vec::new(),
+            control_shape: None,
             geometry_texture,
             geometry_view,
             backdrop_texture,
@@ -507,7 +515,24 @@ impl LiquidGlassRenderer {
         viewport_w: f32,
         apps: &[GridApp<'_>],
     ) {
-        let shapes = shapes_from_layout(layout, viewport_w, apps);
+        self.base_shapes = shapes_from_layout(layout, viewport_w, apps);
+        self.rebuild_shape_buffer(device);
+    }
+
+    /// Replace just the bottom-control capsule shape (the last shape in the
+    /// buffer). Cheaper than a full `rebuild_shapes` — only re-uploads the
+    /// shape storage buffer. Pass `None` to hide the control entirely.
+    pub fn set_control_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
+        if self.control_shape == shape {
+            return;
+        }
+        self.control_shape = shape;
+        self.rebuild_shape_buffer(device);
+    }
+
+    /// Rebuild the GPU shape buffer from `base_shapes` + the optional control.
+    fn rebuild_shape_buffer(&mut self, device: &wgpu::Device) {
+        let shapes = with_control(self.base_shapes.clone(), self.control_shape);
         self.shape_buffer = create_shape_buffer(device, &shapes);
         self.shape_count = shapes.len() as u32;
         self.geometry_bind_group = create_geometry_bind_group(

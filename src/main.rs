@@ -28,6 +28,7 @@ mod app_diff;
 mod app_id;
 mod app_registry;
 mod app_scan;
+mod bottom_control;
 mod grid;
 mod icon_atlas;
 mod icon_cache;
@@ -136,6 +137,21 @@ struct App {
     drag_start_x: f32,
     drag_start_y: f32,
     first_frame_rendered: bool,
+
+    // ---- bottom-center morphing control (search pill / page indicator /
+    // search field) ----
+    control: bottom_control::BottomControl,
+    /// Last settled page index, used to detect page changes for the indicator.
+    last_page: i32,
+    /// Whether the pointer is currently over the control capsule (hover),
+    /// for hit-testing click vs. background.
+    pointer_over_control: bool,
+    /// True while the left button is held down *and* the press started on the
+    /// control capsule. Such a release is a control click, not an app launch.
+    pressed_on_control: bool,
+    /// Timestamp of the last redraw, used to compute a real dt for the control
+    /// animations (caret blink + morphs).
+    last_redraw: Option<Instant>,
 }
 
 impl App {
@@ -166,6 +182,11 @@ impl App {
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
+            control: bottom_control::BottomControl::new(),
+            last_page: 0,
+            pointer_over_control: false,
+            pressed_on_control: false,
+            last_redraw: None,
         }
     }
 
@@ -177,6 +198,111 @@ impl App {
                 (s.width, s.height)
             })
             .unwrap_or((1280, 800))
+    }
+
+    /// Current 0-based page index from the scroller position.
+    fn current_page(&self) -> usize {
+        let (w, _h) = self.viewport_phys();
+        let s = match self.scroller.as_ref() {
+            Some(s) => s,
+            None => return 0,
+        };
+        if w == 0 {
+            return 0;
+        }
+        // position is the content offset; page = round(-position / page_extent).
+        let p = (-s.position / w as f32).round() as i32;
+        p.clamp(0, self.layout.page_count.saturating_sub(1) as i32) as usize
+    }
+
+    /// The Y coordinate of the bottom edge of the fixed page frame, in
+    /// physical px. The bottom control sits a fixed margin below this.
+    fn frame_bottom_y(&self) -> f32 {
+        let (w, _h) = self.viewport_phys();
+        let (_cx, cy, _pw, panel_h) = self.layout.frame_panel_rect(w.max(1) as f32);
+        cy + panel_h * 0.5
+    }
+
+    /// Resolve the control's frame geometry + layers for the current state.
+    fn resolve_control(
+        &self,
+    ) -> Option<(
+        bottom_control::ControlGeometry,
+        Vec<bottom_control::ControlLayer>,
+    )> {
+        let viewport = self.viewport_phys();
+        let frame_bottom = self.frame_bottom_y();
+        let page = self.current_page();
+        let page_count = self.layout.page_count;
+        Some(
+            self.control
+                .resolve(viewport, frame_bottom, page, page_count),
+        )
+    }
+
+    /// Lay out and upload the bottom control's glass capsule + overlay shapes
+    /// and text for the current frame. Call this once per redraw, after the
+    /// control has been ticked.
+    fn render_bottom_control(&mut self) {
+        let (geom, layers) = match self.resolve_control() {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Gather all the immutable data first (avoid overlapping borrows with
+        // the mutable renderer/text borrows below).
+        let scale = self.scale_factor;
+        let query_width = self.measure_query_width();
+        let caret_blink = caret_visibility(&self.control);
+
+        // 1) Procedural overlay instances (magnifier, dots, caret, close).
+        let instances =
+            bottom_control::build_overlay_instances(&geom, &layers, query_width, caret_blink);
+
+        // 2) Text glyphs (label / query / placeholder). Built via the shared
+        // text renderer so they share the glyph atlas. Done before touching the
+        // renderer so the atlas upload + dirty clear happen in one place.
+        let (quads, atlas_dirty) = if let Some(t) = self.text.as_mut() {
+            let q = self_layout_control_text(t, &geom, &layers, scale, &self.control);
+            (q, t.atlas_dirty)
+        } else {
+            (Vec::new(), false)
+        };
+        if atlas_dirty {
+            if let Some(t) = self.text.as_mut() {
+                t.atlas_dirty = false;
+            }
+        }
+
+        // 3) Push everything to the GPU.
+        let Some(r) = self.renderer.as_mut() else {
+            return;
+        };
+        let shape = bottom_control::glass_shape(&geom);
+        r.set_control_glass_shape(shape);
+        if atlas_dirty {
+            if let Some(t) = self.text.as_ref() {
+                r.upload_atlas(t.atlas_rgba());
+            }
+        }
+        r.set_control_instances(&instances);
+        r.set_control_text_instances(&quads);
+    }
+
+    /// Measure the current query's laid-out width in physical px (for caret
+    /// placement). Falls back to 0 when there's no query.
+    fn measure_query_width(&self) -> f32 {
+        if self.control.query.is_empty() {
+            return 0.0;
+        }
+        // Approximate via the text renderer's layout without committing to the
+        // atlas: lay out a centered line at origin 0 and take the max right
+        // edge. We can't borrow mutably here cheaply, so estimate from glyph
+        // count instead. A precise measure would require a &mut TextRenderer;
+        // the caret drift of a few px is acceptable for the MVP.
+        // TODO: exact width once TextRenderer exposes a measure API.
+        let chars = self.control.query.chars().count() as f32;
+        chars * 9.0 * self.scale_factor
     }
 
     /// Build an owned snapshot of the current registry in display order.
@@ -786,6 +912,81 @@ impl App {
             r.window.request_redraw();
         }
     }
+
+    /// Handle a click (press + release inside the capsule with no drag) on the
+    /// bottom control. Decides whether it hit the close (×) button, and
+    /// otherwise toggles the search field open/closed.
+    fn handle_control_click(&mut self, x: f32, y: f32) {
+        let viewport = self.viewport_phys();
+        let frame_bottom = self.frame_bottom_y();
+        // Close-button hit region (only meaningful when the field is open).
+        let close_x = self.control.close_button_x(viewport, frame_bottom);
+        let hit_close = close_x
+            .map(|cx| (x - cx).abs() <= 12.0 && (y - self.frame_control_cy()).abs() <= 12.0)
+            .unwrap_or(false);
+
+        if hit_close {
+            self.control.press_close();
+        } else {
+            match self.control.mode {
+                bottom_control::Mode::Pill
+                | bottom_control::Mode::Indicator
+                | bottom_control::Mode::Collapsing => {
+                    self.control.open_search();
+                }
+                bottom_control::Mode::Expanding | bottom_control::Mode::Field => {
+                    // Clicking inside an open field does nothing (keep focus).
+                    // A click outside the field's text area could move the
+                    // caret; the MVP leaves the caret at the end.
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// The center Y of the control capsule (for hit-testing the close button).
+    fn frame_control_cy(&self) -> f32 {
+        let (_cx, _cy, _w, panel_h) = self
+            .layout
+            .frame_panel_rect(self.viewport_phys().0.max(1) as f32);
+        let (_, vh) = self.viewport_phys();
+        let bottom = _cy + panel_h * 0.5;
+        (bottom + 26.0 + 15.0)
+            .min(vh as f32 - 15.0 - 8.0)
+            .max(15.0 + 8.0)
+    }
+
+    /// Keep the OS IME in sync with the search field: enable it (and point the
+    /// composition window at the caret) while the field is focused, disable it
+    /// otherwise. Called every frame; `set_ime_allowed` is cheap.
+    fn update_ime_state(&self) {
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let want_ime = self.control.wants_keyboard();
+        r.window.set_ime_allowed(want_ime);
+        if want_ime {
+            // Park the IME composition window at the caret so Japanese/IME
+            // candidates appear right next to the typed text.
+            let scale = self.scale_factor;
+            let caret_x = self.control_caret_screen_x();
+            let caret_y = self.frame_control_cy();
+            r.window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(caret_x as f64, caret_y as f64),
+                winit::dpi::PhysicalSize::new(1.0, (16.0 * scale) as f64),
+            );
+        }
+    }
+
+    /// Screen-space X of the text caret inside the search field (physical px),
+    /// used to anchor the IME composition window.
+    fn control_caret_screen_x(&self) -> f32 {
+        let Some((geom, _)) = self.resolve_control() else {
+            return 0.0;
+        };
+        let origin = bottom_control::field_text_origin_x(&geom);
+        origin + self.measure_query_width()
+    }
 }
 
 fn initial_window_position(event_loop: &ActiveEventLoop) -> Option<PhysicalPosition<i32>> {
@@ -909,6 +1110,57 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
 
+                // While the search field has focus, the control eats most keys.
+                if self.control.wants_keyboard() {
+                    let handled = match key_code {
+                        winit::keyboard::KeyCode::Escape => {
+                            let c = self.control.handle_escape();
+                            // If the field was open, Esc closes it instead of
+                            // quitting; otherwise fall through to quit below.
+                            if c {
+                                self.request_redraw();
+                                return;
+                            }
+                            false
+                        }
+                        winit::keyboard::KeyCode::Backspace => {
+                            self.control.handle_backspace();
+                            self.request_redraw();
+                            true
+                        }
+                        winit::keyboard::KeyCode::ArrowLeft => {
+                            self.control.handle_left();
+                            self.request_redraw();
+                            true
+                        }
+                        winit::keyboard::KeyCode::ArrowRight => {
+                            self.control.handle_right();
+                            self.request_redraw();
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        return;
+                    }
+                    // Otherwise, let printable text through (typed below).
+                    // Direct (non-IME) printable characters arrive in event.text.
+                    if let Some(text) = &event.text {
+                        if self.control.wants_keyboard() {
+                            let mut any = false;
+                            for ch in text.chars() {
+                                if self.control.handle_char(ch) {
+                                    any = true;
+                                }
+                            }
+                            if any {
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 if key_code == winit::keyboard::KeyCode::Escape {
                     event_loop.exit();
                     return;
@@ -926,7 +1178,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // R clears the icon cache and re-extracts every icon live, so
                 // you can recover from a corrupted cache without restarting.
-                if key_code == winit::keyboard::KeyCode::KeyR {
+                if key_code == winit::keyboard::KeyCode::KeyR && !self.control.wants_keyboard() {
                     self.reset_icons();
                     return;
                 }
@@ -934,6 +1186,30 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(r) = self.renderer.as_mut() {
                     if r.handle_liquid_glass_key(key_code) {
                         self.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::Ime(event) => {
+                use winit::event::Ime;
+                if self.control.wants_keyboard() {
+                    match event {
+                        Ime::Preedit(s, _) => {
+                            // Show the in-flight composition inline.
+                            self.control.set_preedit(s);
+                            self.request_redraw();
+                        }
+                        Ime::Commit(text) => {
+                            // IME commit: finalize the composition into the query.
+                            self.control.set_preedit(String::new());
+                            for ch in text.chars() {
+                                self.control.handle_char(ch);
+                            }
+                            self.request_redraw();
+                        }
+                        Ime::Enabled => {}
+                        Ime::Disabled => {
+                            self.control.set_preedit(String::new());
+                        }
                     }
                 }
             }
@@ -968,6 +1244,8 @@ impl ApplicationHandler<UserEvent> for App {
                 if dragging {
                     self.handle_drag_end();
                 }
+                // Drop a pending control press if the pointer leaves.
+                self.pressed_on_control = false;
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.pointer_phys_x = position.x as f32;
@@ -987,9 +1265,35 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 match state {
                     ElementState::Pressed => {
+                        // If the press starts on the control capsule, mark it
+                        // so the release is treated as a control click and NOT
+                        // as a scroll drag.
+                        let over_control = self.control.hit_test(
+                            self.viewport_phys(),
+                            self.frame_bottom_y(),
+                            self.pointer_phys_x,
+                            self.pointer_phys_y,
+                        );
+                        self.pressed_on_control = over_control;
+                        if over_control {
+                            return;
+                        }
                         self.handle_drag_start(self.pointer_phys_x, self.pointer_phys_y);
                     }
                     ElementState::Released => {
+                        if self.pressed_on_control {
+                            self.pressed_on_control = false;
+                            // Only count as a click if it stayed on the capsule.
+                            if self.control.hit_test(
+                                self.viewport_phys(),
+                                self.frame_bottom_y(),
+                                self.pointer_phys_x,
+                                self.pointer_phys_y,
+                            ) {
+                                self.handle_control_click(self.pointer_phys_x, self.pointer_phys_y);
+                            }
+                            return;
+                        }
                         if let Some(app) = self.handle_pointer_release() {
                             // Dismiss first, launch second. `set_visible(false)`
                             // hands the hide straight to the DWM (a few ms),
@@ -1018,24 +1322,61 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let vp = self.viewport_phys();
-                let animating;
-                if let (Some(r), Some(s)) = (self.renderer.as_mut(), self.scroller.as_mut()) {
-                    let dragging = s.phase == Phase::Dragging;
+                let scroll_x;
+                let dragging;
+                if let Some(s) = self.scroller.as_mut() {
+                    dragging = s.phase == Phase::Dragging;
                     s.tick(now);
-                    r.render(&DrawArgs {
-                        scroll_x: s.position,
-                        viewport: vp,
-                        defer_backdrop_capture: dragging,
-                    });
-                    animating = s.is_animating();
+                    scroll_x = s.position;
                 } else {
                     return;
                 }
+                let scroller_animating = self
+                    .scroller
+                    .as_ref()
+                    .map(|s| s.is_animating())
+                    .unwrap_or(false);
+
+                // Detect a page change (settled page differs from the last
+                // tracked one) and arm the transient page indicator.
+                let page = self.current_page() as i32;
+                if page != self.last_page && !scroller_animating {
+                    self.last_page = page;
+                    self.control.on_page_change(now);
+                }
+
+                // Advance the bottom-control's animations + timers. Use the
+                // real elapsed dt (not a fixed 1/60) so the caret blink and
+                // morph speeds are correct even when redraws fire faster than
+                // 60 Hz (e.g. on backdrop-frame arrivals).
+                let control_dt = match self.last_redraw {
+                    Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
+                    None => 1.0 / 60.0,
+                };
+                self.last_redraw = Some(now);
+                let control_animating = self.control.tick(now, control_dt);
+
+                // Sync the OS IME with the search field (on while focused,
+                // parked at the caret) so Japanese / other IME input works.
+                self.update_ime_state();
+
+                // Upload the control's capsule + overlays before the render.
+                self.render_bottom_control();
+
+                // Render the frame (consumes the uploaded buffers).
+                if let Some(r) = self.renderer.as_mut() {
+                    r.render(&DrawArgs {
+                        scroll_x,
+                        viewport: vp,
+                        defer_backdrop_capture: dragging,
+                    });
+                }
+
                 if !self.first_frame_rendered {
                     self.first_frame_rendered = true;
                     self.timer.mark(prefix::STARTUP, "first frame rendered");
                 }
-                if animating {
+                if scroller_animating || control_animating {
                     self.request_redraw();
                 }
             }
@@ -1043,18 +1384,144 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Keep the loop pumping while animating; otherwise winit blocks until
-        // the next input or WGC FrameArrived user event.
-        let animating = self
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Keep the loop pumping while the scroller or the bottom control is
+        // animating; otherwise winit blocks until the next input or WGC
+        // FrameArrived user event.
+        let scroller_animating = self
             .scroller
             .as_ref()
             .map(|s| s.is_animating())
             .unwrap_or(false);
-        if animating {
+        let control_animating = self.control.mode.is_morphing()
+            || matches!(self.control.mode, bottom_control::Mode::Indicator)
+            || matches!(self.control.mode, bottom_control::Mode::Field);
+        if scroller_animating || control_animating {
             self.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::Wait);
+        _event_loop.set_control_flow(ControlFlow::Wait);
+    }
+}
+
+/// Scale a color's alpha by `a` (used to cross-fade control text layers).
+fn mul_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
+    c[3] *= a.clamp(0.0, 1.0);
+    c
+}
+
+/// Build the text glyph quads for the control's active layers. A free function
+/// (not a method) so it can borrow `&mut TextRenderer` and `&BottomControl`
+/// without colliding with the renderer borrow in `render_bottom_control`.
+fn self_layout_control_text(
+    t: &mut text::TextRenderer,
+    geom: &bottom_control::ControlGeometry,
+    layers: &[bottom_control::ControlLayer],
+    scale: f32,
+    control: &bottom_control::BottomControl,
+) -> Vec<text::GlyphQuad> {
+    let mut quads = Vec::new();
+    const LABEL_FONT: &str = "Yu Gothic UI";
+    const LABEL_SIZE: f32 = 13.0;
+    const LABEL_LINE: f32 = 18.0;
+    const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
+    const PLACEHOLDER: [f32; 4] = [1.0, 1.0, 1.0, 0.45];
+    /// Preedit (in-flight IME composition) is shown slightly dimmer to hint
+    /// it isn't committed yet.
+    const PREEDIT_INK: [f32; 4] = [0.85, 0.92, 1.0, 0.88];
+
+    for layer in layers {
+        let a = layer.alpha;
+        if a <= 0.01 {
+            continue;
+        }
+        match layer.visual {
+            bottom_control::Visual::SearchPill => {
+                // "検索" label to the right of the magnifier.
+                let mag_size = 11.0;
+                let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 8.0;
+                let label_center_x = mag_cx + mag_size + 6.0 + 14.0;
+                let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                    text: "検索",
+                    font_size: LABEL_SIZE,
+                    line_height: LABEL_LINE,
+                    family: LABEL_FONT,
+                    color: mul_alpha(INK, a),
+                    center: (label_center_x, geom.center.1),
+                    scale_factor: scale,
+                });
+                quads.append(&mut q);
+            }
+            bottom_control::Visual::PageIndicator => {
+                // No text.
+            }
+            bottom_control::Visual::SearchField => {
+                let origin_x = bottom_control::field_text_origin_x(geom);
+                if control.query.is_empty() && control.preedit.is_empty() {
+                    let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                        text: "検索",
+                        font_size: LABEL_SIZE,
+                        line_height: LABEL_LINE,
+                        family: LABEL_FONT,
+                        color: mul_alpha(PLACEHOLDER, a),
+                        center: (origin_x + 14.0, geom.center.1),
+                        scale_factor: scale,
+                    });
+                    quads.append(&mut q);
+                } else {
+                    // Render the committed query plus the in-flight IME
+                    // preedit inline. The preedit is shown with an
+                    // underline tint so the user can tell it's not yet
+                    // committed.
+                    let q_len = control.query.chars().count() as f32;
+                    let p_len = control.preedit.chars().count() as f32;
+                    // Committed text.
+                    if !control.query.is_empty() {
+                        let approx_half = q_len * 4.5;
+                        let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                            text: &control.query,
+                            font_size: LABEL_SIZE,
+                            line_height: LABEL_LINE,
+                            family: LABEL_FONT,
+                            color: mul_alpha(INK, a),
+                            center: (origin_x + approx_half, geom.center.1),
+                            scale_factor: scale,
+                        });
+                        quads.append(&mut q);
+                    }
+                    // Preedit, starting after the committed query.
+                    if !control.preedit.is_empty() {
+                        let preedit_origin = origin_x + q_len * 9.0;
+                        let approx_half = p_len * 4.5;
+                        let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                            text: &control.preedit,
+                            font_size: LABEL_SIZE,
+                            line_height: LABEL_LINE,
+                            family: LABEL_FONT,
+                            color: mul_alpha(PREEDIT_INK, a),
+                            center: (preedit_origin + approx_half, geom.center.1),
+                            scale_factor: scale,
+                        });
+                        quads.append(&mut q);
+                    }
+                }
+            }
+        }
+    }
+    quads
+}
+
+/// Caret blink visibility for this frame. The caret shows ~57% of a ~1.06s
+/// cycle, in sync with the control's `caret_phase`.
+fn caret_visibility(control: &bottom_control::BottomControl) -> f32 {
+    // Only blink when the field is the focus.
+    if !matches!(control.mode, bottom_control::Mode::Field) {
+        return 1.0;
+    }
+    let phase = control.caret_phase % 1.06;
+    if phase < 0.6 {
+        1.0
+    } else {
+        0.0
     }
 }
 
