@@ -280,12 +280,20 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         let vk = kb.vkCode as u16;
         let is_win = vk == VK_LWIN || vk == VK_RWIN;
 
-        // Debug trace: log every event we inspect, so we can see the actual
-        // event order/flags on the failing machine. Remove after fixing.
-        eprintln!(
-            "hook: vk=0x{:02X} win={} down={} up={} win_down={} consumed={} latched={}",
-            vk, is_win, keydown, keyup, state.win_down, state.combo_consumed, state.space_latched,
-        );
+        // Log only events we care about (Win keys + Space) to keep the file
+        // readable; we see the exact order + flags on the failing machine.
+        if is_win || vk == VK_SPACE {
+            crate::debug_log!(
+                "hook: vk=0x{:02X} win={} down={} up={} win_down={} consumed={} latched={}",
+                vk,
+                is_win,
+                keydown,
+                keyup,
+                state.win_down,
+                state.combo_consumed,
+                state.space_latched,
+            );
+        }
 
         // Win modifier transitions: track scope + swallow its keyup when we
         // consumed a combo during this press.
@@ -301,9 +309,10 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
             if consumed {
                 // Swallow the Win keyup so the OS doesn't read a lone Win tap
                 // (which opens the Start menu).
-                eprintln!("hook: swallowing Win keyup (combo was consumed)");
+                crate::debug_log!("hook: swallowing Win keyup (combo was consumed)");
                 return HookAction::Swallow;
             }
+            crate::debug_log!("hook: Win keyup passing through (combo not consumed)");
             return HookAction::Chain;
         }
 
@@ -312,7 +321,8 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         }
 
         if keydown {
-            if win_held_now() {
+            let held = win_held_now();
+            if held {
                 // Genuine Win+Space. Fire once per press (latched), swallow
                 // the Space so the IME switcher never sees the combo, and
                 // remember we consumed it so the matching Win keyup is also
@@ -320,12 +330,15 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
                 if !state.space_latched {
                     state.space_latched = true;
                     state.combo_consumed = true;
-                    eprintln!("hook: Win+Space → Summon");
+                    crate::debug_log!("hook: Win+Space → Summon (firing)");
                     let _ = state.proxy.send_event(UserEvent::Summon);
+                } else {
+                    crate::debug_log!("hook: Win+Space repeat (latched, swallowed)");
                 }
                 return HookAction::Swallow;
             }
             // Space without Win — pass through untouched.
+            crate::debug_log!("hook: bare Space (no Win) → pass through");
             state.space_latched = false;
             return HookAction::Chain;
         }
@@ -338,8 +351,14 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
             let was_latched = state.space_latched;
             state.space_latched = false;
             if was_latched && held {
+                crate::debug_log!("hook: Space keyup swallowed (was latched + Win held)");
                 return HookAction::Swallow;
             }
+            crate::debug_log!(
+                "hook: Space keyup passing through (latched={} held={})",
+                was_latched,
+                held
+            );
             return HookAction::Chain;
         }
 
@@ -360,11 +379,14 @@ enum HookAction {
 /// Send a `UserEvent` to the winit event loop from the tray window proc.
 /// Best-effort: a closed loop just means we're shutting down.
 fn send_from_tray(ev: UserEvent) {
-    HOOK_STATE.with(|cell| {
+    let sent = HOOK_STATE.with(|cell| {
         if let Some(state) = cell.borrow().as_ref() {
-            let _ = state.proxy.send_event(ev);
+            state.proxy.send_event(ev).is_ok()
+        } else {
+            false
         }
     });
+    crate::debug_log!("send_from_tray: event sent={}", sent);
 }
 
 // ----------------------------------------------------------------------------
@@ -425,9 +447,16 @@ extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
     }
     if msg == WM_COMMAND {
         let cmd = (wparam.0 as u32) & 0xFFFF;
+        crate::debug_log!("tray: WM_COMMAND cmd={}", cmd);
         match cmd {
-            ID_SHOW => send_from_tray(UserEvent::Summon),
-            ID_QUIT => send_from_tray(UserEvent::QuitRequested),
+            ID_SHOW => {
+                crate::debug_log!("tray: → Summon");
+                send_from_tray(UserEvent::Summon);
+            }
+            ID_QUIT => {
+                crate::debug_log!("tray: → QuitRequested");
+                send_from_tray(UserEvent::QuitRequested);
+            }
             _ => {}
         }
         return LRESULT(0);
@@ -492,7 +521,10 @@ fn show_tray_menu(hwnd: HWND) {
         let _ = DestroyMenu(menu);
 
         if chosen.0 != 0 {
+            crate::debug_log!("tray: menu chose id={} → posting WM_COMMAND", chosen.0);
             let _ = PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(chosen.0 as usize), LPARAM(0));
+        } else {
+            crate::debug_log!("tray: menu dismissed with no selection");
         }
     }
 }

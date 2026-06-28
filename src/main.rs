@@ -29,6 +29,7 @@ mod app_id;
 mod app_registry;
 mod app_scan;
 mod bottom_control;
+mod debug_logger;
 mod grid;
 mod icon_atlas;
 mod icon_cache;
@@ -942,8 +943,10 @@ impl App {
     /// can be summoned again. Idempotent: a no-op if already hidden.
     fn hide(&mut self) {
         if !self.visible {
+            debug_log!("hide: already hidden, no-op");
             return;
         }
+        debug_log!("hide: hiding window");
         if let Some(r) = self.renderer.as_ref() {
             r.window.set_visible(false);
             r.window.set_ime_allowed(false);
@@ -969,7 +972,7 @@ impl App {
         let Some(r) = self.renderer.as_ref() else {
             return;
         };
-        eprintln!("summon: showing window");
+        debug_log!("summon: showing window (visible was {})", self.visible);
         r.window.set_visible(true);
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
@@ -991,7 +994,7 @@ impl App {
         r.window.focus_window();
         self.visible = true;
         self.request_redraw();
-        eprintln!("summon: window shown + focus requested");
+        debug_log!("summon: window shown + focus requested");
     }
 
     /// Handle a click (press + release inside the capsule with no drag) on the
@@ -1104,15 +1107,18 @@ impl ApplicationHandler<UserEvent> for App {
                 self.drain_inbox();
             }
             UserEvent::Summon => {
+                debug_log!("user_event: Summon received (visible={})", self.visible);
                 self.summon();
             }
             UserEvent::QuitRequested => {
+                debug_log!("user_event: QuitRequested received");
                 // Quit immediately. We used to defer to `about_to_wait`, but
                 // with `ControlFlow::Wait` the loop isn't guaranteed to reach
                 // `about_to_wait` after a user event, so the quit could be
                 // lost and require a second click. Exit here, now.
                 self.should_quit = true;
                 event_loop.exit();
+                debug_log!("user_event: event_loop.exit() called");
             }
         }
     }
@@ -1479,12 +1485,15 @@ impl ApplicationHandler<UserEvent> for App {
                     self.request_redraw();
                 }
             }
-            WindowEvent::Focused(false) => {
+            WindowEvent::Focused(focused) => {
+                debug_log!("window_event: Focused({})", focused);
                 // Auto-hide when the launcher loses focus (clicking another
                 // window, Alt-Tab, …). This is the macOS-Launchpad / Run-dialog
                 // behavior. `hide()` is idempotent so the focus-loss that fires
                 // right after we hide to launch an app is a harmless no-op.
-                self.hide();
+                if !focused {
+                    self.hide();
+                }
             }
             _ => {}
         }
@@ -1688,6 +1697,11 @@ fn main() {
     let timer = StartupTimer::new();
     timer.mark(prefix::STARTUP, "process start");
     startup_timer::install(timer.clone());
+
+    // File-backed debug logger. Opt-in via LAUNCHPAD_DEBUG env var so the
+    // release build is silent by default; when on it writes to
+    // %LOCALAPPDATA%\Launchpad\debug.log (visible even with no console).
+    debug_logger::init();
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
