@@ -29,6 +29,7 @@ use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     HBITMAP,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
 };
@@ -131,7 +132,6 @@ fn run_integration_thread(
     HOOK_STATE.with(|cell| {
         *cell.borrow_mut() = Some(HookState {
             proxy,
-            win_down: false,
             space_latched: false,
         });
     });
@@ -198,7 +198,10 @@ fn run_integration_thread(
 /// Shared state between the integration thread and the LL hook callback.
 struct HookState {
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
-    win_down: bool,
+    /// Suppresses auto-repeat: once Win+Space fires a Summon, the next Space
+    /// must be a genuine release+repress before another Summon can fire. This
+    /// is the ONLY key state we track ourselves; the Win modifier is read
+    /// live via `GetAsyncKeyState` so we never get stuck thinking Win is held.
     space_latched: bool,
 }
 
@@ -207,6 +210,19 @@ thread_local! {
     /// ever sets or reads it (its callbacks run on that thread), so this is
     /// effectively a thread-local with a single owner.
     static HOOK_STATE: std::cell::RefCell<Option<HookState>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Read whether a Win modifier is physically held right now, straight from
+/// the keyboard state. We do NOT track this ourselves (a missed keyup —
+/// UAC, a timeout-induced dropped hook call, a full-screen app stealing
+/// focus — would otherwise leave our flag stuck `true` and let bare Space
+/// trigger Summon forever).
+fn win_held_now() -> bool {
+    // GetAsyncKeyState returns an i16; the high bit (sign bit) is set when
+    // the key is currently down. Two calls (LWIN/RWIN) are cheap and safe
+    // inside the hook callback; they read a kernel-maintained state, not a
+    // syscall into anything that could stall past LowLevelHooksTimeout.
+    unsafe { GetAsyncKeyState(VK_LWIN as i32) < 0 || GetAsyncKeyState(VK_RWIN as i32) < 0 }
 }
 
 /// The low-level keyboard hook callback.
@@ -234,31 +250,43 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         };
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let vk = kb.vkCode as u16;
-        let is_win = vk == VK_LWIN || vk == VK_RWIN;
 
-        if is_win && keydown {
-            state.win_down = true;
+        // Only care about Space. Win modifier state is read live from the
+        // hardware via GetAsyncKeyState (see win_held_now), so we never have
+        // to track Win down/up ourselves — that was the source of the
+        // "bare Space triggers Summon" bug when a Win keyup was dropped.
+        if vk != VK_SPACE {
             return HookAction::Chain;
         }
-        if is_win && keyup {
-            state.win_down = false;
-            return HookAction::Chain;
-        }
-        if vk == VK_SPACE && keydown && state.win_down {
-            if !state.space_latched {
-                state.space_latched = true;
-                let _ = state.proxy.send_event(UserEvent::Summon);
-            }
-            // Swallow so the OS IME switcher never sees it.
-            return HookAction::Swallow;
-        }
-        if vk == VK_SPACE && keyup {
-            let was_latched = state.space_latched;
-            state.space_latched = false;
-            if was_latched && state.win_down {
+
+        if keydown {
+            if win_held_now() {
+                // Genuine Win+Space. Fire once per press (latched) and
+                // swallow so the OS IME switcher never sees the combo.
+                if !state.space_latched {
+                    state.space_latched = true;
+                    let _ = state.proxy.send_event(UserEvent::Summon);
+                }
                 return HookAction::Swallow;
             }
+            // Space without Win — pass through untouched.
+            state.space_latched = false;
+            return HookAction::Chain;
         }
+
+        if keyup {
+            // Clear the auto-repeat latch on Space release so the next press
+            // can fire again. Swallow the keyup too if Win was held (the
+            // combo's keyup belongs to us), otherwise let it through.
+            let held = win_held_now();
+            let was_latched = state.space_latched;
+            state.space_latched = false;
+            if was_latched && held {
+                return HookAction::Swallow;
+            }
+            return HookAction::Chain;
+        }
+
         HookAction::Chain
     });
 
