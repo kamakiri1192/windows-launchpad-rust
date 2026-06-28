@@ -132,6 +132,8 @@ fn run_integration_thread(
     HOOK_STATE.with(|cell| {
         *cell.borrow_mut() = Some(HookState {
             proxy,
+            win_down: false,
+            combo_consumed: false,
             space_latched: false,
         });
     });
@@ -198,10 +200,19 @@ fn run_integration_thread(
 /// Shared state between the integration thread and the LL hook callback.
 struct HookState {
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
-    /// Suppresses auto-repeat: once Win+Space fires a Summon, the next Space
-    /// must be a genuine release+repress before another Summon can fire. This
-    /// is the ONLY key state we track ourselves; the Win modifier is read
-    /// live via `GetAsyncKeyState` so we never get stuck thinking Win is held.
+    /// Tracks the Win modifier's down/up transitions. This is NOT used to
+    /// decide whether Space is part of a Win+Space combo (that's polled live
+    /// via `GetAsyncKeyState` so a dropped keyup can never poison it). It only
+    /// scopes the `combo_consumed` flag to a single Win press.
+    win_down: bool,
+    /// True once we've consumed a Win+Space on the *current* Win press. While
+    /// set, we also swallow the matching Win keyup so Windows doesn't see a
+    /// bare "Win down ... Win up" and open the Start menu (which is what was
+    /// happening: we swallowed Space but let Win through, so the OS read it as
+    /// a lone Win tap). Reset on the next Win keydown.
+    combo_consumed: bool,
+    /// Suppresses Space auto-repeat: once Win+Space fires a Summon, the next
+    /// Space must be a genuine release+repress before another Summon fires.
     space_latched: bool,
 }
 
@@ -228,10 +239,27 @@ fn win_held_now() -> bool {
 /// The low-level keyboard hook callback.
 ///
 /// Safety contract: must return quickly. Does only: read the
-/// KBDLLHOOKSTRUCT, update `win_down`/`space_latched` on the shared state,
-/// and call `send_event`. On Win+Space it returns a non-zero LRESULT to
-/// *swallow* the keystroke (this is what suppresses the system IME switch);
-/// otherwise it chains to the next hook.
+/// KBDLLHOOKSTRUCT, update a few flags on the shared state, and call
+/// `send_event`. On Win+Space it returns a non-zero LRESULT to *swallow* the
+/// keystroke (this is what suppresses the system IME switch); otherwise it
+/// chains to the next hook.
+///
+/// Two tricky bits:
+///
+/// - **The "Space alone triggers Summon" bug.** We must NOT trust a tracked
+///   `win_down` flag to decide whether a Space is part of a Win+Space combo,
+///   because a dropped Win keyup (UAC, hook timeout, fullscreen focus steal,
+///   sticky keys, injected events) would leave it stuck and every subsequent
+///   bare Space would fire Summon. So the combo check polls the live hardware
+///   state via `GetAsyncKeyState`. The tracked flags below are only used for
+///   *swallowing* — deciding what the OS is allowed to see.
+///
+/// - **The "Start menu opens after summon" bug.** If we swallow only Space,
+///   the OS sees a bare "Win down ... Win up" and opens the Start menu. So
+///   once a Win+Space is consumed, we also swallow the *matching Win keyup*.
+///   The `combo_consumed` flag is scoped to a single Win press and reset on
+///   the next Win keydown, so a dropped keyup can at worst drop one Start-menu
+///   suppress — never poison subsequent presses.
 extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // HC_ACTION == 0 means there's a keyboard event in lparam.
     const HC_ACTION: i32 = 0;
@@ -250,21 +278,40 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         };
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let vk = kb.vkCode as u16;
+        let is_win = vk == VK_LWIN || vk == VK_RWIN;
 
-        // Only care about Space. Win modifier state is read live from the
-        // hardware via GetAsyncKeyState (see win_held_now), so we never have
-        // to track Win down/up ourselves — that was the source of the
-        // "bare Space triggers Summon" bug when a Win keyup was dropped.
+        // Win modifier transitions: track scope + swallow its keyup when we
+        // consumed a combo during this press.
+        if is_win && keydown {
+            state.win_down = true;
+            state.combo_consumed = false;
+            return HookAction::Chain;
+        }
+        if is_win && keyup {
+            state.win_down = false;
+            let consumed = state.combo_consumed;
+            state.combo_consumed = false;
+            if consumed {
+                // Swallow the Win keyup so the OS doesn't read a lone Win tap
+                // (which opens the Start menu).
+                return HookAction::Swallow;
+            }
+            return HookAction::Chain;
+        }
+
         if vk != VK_SPACE {
             return HookAction::Chain;
         }
 
         if keydown {
             if win_held_now() {
-                // Genuine Win+Space. Fire once per press (latched) and
-                // swallow so the OS IME switcher never sees the combo.
+                // Genuine Win+Space. Fire once per press (latched), swallow
+                // the Space so the IME switcher never sees the combo, and
+                // remember we consumed it so the matching Win keyup is also
+                // swallowed (prevents the Start-menu-open bug).
                 if !state.space_latched {
                     state.space_latched = true;
+                    state.combo_consumed = true;
                     let _ = state.proxy.send_event(UserEvent::Summon);
                 }
                 return HookAction::Swallow;
