@@ -14,8 +14,10 @@
 //! the LL hook callback does *no* work beyond a cheap state read and one
 //! `send_event`, because `WH_KEYBOARD_LL` callbacks that block longer than
 //! `LowLevelHooksTimeout` get silently removed by Windows.
-
-#![cfg(windows)]
+//!
+//! This whole module is gated by `#[cfg(windows)]` on the `mod` declaration in
+//! `main.rs`, so we do *not* repeat `#![cfg(windows)]` here (clippy's
+//! `duplicated_attributes` would flag the duplicate).
 
 use std::ffi::c_void;
 use std::sync::mpsc;
