@@ -40,7 +40,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, HICON, HWND_MESSAGE, ICONINFO,
     KBDLLHOOKSTRUCT, MENUITEMINFOW, MENU_ITEM_MASK, MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG,
     TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
 };
 
 use crate::UserEvent;
@@ -132,7 +132,7 @@ fn run_integration_thread(
     HOOK_STATE.with(|cell| {
         *cell.borrow_mut() = Some(HookState {
             proxy,
-            space_down: false,
+            last_summon_ms: 0,
         });
     });
 
@@ -198,14 +198,22 @@ fn run_integration_thread(
 /// Shared state between the integration thread and the LL hook callback.
 struct HookState {
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
-    /// Tracks ONLY the Space key's down/up. This is safe to track (unlike the
-    /// Win modifier): a Space keyup always reaches the hook shortly after its
-    /// keydown, so this flag can't get stuck the way a Win keyup sometimes
-    /// does. It exists only to suppress Space auto-repeat (so one Win+Space
-    /// press fires exactly one Summon). The Win modifier is never tracked —
-    /// it's read live via GetAsyncKeyState.
-    space_down: bool,
+    /// Timestamp (ms, from GetTickCount) of the last Summon we fired. Used to
+    /// suppress auto-repeat WITHOUT depending on a tracked key state, because
+    /// the debug log proved the hook sometimes never sees the Space keyup
+    /// (the focus change on summon appears to drop it), which left a
+    /// `space_down` flag stuck and made the next press look like a repeat.
+    /// A time-based debounce doesn't depend on keyup delivery at all: any
+    /// Space keydown within DEBOUNCE_MS of the last fire is treated as
+    /// auto-repeat and swallowed without firing.
+    last_summon_ms: u32,
 }
+
+/// Auto-repeat debounce window in milliseconds. A typical keyboard repeats
+/// at ~30Hz (33ms) once the OS repeat kicks in (~500ms after press-down), so
+/// 400ms comfortably swallows a held key's auto-repeats while letting a
+/// genuine second press (which takes a human >400ms to produce) fire.
+const SUMMON_DEBOUNCE_MS: u32 = 400;
 
 thread_local! {
     /// Per-thread slot holding the hook state. Only the integration thread
@@ -230,13 +238,18 @@ fn win_held_now() -> bool {
 
 /// The low-level keyboard hook callback.
 ///
-/// Safety contract: must return quickly. We track ONLY the Space key's
-/// down/up state (a Space keyup always reaches the hook shortly after its
-/// keydown, so this flag is safe across sessions). The Win modifier is never
-/// tracked — it's read live via `GetAsyncKeyState`, because a Win keyup can
-/// be dropped (UAC / hook timeout / focus steal), and a tracked Win flag that
-/// never resets was exactly the root cause of the "Start menu opens on the
-/// 2nd summon" bug.
+/// Safety contract: must return quickly. The Win modifier is never tracked —
+/// it's read live via `GetAsyncKeyState`, because a Win keyup can be dropped
+/// (UAC / hook timeout / focus steal), and a tracked Win flag that never
+/// resets was exactly the root cause of the "Start menu opens on the 2nd
+/// summon" bug.
+///
+/// Auto-repeat suppression uses a **time debounce** instead of tracking the
+/// Space key's down/up: the debug log proved the hook sometimes never
+/// receives the Space keyup (the focus change on summon appears to drop it),
+/// which left a tracked `space_down` flag stuck and made the next press look
+/// like a repeat. A debounce only records *when* we last fired, so a missing
+/// keyup can't poison it.
 ///
 /// We do NOT swallow the Win keyup: that path is fragile (keyups arrive
 /// out-of-order) and the summon-side focus steal keeps the Start menu from
@@ -250,7 +263,10 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
 
     let wparam_val = wparam.0 as u32;
     let keydown = wparam_val == WM_KEYDOWN || wparam_val == WM_SYSKEYDOWN;
-    let keyup = wparam_val == WM_KEYUP || wparam_val == WM_SYSKEYUP;
+    if !keydown {
+        // Let keyups (and anything else) pass through.
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
 
     let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode as u16;
@@ -258,52 +274,33 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
 
-    // Track Space down/up. A Space keyup is always delivered right after its
-    // keydown (no UAC/timeout-style drops for a normal key), so this single
-    // flag can't get poisoned across sessions the way a Win flag can.
+    let win_held = win_held_now();
+    if !win_held {
+        // Bare Space — pass through untouched.
+        crate::debug_log!("hook: Space down (no Win) → pass through");
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+
+    // Genuine Win+Space. Decide fire vs. swallow with a time debounce.
+    let now_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
     let swallow = HOOK_STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
         let Some(state) = slot.as_mut() else {
-            return false;
+            return true; // still swallow Space so the IME switch is suppressed
         };
-
-        if keyup {
-            state.space_down = false;
-            // Pass the Space keyup through; swallowing it isn't necessary and
-            // avoids surprising apps that wait for keyup.
-            return false;
-        }
-
-        if !keydown {
-            return false;
-        }
-
-        // Space keydown. Is it a fresh press or auto-repeat?
-        let fresh = !state.space_down;
-        state.space_down = true;
-
-        let win_held = win_held_now();
-        crate::debug_log!(
-            "hook: Space down, fresh={}, win_held={}, space_down now={}",
-            fresh,
-            win_held,
-            state.space_down
-        );
-
-        if !win_held {
-            // Bare Space — pass through untouched.
-            return false;
-        }
-
-        // Genuine Win+Space. Fire Summon exactly once per press (auto-repeat
-        // suppressed by `fresh`), and always swallow the Space so the IME
-        // switcher never sees the combo.
+        // Wrapping difference handles GetTickCount wraparound (~49 days).
+        let elapsed = now_ms.wrapping_sub(state.last_summon_ms);
+        let fresh = elapsed > SUMMON_DEBOUNCE_MS;
+        crate::debug_log!("hook: Win+Space, elapsed={}ms, fresh={}", elapsed, fresh);
         if fresh {
+            state.last_summon_ms = now_ms;
             crate::debug_log!("hook: Win+Space → Summon (firing)");
             let _ = state.proxy.send_event(UserEvent::Summon);
         } else {
-            crate::debug_log!("hook: Win+Space repeat (swallowed)");
+            crate::debug_log!("hook: Win+Space repeat (swallowed, debounce)");
         }
+        // Always swallow Space while Win is held so the IME switcher never
+        // sees the combo (auto-repeat included).
         true
     });
 
