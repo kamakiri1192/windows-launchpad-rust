@@ -280,6 +280,13 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         let vk = kb.vkCode as u16;
         let is_win = vk == VK_LWIN || vk == VK_RWIN;
 
+        // Debug trace: log every event we inspect, so we can see the actual
+        // event order/flags on the failing machine. Remove after fixing.
+        eprintln!(
+            "hook: vk=0x{:02X} win={} down={} up={} win_down={} consumed={} latched={}",
+            vk, is_win, keydown, keyup, state.win_down, state.combo_consumed, state.space_latched,
+        );
+
         // Win modifier transitions: track scope + swallow its keyup when we
         // consumed a combo during this press.
         if is_win && keydown {
@@ -294,6 +301,7 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
             if consumed {
                 // Swallow the Win keyup so the OS doesn't read a lone Win tap
                 // (which opens the Start menu).
+                eprintln!("hook: swallowing Win keyup (combo was consumed)");
                 return HookAction::Swallow;
             }
             return HookAction::Chain;
@@ -312,6 +320,7 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
                 if !state.space_latched {
                     state.space_latched = true;
                     state.combo_consumed = true;
+                    eprintln!("hook: Win+Space → Summon");
                     let _ = state.proxy.send_event(UserEvent::Summon);
                 }
                 return HookAction::Swallow;

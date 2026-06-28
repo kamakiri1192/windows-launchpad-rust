@@ -969,10 +969,29 @@ impl App {
         let Some(r) = self.renderer.as_ref() else {
             return;
         };
+        eprintln!("summon: showing window");
         r.window.set_visible(true);
+        // Steal focus. focus_window() can be silently denied by Windows when
+        // the foreground already belongs to another app (common after hide()),
+        // so we also allow-set-foreground + re-assert focus. If it still fails
+        // the user at least sees the window appear (visible=true above) even
+        // if it's not topmost.
+        #[cfg(windows)]
+        {
+            // ASFW_ANY (-1) lifts the SetForegroundWindow restriction so any
+            // process (incl. ours) can come to the front. This is what lets a
+            // hotkey-triggered summon reliably raise the window instead of
+            // just flashing the taskbar after the window was hidden.
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+                const ASFW_ANY: u32 = u32::MAX; // -1 as the Win32 ASFW_ANY sentinel
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+            }
+        }
         r.window.focus_window();
         self.visible = true;
         self.request_redraw();
+        eprintln!("summon: window shown + focus requested");
     }
 
     /// Handle a click (press + release inside the capsule with no drag) on the
@@ -1071,7 +1090,7 @@ fn initial_window_position(event_loop: &ActiveEventLoop) -> Option<PhysicalPosit
 }
 
 impl ApplicationHandler<UserEvent> for App {
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::BackdropFrameArrived => {
                 self.request_redraw();
@@ -1088,9 +1107,12 @@ impl ApplicationHandler<UserEvent> for App {
                 self.summon();
             }
             UserEvent::QuitRequested => {
-                // Defer the actual exit to `about_to_wait` so the current
-                // event drains cleanly.
+                // Quit immediately. We used to defer to `about_to_wait`, but
+                // with `ControlFlow::Wait` the loop isn't guaranteed to reach
+                // `about_to_wait` after a user event, so the quit could be
+                // lost and require a second click. Exit here, now.
                 self.should_quit = true;
+                event_loop.exit();
             }
         }
     }
