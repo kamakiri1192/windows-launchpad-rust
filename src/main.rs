@@ -50,7 +50,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use app_diff::{AppDiff, SnapshotEntry};
 use app_id::AppId;
@@ -77,6 +77,11 @@ const INITIAL_WINDOW_WIDTH: f64 = 1280.0;
 const INITIAL_WINDOW_HEIGHT: f64 = 800.0;
 const MIN_WINDOW_WIDTH: f64 = 640.0;
 const MIN_WINDOW_HEIGHT: f64 = 480.0;
+/// Grace window after `summon()` during which a `Focused(false)` is treated as
+/// a focus-transition artifact and ignored (SetForegroundWindow can briefly
+/// drop and re-acquire focus as the OS shuffles windows). Without this the
+/// just-summoned launcher would instantly hide again on some machines.
+const SUMMON_FOCUS_GRACE: Duration = Duration::from_millis(500);
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
 /// event, this carries icon-worker results and refresh-watcher diffs.
@@ -165,6 +170,12 @@ struct App {
     /// so we track it ourselves to make `hide()` idempotent (avoids a hide
     /// storm when a focus-loss event races an app-launch hide).
     visible: bool,
+    /// When the most recent `summon()` happened. A `Focused(false)` that
+    /// arrives within `SUMMON_FOCUS_GRACE` of a summon is treated as a
+    /// focus-transition artifact (SetForegroundWindow can briefly lose and
+    /// re-acquire focus as the OS shuffles windows) and ignored, instead of
+    /// instantly hiding the just-summoned window.
+    last_summon: Option<Instant>,
     /// Set by `UserEvent::QuitRequested` (tray "Quit"); checked in
     /// `about_to_wait` to actually exit the loop. Decoupling the request from
     /// the exit lets the loop drain the current frame cleanly.
@@ -209,6 +220,7 @@ impl App {
             pressed_on_control: false,
             last_redraw: None,
             visible: true,
+            last_summon: None,
             should_quit: false,
             #[cfg(windows)]
             _os: None,
@@ -993,6 +1005,9 @@ impl App {
         }
         r.window.focus_window();
         self.visible = true;
+        // Record the summon time so a focus-transition artifact in the next
+        // SUMMON_FOCUS_GRACE is ignored instead of instantly hiding us.
+        self.last_summon = Some(Instant::now());
         self.request_redraw();
         debug_log!("summon: window shown + focus requested");
     }
@@ -1492,8 +1507,22 @@ impl ApplicationHandler<UserEvent> for App {
                 // window, Alt-Tab, …). This is the macOS-Launchpad / Run-dialog
                 // behavior. `hide()` is idempotent so the focus-loss that fires
                 // right after we hide to launch an app is a harmless no-op.
+                //
+                // BUT: ignore a focus loss that happens within
+                // SUMMON_FOCUS_GRACE of a summon. SetForegroundWindow can
+                // briefly drop and re-acquire focus as the OS shuffles
+                // windows, and without this guard the just-summoned launcher
+                // would vanish within ~75ms on some machines.
                 if !focused {
-                    self.hide();
+                    let in_grace = self
+                        .last_summon
+                        .map(|t| t.elapsed() < SUMMON_FOCUS_GRACE)
+                        .unwrap_or(false);
+                    if in_grace {
+                        debug_log!("window_event: Focused(false) ignored (within summon grace)");
+                    } else {
+                        self.hide();
+                    }
                 }
             }
             _ => {}
