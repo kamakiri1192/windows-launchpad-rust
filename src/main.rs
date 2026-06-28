@@ -1093,7 +1093,7 @@ fn initial_window_position(event_loop: &ActiveEventLoop) -> Option<PhysicalPosit
 }
 
 impl ApplicationHandler<UserEvent> for App {
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::BackdropFrameArrived => {
                 self.request_redraw();
@@ -1111,14 +1111,15 @@ impl ApplicationHandler<UserEvent> for App {
                 self.summon();
             }
             UserEvent::QuitRequested => {
-                debug_log!("user_event: QuitRequested received");
-                // Quit immediately. We used to defer to `about_to_wait`, but
-                // with `ControlFlow::Wait` the loop isn't guaranteed to reach
-                // `about_to_wait` after a user event, so the quit could be
-                // lost and require a second click. Exit here, now.
-                self.should_quit = true;
-                event_loop.exit();
-                debug_log!("user_event: event_loop.exit() called");
+                debug_log!("user_event: QuitRequested received → process::exit(0)");
+                // Force-exit the process. We previously used event_loop.exit(),
+                // but the debug log showed the os-integration thread (tray +
+                // hook) kept the process alive for >1.8s after the call — the
+                // tray was still clickable, so 'Quit' appeared to need two
+                // clicks. A hard exit terminates all threads immediately; the
+                // OS releases the LL hook and removes the tray icon on process
+                // teardown, so no manual cleanup is needed.
+                std::process::exit(0);
             }
         }
     }
