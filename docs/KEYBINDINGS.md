@@ -30,6 +30,22 @@ from scratch. The `R` key does the equivalent at runtime without restarting.
 |-------|--------|
 | Left-drag (horizontal) | Page swipe with rubber-band + spring snap |
 
+## Bottom-center control (search pill / page indicator / search field)
+
+The bottom-center control morphs between a search pill, a transient page
+indicator, and a search field. See [BOTTOM_CONTROL.md](BOTTOM_CONTROL.md) for
+the full state machine.
+
+| Input | Action |
+|-------|--------|
+| Click the search pill | Expand into the search field |
+| Click the close (×) in the field | Clear the query and collapse back to the pill |
+| Type | Append to the query (IME supported) |
+| `Backspace` | Delete the character before the caret |
+| `←` / `→` | Move the caret one character |
+| `Esc` (while the field is open) | Collapse to the pill (does **not** quit) |
+| Page change (swipe) | Briefly show the page indicator, then return to the pill |
+
 ## Liquid Glass master switch
 
 | Key | Action |

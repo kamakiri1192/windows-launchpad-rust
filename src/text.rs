@@ -87,6 +87,20 @@ struct PlacedGlyph {
     y: f32,
 }
 
+/// Parameters for [`TextRenderer::layout_centered_line`]: a single centered
+/// line of text with an explicit color. Bundled into a struct so the method
+/// stays under clippy's argument-count limit.
+pub struct CenteredLineSpec<'a> {
+    pub text: &'a str,
+    pub font_size: f32,
+    pub line_height: f32,
+    pub family: &'a str,
+    pub color: [f32; 4],
+    /// On-screen center of the line, in physical px.
+    pub center: (f32, f32),
+    pub scale_factor: f32,
+}
+
 pub struct TextRenderer {
     font_system: FontSystem,
     swash: SwashCache,
@@ -149,7 +163,58 @@ impl TextRenderer {
     /// units the rest of the renderer uses). Pass the window's scale factor.
     pub fn layout_labels(&mut self, labels: &[Label], scale_factor: f32) -> Vec<GlyphQuad> {
         let placed = self.layout_phase(labels, scale_factor);
-        self.raster_phase(placed, scale_factor)
+        self.raster_phase(placed, scale_factor, LABEL_SHADOW_LAYERS, LABEL_TEXT_COLOR)
+    }
+
+    /// Lay out a single centered line of text with an explicit color, returning
+    /// glyph quads *without* the label drop-shadow. Used by the bottom control
+    /// (search pill label + search field query + placeholder), which draws its
+    /// own crisp text over the Liquid Glass capsule.
+    ///
+    /// `spec.center` is the on-screen center of the line in physical px. The
+    /// glyph quads are positioned so the line is horizontally centered on it.
+    pub fn layout_centered_line(&mut self, spec: &CenteredLineSpec<'_>) -> Vec<GlyphQuad> {
+        let CenteredLineSpec {
+            text,
+            font_size,
+            line_height,
+            family,
+            color,
+            center,
+            scale_factor,
+        } = *spec;
+        let metrics = Metrics::new(font_size, line_height);
+        let attrs = Attrs::new().family(Family::Name(family)).color(Color::rgba(
+            (color[0] * 255.0).round() as u8,
+            (color[1] * 255.0).round() as u8,
+            (color[2] * 255.0).round() as u8,
+            (color[3] * 255.0).round() as u8,
+        ));
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        // No wrapping: the control text is short.
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(Some(f32::MAX / 4.0), Some(line_height * 2.0 / scale_factor));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut placed = Vec::new();
+        let baseline_y = center.1 - line_height * 0.5 * scale_factor;
+        // Single line only: take the first layout run.
+        if let Some(run) = buffer.layout_runs().next() {
+            let run_w = run.line_w;
+            let centered_x = (center.0 / scale_factor - run_w * 0.5).max(0.0);
+            let line_origin = (
+                centered_x * scale_factor,
+                baseline_y + run.line_y * scale_factor,
+            );
+            for glyph in run.glyphs.iter() {
+                let physical = glyph.physical(line_origin, scale_factor);
+                let x = physical.x as f32;
+                let y = physical.y as f32;
+                placed.push(PlacedGlyph { physical, x, y });
+            }
+        }
+        self.raster_phase(placed, scale_factor, &[], color)
     }
 
     // -- Phase 1: cosmic-text layout --------------------------------------
@@ -199,7 +264,13 @@ impl TextRenderer {
 
     // -- Phase 2: rasterize into the atlas, emit quads --------------------
 
-    fn raster_phase(&mut self, placed: Vec<PlacedGlyph>, scale_factor: f32) -> Vec<GlyphQuad> {
+    fn raster_phase(
+        &mut self,
+        placed: Vec<PlacedGlyph>,
+        scale_factor: f32,
+        shadow_layers: &[(f32, f32, f32)],
+        text_color: [f32; 4],
+    ) -> Vec<GlyphQuad> {
         let mut glyphs = Vec::with_capacity(placed.len());
         for g in placed {
             let entry = match self.ensure_glyph(&g.physical) {
@@ -220,13 +291,13 @@ impl TextRenderer {
                 v0: entry.y as f32 / ATLAS_H as f32,
                 u1: (entry.x + entry.w) as f32 / ATLAS_W as f32,
                 v1: (entry.y + entry.h) as f32 / ATLAS_H as f32,
-                color: LABEL_TEXT_COLOR,
+                color: text_color,
             });
         }
 
-        let mut quads = Vec::with_capacity(glyphs.len() * (LABEL_SHADOW_LAYERS.len() + 1));
+        let mut quads = Vec::with_capacity(glyphs.len() * (shadow_layers.len() + 1));
         for glyph in glyphs.iter().copied() {
-            for &(dx, dy, alpha) in LABEL_SHADOW_LAYERS {
+            for &(dx, dy, alpha) in shadow_layers {
                 quads.push(glyph.with_offset_and_color(
                     dx * scale_factor,
                     dy * scale_factor,

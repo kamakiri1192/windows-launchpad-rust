@@ -1,7 +1,7 @@
 use crate::grid::{GridApp, GridLayout, TileInstance};
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlassShape {
     /// Center position in content pixels.
     pub center: [f32; 2],
@@ -16,9 +16,14 @@ pub struct GlassShape {
 
 /// Shape kind encoded into `shape_type`:
 /// - 0 = scrolling rounded rectangle (moves with `scroll_x`, e.g. tile halos).
-/// - 1 = fixed rounded rectangle (ignores `scroll_x`, e.g. the single page frame).
+/// - 1 = fixed rounded rectangle that is the page-frame clip region (tiles are
+///   clipped to this; the frame itself renders as glass).
+/// - 2 = fixed rounded rectangle that lives *outside* the frame clip (the
+///   bottom-center control capsule). Rendered as glass but never clipped to
+///   the frame.
 const SHAPE_SCROLLING: u32 = 0;
 const SHAPE_FIXED: u32 = 1;
+const SHAPE_CONTROL: u32 = 2;
 
 impl GlassShape {
     pub fn rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
@@ -29,6 +34,13 @@ impl GlassShape {
     /// Used for the fixed page frame behind the scrolling tiles.
     pub fn fixed_rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
         Self::with_kind(center, size, radius, SHAPE_FIXED)
+    }
+
+    /// A fixed rounded rectangle that is rendered as glass but is *not* clipped
+    /// to the page frame. Used for the bottom-center control capsule, which
+    /// sits below the frame.
+    pub fn control_rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
+        Self::with_kind(center, size, radius, SHAPE_CONTROL)
     }
 
     fn with_kind(center: [f32; 2], size: [f32; 2], radius: f32, shape_type: u32) -> Self {
@@ -42,6 +54,9 @@ impl GlassShape {
     }
 }
 
+/// Build the base glass shapes (fixed page frame + scrolling tile halos).
+/// The bottom-control capsule, if any, is appended separately via
+/// [`with_control`] so the geometry buffer can be updated independently.
 pub fn shapes_from_layout(
     layout: &GridLayout,
     viewport_w: f32,
@@ -66,6 +81,14 @@ pub fn shapes_from_layout(
             .iter()
             .map(shape_from_tile),
     );
+    shapes
+}
+
+/// Append the bottom-control capsule (if `Some`) to a base shape list.
+pub fn with_control(mut shapes: Vec<GlassShape>, control: Option<GlassShape>) -> Vec<GlassShape> {
+    if let Some(c) = control {
+        shapes.push(c);
+    }
     shapes
 }
 

@@ -20,6 +20,7 @@ use wgpu::{
     TextureViewDescriptor,
 };
 
+use crate::bottom_control::ControlInstance;
 use crate::grid::{GridLayout, TileInstance};
 use crate::icon_pipeline::IconInstance;
 use crate::liquid_glass::capture::FallbackCapture;
@@ -41,6 +42,15 @@ struct Uniforms {
     /// Fixed page-frame corner radius in physical px.
     frame_radius: f32,
     frame_pad: f32,
+}
+
+/// Viewport-only uniform for the bottom-control overlay + text shaders. They
+/// don't need scroll or frame data (the control is screen-fixed and not
+/// clipped to the frame).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ControlUniforms {
+    viewport: [f32; 2],
 }
 
 pub struct Renderer {
@@ -85,6 +95,21 @@ pub struct Renderer {
     // Fixed page-frame geometry in physical px, fed to the tile/icon/text
     // shaders so they clip to the frame's rounded rect. `(cx, cy, hw, hh, r)`.
     frame_clip: (f32, f32, f32, f32, f32),
+
+    // -- Bottom control overlays --------------------------------------
+    // The control's glass capsule is drawn by the Liquid Glass pass (it's a
+    // shape in the geometry buffer). These two pipelines draw the foreground
+    // ink on top: procedural shapes (magnifier, dots, caret, close) and the
+    // cosmic-text glyphs for the label / query / placeholder.
+    control_pipeline: RenderPipeline,
+    control_uniform_buffer: Buffer,
+    control_bind_group: wgpu::BindGroup,
+    control_instance_buffer: Option<Buffer>,
+    control_instance_count: u32,
+    control_text_pipeline: RenderPipeline,
+    control_text_bind_group: wgpu::BindGroup,
+    control_text_instance_buffer: Option<Buffer>,
+    control_text_instance_count: u32,
 }
 
 pub struct DrawArgs {
@@ -503,6 +528,145 @@ impl Renderer {
             capture,
         );
 
+        // ---- Bottom-control overlay pipelines ---------------------------
+        // Small viewport-only uniform shared by the control shape + text
+        // shaders. Reuses the text bind group layout (uniform + atlas +
+        // sampler) so the text pipeline can sample the glyph atlas; the shape
+        // pipeline binds only [0].
+        let control_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("control uniform buffer"),
+            size: std::mem::size_of::<ControlUniforms>() as BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let control_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("control bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            std::mem::size_of::<ControlUniforms>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let control_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("control bg"),
+            layout: &control_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: control_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+            ],
+        });
+
+        let control_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("control overlay shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader_control.wgsl").into()),
+        });
+        let control_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("control overlay pipeline layout"),
+                bind_group_layouts: &[Some(&control_bgl)],
+                immediate_size: 0,
+            });
+        let control_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("control overlay pipeline"),
+            layout: Some(&control_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &control_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[ControlInstance::LAYOUT],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &control_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // Control text pipeline: same bind group (uniform + atlas + sampler).
+        let control_text_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("control text shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader_control_text.wgsl").into()),
+        });
+        let control_text_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("control text pipeline"),
+                layout: Some(&control_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &control_text_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[GlyphQuad::LAYOUT],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &control_text_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
         Ok(Self {
             window,
             device,
@@ -529,6 +693,15 @@ impl Renderer {
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
+            control_pipeline,
+            control_uniform_buffer,
+            control_bind_group: control_bind_group.clone(),
+            control_instance_buffer: None,
+            control_instance_count: 0,
+            control_text_pipeline,
+            control_text_bind_group: control_bind_group,
+            control_text_instance_buffer: None,
+            control_text_instance_count: 0,
         })
     }
 
@@ -778,6 +951,50 @@ impl Renderer {
         ));
     }
 
+    /// Push the bottom-control's glass capsule shape into the Liquid Glass
+    /// geometry buffer. `None` hides the control. Called every frame from the
+    /// app (the geometry is tiny and rebuilt cheaply).
+    pub fn set_control_glass_shape(
+        &mut self,
+        shape: Option<crate::liquid_glass::geometry::GlassShape>,
+    ) {
+        self.liquid_glass.set_control_shape(&self.device, shape);
+    }
+
+    /// Replace the procedural overlay instances (magnifier, dots, caret,
+    /// close ×) for the bottom control.
+    pub fn set_control_instances(&mut self, instances: &[ControlInstance]) {
+        self.control_instance_count = instances.len() as u32;
+        if instances.is_empty() {
+            self.control_instance_buffer = None;
+            return;
+        }
+        self.control_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("control instance buffer"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
+    /// Replace the text glyph quads for the bottom control (label / query /
+    /// placeholder).
+    pub fn set_control_text_instances(&mut self, quads: &[GlyphQuad]) {
+        self.control_text_instance_count = quads.len() as u32;
+        if quads.is_empty() {
+            self.control_text_instance_buffer = None;
+            return;
+        }
+        self.control_text_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("control text instance buffer"),
+                contents: bytemuck::cast_slice(quads),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
         // Update uniforms (tiny, every frame).
@@ -900,6 +1117,51 @@ impl Renderer {
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.text_instance_count);
+                }
+            }
+        }
+
+        // Bottom-control overlays: drawn last so they sit above everything.
+        // Update the viewport-only control uniform, then run the procedural
+        // shape pass and the text pass.
+        self.queue.write_buffer(
+            &self.control_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&ControlUniforms {
+                viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
+            }),
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("control overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if self.control_instance_count > 0 {
+                if let Some(buf) = self.control_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.control_instance_count);
+                }
+            }
+            if self.control_text_instance_count > 0 {
+                if let Some(buf) = self.control_text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_text_pipeline);
+                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.control_text_instance_count);
                 }
             }
         }
