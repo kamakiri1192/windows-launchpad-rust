@@ -24,6 +24,12 @@ const START_SCALE: f32 = 0.92;
 pub struct EntranceAnimation {
     progress: f32,
     active: bool,
+    /// True until the first `tick()` after a `start()`. The first post-summon
+    /// frame can carry a huge `dt` (the loop was idle while hidden, so
+    /// `last_redraw` is stale), which would jump `progress` partway in and make
+    /// the UI "flash" at a partial-alpha/scale state. Dropping that first dt
+    /// guarantees the reveal always begins from alpha 0 / start scale.
+    primed: bool,
 }
 
 impl Default for EntranceAnimation {
@@ -31,6 +37,7 @@ impl Default for EntranceAnimation {
         Self {
             progress: 0.0,
             active: false,
+            primed: false,
         }
     }
 }
@@ -41,10 +48,19 @@ impl EntranceAnimation {
     }
 
     /// Arm the reveal (progress back to 0, marked active). Called on first show
-    /// and on every subsequent summon.
+    /// and on every subsequent summon. No-op when `LAUNCHPAD_NO_ENTRANCE` is set
+    /// (diagnostic switch to compare with/without the animation).
     pub fn start(&mut self) {
+        if std::env::var_os("LAUNCHPAD_NO_ENTRANCE").is_some() {
+            // Skip the reveal entirely: jump straight to fully shown.
+            self.progress = 1.0;
+            self.active = false;
+            self.primed = false;
+            return;
+        }
         self.progress = 0.0;
         self.active = true;
+        self.primed = true;
     }
 
     /// Advance the linear progress by `dt` seconds. Returns `true` while the
@@ -53,6 +69,11 @@ impl EntranceAnimation {
     pub fn tick(&mut self, dt: f32) -> bool {
         if !self.active {
             return false;
+        }
+        // Discard the stale first-frame dt so the reveal starts from rest.
+        if self.primed {
+            self.primed = false;
+            return self.active;
         }
         self.progress = advance_linear(self.progress, 1.0, dt, DURATION);
         if self.progress >= 1.0 {
@@ -163,7 +184,9 @@ mod tests {
     fn tick_advances_and_completes() {
         let mut a = EntranceAnimation::new();
         a.start();
-        // ~one full DURATION later, it should be done.
+        // The first tick after start() is discarded (stale dt guard), so the
+        // reveal needs DURATION of *real* ticks on top of that.
+        a.tick(0.0); // primed frame dropped
         let still = a.tick(DURATION);
         assert!(!still);
         assert!(!a.is_animating());
@@ -171,15 +194,31 @@ mod tests {
     }
 
     #[test]
+    fn first_tick_starts_from_rest() {
+        // A huge first-frame dt (e.g. the loop was idle while hidden) must NOT
+        // jump progress — the reveal always begins from alpha 0 / start scale.
+        let mut a = EntranceAnimation::new();
+        a.start();
+        let still = a.tick(1.0); // absurd dt on the primed frame
+        assert!(still);
+        assert_eq!(a.progress, 0.0);
+        assert!((a.alpha() - 0.0).abs() < 1e-5);
+        assert!((a.scale() - START_SCALE).abs() < 1e-5);
+    }
+
+    #[test]
     fn tick_is_frame_rate_independent() {
         // Two dt slices summing to DURATION must reach the same place as one
-        // big slice, regardless of how the time is split.
+        // big slice, regardless of how the time is split (after the primed
+        // frame is dropped).
         let mut big = EntranceAnimation::new();
         big.start();
+        big.tick(0.0);
         big.tick(DURATION);
 
         let mut small = EntranceAnimation::new();
         small.start();
+        small.tick(0.0); // primed frame dropped
         let n = 64;
         let mut still = false;
         for _ in 0..n {
@@ -196,7 +235,8 @@ mod tests {
         // At progress 0, alpha is 0 and scale is the start value.
         assert!((a.alpha() - 0.0).abs() < 1e-5);
         assert!((a.scale() - START_SCALE).abs() < 1e-5);
-        // At progress 1, alpha is 1 and scale is 1.
+        // At progress 1, alpha is 1 and scale is 1 (drop the primed frame first).
+        a.tick(0.0);
         a.tick(DURATION);
         assert!((a.alpha() - 1.0).abs() < 1e-3);
         assert!((a.scale() - 1.0).abs() < 1e-3);

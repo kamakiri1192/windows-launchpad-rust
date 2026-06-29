@@ -170,6 +170,10 @@ struct GeometryKey {
     width: u32,
     height: u32,
     shape_count: u32,
+    /// Entrance reveal scale — the SDF scales shapes about the frame center,
+    /// so a geometry pass baked at one scale is invalid at another. Quantized
+    /// to avoid re-baking every animation sub-step.
+    appear_scale: f32,
 }
 
 impl LiquidGlassRenderer {
@@ -805,7 +809,7 @@ impl LiquidGlassRenderer {
             queue.submit(std::iter::once(enc.finish()));
         }
 
-        let geometry_key = self.geometry_key(scroll_x);
+        let geometry_key = self.geometry_key(scroll_x, reveal.scale);
         if self.last_geometry_key != Some(geometry_key) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass geometry pass"),
@@ -867,7 +871,7 @@ impl LiquidGlassRenderer {
         true
     }
 
-    fn geometry_key(&self, scroll_x: f32) -> GeometryKey {
+    fn geometry_key(&self, scroll_x: f32, appear_scale: f32) -> GeometryKey {
         let (width, height) = self.texture_size;
         GeometryKey {
             scroll_x: (scroll_x * 10.0).round() / 10.0,
@@ -877,6 +881,9 @@ impl LiquidGlassRenderer {
             width,
             height,
             shape_count: self.shape_count,
+            // Quantize to 0.01 steps so the geometry pass re-bakes only when
+            // the scale has visibly changed, not every animation sub-frame.
+            appear_scale: (appear_scale * 100.0).round() / 100.0,
         }
     }
 
