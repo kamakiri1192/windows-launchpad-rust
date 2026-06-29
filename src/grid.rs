@@ -40,7 +40,7 @@ const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
 /// Extra height the panel adds to the raw grid height (incl. label rows).
 pub const FRAME_EXTRA_HEIGHT: f32 = 52.0;
 /// Extra height the panel adds *beyond* `FRAME_EXTRA_HEIGHT`.
-pub const FRAME_PADDING_HEIGHT: f32 = 72.0;
+pub const FRAME_PADDING_HEIGHT: f32 = 38.0;
 /// Extra width the panel adds around the grid.
 pub const FRAME_PADDING_WIDTH: f32 = 112.0;
 /// Inset from the viewport edge the panel keeps (minimum gutter).
@@ -106,6 +106,9 @@ pub struct GridLayout {
     pub cols: usize,
     pub rows: usize,
     pub page_count: usize,
+    /// Window DPI scale factor used to convert 100% DPI logical design units
+    /// into the physical-pixel geometry consumed by the renderer.
+    pub scale: f32,
     /// Tile side length in physical px.
     pub tile_size: f32,
     pub gap: f32,
@@ -120,10 +123,11 @@ impl Default for GridLayout {
             cols: 7,
             rows: 5,
             page_count: 3,
+            scale: 1.0,
             tile_size: 84.0,
             gap: 22.0,
             row_gap: 48.0,
-            margin_top: 96.0,
+            margin_top: 56.0,
             margin_left: 0.0, // recomputed per-viewport to center the grid
         }
     }
@@ -139,6 +143,21 @@ impl GridLayout {
         let needed = app_count.div_ceil(per_page);
         let page_count = needed.max(1);
         Self { page_count, ..base }
+    }
+
+    /// Convert the 100% DPI layout constants into physical pixels for the
+    /// current monitor scale factor. Keep `cols`/`rows` stable; only distances
+    /// and radii scale.
+    pub fn with_scale_factor(mut self, scale_factor: f32) -> Self {
+        let scale = sanitize_scale(scale_factor);
+        let ratio = scale / sanitize_scale(self.scale);
+        self.scale = scale;
+        self.tile_size *= ratio;
+        self.gap *= ratio;
+        self.row_gap *= ratio;
+        self.margin_top *= ratio;
+        self.margin_left *= ratio;
+        self
     }
 
     /// Total tiles across all pages.
@@ -164,8 +183,8 @@ impl GridLayout {
     /// keep a minimum viewport gutter and never narrower than the grid itself.
     pub fn page_width(&self, viewport_w: f32) -> f32 {
         let grid_w = self.grid_w();
-        (grid_w + FRAME_PADDING_WIDTH)
-            .min(viewport_w - FRAME_VIEWPORT_GUTTER)
+        (grid_w + self.scaled(FRAME_PADDING_WIDTH))
+            .min(viewport_w - self.scaled(FRAME_VIEWPORT_GUTTER))
             .max(grid_w)
     }
 
@@ -186,7 +205,7 @@ impl GridLayout {
     pub fn grid_h(&self) -> f32 {
         self.rows as f32 * self.tile_size
             + (self.rows.saturating_sub(1)) as f32 * self.row_gap
-            + FRAME_EXTRA_HEIGHT
+            + self.scaled(FRAME_EXTRA_HEIGHT)
     }
 
     /// Return the fixed page-frame panel rectangle in content/screen pixels.
@@ -199,9 +218,9 @@ impl GridLayout {
         let grid_h = self.grid_h();
         // The panel width equals one content page; see `page_width`.
         let panel_w = self.page_width(viewport_w);
-        let panel_h = grid_h + FRAME_PADDING_HEIGHT;
+        let panel_h = grid_h + self.scaled(FRAME_PADDING_HEIGHT);
         let center_x = self.margin_left + grid_w * 0.5;
-        let center_y = self.margin_top - FRAME_TOP_OFFSET + panel_h * 0.5;
+        let center_y = self.margin_top - self.scaled(FRAME_TOP_OFFSET) + panel_h * 0.5;
         (center_x, center_y, panel_w, panel_h)
     }
 
@@ -250,7 +269,9 @@ impl GridLayout {
 
         let step_x = self.tile_size + self.gap;
         let step_y = self.tile_size + self.row_gap;
-        let col = ((x_in_page + LABEL_CLICK_EXTRA_X) / step_x).floor() as usize;
+        let label_click_extra_x = self.scaled(LABEL_CLICK_EXTRA_X);
+        let label_click_extra_y = self.scaled(LABEL_CLICK_EXTRA_Y);
+        let col = ((x_in_page + label_click_extra_x) / step_x).floor() as usize;
         let row = (y_in_grid / step_y).floor() as usize;
         if col >= self.cols || row >= self.rows {
             return None;
@@ -262,10 +283,10 @@ impl GridLayout {
             && x_in_page <= tile_x + self.tile_size
             && y_in_grid >= tile_y
             && y_in_grid <= tile_y + self.tile_size;
-        let in_label = x_in_page >= tile_x - LABEL_CLICK_EXTRA_X
-            && x_in_page <= tile_x + self.tile_size + LABEL_CLICK_EXTRA_X
+        let in_label = x_in_page >= tile_x - label_click_extra_x
+            && x_in_page <= tile_x + self.tile_size + label_click_extra_x
             && y_in_grid >= tile_y + self.tile_size
-            && y_in_grid <= tile_y + self.tile_size + LABEL_CLICK_EXTRA_Y;
+            && y_in_grid <= tile_y + self.tile_size + label_click_extra_y;
         if !in_tile && !in_label {
             return None;
         }
@@ -306,7 +327,7 @@ impl GridLayout {
                 x,
                 y,
                 size: self.tile_size,
-                radius: 19.0,
+                radius: self.scaled(19.0),
                 r: r_,
                 g: g_,
                 b: b_,
@@ -344,7 +365,7 @@ impl GridLayout {
                 x,
                 y,
                 size: self.tile_size,
-                radius: 19.0,
+                radius: self.scaled(19.0),
                 u0: uv.u0,
                 v0: uv.v0,
                 u1: uv.u1,
@@ -372,9 +393,9 @@ impl GridLayout {
             let page_origin_x = (p as f32) * page_w;
             let tile_x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
-            let label_w = self.tile_size + 20.0; // a little wider than the tile
+            let label_w = self.tile_size + self.scaled(20.0); // a little wider than the tile
             let label_x = tile_x + (self.tile_size - label_w) * 0.5;
-            let label_y = tile_y + self.tile_size + 8.0;
+            let label_y = tile_y + self.tile_size + self.scaled(8.0);
             out.push(crate::text::Label {
                 text: app.name.to_string(),
                 x: label_x,
@@ -383,6 +404,19 @@ impl GridLayout {
             });
         }
         out
+    }
+
+    #[inline]
+    pub fn scaled(&self, value: f32) -> f32 {
+        value * self.scale
+    }
+}
+
+fn sanitize_scale(scale_factor: f32) -> f32 {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
     }
 }
 
@@ -556,6 +590,19 @@ mod tests {
     }
 
     #[test]
+    fn frame_leaves_room_for_bottom_control_outside_panel() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let (_cx, cy, _w, h) = g.frame_panel_rect(vw);
+        let frame_bottom = cy + h * 0.5;
+
+        assert!(
+            frame_bottom <= 724.0 + 1e-2,
+            "page frame must leave room below for the separate search control"
+        );
+    }
+
+    #[test]
     fn bounds_page_extent_equals_page_width() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
@@ -626,6 +673,36 @@ mod tests {
             g.hit_test_app(vw, screen_x, screen_y, -page_w, g.total_tiles()),
             Some(per_page)
         );
+    }
+
+    #[test]
+    fn scaled_layout_keeps_label_hit_area_with_scaled_text() {
+        let scale = 1.5;
+        let vw = 1920.0;
+        let g = GridLayout::default().with_scale_factor(scale).centered(vw);
+        assert!((g.tile_size - 126.0).abs() < 1e-2);
+        assert!((g.row_gap - 72.0).abs() < 1e-2);
+
+        let apps = fake_apps(1);
+        let labels = g.build_labels(vw, &view(&apps));
+        let label = &labels[0];
+        assert!((label.y - (g.margin_top + g.tile_size + 8.0 * scale)).abs() < 1e-2);
+        assert!((label.max_width - (g.tile_size + 20.0 * scale)).abs() < 1e-2);
+
+        let x = g.margin_left + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size + 41.0 * scale;
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, apps.len()), Some(0));
+    }
+
+    #[test]
+    fn scale_factor_replaces_previous_scale_instead_of_accumulating() {
+        let g = GridLayout::default()
+            .with_scale_factor(1.5)
+            .with_scale_factor(2.0);
+
+        assert!((g.tile_size - 168.0).abs() < 1e-2);
+        assert!((g.gap - 44.0).abs() < 1e-2);
+        assert!((g.margin_top - 112.0).abs() < 1e-2);
     }
 
     #[test]
