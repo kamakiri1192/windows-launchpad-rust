@@ -55,17 +55,25 @@ src/
 
 - **Win+Space で召喚**: 専用スレッド上の `WH_KEYBOARD_LL` フックがこの
   コンビネーションを検出し、システムのIME切り替えを抑制した上で
-  `UserEvent::Summon` を投げてウィンドウを表示します。
+  `UserEvent::Summon` を投げてウィンドウを表示します。スタートメニューが
+  同時に開くのを防ぐため、コンボ消費後に無害なダミーキー(`VK_F20`)を
+  投入して「Win単独タップ」と判定されないようにしています。
 - **フォーカス消失で自動非表示**: 他ウィンドウをクリック / Alt-Tab で
-  `WindowEvent::Focused(false)` を受け取り `hide()` します。
+  `WindowEvent::Focused(false)` を受け取り `hide()` します。ただし召喚直後
+  500ms 以内のフォーカス喪失は `SetForegroundWindow` の過渡期とみなし無視します。
 - **常駐**: Esc / アプリ起動 / CloseRequested は `event_loop.exit()` せず
   `hide()` に切り替えています。プロセスは生き続け、アイコンワーカや
   リフレッシュウォッチャも稼働し続けます。
 - **トレイアイコンで本終了**: 右クリックメニューの「終了」が唯一の本終了経路で、
-  `UserEvent::QuitRequested` → `about_to_wait` で `event_loop.exit()` します。
+  `UserEvent::QuitRequested` → `std::process::exit(0)` で即時終了します
+  （OS がプロセス終了時にLLフックとトレイアイコンを解放します）。
 
-設計の詳細は [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md) の
-"Window & lifecycle" セクションを参照してください。
+設計の詳細は以下を参照してください:
+- [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md) — 操作一覧
+- [docs/HOTKEY_DESIGN.md](docs/HOTKEY_DESIGN.md) — Win+Space ホットキーの
+  実装設計と試行した全アプローチの成否記録
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — 実装中に遭遇した
+  バグと原因・解決策の記録
 
 ## 今後の予定
 

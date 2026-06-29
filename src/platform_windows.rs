@@ -329,7 +329,7 @@ static INJECTING: AtomicBool = AtomicBool::new(false);
 ///
 /// 3. **Suppress the Start menu with a dummy key.** When Win+Space fires, we
 ///    swallow Space AND inject a quick VK_F20 down/up while Win is still
-///    held. The OS now sees "Win down, F24, Win up" instead of a bare Win
+///    held. The OS now sees "Win down, F20, Win up" instead of a bare Win
 ///    tap, so the shell does NOT open Start. This lets the real Win keyup
 ///    pass normally (Win+E etc. stay intact) — we don't touch Win at all.
 ///
@@ -354,7 +354,7 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
     // LLKHF_INJECTED is set by the system on SendInput-produced events; we
     // also tag our own dwExtraInfo with INJECT_MAGIC. Either signal means
     // "not a real keystroke, don't touch it" — this is what stops our own
-    // injected F24 from being re-swallowed.
+    // injected F20 from being re-swallowed.
     let injected = (kb.flags.0 & LLKHF_INJECTED.0) != 0
         || kb.dwExtraInfo == INJECT_MAGIC
         || INJECTING.load(Ordering::Relaxed);
