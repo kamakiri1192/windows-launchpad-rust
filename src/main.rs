@@ -24,6 +24,7 @@
 //!   - Click an app icon → launch its Start Menu shortcut.
 //!   - Esc → quit.
 
+mod anim;
 mod app_diff;
 mod app_id;
 mod app_registry;
@@ -170,6 +171,12 @@ struct App {
     /// animations (caret blink + morphs).
     last_redraw: Option<Instant>,
 
+    // ---- entrance (appear) animation ----
+    /// Scales the whole UI up (0.92 -> 1.0) about the frame center while fading
+    /// in alpha (0 -> 1) each time the window is shown: on startup and on every
+    /// subsequent summon. An iOS / Spotlight-style "liquid glass" reveal.
+    entrance: anim::EntranceAnimation,
+
     // ---- resident-lifecycle state ----
     /// Whether the window is currently visible. `set_visible` doesn't query,
     /// so we track it ourselves to make `hide()` idempotent (avoids a hide
@@ -225,6 +232,7 @@ impl App {
             pointer_over_control: false,
             pressed_on_control: false,
             last_redraw: None,
+            entrance: anim::EntranceAnimation::new(),
             visible: true,
             last_summon: None,
             should_quit: false,
@@ -1072,6 +1080,9 @@ impl App {
         }
         self.last_page = 0;
         self.visible = false;
+        // Reset the entrance reveal so the next summon plays it from scratch
+        // (it stays hidden while inactive, so no visual effect here).
+        self.entrance = anim::EntranceAnimation::new();
         self.request_redraw();
     }
 
@@ -1106,6 +1117,10 @@ impl App {
         // Record the summon time so a focus-transition artifact in the next
         // SUMMON_FOCUS_GRACE is ignored instead of instantly hiding us.
         self.last_summon = Some(Instant::now());
+        // Kick off the entrance reveal (scale + fade) so a shortcut-summoned
+        // window appears with an iOS-style "liquid glass" pop instead of a
+        // hard cut.
+        self.entrance.start();
         self.request_redraw();
         debug_log!("summon: window shown + focus requested");
     }
@@ -1300,6 +1315,9 @@ impl ApplicationHandler<UserEvent> for App {
         // First paint: empty/loading state, NO icon extraction. This is the
         // core Phase-1 win — the window is visible before any Shell/GDI work.
         self.relayout();
+        // Arm the entrance reveal so the very first appearance (process start)
+        // animates in the same way as a shortcut summon.
+        self.entrance.start();
         self.request_redraw();
         self.timer.mark(prefix::STARTUP, "first redraw requested");
     }
@@ -1596,6 +1614,10 @@ impl ApplicationHandler<UserEvent> for App {
                 self.last_redraw = Some(now);
                 let control_animating = self.control.tick(now, control_dt);
 
+                // Advance the entrance reveal with the same real dt so its
+                // pacing matches the control animation.
+                let entrance_animating = self.entrance.tick(control_dt);
+
                 // Upload the control's capsule + overlays before the render.
                 // This also measures query + preedit width for the IME cursor.
                 self.render_bottom_control();
@@ -1610,6 +1632,8 @@ impl ApplicationHandler<UserEvent> for App {
                         scroll_x,
                         viewport: vp,
                         defer_backdrop_capture: dragging,
+                        appear_alpha: self.entrance.alpha(),
+                        appear_scale: self.entrance.scale(),
                     });
                 }
 
@@ -1617,7 +1641,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.first_frame_rendered = true;
                     self.timer.mark(prefix::STARTUP, "first frame rendered");
                 }
-                if scroller_animating || control_animating {
+                if scroller_animating || control_animating || entrance_animating {
                     self.request_redraw();
                 }
             }
@@ -1668,7 +1692,8 @@ impl ApplicationHandler<UserEvent> for App {
         let control_animating = self.control.mode.is_morphing()
             || matches!(self.control.mode, bottom_control::Mode::Indicator)
             || matches!(self.control.mode, bottom_control::Mode::Field);
-        if scroller_animating || control_animating {
+        let entrance_animating = self.entrance.is_animating();
+        if scroller_animating || control_animating || entrance_animating {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);

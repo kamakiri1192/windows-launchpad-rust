@@ -12,6 +12,12 @@ struct GlassUniforms {
     ambient_strength: f32,
     blend: f32,
     max_displacement: f32,
+    // Entrance reveal: composited opacity (0..1) applied to the glass alpha.
+    appear_alpha: f32,
+    // Entrance reveal: uniform scale about the frame center (0.92..1.0).
+    appear_scale: f32,
+    // Page-frame center (physical px), the pivot for `appear_scale`.
+    frame_center: vec2<f32>,
     shape_count: u32,
     debug_flags: u32,
 };
@@ -70,10 +76,14 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
         // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
         // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
         let cx = select(shape.center.x + u.scroll_x, shape.center.x, shape.shape_type != 0u);
-        let center = vec2<f32>(cx, shape.center.y);
+        let center_raw = vec2<f32>(cx, shape.center.y);
+        // Entrance reveal: scale the frame + tile halos about the page-frame
+        // center. The bottom control (type 2) is screen-fixed → no scale.
+        let scale = select(u.appear_scale, 1.0, shape.shape_type == 2u);
+        let center = u.frame_center + (center_raw - u.frame_center) * scale;
         let local = pixel - center;
-        let half_size = shape.size * 0.5;
-        let shape_d = sdf_rrect(local, half_size, shape.radius);
+        let half_size = shape.size * 0.5 * scale;
+        let shape_d = sdf_rrect(local, half_size, shape.radius * scale);
         d = smooth_union(d, shape_d, u.blend);
     }
     return d;
@@ -87,8 +97,10 @@ fn frame_sdf(pixel: vec2<f32>) -> f32 {
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
         if shape.shape_type == 1u {
-            let local = pixel - shape.center;
-            d = sdf_rrect(local, shape.size * 0.5, shape.radius);
+            // Entrance reveal: scale the frame about its own center pivot.
+            let center = u.frame_center + (shape.center - u.frame_center) * u.appear_scale;
+            let local = pixel - center;
+            d = sdf_rrect(local, shape.size * 0.5 * u.appear_scale, shape.radius * u.appear_scale);
             return d;
         }
     }

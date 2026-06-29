@@ -14,6 +14,10 @@
 
 struct Uniforms {
     viewport: vec2<f32>,
+    // Entrance reveal: composited opacity (0..1). Control is screen-fixed, so
+    // only a fade applies (no frame-center scale).
+    appear_alpha: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -36,6 +40,7 @@ struct VsOut {
     @location(1) params: vec4<f32>,
     @location(2) color: vec4<f32>,
     @location(3) kind: vec4<f32>,
+    @location(4) appear_alpha: f32,
 };
 
 @vertex
@@ -77,6 +82,7 @@ fn vs_main(
     out.params = params;
     out.color = color;
     out.kind = kind;
+    out.appear_alpha = u.appear_alpha;
     return out;
 }
 
@@ -158,7 +164,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
     }
 
-    let a = coverage * alpha;
+    let a = coverage * alpha * in.appear_alpha;
     if a <= 0.001 {
         discard;
     }

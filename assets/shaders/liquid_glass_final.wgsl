@@ -12,6 +12,12 @@ struct GlassUniforms {
     ambient_strength: f32,
     blend: f32,
     max_displacement: f32,
+    // Entrance reveal: composited opacity (0..1) applied to the glass alpha.
+    appear_alpha: f32,
+    // Entrance reveal: uniform scale about the frame center (0.92..1.0).
+    appear_scale: f32,
+    // Page-frame center (physical px), the pivot for `appear_scale`.
+    frame_center: vec2<f32>,
     shape_count: u32,
     debug_flags: u32,
 };
@@ -184,7 +190,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     final_rgb = clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5), 0.0, 0.92);
+    // Entrance reveal: fade the whole glass composite (output is premultiplied,
+    // so scaling glass_alpha keeps the premultiplied relationship correct).
+    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5), 0.0, 0.92)
+        * u.appear_alpha;
 
     if has_flag(4u) {
         return vec4<f32>(final_rgb * glass_alpha, glass_alpha);

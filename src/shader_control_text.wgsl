@@ -7,6 +7,10 @@
 
 struct Uniforms {
     viewport: vec2<f32>,
+    // Entrance reveal: composited opacity (0..1). Control is screen-fixed, so
+    // only a fade applies (no frame-center scale).
+    appear_alpha: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -17,6 +21,7 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) appear_alpha: f32,
 };
 
 @vertex
@@ -52,6 +57,7 @@ fn vs_main(
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.color = color;
+    out.appear_alpha = u.appear_alpha;
     return out;
 }
 
@@ -59,5 +65,5 @@ fn vs_main(
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied.
-    return vec4<f32>(in.color.rgb, sampled.a * in.color.a);
+    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * in.appear_alpha);
 }

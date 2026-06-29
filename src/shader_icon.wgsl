@@ -11,14 +11,16 @@ struct Uniforms {
     viewport: vec2<f32>,
     // Horizontal content offset (px). Negative scrolls right.
     scroll_x: f32,
-    _pad: f32,
+    // Entrance reveal: composited opacity (0..1). Reuses the 16-byte pad.
+    appear_alpha: f32,
     // Fixed page-frame center (physical px).
     frame_center: vec2<f32>,
     // Fixed page-frame half-size (physical px).
     frame_half_size: vec2<f32>,
-    // Fixed page-frame corner radius (physical px) + pad.
+    // Fixed page-frame corner radius (physical px).
     frame_radius: f32,
-    frame_pad: f32,
+    // Entrance reveal: uniform scale about the frame center (0.92..1.0).
+    appear_scale: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -37,6 +39,7 @@ struct VsOut {
     @location(0) local: vec2<f32>,
     @location(1) size_r: vec2<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) appear_alpha: f32,
 };
 
 // Unit quad: two triangles covering [0,1]x[0,1].
@@ -64,7 +67,10 @@ fn vs_main(
     let tl = vec2<f32>(origin.x + u.scroll_x, origin.y);
     // Local pixel coordinates relative to the tile's center (for the SDF).
     let local = vec2<f32>(c.x * size - size * 0.5, (1.0 - c.y) * size - size * 0.5);
-    let world = vec2<f32>(tl.x + c.x * size, tl.y + (1.0 - c.y) * size);
+    var world = vec2<f32>(tl.x + c.x * size, tl.y + (1.0 - c.y) * size);
+
+    // Entrance reveal: scale about the fixed page-frame center.
+    world = u.frame_center + (world - u.frame_center) * u.appear_scale;
 
     // Physical px → clip space. Y is flipped so content origin is top-left.
     let half = u.viewport * 0.5;
@@ -82,6 +88,7 @@ fn vs_main(
         mix(uvrect.x, uvrect.z, c.x),
         mix(uvrect.w, uvrect.y, c.y),
     );
+    out.appear_alpha = u.appear_alpha;
     return out;
 }
 
@@ -114,6 +121,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Sample straight-alpha from the atlas, then premultiply for correct
     // blending (the pipeline uses PREMULTIPLIED_ALPHA_BLENDING over the tiles).
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
-    let out_a = sampled.a * a;
+    let out_a = sampled.a * a * in.appear_alpha;
     return vec4<f32>(sampled.rgb * out_a, out_a);
 }
