@@ -299,9 +299,8 @@ impl App {
         // as drawing), so the caret and IME anchor line up with the glyphs
         // regardless of ASCII/CJK widths. Cached for the frame so
         // `measure_query_width` can read it back under `&self`.
-        if self.text.is_some() {
+        if let Some(m) = self.text.as_mut() {
             self.cached_query_width = {
-                let m = self.text.as_mut().unwrap();
                 let mut measure = |s: &str| -> f32 {
                     if s.is_empty() {
                         return 0.0;
@@ -361,26 +360,77 @@ impl App {
         r.set_control_text_instances(&quads);
     }
 
-    /// Measure the current query's laid-out width in physical px (for caret
+    /// Measure the current visible search text's laid-out width in physical px (for caret
     /// placement). Returns the value measured this frame in
     /// `render_bottom_control` via cosmic-text shaping (cached so this can be
     /// called under `&self`). Falls back to 0 when not measured yet or when
-    /// the query is empty.
+    /// both the committed query and in-flight preedit are empty.
     fn measure_query_width(&self) -> f32 {
-        if self.control.query.is_empty() {
+        if self.control.query.is_empty() && self.control.preedit.is_empty() {
             return 0.0;
         }
         self.cached_query_width.unwrap_or(0.0)
     }
 
-    /// Build an owned snapshot of the current registry in display order.
+    /// Search text used for live filtering. This intentionally includes the
+    /// active IME preedit so Japanese composition narrows the grid before the
+    /// text is committed, while the committed query remains stored separately.
+    fn visible_search_query(&self) -> String {
+        let mut q = String::with_capacity(self.control.query.len() + self.control.preedit.len());
+        q.push_str(&self.control.query);
+        q.push_str(&self.control.preedit);
+        q
+    }
+
+    fn matches_search(name: &str, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+
+        let haystack = name.to_lowercase();
+        query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .all(|needle| haystack.contains(&needle))
+    }
+
+    /// Rebuild visible search results and redraw immediately after any input
+    /// mutation. Keeps text input, IME composition, tiles, labels, click
+    /// resolution, and scroll bounds in one state transition.
+    fn search_input_changed(&mut self) {
+        self.relayout();
+        let (w, _h) = self.viewport_phys();
+        let bounds = self.layout.bounds(w as f32);
+        if let Some(s) = self.scroller.as_mut() {
+            s.position = bounds.snap_target(s.position);
+            s.velocity = 0.0;
+            s.phase = Phase::Idle;
+        }
+        self.last_page = self.current_page() as i32;
+        self.request_redraw();
+    }
+
+    /// Build an owned snapshot of the currently visible app list in display order.
     /// Returns owned data so it doesn't hold a borrow on `self` while the
     /// renderer mutates.
     fn grid_apps_owned(&self) -> Vec<(String, Option<icons::UvRect>)> {
+        let query = self.visible_search_query();
         self.registry
             .apps()
             .iter()
+            .filter(|rec| Self::matches_search(&rec.name, &query))
             .map(|rec| (rec.name.clone(), rec.uv))
+            .collect()
+    }
+
+    fn visible_app_ids(&self) -> Vec<AppId> {
+        let query = self.visible_search_query();
+        self.registry
+            .apps()
+            .iter()
+            .filter(|rec| Self::matches_search(&rec.name, &query))
+            .map(|rec| rec.app_id.clone())
             .collect()
     }
 
@@ -388,15 +438,15 @@ impl App {
     /// label + icon instance buffers to the GPU.
     fn relayout(&mut self) {
         let (w, _h) = self.viewport_phys();
-        // Size pages to the current app count so every app is reachable by
-        // scrolling (the grid grows pages as apps are added).
-        self.layout = grid::GridLayout::for_app_count(self.registry.len()).centered(w as f32);
+        let owned = self.grid_apps_owned();
+        // Size pages to the current visible app count so every filtered app is
+        // reachable and blank trailing pages disappear during search.
+        self.layout = grid::GridLayout::for_app_count(owned.len()).centered(w as f32);
         let bounds = self.layout.bounds(w as f32);
         if let Some(s) = self.scroller.as_mut() {
             s.set_bounds(bounds);
         }
 
-        let owned = self.grid_apps_owned();
         let apps: Vec<grid::GridApp<'_>> = owned
             .iter()
             .map(|(name, uv)| grid::GridApp {
@@ -975,14 +1025,15 @@ impl App {
     fn resolve_clicked_app(&self, x_phys: f32, y_phys: f32) -> Option<AppLaunchInfo> {
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let visible_ids = self.visible_app_ids();
         let app_index =
             self.layout
-                .hit_test_app(w as f32, x_phys, y_phys, scroll_x, self.registry.len())?;
+                .hit_test_app(w as f32, x_phys, y_phys, scroll_x, visible_ids.len())?;
         // Map display index → stable id → launch snapshot. Going through the id
         // means even a concurrent mutation between pick and launch can't
         // resolve to the wrong app.
-        let app_id = self.registry.apps().get(app_index)?.app_id.clone();
-        self.registry.launch_info(&app_id)
+        let app_id = visible_ids.get(app_index)?;
+        self.registry.launch_info(app_id)
     }
 
     fn request_redraw(&self) {
@@ -1007,6 +1058,7 @@ impl App {
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
         self.control.press_close();
+        self.relayout();
         // Reset scroll to page 0 so the next appearance doesn't land mid-page.
         if let Some(s) = self.scroller.as_mut() {
             s.position = 0.0;
@@ -1067,6 +1119,7 @@ impl App {
 
         if hit_close {
             self.control.press_close();
+            self.search_input_changed();
         } else {
             match self.control.mode {
                 bottom_control::Mode::Pill
@@ -1080,8 +1133,8 @@ impl App {
                     // caret; the MVP leaves the caret at the end.
                 }
             }
+            self.request_redraw();
         }
-        self.request_redraw();
     }
 
     /// The center Y of the control capsule (for hit-testing the close button).
@@ -1265,35 +1318,45 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
 
-                let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key else {
-                    return;
+                let key_code = match event.physical_key {
+                    winit::keyboard::PhysicalKey::Code(code) => Some(code),
+                    winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
 
                 // While the search field has focus, the control eats most keys.
                 if self.control.wants_keyboard() {
                     let handled = match key_code {
-                        winit::keyboard::KeyCode::Escape => {
-                            let c = self.control.handle_escape();
-                            // If the field was open, Esc closes it instead of
-                            // quitting; otherwise fall through to quit below.
+                        Some(winit::keyboard::KeyCode::Escape) => {
+                            let c = self.control.wants_keyboard();
+                            // If the field was open, Esc clears search and
+                            // closes it instead of hiding the launcher.
                             if c {
-                                self.request_redraw();
+                                self.control.press_close();
+                                self.search_input_changed();
                                 return;
                             }
                             false
                         }
-                        winit::keyboard::KeyCode::Backspace => {
-                            self.control.handle_backspace();
+                        Some(winit::keyboard::KeyCode::Backspace) => {
+                            if self.control.preedit.is_empty() {
+                                self.control.handle_backspace();
+                                self.search_input_changed();
+                            } else {
+                                self.request_redraw();
+                            }
+                            true
+                        }
+                        Some(winit::keyboard::KeyCode::ArrowLeft) => {
+                            if self.control.preedit.is_empty() {
+                                self.control.handle_left();
+                            }
                             self.request_redraw();
                             true
                         }
-                        winit::keyboard::KeyCode::ArrowLeft => {
-                            self.control.handle_left();
-                            self.request_redraw();
-                            true
-                        }
-                        winit::keyboard::KeyCode::ArrowRight => {
-                            self.control.handle_right();
+                        Some(winit::keyboard::KeyCode::ArrowRight) => {
+                            if self.control.preedit.is_empty() {
+                                self.control.handle_right();
+                            }
                             self.request_redraw();
                             true
                         }
@@ -1304,23 +1367,25 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     // Otherwise, let printable text through (typed below).
                     // Direct (non-IME) printable characters arrive in event.text.
-                    if let Some(text) = &event.text {
-                        if self.control.wants_keyboard() {
-                            let mut any = false;
-                            for ch in text.chars() {
-                                if self.control.handle_char(ch) {
-                                    any = true;
+                    if self.control.preedit.is_empty() {
+                        if let Some(text) = &event.text {
+                            if self.control.wants_keyboard() {
+                                let mut any = false;
+                                for ch in text.chars() {
+                                    if self.control.handle_char(ch) {
+                                        any = true;
+                                    }
                                 }
-                            }
-                            if any {
-                                self.request_redraw();
-                                return;
+                                if any {
+                                    self.search_input_changed();
+                                    return;
+                                }
                             }
                         }
                     }
                 }
 
-                if key_code == winit::keyboard::KeyCode::Escape {
+                if key_code == Some(winit::keyboard::KeyCode::Escape) {
                     // Esc with no open field: hide the launcher (stay resident).
                     self.hide();
                     return;
@@ -1328,7 +1393,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // M toggles the OS window frame on/off for easier debugging
                 // (grab edges to resize, title bar to move) without rebuilding.
-                if key_code == winit::keyboard::KeyCode::KeyM {
+                if key_code == Some(winit::keyboard::KeyCode::KeyM) {
                     if let Some(r) = self.renderer.as_mut() {
                         r.toggle_decorations();
                         self.request_redraw();
@@ -1338,12 +1403,14 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // R clears the icon cache and re-extracts every icon live, so
                 // you can recover from a corrupted cache without restarting.
-                if key_code == winit::keyboard::KeyCode::KeyR && !self.control.wants_keyboard() {
+                if key_code == Some(winit::keyboard::KeyCode::KeyR)
+                    && !self.control.wants_keyboard()
+                {
                     self.reset_icons();
                     return;
                 }
 
-                if let Some(r) = self.renderer.as_mut() {
+                if let (Some(r), Some(key_code)) = (self.renderer.as_mut(), key_code) {
                     if r.handle_liquid_glass_key(key_code) {
                         self.request_redraw();
                     }
@@ -1356,19 +1423,25 @@ impl ApplicationHandler<UserEvent> for App {
                         Ime::Preedit(s, _) => {
                             // Show the in-flight composition inline.
                             self.control.set_preedit(s);
-                            self.request_redraw();
+                            self.search_input_changed();
                         }
                         Ime::Commit(text) => {
                             // IME commit: finalize the composition into the query.
                             self.control.set_preedit(String::new());
+                            let mut any = false;
                             for ch in text.chars() {
-                                self.control.handle_char(ch);
+                                if self.control.handle_char(ch) {
+                                    any = true;
+                                }
                             }
-                            self.request_redraw();
+                            if any || !text.is_empty() {
+                                self.search_input_changed();
+                            }
                         }
                         Ime::Enabled => {}
                         Ime::Disabled => {
                             self.control.set_preedit(String::new());
+                            self.search_input_changed();
                         }
                     }
                 }
@@ -1518,12 +1591,13 @@ impl ApplicationHandler<UserEvent> for App {
                 self.last_redraw = Some(now);
                 let control_animating = self.control.tick(now, control_dt);
 
+                // Upload the control's capsule + overlays before the render.
+                // This also measures query + preedit width for the IME cursor.
+                self.render_bottom_control();
+
                 // Sync the OS IME with the search field (on while focused,
                 // parked at the caret) so Japanese / other IME input works.
                 self.update_ime_state();
-
-                // Upload the control's capsule + overlays before the render.
-                self.render_bottom_control();
 
                 // Render the frame (consumes the uploaded buffers).
                 if let Some(r) = self.renderer.as_mut() {
@@ -1891,4 +1965,23 @@ fn spawn_bridge<T: Send + 'static>(
             }
         })
         .expect("spawn channel-bridge");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+
+    #[test]
+    fn search_matching_is_case_insensitive_for_ascii() {
+        assert!(App::matches_search("Windows Terminal", "terminal"));
+        assert!(App::matches_search("Windows Terminal", "WIN term"));
+        assert!(!App::matches_search("Windows Terminal", "memo"));
+    }
+
+    #[test]
+    fn search_matching_handles_japanese_names() {
+        assert!(App::matches_search("メモ帳", "メモ"));
+        assert!(App::matches_search("アプリ設定", "アプリ"));
+        assert!(!App::matches_search("メモ帳", "アプリ"));
+    }
 }

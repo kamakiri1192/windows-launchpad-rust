@@ -883,6 +883,21 @@ mod tests {
     }
 
     #[test]
+    fn backspace_removes_one_unicode_scalar() {
+        let mut c = bc();
+        c.mode = Mode::Field;
+        c.handle_char('あ');
+        c.handle_char('プ');
+        c.handle_char('A');
+        c.handle_backspace();
+        assert_eq!(c.query, "あプ");
+        assert_eq!(c.caret, "あプ".len());
+        c.handle_backspace();
+        assert_eq!(c.query, "あ");
+        assert_eq!(c.caret, "あ".len());
+    }
+
+    #[test]
     fn backspace_at_empty_is_noop() {
         let mut c = bc();
         c.mode = Mode::Field;
@@ -999,6 +1014,7 @@ mod tests {
         c.mode = Mode::Field;
         c.set_preedit("あいう".to_string());
         assert_eq!(c.preedit, "あいう");
+        assert_eq!(c.query, "");
         c.set_preedit(String::new());
         assert_eq!(c.preedit, "");
     }
