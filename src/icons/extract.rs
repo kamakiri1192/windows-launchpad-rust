@@ -19,7 +19,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use windows::core::{GUID, Interface, PCWSTR, PWSTR};
+use windows::core::{Interface, GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, PROPERTYKEY, SIZE};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
