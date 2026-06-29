@@ -387,20 +387,26 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
     }
 
     // Genuine Win+Space keydown. Decide fire vs. swallow via time debounce.
-    let fresh = space_held_now()
-        && HOOK_STATE.with(|cell| {
-            let mut slot = cell.borrow_mut();
-            let Some(state) = slot.as_mut() else {
-                return false;
-            };
-            let elapsed = now_ms.saturating_sub(state.last_summon_ms);
-            let fresh = elapsed > SUMMON_DEBOUNCE_MS;
-            if fresh {
-                state.last_summon_ms = now_ms;
-                state.suppress_space_up_until_ms = now_ms + COMBO_SUPPRESS_MS;
-            }
-            fresh
-        });
+    // NOTE: we deliberately do NOT consult space_held_now() (GetAsyncKeyState
+    // high bit for VK_SPACE) here, even though it sounds right. Inside the LL
+    // hook callback for a key's OWN keydown, GetAsyncKeyState has not yet
+    // recorded that key as down — so it returns false and makes EVERY press
+    // look stale, which is exactly what broke the dummy-key build ("fresh=false"
+    // on every press, no Summon ever fired). The time debounce alone is
+    // sufficient and reliable.
+    let fresh = HOOK_STATE.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let Some(state) = slot.as_mut() else {
+            return false;
+        };
+        let elapsed = now_ms.saturating_sub(state.last_summon_ms);
+        let fresh = elapsed > SUMMON_DEBOUNCE_MS;
+        if fresh {
+            state.last_summon_ms = now_ms;
+            state.suppress_space_up_until_ms = now_ms + COMBO_SUPPRESS_MS;
+        }
+        fresh
+    });
 
     crate::debug_log!("hook: Win+Space, fresh={}", fresh);
 
