@@ -3,13 +3,33 @@
 The app exposes a number of debug / tuning keys for inspecting and adjusting
 the Liquid Glass effect at runtime. Press the key while the window has focus.
 
-## Window
+## Window & lifecycle
 
-| Key | Action |
+The launcher is a **resident** app: closing its window (Esc, clicking another
+window, launching an app) only *hides* it — the process stays alive so it can
+be summoned again instantly. Real quit happens via the tray icon.
+
+| Key / Input | Action |
 |-----|--------|
-| `Esc` | Quit the app |
+| `Win+Space` | **Summon** the launcher from anywhere (suppresses the system IME switch on this combo via a low-level keyboard hook) |
+| `Esc` | Hide the launcher (stay resident). If the search field is open, the first Esc just closes the field. |
+| Focus loss (clicking another window, Alt-Tab) | Auto-hide the launcher |
+| Launch an app (click its tile) | Launch the app and hide the launcher |
+| Tray icon → left click | Summon |
+| Tray icon → right click → 表示 (Show) | Summon |
+| Tray icon → right click → 終了 (Quit) | **Really quit** the app |
 | `M`   | Toggle the OS window frame on/off (borderless by default; bring the title bar + resize edges back for debugging) |
 | `R`   | Clear the icon cache and re-extract every icon live (recover from a corrupted/stale cache without restarting) |
+
+### How the hot key works
+
+`Win+Space` is captured by a `WH_KEYBOARD_LL` hook installed on a dedicated
+OS-integration thread (`src/platform_windows.rs`). When the combo is detected
+the hook swallows the keystroke (`return 1`) so Windows never sees it — this
+is what suppresses the IME-switch behavior on that combo — and posts a
+`UserEvent::Summon` to the winit event loop. The hook callback does only the
+state read + one `send_event` and returns, so it stays well under
+`LowLevelHooksTimeout`. Auto-repeat is suppressed (one summon per press).
 
 ## Icon cache reset (CLI)
 

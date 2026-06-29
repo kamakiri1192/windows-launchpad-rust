@@ -29,6 +29,7 @@ mod app_id;
 mod app_registry;
 mod app_scan;
 mod bottom_control;
+mod debug_logger;
 mod grid;
 mod icon_atlas;
 mod icon_cache;
@@ -37,6 +38,8 @@ mod icon_worker;
 mod icons;
 mod launch;
 mod liquid_glass;
+#[cfg(windows)]
+mod platform_windows;
 mod refresh_watcher;
 mod renderer;
 mod scroll;
@@ -47,7 +50,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use app_diff::{AppDiff, SnapshotEntry};
 use app_id::AppId;
@@ -74,6 +77,11 @@ const INITIAL_WINDOW_WIDTH: f64 = 1280.0;
 const INITIAL_WINDOW_HEIGHT: f64 = 800.0;
 const MIN_WINDOW_WIDTH: f64 = 640.0;
 const MIN_WINDOW_HEIGHT: f64 = 480.0;
+/// Grace window after `summon()` during which a `Focused(false)` is treated as
+/// a focus-transition artifact and ignored (SetForegroundWindow can briefly
+/// drop and re-acquire focus as the OS shuffles windows). Without this the
+/// just-summoned launcher would instantly hide again on some machines.
+const SUMMON_FOCUS_GRACE: Duration = Duration::from_millis(500);
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
 /// event, this carries icon-worker results and refresh-watcher diffs.
@@ -91,6 +99,10 @@ pub(crate) enum UserEvent {
     IconFailed { app_id: AppId, error: String },
     /// Refresh watcher produced a non-empty Start Menu diff.
     AppListDiff(AppDiff),
+    /// Summon the launcher window (global hot key / tray "Show").
+    Summon,
+    /// User asked to really quit (tray "Quit"). Ends the event loop.
+    QuitRequested,
 }
 
 /// Shared inbox the worker + watcher push into; the event loop drains it on
@@ -152,6 +164,26 @@ struct App {
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     last_redraw: Option<Instant>,
+
+    // ---- resident-lifecycle state ----
+    /// Whether the window is currently visible. `set_visible` doesn't query,
+    /// so we track it ourselves to make `hide()` idempotent (avoids a hide
+    /// storm when a focus-loss event races an app-launch hide).
+    visible: bool,
+    /// When the most recent `summon()` happened. A `Focused(false)` that
+    /// arrives within `SUMMON_FOCUS_GRACE` of a summon is treated as a
+    /// focus-transition artifact (SetForegroundWindow can briefly lose and
+    /// re-acquire focus as the OS shuffles windows) and ignored, instead of
+    /// instantly hiding the just-summoned window.
+    last_summon: Option<Instant>,
+    /// Set by `UserEvent::QuitRequested` (tray "Quit"); checked in
+    /// `about_to_wait` to actually exit the loop. Decoupling the request from
+    /// the exit lets the loop drain the current frame cleanly.
+    should_quit: bool,
+    /// Anchor keeping the OS-integration thread (hot key + tray) alive for
+    /// the whole process. Underscore-prefixed because we never read it.
+    #[cfg(windows)]
+    _os: Option<platform_windows::OsIntegrationHandle>,
 }
 
 impl App {
@@ -187,6 +219,11 @@ impl App {
             pointer_over_control: false,
             pressed_on_control: false,
             last_redraw: None,
+            visible: true,
+            last_summon: None,
+            should_quit: false,
+            #[cfg(windows)]
+            _os: None,
         }
     }
 
@@ -913,6 +950,68 @@ impl App {
         }
     }
 
+    /// Hide the launcher window and reset transient UI state (search field,
+    /// scroll position, IME), but keep the process + event loop alive so it
+    /// can be summoned again. Idempotent: a no-op if already hidden.
+    fn hide(&mut self) {
+        if !self.visible {
+            debug_log!("hide: already hidden, no-op");
+            return;
+        }
+        debug_log!("hide: hiding window");
+        if let Some(r) = self.renderer.as_ref() {
+            r.window.set_visible(false);
+            r.window.set_ime_allowed(false);
+        }
+        // Drop any in-progress search / IME composition so the next summon
+        // starts clean.
+        self.control.press_close();
+        // Reset scroll to page 0 so the next appearance doesn't land mid-page.
+        if let Some(s) = self.scroller.as_mut() {
+            s.position = 0.0;
+            s.velocity = 0.0;
+            s.phase = Phase::Idle;
+        }
+        self.last_page = 0;
+        self.visible = false;
+        self.request_redraw();
+    }
+
+    /// Show the launcher window and steal focus. Counterpart to [`hide`].
+    /// Re-centers on the primary monitor so a multi-monitor move doesn't
+    /// strand the launcher on the wrong screen.
+    fn summon(&mut self) {
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        debug_log!("summon: showing window (visible was {})", self.visible);
+        r.window.set_visible(true);
+        // Steal focus. focus_window() can be silently denied by Windows when
+        // the foreground already belongs to another app (common after hide()),
+        // so we also allow-set-foreground + re-assert focus. If it still fails
+        // the user at least sees the window appear (visible=true above) even
+        // if it's not topmost.
+        #[cfg(windows)]
+        {
+            // ASFW_ANY (-1) lifts the SetForegroundWindow restriction so any
+            // process (incl. ours) can come to the front. This is what lets a
+            // hotkey-triggered summon reliably raise the window instead of
+            // just flashing the taskbar after the window was hidden.
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+                const ASFW_ANY: u32 = u32::MAX; // -1 as the Win32 ASFW_ANY sentinel
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+            }
+        }
+        r.window.focus_window();
+        self.visible = true;
+        // Record the summon time so a focus-transition artifact in the next
+        // SUMMON_FOCUS_GRACE is ignored instead of instantly hiding us.
+        self.last_summon = Some(Instant::now());
+        self.request_redraw();
+        debug_log!("summon: window shown + focus requested");
+    }
+
     /// Handle a click (press + release inside the capsule with no drag) on the
     /// bottom control. Decides whether it hit the close (×) button, and
     /// otherwise toggles the search field open/closed.
@@ -1022,6 +1121,21 @@ impl ApplicationHandler<UserEvent> for App {
             | UserEvent::AppListDiff(_) => {
                 self.drain_inbox();
             }
+            UserEvent::Summon => {
+                debug_log!("user_event: Summon received (visible={})", self.visible);
+                self.summon();
+            }
+            UserEvent::QuitRequested => {
+                debug_log!("user_event: QuitRequested received → process::exit(0)");
+                // Force-exit the process. We previously used event_loop.exit(),
+                // but the debug log showed the os-integration thread (tray +
+                // hook) kept the process alive for >1.8s after the call — the
+                // tray was still clickable, so 'Quit' appeared to need two
+                // clicks. A hard exit terminates all threads immediately; the
+                // OS releases the LL hook and removes the tray icon on process
+                // teardown, so no manual cleanup is needed.
+                std::process::exit(0);
+            }
         }
     }
 
@@ -1093,13 +1207,17 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         _window_id: WindowId,
         event: WindowEvent,
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                event_loop.exit();
+                // Borderless window has no close button in normal use, but
+                // Alt+F4 still reaches here. Treat it as "hide" rather than
+                // "quit" so the launcher stays resident; real quit is via the
+                // tray menu.
+                self.hide();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
@@ -1162,7 +1280,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
 
                 if key_code == winit::keyboard::KeyCode::Escape {
-                    event_loop.exit();
+                    // Esc with no open field: hide the launcher (stay resident).
+                    self.hide();
                     return;
                 }
 
@@ -1295,23 +1414,25 @@ impl ApplicationHandler<UserEvent> for App {
                             return;
                         }
                         if let Some(app) = self.handle_pointer_release() {
-                            // Dismiss first, launch second. `set_visible(false)`
-                            // hands the hide straight to the DWM (a few ms),
-                            // while `ShellExecuteW` resolves the shortcut and
-                            // spawns the target (tens to hundreds of ms). Doing
-                            // them in this order makes the launcher feel like it
-                            // vanishes the instant you click, instead of freezing
-                            // on screen until the target app starts.
-                            if let Some(r) = self.renderer.as_ref() {
-                                r.window.set_visible(false);
-                            }
-                            event_loop.exit();
-                            match launch::open_shortcut(&app.link_path) {
-                                Ok(()) => eprintln!("launched {}", app.name),
+                            // Dismiss first, launch second. `hide()` hands the
+                            // hide straight to the DWM (a few ms) and resets
+                            // the UI, while `ShellExecuteW` resolves the
+                            // shortcut and spawns the target (tens to hundreds
+                            // of ms). Doing them in this order makes the
+                            // launcher feel like it vanishes the instant you
+                            // click, instead of freezing on screen until the
+                            // target app starts.
+                            let link_path = app.link_path.clone();
+                            let name = app.name.clone();
+                            self.hide();
+                            // NOTE: no `event_loop.exit()` — we stay resident
+                            // so the next hot key can summon us instantly.
+                            match launch::open_shortcut(&link_path) {
+                                Ok(()) => eprintln!("launched {}", name),
                                 Err(err) => eprintln!(
                                     "failed to launch {} ({}): {}",
-                                    app.name,
-                                    app.link_path.display(),
+                                    name,
+                                    link_path.display(),
                                     err
                                 ),
                             }
@@ -1380,11 +1501,42 @@ impl ApplicationHandler<UserEvent> for App {
                     self.request_redraw();
                 }
             }
+            WindowEvent::Focused(focused) => {
+                debug_log!("window_event: Focused({})", focused);
+                // Auto-hide when the launcher loses focus (clicking another
+                // window, Alt-Tab, …). This is the macOS-Launchpad / Run-dialog
+                // behavior. `hide()` is idempotent so the focus-loss that fires
+                // right after we hide to launch an app is a harmless no-op.
+                //
+                // BUT: ignore a focus loss that happens within
+                // SUMMON_FOCUS_GRACE of a summon. SetForegroundWindow can
+                // briefly drop and re-acquire focus as the OS shuffles
+                // windows, and without this guard the just-summoned launcher
+                // would vanish within ~75ms on some machines.
+                if !focused {
+                    let in_grace = self
+                        .last_summon
+                        .map(|t| t.elapsed() < SUMMON_FOCUS_GRACE)
+                        .unwrap_or(false);
+                    if in_grace {
+                        debug_log!("window_event: Focused(false) ignored (within summon grace)");
+                    } else {
+                        self.hide();
+                    }
+                }
+            }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Real quit path: the tray "Quit" command set the flag; now that the
+        // current event is fully handled we can terminate the loop.
+        if self.should_quit {
+            event_loop.exit();
+            return;
+        }
+
         // Keep the loop pumping while the scroller or the bottom control is
         // animating; otherwise winit blocks until the next input or WGC
         // FrameArrived user event.
@@ -1399,7 +1551,7 @@ impl ApplicationHandler<UserEvent> for App {
         if scroller_animating || control_animating {
             self.request_redraw();
         }
-        _event_loop.set_control_flow(ControlFlow::Wait);
+        event_loop.set_control_flow(ControlFlow::Wait);
     }
 }
 
@@ -1576,6 +1728,11 @@ fn main() {
     timer.mark(prefix::STARTUP, "process start");
     startup_timer::install(timer.clone());
 
+    // File-backed debug logger. Opt-in via LAUNCHPAD_DEBUG env var so the
+    // release build is silent by default; when on it writes to
+    // %LOCALAPPDATA%\Launchpad\debug.log (visible even with no console).
+    debug_logger::init();
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     // `--reset-cache`: delete the SQLite cache file before opening so the next
@@ -1630,7 +1787,17 @@ fn main() {
     // Single forwarder for the merged channel into the shared inbox.
     forward_inbox(merged_rx, inbox.clone(), proxy.clone());
 
+    // OS integration: global hot key (Win+Space) + tray icon. Spawned before
+    // the event loop so the hot key works even during the very first frame.
+    #[cfg(windows)]
+    let os = platform_windows::OsIntegrationHandle::spawn(proxy.clone());
+
     let mut app = App::new(proxy, timer, cache, inbox, worker);
+    // Anchor the OS-integration thread for the whole process lifetime.
+    #[cfg(windows)]
+    {
+        app._os = Some(os);
+    }
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("event loop error: {e}");
         std::process::exit(1);
