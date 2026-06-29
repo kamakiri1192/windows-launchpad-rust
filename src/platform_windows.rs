@@ -29,9 +29,7 @@ use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     HBITMAP,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, VIRTUAL_KEY,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
 };
@@ -42,7 +40,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, HICON, HWND_MESSAGE, ICONINFO,
     KBDLLHOOKSTRUCT, MENUITEMINFOW, MENU_ITEM_MASK, MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG,
     TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
 };
 
 use crate::UserEvent;
@@ -135,8 +133,6 @@ fn run_integration_thread(
         *cell.borrow_mut() = Some(HookState {
             proxy,
             last_summon_ms: 0,
-            win_swallowed: false,
-            swallowed_win_vk: 0,
         });
     });
 
@@ -211,17 +207,6 @@ struct HookState {
     /// Space keydown within DEBOUNCE_MS of the last fire is treated as
     /// auto-repeat and swallowed without firing.
     last_summon_ms: u32,
-    /// True when we have SWALLOWED a Win keydown and are waiting to see if
-    /// Space follows. If Space arrives → we've consumed the Win+Space combo,
-    /// and we keep the Win swallowed (so the OS never sees a lone Win tap →
-    /// no Start menu). If any OTHER key arrives first → it wasn't a Win+Space,
-    /// so we re-inject the swallowed Win keydown and let that key through,
-    /// restoring normal behavior (Win+E, Win+D, …). Cleared on the matching
-    /// Win keyup.
-    win_swallowed: bool,
-    /// Which Win key (VK_LWIN or VK_RWIN) we swallowed, so we can re-inject
-    /// the exact same one if the user turns out not to be pressing Win+Space.
-    swallowed_win_vk: u16,
 }
 
 /// Auto-repeat debounce window in milliseconds. A typical keyboard repeats
@@ -251,54 +236,24 @@ fn win_held_now() -> bool {
     unsafe { GetAsyncKeyState(VK_LWIN as i32) < 0 || GetAsyncKeyState(VK_RWIN as i32) < 0 }
 }
 
-/// Inject a synthetic key event (down or up) for `vk` via SendInput. Used to
-/// re-send a Win keydown that we had tentatively swallowed when the user
-/// turned out NOT to be pressing Win+Space (so Win+E etc. still work).
-///
-/// Safe to call from the hook callback: SendInput is fast and won't stall
-/// past LowLevelHooksTimeout.
-unsafe fn inject_key(vk: u16, down: bool) {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP};
-    let input = INPUT {
-        r#type: INPUT_TYPE(1), // INPUT_KEYBOARD
-        Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: VIRTUAL_KEY(vk),
-                wScan: 0,
-                dwFlags: if down {
-                    KEYBD_EVENT_FLAGS::default()
-                } else {
-                    KEYBD_EVENT_FLAGS(KEYEVENTF_KEYUP.0)
-                },
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
-}
-
 /// The low-level keyboard hook callback.
 ///
-/// Safety contract: must return quickly.
+/// Safety contract: must return quickly. The Win modifier is never tracked —
+/// it's read live via `GetAsyncKeyState`, because a Win keyup can be dropped
+/// (UAC / hook timeout / focus steal), and a tracked Win flag that never
+/// resets was exactly the root cause of the "Start menu opens on the 2nd
+/// summon" bug.
 ///
-/// To suppress the Start menu on Win+Space we swallow the **Win keydown**
-/// (not just the Space). If we only swallow Space, the OS still sees a bare
-/// "Win down ... Win up" and reads it as a lone Win tap → Start menu. So:
+/// Auto-repeat suppression uses a **time debounce** instead of tracking the
+/// Space key's down/up: the debug log proved the hook sometimes never
+/// receives the Space keyup (the focus change on summon appears to drop it),
+/// which left a tracked `space_down` flag stuck and made the next press look
+/// like a repeat. A debounce only records *when* we last fired, so a missing
+/// keyup can't poison it.
 ///
-/// - On Win keydown, swallow it and set `win_swallowed` (tentatively consume).
-/// - On the NEXT keydown while Win is swallowed:
-///   - If it's Space → it's a Win+Space; fire Summon (debounced) and keep the
-///     Win swallowed. The OS never sees a lone Win tap, so no Start menu.
-///   - If it's anything else → it wasn't a Win+Space; re-inject the swallowed
-///     Win keydown and let this key through, so Win+E, Win+D, etc. still work.
-/// - On Win keyup, clear `win_swallowed`.
-///
-/// Auto-repeat suppression uses a **time debounce** instead of a tracked key
-/// latch: the debug log proved the hook sometimes never sees the Space keyup
-/// (the focus change on summon appears to drop it), which left a tracked flag
-/// stuck. A debounce only records *when* we last fired, so a missing keyup
-/// can't poison it.
+/// We do NOT swallow the Win keyup: that path is fragile (keyups arrive
+/// out-of-order) and the summon-side focus steal keeps the Start menu from
+/// becoming foreground anyway.
 extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // HC_ACTION == 0 means there's a keyboard event in lparam.
     const HC_ACTION: i32 = 0;
@@ -308,105 +263,52 @@ extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESU
 
     let wparam_val = wparam.0 as u32;
     let keydown = wparam_val == WM_KEYDOWN || wparam_val == WM_SYSKEYDOWN;
-    let keyup = wparam_val == WM_KEYUP || wparam_val == WM_SYSKEYUP;
+    if !keydown {
+        // Let keyups (and anything else) pass through.
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
 
     let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode as u16;
-    let is_win = vk == VK_LWIN || vk == VK_RWIN;
-
-    // Win keyup: just clear the swallow latch and pass through.
-    if is_win && keyup {
-        HOOK_STATE.with(|cell| {
-            if let Some(s) = cell.borrow_mut().as_mut() {
-                s.win_swallowed = false;
-            }
-        });
+    if vk != VK_SPACE {
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
 
-    // Win keydown: tentatively swallow it (start of a possible Win+Space).
-    // Remember WHICH Win key (L/R) so we can re-inject the right one later.
-    if is_win && keydown {
-        HOOK_STATE.with(|cell| {
-            if let Some(s) = cell.borrow_mut().as_mut() {
-                s.win_swallowed = true;
-                s.swallowed_win_vk = vk;
-                crate::debug_log!("hook: Win down (vk=0x{:02X}) → tentatively swallowed", vk);
-            }
-        });
-        return LRESULT(1);
-    }
-
-    if !keydown {
-        // Pass through other keyups.
+    let win_held = win_held_now();
+    if !win_held {
+        // Bare Space — pass through untouched.
+        crate::debug_log!("hook: Space down (no Win) → pass through");
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
 
-    // Some non-Win key went down. Was Win tentatively swallowed?
-    let (swallowed_before, elapsed, fresh) = HOOK_STATE.with(|cell| {
+    // Genuine Win+Space. Decide fire vs. swallow with a time debounce.
+    let now_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
+    let swallow = HOOK_STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
         let Some(state) = slot.as_mut() else {
-            return (false, 0u32, false);
+            return true; // still swallow Space so the IME switch is suppressed
         };
-        let swallowed = state.win_swallowed;
-        if vk == VK_SPACE && swallowed {
-            // Win+Space confirmed. Keep Win swallowed (the combo is ours).
-            let now_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
-            let elapsed = now_ms.wrapping_sub(state.last_summon_ms);
-            let fresh = elapsed > SUMMON_DEBOUNCE_MS;
-            if fresh {
-                state.last_summon_ms = now_ms;
-            }
-            (true, elapsed, fresh)
-        } else if swallowed {
-            // Win + (not Space) → restore the Win keydown we ate, then let
-            // this key through normally.
-            state.win_swallowed = false;
-            (true, 0, false) // `false` for fresh signals "re-inject Win"
+        // Wrapping difference handles GetTickCount wraparound (~49 days).
+        let elapsed = now_ms.wrapping_sub(state.last_summon_ms);
+        let fresh = elapsed > SUMMON_DEBOUNCE_MS;
+        crate::debug_log!("hook: Win+Space, elapsed={}ms, fresh={}", elapsed, fresh);
+        if fresh {
+            state.last_summon_ms = now_ms;
+            crate::debug_log!("hook: Win+Space → Summon (firing)");
+            let _ = state.proxy.send_event(UserEvent::Summon);
         } else {
-            (false, 0, false)
+            crate::debug_log!("hook: Win+Space repeat (swallowed, debounce)");
         }
+        // Always swallow Space while Win is held so the IME switcher never
+        // sees the combo (auto-repeat included).
+        true
     });
 
-    // If we had tentatively swallowed Win but this isn't Space, re-inject the
-    // Win keydown first so Win+E / Win+D / ... still work. We need the
-    // swallowed Win vk (not the current key's vk).
-    if swallowed_before && vk != VK_SPACE {
-        let win_vk = HOOK_STATE.with(|cell| {
-            cell.borrow()
-                .as_ref()
-                .map(|s| s.swallowed_win_vk)
-                .unwrap_or(VK_LWIN)
-        });
-        crate::debug_log!(
-            "hook: Win+(non-Space 0x{:02X}) → re-injecting Win 0x{:02X} down",
-            vk,
-            win_vk
-        );
-        unsafe { inject_key(win_vk, true) }; // re-send the swallowed Win down
-                                             // Then let the current (non-Space) key pass through normally.
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-
-    if !swallowed_before || vk != VK_SPACE {
-        // Nothing to do with this key.
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-
-    // Genuine Win+Space. Fire Summon (debounced) and swallow the Space.
-    crate::debug_log!("hook: Win+Space, elapsed={}ms, fresh={}", elapsed, fresh);
-    if fresh {
-        crate::debug_log!("hook: Win+Space → Summon (firing)");
-        let _ = HOOK_STATE.with(|cell| {
-            cell.borrow()
-                .as_ref()
-                .map(|s| s.proxy.send_event(UserEvent::Summon))
-        });
+    if swallow {
+        LRESULT(1)
     } else {
-        crate::debug_log!("hook: Win+Space repeat (swallowed, debounce)");
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
     }
-    // Always swallow Space so the IME switcher never sees the combo.
-    LRESULT(1)
 }
 
 /// Send a `UserEvent` to the winit event loop from the tray window proc.
