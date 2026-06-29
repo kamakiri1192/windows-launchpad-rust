@@ -48,7 +48,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW,
 };
 
-use crate::UserEvent;
+use crate::{app_icon, UserEvent};
 
 /// App-private window message used by the shell to deliver tray notifications.
 /// Anything in the `WM_APP`..`WM_APP+0x7FFF` range is safe for this.
@@ -188,8 +188,7 @@ fn run_integration_thread(
         }
     };
 
-    // Register the tray icon. The icon bitmap is procedurally generated (a
-    // simple rounded square) so we don't need to ship a .ico resource.
+    // Register the tray icon from the same artwork as the app/window icon.
     let icon = create_app_icon();
     add_tray_icon(hwnd, icon);
 
@@ -633,40 +632,30 @@ fn remove_tray_icon(hwnd: HWND) {
 }
 
 // ----------------------------------------------------------------------------
-// Procedurally generated HICON (no .ico resource needed)
+// Runtime HICON for the notification area
 // ----------------------------------------------------------------------------
 
-/// Create a small (16x16) HICON with a simple procedurally drawn glyph. Returns
-/// an owned HICON (caller destroys it).
+/// Create a small HICON from the bundled app icon artwork. Returns an owned
+/// HICON (caller destroys it).
 fn create_app_icon() -> HICON {
-    const W: i32 = 16;
-    const H: i32 = 16;
-    // BGRA 32-bpp, top-down DIB.
-    let mut pixels: Vec<u8> = vec![0; (W * H * 4) as usize];
-    // Draw a translucent rounded square with a calm blue fill.
-    for y in 0..H {
-        for x in 0..W {
-            let dx = (x - W / 2).abs();
-            let dy = (y - H / 2).abs();
-            let inside = (1..W - 1).contains(&x) && (1..H - 1).contains(&y);
-            // Round the corners.
-            let corner_ok = !(dx > 5 && dy > 5);
-            if inside && corner_ok {
-                let idx = ((y * W + x) * 4) as usize;
-                pixels[idx] = 0xC0; // B
-                pixels[idx + 1] = 0x7A; // G
-                pixels[idx + 2] = 0x3A; // R
-                pixels[idx + 3] = 0xE0; // A
-            }
-        }
+    let Some(icon) = app_icon::load_rgba(Some(32)) else {
+        return HICON(std::ptr::null_mut());
+    };
+    let w = icon.width as i32;
+    let h = icon.height as i32;
+
+    // CreateDIBSection expects BGRA bytes. The bundled asset decodes as RGBA.
+    let mut pixels = Vec::with_capacity(icon.rgba.len());
+    for px in icon.rgba.chunks_exact(4) {
+        pixels.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
     }
 
     unsafe {
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: W,
-                biHeight: -H, // top-down
+                biWidth: w,
+                biHeight: -h, // top-down
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: 0, // BI_RGB
@@ -693,8 +682,8 @@ fn create_app_icon() -> HICON {
             };
 
         // AND mask: all zeros (we use alpha instead).
-        let and_mask: Vec<u8> = vec![0; (((W + 7) / 8) * H) as usize];
-        let hbm_mask: HBITMAP = CreateBitmap(W, H, 1, 1, Some(and_mask.as_ptr() as *const c_void));
+        let and_mask: Vec<u8> = vec![0; (((w + 7) / 8) * h) as usize];
+        let hbm_mask: HBITMAP = CreateBitmap(w, h, 1, 1, Some(and_mask.as_ptr() as *const c_void));
 
         let ii = ICONINFO {
             fIcon: windows::Win32::Foundation::TRUE,
