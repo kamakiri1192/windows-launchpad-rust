@@ -282,10 +282,13 @@ impl App {
         let frame_bottom = self.frame_bottom_y();
         let page = self.current_page();
         let page_count = self.layout.page_count;
-        Some(
-            self.control
-                .resolve(viewport, frame_bottom, page, page_count),
-        )
+        Some(self.control.resolve_scaled(
+            viewport,
+            frame_bottom,
+            page,
+            page_count,
+            self.scale_factor,
+        ))
     }
 
     /// Lay out and upload the bottom control's glass capsule + overlay shapes
@@ -446,7 +449,9 @@ impl App {
         let owned = self.grid_apps_owned();
         // Size pages to the current visible app count so every filtered app is
         // reachable and blank trailing pages disappear during search.
-        self.layout = grid::GridLayout::for_app_count(owned.len()).centered(w as f32);
+        self.layout = grid::GridLayout::for_app_count(owned.len())
+            .with_scale_factor(self.scale_factor)
+            .centered(w as f32);
         let bounds = self.layout.bounds(w as f32);
         if let Some(s) = self.scroller.as_mut() {
             s.set_bounds(bounds);
@@ -1117,9 +1122,14 @@ impl App {
         let viewport = self.viewport_phys();
         let frame_bottom = self.frame_bottom_y();
         // Close-button hit region (only meaningful when the field is open).
-        let close_x = self.control.close_button_x(viewport, frame_bottom);
+        let close_x = self
+            .control
+            .close_button_x_scaled(viewport, frame_bottom, self.scale_factor);
         let hit_close = close_x
-            .map(|cx| (x - cx).abs() <= 12.0 && (y - self.frame_control_cy()).abs() <= 12.0)
+            .map(|cx| {
+                let hit_radius = 12.0 * self.scale_factor.max(1.0);
+                (x - cx).abs() <= hit_radius && (y - self.frame_control_cy()).abs() <= hit_radius
+            })
             .unwrap_or(false);
 
         if hit_close {
@@ -1144,14 +1154,9 @@ impl App {
 
     /// The center Y of the control capsule (for hit-testing the close button).
     fn frame_control_cy(&self) -> f32 {
-        let (_cx, _cy, _w, panel_h) = self
-            .layout
-            .frame_panel_rect(self.viewport_phys().0.max(1) as f32);
-        let (_, vh) = self.viewport_phys();
-        let bottom = _cy + panel_h * 0.5;
-        (bottom + 26.0 + 15.0)
-            .min(vh as f32 - 15.0 - 8.0)
-            .max(15.0 + 8.0)
+        self.resolve_control()
+            .map(|(geom, _)| geom.center.1)
+            .unwrap_or(0.0)
     }
 
     /// Keep the OS IME in sync with the search field: enable it (and point the
@@ -1280,7 +1285,9 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.scale_factor = window.scale_factor() as f32;
         let (w, _h) = (window.inner_size().width, window.inner_size().height);
-        self.layout = grid::GridLayout::default().centered(w as f32);
+        self.layout = grid::GridLayout::default()
+            .with_scale_factor(self.scale_factor)
+            .centered(w as f32);
 
         let renderer = pollster::block_on(Renderer::new(
             window,
@@ -1506,11 +1513,12 @@ impl ApplicationHandler<UserEvent> for App {
                         // If the press starts on the control capsule, mark it
                         // so the release is treated as a control click and NOT
                         // as a scroll drag.
-                        let over_control = self.control.hit_test(
+                        let over_control = self.control.hit_test_scaled(
                             self.viewport_phys(),
                             self.frame_bottom_y(),
                             self.pointer_phys_x,
                             self.pointer_phys_y,
+                            self.scale_factor,
                         );
                         self.pressed_on_control = over_control;
                         if over_control {
@@ -1522,11 +1530,12 @@ impl ApplicationHandler<UserEvent> for App {
                         if self.pressed_on_control {
                             self.pressed_on_control = false;
                             // Only count as a click if it stayed on the capsule.
-                            if self.control.hit_test(
+                            if self.control.hit_test_scaled(
                                 self.viewport_phys(),
                                 self.frame_bottom_y(),
                                 self.pointer_phys_x,
                                 self.pointer_phys_y,
+                                self.scale_factor,
                             ) {
                                 self.handle_control_click(self.pointer_phys_x, self.pointer_phys_y);
                             }
@@ -1712,9 +1721,9 @@ fn self_layout_control_text(
         match layer.visual {
             bottom_control::Visual::SearchPill => {
                 // "検索" label to the right of the magnifier.
-                let mag_size = 11.0;
-                let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 8.0;
-                let label_center_x = mag_cx + mag_size + 6.0 + 14.0;
+                let mag_size = 11.0 * scale;
+                let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 8.0 * scale;
+                let label_center_x = mag_cx + mag_size + 6.0 * scale + 14.0 * scale;
                 let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                     text: "検索",
                     font_size: QUERY_LABEL_SIZE,
@@ -1738,7 +1747,7 @@ fn self_layout_control_text(
                         line_height: QUERY_LABEL_LINE,
                         family: QUERY_LABEL_FONT,
                         color: mul_alpha(PLACEHOLDER, a),
-                        center: (origin_x + 14.0, geom.center.1),
+                        center: (origin_x + 14.0 * scale, geom.center.1),
                         scale_factor: scale,
                     });
                     quads.append(&mut q);

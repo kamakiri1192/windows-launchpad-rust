@@ -62,8 +62,6 @@ pub fn shapes_from_layout(
     viewport_w: f32,
     apps: &[GridApp<'_>],
 ) -> Vec<GlassShape> {
-    use crate::grid::FRAME_CORNER_RADIUS;
-
     let mut shapes = Vec::with_capacity(1 + apps.len().min(layout.total_tiles()));
     let (center_x, center_y, panel_w, panel_h) = layout.frame_panel_rect(viewport_w);
 
@@ -72,14 +70,14 @@ pub fn shapes_from_layout(
     shapes.push(GlassShape::fixed_rounded_rect(
         [center_x, center_y],
         [panel_w, panel_h],
-        FRAME_CORNER_RADIUS,
+        layout.scaled(crate::grid::FRAME_CORNER_RADIUS),
     ));
 
     shapes.extend(
         layout
             .build_instances(viewport_w, apps)
             .iter()
-            .map(shape_from_tile),
+            .map(|tile| shape_from_tile(layout, tile)),
     );
     shapes
 }
@@ -92,9 +90,9 @@ pub fn with_control(mut shapes: Vec<GlassShape>, control: Option<GlassShape>) ->
     shapes
 }
 
-fn shape_from_tile(tile: &TileInstance) -> GlassShape {
+fn shape_from_tile(layout: &GridLayout, tile: &TileInstance) -> GlassShape {
     let center = [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5];
-    let halo_size = tile.size + 18.0;
+    let halo_size = tile.size + layout.scaled(18.0);
     let size = [halo_size, halo_size];
-    GlassShape::rounded_rect(center, size, tile.radius + 9.0)
+    GlassShape::rounded_rect(center, size, tile.radius + layout.scaled(9.0))
 }

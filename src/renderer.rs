@@ -1198,7 +1198,13 @@ fn default_backends() -> Backends {
 /// px. Single source is `GridLayout::frame_panel_rect`.
 fn frame_clip(layout: &GridLayout, viewport_w: u32) -> (f32, f32, f32, f32, f32) {
     let (cx, cy, w, h) = layout.frame_panel_rect(viewport_w.max(1) as f32);
-    (cx, cy, w * 0.5, h * 0.5, crate::grid::FRAME_CORNER_RADIUS)
+    (
+        cx,
+        cy,
+        w * 0.5,
+        h * 0.5,
+        layout.scaled(crate::grid::FRAME_CORNER_RADIUS),
+    )
 }
 
 fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
