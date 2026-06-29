@@ -415,25 +415,41 @@ impl BottomControl {
         page: usize,
         page_count: usize,
     ) -> (ControlGeometry, Vec<ControlLayer>) {
+        self.resolve_scaled(viewport, frame_bottom, page, page_count, 1.0)
+    }
+
+    pub fn resolve_scaled(
+        &self,
+        viewport: (u32, u32),
+        frame_bottom: f32,
+        page: usize,
+        page_count: usize,
+        scale_factor: f32,
+    ) -> (ControlGeometry, Vec<ControlLayer>) {
+        let scale = sanitize_scale(scale_factor);
         let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
         let center_x = vw * 0.5;
+        let capsule_height = CAPSULE_HEIGHT * scale;
+        let capsule_radius = CAPSULE_RADIUS * scale;
+        let bottom_margin = BOTTOM_MARGIN * scale;
+        let edge_inset = 8.0 * scale;
         // Sit a fixed margin below the page frame, clamped into the viewport.
-        let center_y = (frame_bottom + BOTTOM_MARGIN + CAPSULE_HEIGHT * 0.5)
-            .min(vh - CAPSULE_HEIGHT * 0.5 - 8.0)
-            .max(CAPSULE_HEIGHT * 0.5 + 8.0);
+        let center_y = (frame_bottom + bottom_margin + capsule_height * 0.5)
+            .min(vh - capsule_height * 0.5 - edge_inset)
+            .max(capsule_height * 0.5 + edge_inset);
 
         // Half-width interpolates from the compact pill to the wide field.
         // The progress is eased with an iOS-style ease-out curve: it shoots
         // out quickly and settles softly, which reads as "deliberate but
         // lively" rather than mechanical.
-        let pill_hw = pill_half_width();
-        let hw = lerp(pill_hw, FIELD_HALF_WIDTH, ease_ios_out(self.expand));
-        let hh = CAPSULE_HEIGHT * 0.5;
+        let pill_hw = pill_half_width() * scale;
+        let hw = lerp(pill_hw, FIELD_HALF_WIDTH * scale, ease_ios_out(self.expand));
+        let hh = capsule_height * 0.5;
 
         let geom = ControlGeometry {
             center: (center_x, center_y),
             half_size: (hw, hh),
-            radius: CAPSULE_RADIUS,
+            radius: capsule_radius,
             expand: self.expand,
             indicator: self.indicator,
             page,
@@ -511,7 +527,18 @@ impl BottomControl {
     /// the *current* (possibly animating) geometry. Returns `true` if the
     /// point is inside the capsule.
     pub fn hit_test(&self, viewport: (u32, u32), frame_bottom: f32, x: f32, y: f32) -> bool {
-        let (geom, _) = self.resolve(viewport, frame_bottom, 0, 0);
+        self.hit_test_scaled(viewport, frame_bottom, x, y, 1.0)
+    }
+
+    pub fn hit_test_scaled(
+        &self,
+        viewport: (u32, u32),
+        frame_bottom: f32,
+        x: f32,
+        y: f32,
+        scale_factor: f32,
+    ) -> bool {
+        let (geom, _) = self.resolve_scaled(viewport, frame_bottom, 0, 0, scale_factor);
         let dx = (x - geom.center.0).abs();
         let dy = (y - geom.center.1).abs();
         // Cheap capsule test: inside the inner rect, or inside a cap circle.
@@ -533,14 +560,24 @@ impl BottomControl {
     /// inside an open field. Returns `Some(x)` only when the field is open
     /// enough to show the close button.
     pub fn close_button_x(&self, viewport: (u32, u32), frame_bottom: f32) -> Option<f32> {
+        self.close_button_x_scaled(viewport, frame_bottom, 1.0)
+    }
+
+    pub fn close_button_x_scaled(
+        &self,
+        viewport: (u32, u32),
+        frame_bottom: f32,
+        scale_factor: f32,
+    ) -> Option<f32> {
         if !matches!(self.mode, Mode::Field | Mode::Expanding | Mode::Collapsing) {
             return None;
         }
-        let (geom, _) = self.resolve(viewport, frame_bottom, 0, 0);
+        let scale = sanitize_scale(scale_factor);
+        let (geom, _) = self.resolve_scaled(viewport, frame_bottom, 0, 0, scale);
         if geom.expand < 0.5 {
             return None;
         }
-        Some(geom.center.0 + geom.half_size.0 - 20.0)
+        Some(geom.center.0 + geom.half_size.0 - 20.0 * scale)
     }
 }
 
@@ -570,6 +607,7 @@ pub fn build_overlay_instances(
     let mut out = Vec::new();
     let (cx, cy) = geom.center;
     let hw = geom.half_size.0;
+    let scale = control_scale(geom);
 
     for layer in layers {
         let a = layer.alpha;
@@ -580,8 +618,8 @@ pub fn build_overlay_instances(
             Visual::SearchPill => {
                 // Compact pill: magnifier on the left, "検索" label to its right.
                 // The label text is drawn separately; here only the magnifier.
-                let mag_size = 11.0;
-                let mag_cx = cx - hw + mag_size + 8.0;
+                let mag_size = 11.0 * scale;
+                let mag_cx = cx - hw + mag_size + 8.0 * scale;
                 out.push(ControlInstance {
                     center: [mag_cx, cy],
                     params: [mag_size, a, 0.0, 0.0],
@@ -592,9 +630,9 @@ pub fn build_overlay_instances(
             Visual::PageIndicator => {
                 let dots = geom.page_count.max(1);
                 // Active dot is slightly larger.
-                let active_r = 3.2;
-                let idle_r = 2.4;
-                let gap = 8.0;
+                let active_r = 3.2 * scale;
+                let idle_r = 2.4 * scale;
+                let gap = 8.0 * scale;
                 let total = dots as f32 * active_r * 2.0 + (dots.saturating_sub(1)) as f32 * gap;
                 let start_x = cx - total * 0.5 + active_r;
                 for i in 0..dots {
@@ -610,8 +648,8 @@ pub fn build_overlay_instances(
             }
             Visual::SearchField => {
                 // Magnifier at the left inside padding.
-                let mag_size = 11.0;
-                let mag_cx = cx - hw + mag_size + 10.0;
+                let mag_size = 11.0 * scale;
+                let mag_cx = cx - hw + mag_size + 10.0 * scale;
                 out.push(ControlInstance {
                     center: [mag_cx, cy],
                     params: [mag_size, a, 0.0, 0.0],
@@ -621,12 +659,12 @@ pub fn build_overlay_instances(
                 // Caret: just past the typed text (which starts after the
                 // magnifier). Only when there's no close button overlap.
                 if caret_blink > 0.01 {
-                    let text_origin_x = mag_cx + mag_size + 6.0;
+                    let text_origin_x = mag_cx + mag_size + 6.0 * scale;
                     let caret_x = text_origin_x + query_width;
                     out.push(ControlInstance {
                         center: [caret_x, cy],
                         // (half-height, alpha, half-width, _)
-                        params: [8.0, a * caret_blink, 1.0, 0.0],
+                        params: [8.0 * scale, a * caret_blink, 1.0 * scale, 0.0],
                         color: INK,
                         kind: [KIND_CARET, 0.0, 0.0, 0.0],
                     });
@@ -634,10 +672,10 @@ pub fn build_overlay_instances(
                 // Close × at the right inside padding. Pad mirrors the left
                 // magnifier: the magnifier's visible ring outer edge sits ~15.5px
                 // in from the capsule edge, so we keep the × the same distance.
-                let close_cx = cx + hw - 20.0;
+                let close_cx = cx + hw - 20.0 * scale;
                 out.push(ControlInstance {
                     center: [close_cx, cy],
-                    params: [7.0, a, 1.4, 0.0],
+                    params: [7.0 * scale, a, 1.4 * scale, 0.0],
                     color: INK,
                     kind: [KIND_CLOSE, 0.0, 0.0, 0.0],
                 });
@@ -650,9 +688,10 @@ pub fn build_overlay_instances(
 /// The X origin (physical px) where the search-field query text should start,
 /// relative to the control. Used by the caller to lay out the query glyphs.
 pub fn field_text_origin_x(geom: &ControlGeometry) -> f32 {
-    let mag_size = 11.0;
-    let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 10.0;
-    mag_cx + mag_size + 6.0
+    let scale = control_scale(geom);
+    let mag_size = 11.0 * scale;
+    let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 10.0 * scale;
+    mag_cx + mag_size + 6.0 * scale
 }
 
 /// Build the Liquid Glass capsule shape for the control this frame, ready to
@@ -681,6 +720,10 @@ pub fn pill_half_width() -> f32 {
     46.0
 }
 
+fn control_scale(geom: &ControlGeometry) -> f32 {
+    (geom.half_size.1 / (CAPSULE_HEIGHT * 0.5)).max(0.01)
+}
+
 /// Linear advancement: moves `v` toward `target` at a constant rate so it
 /// completes in exactly `duration` seconds (frame-rate independent). The
 /// easing curve is applied by the consumer, which lets `resolve` shape the
@@ -697,6 +740,14 @@ fn advance_linear(v: f32, target: f32, dt: f32, duration: f32) -> f32 {
         next.min(target)
     } else {
         next.max(target)
+    }
+}
+
+fn sanitize_scale(scale_factor: f32) -> f32 {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
     }
 }
 
