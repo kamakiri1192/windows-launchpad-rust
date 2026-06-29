@@ -4,18 +4,25 @@
 //! *content* origin (which the scroller shifts horizontally). The renderer
 //! converts these into clip space at draw time.
 //!
+//! One page spans the **content width**, which is the liquid-glass page-frame
+//! panel width (`grid_w + FRAME_PADDING_WIDTH`, clamped to the viewport). This
+//! is narrower than the full viewport, so pages slide in adjacent to each other
+//! with a small gutter — like iOS Launchpad — rather than leaving a wide empty
+//! gap. `page_extent` (the scroller's per-page stride) equals this content
+//! width, and tile pages are spaced by it too, keeping snap targets aligned
+//! with the actual tile pages at every window size.
+//!
 //! Layout (per page):
 //! ```text
-//!   ┌──────────── viewport (page_extent) ────────────┐
-//!   │  margin                                        │
-//!   │   ┌──┬──┬──┬──┬──┬──┬──┐                       │
-//!   │   ├──┼──┼──┼──┼──┼──┼──┤   rows = 5           │
-//!   │   ├──┼──┼──┼──┼──┼──┼──┤   cols = 7           │
-//!   │   ├──┼──┼──┼──┼──┼──┼──┤                       │
-//!   │   ├──┼──┼──┼──┼──┼──┼──┤                       │
-//!   │   └──┴──┴──┴──┴──┴──┴──┘                       │
-//!   │  margin                                        │
-//!   └────────────────────────────────────────────────┘
+//!   ┌────────── content width (page_extent) ──────────┐
+//!   │  ┌──┬──┬──┬──┬──┬──┬──┐                        │
+//!   │  ├──┼──┼──┼──┼──┼──┼──┤   rows = 5            │
+//!   │  ├──┼──┼──┼──┼──┼──┼──┤   cols = 7            │
+//!   │  ├──┼──┼──┼──┼──┼──┼──┤                        │
+//!   │  ├──┼──┼──┼──┼──┼──┼──┤                        │
+//!   │  └──┴──┴──┴──┴──┴──┴──┘                        │
+//!   └─────────────────────────────────────────────────┘
+//!         ↑ centered in the viewport via margin_left
 //! ```
 
 use crate::icons::AppEntry;
@@ -148,10 +155,24 @@ impl GridLayout {
         self
     }
 
+    /// The content width of a single page — the liquid-glass page-frame panel
+    /// width. This is the single source of truth that both the scroller's
+    /// `page_extent` and the tile pages' stride derive from, so snap targets
+    /// always line up with the actual tile pages at every window size.
+    ///
+    /// It is the grid width plus the frame's horizontal padding, clamped to
+    /// keep a minimum viewport gutter and never narrower than the grid itself.
+    pub fn page_width(&self, viewport_w: f32) -> f32 {
+        let grid_w = self.grid_w();
+        (grid_w + FRAME_PADDING_WIDTH)
+            .min(viewport_w - FRAME_VIEWPORT_GUTTER)
+            .max(grid_w)
+    }
+
     /// Build the scroll bounds implied by this layout & viewport.
     pub fn bounds(&self, viewport_w: f32) -> ScrollBounds {
         ScrollBounds {
-            page_extent: viewport_w,
+            page_extent: self.page_width(viewport_w),
             page_count: self.page_count,
         }
     }
@@ -176,9 +197,8 @@ impl GridLayout {
     pub fn frame_panel_rect(&self, viewport_w: f32) -> (f32, f32, f32, f32) {
         let grid_w = self.grid_w();
         let grid_h = self.grid_h();
-        let panel_w = (grid_w + FRAME_PADDING_WIDTH)
-            .min(viewport_w - FRAME_VIEWPORT_GUTTER)
-            .max(grid_w);
+        // The panel width equals one content page; see `page_width`.
+        let panel_w = self.page_width(viewport_w);
         let panel_h = grid_h + FRAME_PADDING_HEIGHT;
         let center_x = self.margin_left + grid_w * 0.5;
         let center_y = self.margin_top - FRAME_TOP_OFFSET + panel_h * 0.5;
@@ -209,17 +229,20 @@ impl GridLayout {
             return None;
         }
 
+        // Pages are spaced by the content page width, not the full viewport.
+        let page_w = self.page_width(viewport_w);
+
         let content_x = screen_x - scroll_x;
         if content_x < 0.0 {
             return None;
         }
 
-        let page = (content_x / viewport_w).floor() as usize;
+        let page = (content_x / page_w).floor() as usize;
         if page >= self.page_count {
             return None;
         }
 
-        let x_in_page = content_x - page as f32 * viewport_w - self.margin_left;
+        let x_in_page = content_x - page as f32 * page_w - self.margin_left;
         let y_in_grid = screen_y - self.margin_top;
         if y_in_grid < 0.0 {
             return None;
@@ -254,10 +277,12 @@ impl GridLayout {
 
     /// Produce the flat list of tile instances for real apps in the current layout.
     ///
-    /// Each page is laid out within its own viewport-wide "slot": the grid is
-    /// centered via `margin_left`, and page `p` starts at `p * viewport_w`.
-    /// Because the scroller also moves one viewport per page, every page is
-    /// centered on screen at rest — regardless of window size.
+    /// Each page is laid out within its own content-wide "slot": the grid is
+    /// centered via `margin_left`, and page `p` starts at `p * page_w` where
+    /// `page_w` is the liquid-glass page-frame width. Because the scroller also
+    /// advances one page width per page, every page is centered on screen at
+    /// rest — regardless of window size — and pages slide in adjacent to each
+    /// other with a small gutter, like iOS Launchpad.
     ///
     /// Tiles are filled left-to-right, top-to-bottom across pages. Apps without
     /// loaded icon UVs still get color fallback tiles. Empty slots after the
@@ -265,13 +290,14 @@ impl GridLayout {
     pub fn build_instances(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<TileInstance> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
+        let page_w = self.page_width(viewport_w);
         let mut out = Vec::with_capacity(app_count);
         for (idx, app) in apps.iter().take(app_count).enumerate() {
             let p = idx / per_page;
             let row_in_page = idx % per_page;
             let r = row_in_page / self.cols;
             let c = row_in_page % self.cols;
-            let page_origin_x = (p as f32) * viewport_w;
+            let page_origin_x = (p as f32) * page_w;
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let (r_, g_, b_) = app_color(idx);
@@ -301,6 +327,7 @@ impl GridLayout {
     ) -> Vec<crate::icon_pipeline::IconInstance> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
+        let page_w = self.page_width(viewport_w);
         let mut out = Vec::with_capacity(app_count);
         for (idx, app) in apps.iter().take(app_count).enumerate() {
             let Some(uv) = app.uv else {
@@ -310,7 +337,7 @@ impl GridLayout {
             let row_in_page = idx % per_page;
             let r = row_in_page / self.cols;
             let c = row_in_page % self.cols;
-            let page_origin_x = (p as f32) * viewport_w;
+            let page_origin_x = (p as f32) * page_w;
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             out.push(crate::icon_pipeline::IconInstance {
@@ -335,13 +362,14 @@ impl GridLayout {
     pub fn build_labels(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<crate::text::Label> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
+        let page_w = self.page_width(viewport_w);
         let mut out = Vec::with_capacity(app_count);
         for (idx, app) in apps.iter().take(app_count).enumerate() {
             let p = idx / per_page;
             let row_in_page = idx % per_page;
             let r = row_in_page / self.cols;
             let c = row_in_page % self.cols;
-            let page_origin_x = (p as f32) * viewport_w;
+            let page_origin_x = (p as f32) * page_w;
             let tile_x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let label_w = self.tile_size + 20.0; // a little wider than the tile
@@ -473,17 +501,68 @@ mod tests {
     }
 
     #[test]
-    fn pages_are_offset_by_one_viewport() {
+    fn pages_are_offset_by_one_page_width() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps = fake_apps(g.total_tiles());
         let inst = g.build_instances(vw, &view(&apps));
+        let page_w = g.page_width(vw);
         let p0 = inst[0].x;
         let p1 = inst[7 * 5].x; // first tile of page 1
-                                // Page 1's first tile must be exactly one viewport to the right.
+                                // Page 1's first tile must be exactly one page width to the right.
         assert!(
-            (p1 - p0 - vw).abs() < 1e-2,
-            "pages spaced by viewport width"
+            (p1 - p0 - page_w).abs() < 1e-2,
+            "pages spaced by the content page width"
+        );
+    }
+
+    #[test]
+    fn page_width_is_panel_width_and_narrower_than_viewport() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let page_w = g.page_width(vw);
+        let grid_w = g.grid_w();
+        // page width = grid_w + frame padding, clamped to viewport - gutter.
+        let expected = (grid_w + FRAME_PADDING_WIDTH)
+            .min(vw - FRAME_VIEWPORT_GUTTER)
+            .max(grid_w);
+        assert!(
+            (page_w - expected).abs() < 1e-2,
+            "page width matches panel width"
+        );
+        assert!(
+            page_w < vw,
+            "page width should be narrower than the full viewport"
+        );
+        assert!(
+            page_w > grid_w,
+            "page width should be wider than the bare grid (has frame gutter)"
+        );
+    }
+
+    #[test]
+    fn page_width_clamps_to_viewport_gutter_when_window_is_narrow() {
+        // A very narrow window must keep the minimum viewport gutter and never
+        // shrink below the grid itself.
+        let g = GridLayout::default().centered(600.0);
+        let page_w = g.page_width(600.0);
+        let grid_w = g.grid_w();
+        // 600 - 48 = 552 < grid_w (7*84 + 6*22 = 720), so the .max(grid_w) arm
+        // kicks in.
+        assert!(
+            (page_w - grid_w).abs() < 1e-2,
+            "page width clamps to the grid width when the viewport is too narrow"
+        );
+    }
+
+    #[test]
+    fn bounds_page_extent_equals_page_width() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let bounds = g.bounds(vw);
+        assert!(
+            (bounds.page_extent - g.page_width(vw)).abs() < 1e-2,
+            "scroll page_extent must equal the content page width"
         );
     }
 
@@ -537,11 +616,14 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let per_page = g.cols * g.rows;
+        // Scrolling left by exactly one page width lands the first tile of
+        // page 1 under the pointer that page 0's first tile started at.
+        let page_w = g.page_width(vw);
         let screen_x = g.margin_left + g.tile_size * 0.5;
         let screen_y = g.margin_top + g.tile_size * 0.5;
 
         assert_eq!(
-            g.hit_test_app(vw, screen_x, screen_y, -vw, g.total_tiles()),
+            g.hit_test_app(vw, screen_x, screen_y, -page_w, g.total_tiles()),
             Some(per_page)
         );
     }
