@@ -7,10 +7,11 @@
 //! - [`Phase::Dragging`]: follows the pointer 1:1, applies a rubber-band
 //!   resistance past the bounds, and records recent samples to estimate the
 //!   flick velocity at release.
-//! - [`Phase::Inertial`]: coasts with exponential velocity decay until a
-//!   bound is hit, then hands off to [`Phase::Settling`].
+//! - [`Phase::Inertial`]: coasts with exponential velocity decay, but is
+//!   clamped to at most one page away from where the gesture started (iOS
+//!   home-screen paging — a single flick never jumps multiple pages).
 //! - [`Phase::Settling`]: a slightly under-damped spring snaps `position` to
-//!   the nearest page boundary. This is the source of the iOS "bounce".
+//!   the chosen page boundary. This is the source of the iOS "bounce".
 //!
 //! Integration is semi-implicit Euler with adaptive substepping so the feel
 //! is identical at 60/120/144 Hz (and after a stutter). The model is written
@@ -117,6 +118,10 @@ pub struct Scroller {
     bounds: ScrollBounds,
     /// Content position captured at drag start.
     drag_anchor: f32,
+    /// Snapped page the gesture started on. Inertia is limited to at most one
+    /// page away from this (iOS-style paging), so a single flick can never jump
+    /// multiple pages regardless of release speed.
+    gesture_start_snap: f32,
     /// Pointer position (physical px) captured at drag start.
     drag_start_pointer: f32,
     /// Pointer history for velocity estimation: (seconds since epoch-ish, pos).
@@ -140,6 +145,7 @@ impl Scroller {
             cfg: PhysicsConfig::default(),
             bounds,
             drag_anchor: 0.0,
+            gesture_start_snap: 0.0,
             drag_start_pointer: 0.0,
             samples: [(0.0, 0.0); VEL_SAMPLES],
             sample_count: 0,
@@ -175,6 +181,10 @@ impl Scroller {
     pub fn drag_start(&mut self, pointer_x: f32) {
         self.phase = Phase::Dragging;
         self.drag_anchor = self.position;
+        // Remember the page we started on (rounded to a boundary). Inertia is
+        // later clamped to at most one page away from here, so a single flick
+        // can never jump multiple pages — iOS home-screen paging.
+        self.gesture_start_snap = self.bounds.snap_target(self.position);
         self.drag_start_pointer = pointer_x;
         self.velocity = 0.0;
         self.sample_count = 0;
@@ -202,7 +212,12 @@ impl Scroller {
             return;
         }
         let v = self.estimate_velocity();
-        self.velocity = v;
+        // Cap the release velocity so even a violent flick can't overshoot the
+        // one-page window in a single substep and so the landing bounce stays
+        // at a tasteful iOS-like magnitude. 12×page_extent/s is well above any
+        // realistic hand-driven flick while keeping the math tame.
+        let max_v = self.bounds.page_extent * 12.0;
+        self.velocity = v.clamp(-max_v, max_v);
         self.phase = Phase::Inertial;
     }
 
@@ -261,15 +276,30 @@ impl Scroller {
                 self.velocity *= decay;
                 self.position += self.velocity * dt;
 
-                let min = self.bounds.min_pos();
-                let max = self.bounds.max_pos();
-                let overshot = self.position < min || self.position > max;
-                let stalled = self.velocity.abs() < self.cfg.inertia_cutoff;
-                if overshot {
-                    // Hit a bound → spring back.
-                    self.begin_settle_to(self.bounds.snap_target(self.position));
-                } else if stalled {
-                    // Coasted to a stop inside the range → snap to nearest page.
+                // iOS-style paging: a single gesture may travel at most one
+                // page from where it started. Build the allowed window around
+                // the gesture's start page and clamp to the global scroll
+                // bounds. Sign note: scrolling to the *next* page (rightward)
+                // makes position more negative, so `lo` is one page ahead and
+                // `hi` is one page back.
+                let start = self.gesture_start_snap;
+                let lo = (start - self.bounds.page_extent).max(self.bounds.min_pos());
+                let hi = (start + self.bounds.page_extent).min(self.bounds.max_pos());
+
+                if self.position < lo {
+                    // Flung one page forward (next page) — clamp to the window
+                    // edge and hand off to the spring, preserving velocity so
+                    // it bounces gently off the landing page like iOS.
+                    self.position = lo;
+                    self.begin_settle_to(lo);
+                } else if self.position > hi {
+                    // Flung one page backward (previous page).
+                    self.position = hi;
+                    self.begin_settle_to(hi);
+                } else if self.velocity.abs() < self.cfg.inertia_cutoff {
+                    // Came to rest inside the window → snap to the nearest page.
+                    // Within ±1 page of the start this is either the start page
+                    // (small flick) or the adjacent page (crossed the midpoint).
                     self.begin_settle_to(self.bounds.snap_target(self.position));
                 }
             }
@@ -460,5 +490,118 @@ mod tests {
         }
         assert_eq!(s.phase, Phase::Idle);
         assert!((s.position - (-1000.0)).abs() < s.cfg.settle_eps);
+    }
+
+    /// Seed an inertial flick from `start_pos` and integrate until idle,
+    /// returning the resting position and the convergence epsilon. Lets the
+    /// page-limit tests express themselves as gestures.
+    ///
+    /// We bypass `drag_*` and seed the inertial phase directly with a known
+    /// velocity: dragging itself is just direct manipulation; the one-page cap
+    /// and window logic live in `drag_end` + the `Inertial` phase, which is
+    /// what these tests exercise.
+    fn run_flick(mut s: Scroller, start_pos: f32, release_velocity: f32) -> (f32, f32) {
+        s.position = start_pos;
+        s.gesture_start_snap = s.bounds.snap_target(start_pos);
+        s.velocity = release_velocity;
+        s.phase = Phase::Inertial;
+        for _ in 0..10_000 {
+            s.step_once(1.0 / 120.0);
+            if s.phase == Phase::Idle {
+                break;
+            }
+        }
+        (s.position, s.cfg.settle_eps)
+    }
+
+    #[test]
+    fn fling_advances_at_most_one_page() {
+        // Start on page 2 of 4 (position = -2000). A negative velocity carries
+        // the content toward the *next* page (more negative). Even an absurdly
+        // fast flick must land on page 3 (-3000), exactly one page ahead —
+        // never two or three pages further.
+        let s = Scroller::new(bounds(4));
+        let (rest, eps) = run_flick(s, -2000.0, -50_000.0);
+        assert!(
+            (-rest - 3000.0).abs() < eps,
+            "violent next-page flick should land one page ahead (-3000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn fling_backward_advances_at_most_one_page() {
+        // Start on page 2, flick toward the previous page (positive velocity).
+        // Must land on page 1 (-1000) at most, not page 0 (0).
+        let s = Scroller::new(bounds(4));
+        let (rest, eps) = run_flick(s, -2000.0, 50_000.0);
+        assert!(
+            (-rest - 1000.0).abs() < eps,
+            "violent prev-page flick should land one page back (-1000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn slow_flick_returns_to_start_page() {
+        // A gentle flick that doesn't carry the content across the page
+        // midpoint must settle back on the start page.
+        let s = Scroller::new(bounds(4));
+        let (rest, eps) = run_flick(s, -2000.0, -300.0);
+        assert!(
+            (-rest - 2000.0).abs() < eps,
+            "weak flick should return to start page (-2000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn fling_at_first_page_clamps_to_bound() {
+        // On the first page (position 0), flicking toward the next page
+        // (negative velocity) can only reach page 1 (-1000): the one-page
+        // window's far edge coincides with that page. Ensure we stop at
+        // -1000, not beyond.
+        let s = Scroller::new(bounds(4));
+        let (rest, eps) = run_flick(s, 0.0, -50_000.0);
+        assert!(
+            (-rest - 1000.0).abs() < eps,
+            "flick from first page should land on page 1 (-1000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn fling_at_last_page_clamps_to_bound() {
+        // On the last page of 4 (position = -3000), a backward (positive)
+        // flick can't go past the bound; it lands on page 2 (-2000).
+        let s = Scroller::new(bounds(4));
+        let (rest, eps) = run_flick(s, -3000.0, 50_000.0);
+        assert!(
+            (-rest - 2000.0).abs() < eps,
+            "flick from last page should land on page 2 (-2000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn drag_end_caps_release_velocity() {
+        // Even an unrealistically large estimated velocity must be clamped to
+        // 12×page_extent/s, so inertia can't overrun the one-page window in a
+        // single substep.
+        let mut s = Scroller::new(bounds(4));
+        s.position = -1000.0;
+        s.drag_start(0.0);
+        // Manually fake a couple of samples so estimate_velocity returns a
+        // huge value; then ensure drag_end clamps it.
+        s.samples = [
+            (0.0, -1000.0),
+            (0.0, -1000.0),
+            (0.02, -1000.0),
+            (0.02, -5000.0),
+        ];
+        s.sample_count = VEL_SAMPLES;
+        s.drag_end();
+        let max_v = 1000.0 * 12.0;
+        assert!(
+            s.velocity.abs() <= max_v + 1e-3,
+            "release velocity must be clamped to ±{max_v}, got {}",
+            s.velocity
+        );
+        assert_eq!(s.phase, Phase::Inertial);
     }
 }
