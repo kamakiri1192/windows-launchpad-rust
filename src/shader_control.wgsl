@@ -122,8 +122,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // Annulus coverage: inside outer, outside inner.
         let ring = (1.0 - smoothstep(-1.0, 1.0, d_outer)) * smoothstep(-1.0, 1.0, d_inner);
         // Handle: a short thick segment down-right from the ring edge.
+        // Local space is Y-down (matches screen coords), so (1, 1) points to
+        // the lower-right — the classic 🔍 handle direction.
         let h_len = size * 0.62;
-        let dir = normalize(vec2<f32>(1.0, -1.0));
+        let dir = normalize(vec2<f32>(1.0, 1.0));
         let b: vec2<f32> = dir * h_len;
         // Shift the handle start to the ring's lower-right edge.
         let hp = p - dir * (ring_r * 0.7);

@@ -153,6 +153,11 @@ struct App {
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
     control: bottom_control::BottomControl,
+    /// Measured laid-out width (physical px) of the current search query, set
+    /// once per frame in `render_bottom_control` (where we hold `&mut text`)
+    /// and read back by `measure_query_width`. `None` = not measured this
+    /// frame yet.
+    cached_query_width: Option<f32>,
     /// Last settled page index, used to detect page changes for the indicator.
     last_page: i32,
     /// Whether the pointer is currently over the control capsule (hover),
@@ -215,6 +220,7 @@ impl App {
             drag_start_y: 0.0,
             first_frame_rendered: false,
             control: bottom_control::BottomControl::new(),
+            cached_query_width: None,
             last_page: 0,
             pointer_over_control: false,
             pressed_on_control: false,
@@ -289,6 +295,35 @@ impl App {
         // Gather all the immutable data first (avoid overlapping borrows with
         // the mutable renderer/text borrows below).
         let scale = self.scale_factor;
+        // Measure the query width exactly via cosmic-text shaping (same pass
+        // as drawing), so the caret and IME anchor line up with the glyphs
+        // regardless of ASCII/CJK widths. Cached for the frame so
+        // `measure_query_width` can read it back under `&self`.
+        if self.text.is_some() {
+            self.cached_query_width = {
+                let m = self.text.as_mut().unwrap();
+                let mut measure = |s: &str| -> f32 {
+                    if s.is_empty() {
+                        return 0.0;
+                    }
+                    let spec = text::CenteredLineSpec {
+                        text: s,
+                        font_size: QUERY_LABEL_SIZE,
+                        line_height: QUERY_LABEL_LINE,
+                        family: QUERY_LABEL_FONT,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        center: (0.0, 0.0),
+                        scale_factor: scale,
+                    };
+                    m.measure_text(&spec)
+                };
+                // The caret sits after *all visible text*: the committed query
+                // plus the in-flight IME preedit. Without the preedit width,
+                // the caret stays put while the user types Japanese.
+                let w = measure(&self.control.query) + measure(&self.control.preedit);
+                Some(w)
+            };
+        }
         let query_width = self.measure_query_width();
         let caret_blink = caret_visibility(&self.control);
 
@@ -327,19 +362,15 @@ impl App {
     }
 
     /// Measure the current query's laid-out width in physical px (for caret
-    /// placement). Falls back to 0 when there's no query.
+    /// placement). Returns the value measured this frame in
+    /// `render_bottom_control` via cosmic-text shaping (cached so this can be
+    /// called under `&self`). Falls back to 0 when not measured yet or when
+    /// the query is empty.
     fn measure_query_width(&self) -> f32 {
         if self.control.query.is_empty() {
             return 0.0;
         }
-        // Approximate via the text renderer's layout without committing to the
-        // atlas: lay out a centered line at origin 0 and take the max right
-        // edge. We can't borrow mutably here cheaply, so estimate from glyph
-        // count instead. A precise measure would require a &mut TextRenderer;
-        // the caret drift of a few px is acceptable for the MVP.
-        // TODO: exact width once TextRenderer exposes a measure API.
-        let chars = self.control.query.chars().count() as f32;
-        chars * 9.0 * self.scale_factor
+        self.cached_query_width.unwrap_or(0.0)
     }
 
     /// Build an owned snapshot of the current registry in display order.
@@ -1561,6 +1592,12 @@ fn mul_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
     c
 }
 
+// Shared font metrics for the bottom-control text (label / query / placeholder
+// / preedit), so measuring and drawing use identical shaping parameters.
+const QUERY_LABEL_FONT: &str = "Yu Gothic UI";
+const QUERY_LABEL_SIZE: f32 = 13.0;
+const QUERY_LABEL_LINE: f32 = 18.0;
+
 /// Build the text glyph quads for the control's active layers. A free function
 /// (not a method) so it can borrow `&mut TextRenderer` and `&BottomControl`
 /// without colliding with the renderer borrow in `render_bottom_control`.
@@ -1572,9 +1609,6 @@ fn self_layout_control_text(
     control: &bottom_control::BottomControl,
 ) -> Vec<text::GlyphQuad> {
     let mut quads = Vec::new();
-    const LABEL_FONT: &str = "Yu Gothic UI";
-    const LABEL_SIZE: f32 = 13.0;
-    const LABEL_LINE: f32 = 18.0;
     const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
     const PLACEHOLDER: [f32; 4] = [1.0, 1.0, 1.0, 0.45];
     /// Preedit (in-flight IME composition) is shown slightly dimmer to hint
@@ -1594,9 +1628,9 @@ fn self_layout_control_text(
                 let label_center_x = mag_cx + mag_size + 6.0 + 14.0;
                 let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                     text: "検索",
-                    font_size: LABEL_SIZE,
-                    line_height: LABEL_LINE,
-                    family: LABEL_FONT,
+                    font_size: QUERY_LABEL_SIZE,
+                    line_height: QUERY_LABEL_LINE,
+                    family: QUERY_LABEL_FONT,
                     color: mul_alpha(INK, a),
                     center: (label_center_x, geom.center.1),
                     scale_factor: scale,
@@ -1611,9 +1645,9 @@ fn self_layout_control_text(
                 if control.query.is_empty() && control.preedit.is_empty() {
                     let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                         text: "検索",
-                        font_size: LABEL_SIZE,
-                        line_height: LABEL_LINE,
-                        family: LABEL_FONT,
+                        font_size: QUERY_LABEL_SIZE,
+                        line_height: QUERY_LABEL_LINE,
+                        family: QUERY_LABEL_FONT,
                         color: mul_alpha(PLACEHOLDER, a),
                         center: (origin_x + 14.0, geom.center.1),
                         scale_factor: scale,
@@ -1623,34 +1657,58 @@ fn self_layout_control_text(
                     // Render the committed query plus the in-flight IME
                     // preedit inline. The preedit is shown with an
                     // underline tint so the user can tell it's not yet
-                    // committed.
-                    let q_len = control.query.chars().count() as f32;
-                    let p_len = control.preedit.chars().count() as f32;
-                    // Committed text.
-                    if !control.query.is_empty() {
-                        let approx_half = q_len * 4.5;
+                    // committed. Widths are measured exactly (same shaping as
+                    // drawing) so the caret / preedit line up with the glyphs.
+                    let query_w = if control.query.is_empty() {
+                        0.0
+                    } else {
+                        t.measure_text(&text::CenteredLineSpec {
+                            text: &control.query,
+                            font_size: QUERY_LABEL_SIZE,
+                            line_height: QUERY_LABEL_LINE,
+                            family: QUERY_LABEL_FONT,
+                            color: INK,
+                            center: (0.0, 0.0),
+                            scale_factor: scale,
+                        })
+                    };
+                    let preedit_w = if control.preedit.is_empty() {
+                        0.0
+                    } else {
+                        t.measure_text(&text::CenteredLineSpec {
+                            text: &control.preedit,
+                            font_size: QUERY_LABEL_SIZE,
+                            line_height: QUERY_LABEL_LINE,
+                            family: QUERY_LABEL_FONT,
+                            color: PREEDIT_INK,
+                            center: (0.0, 0.0),
+                            scale_factor: scale,
+                        })
+                    };
+                    // Committed text: left-anchored at origin_x, so center on
+                    // its own half-width.
+                    if query_w > 0.0 {
                         let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                             text: &control.query,
-                            font_size: LABEL_SIZE,
-                            line_height: LABEL_LINE,
-                            family: LABEL_FONT,
+                            font_size: QUERY_LABEL_SIZE,
+                            line_height: QUERY_LABEL_LINE,
+                            family: QUERY_LABEL_FONT,
                             color: mul_alpha(INK, a),
-                            center: (origin_x + approx_half, geom.center.1),
+                            center: (origin_x + query_w * 0.5, geom.center.1),
                             scale_factor: scale,
                         });
                         quads.append(&mut q);
                     }
-                    // Preedit, starting after the committed query.
-                    if !control.preedit.is_empty() {
-                        let preedit_origin = origin_x + q_len * 9.0;
-                        let approx_half = p_len * 4.5;
+                    // Preedit, starting right after the committed query.
+                    if preedit_w > 0.0 {
+                        let preedit_origin = origin_x + query_w;
                         let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                             text: &control.preedit,
-                            font_size: LABEL_SIZE,
-                            line_height: LABEL_LINE,
-                            family: LABEL_FONT,
+                            font_size: QUERY_LABEL_SIZE,
+                            line_height: QUERY_LABEL_LINE,
+                            family: QUERY_LABEL_FONT,
                             color: mul_alpha(PREEDIT_INK, a),
-                            center: (preedit_origin + approx_half, geom.center.1),
+                            center: (preedit_origin + preedit_w * 0.5, geom.center.1),
                             scale_factor: scale,
                         });
                         quads.append(&mut q);
