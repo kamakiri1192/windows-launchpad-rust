@@ -15,9 +15,11 @@
 /// present — comparable to iOS Spotlight / Launchpad.
 const DURATION: f32 = 0.32;
 
-/// Scale the UI starts at before easing to 1.0 about the frame center. A touch
-/// under 1.0 reads as "settling into place" without an obvious zoom.
-const START_SCALE: f32 = 0.92;
+/// Scale the UI starts at before easing to 1.0 about the frame center. Kept
+/// subtle (0.97): a larger value makes tile/icon/label distances visibly shift,
+/// which reads as the glass and foreground being separate layers (the iOS feel
+/// comes from material convergence, not a big zoom). See Codex consultation.
+const START_SCALE: f32 = 0.97;
 
 /// Drives the entrance reveal. Owns a normalized progress in `0.0..=1.0`.
 #[derive(Debug, Clone, Copy)]
