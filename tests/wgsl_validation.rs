@@ -59,7 +59,7 @@ async fn request_adapter(instance: &wgpu::Instance) -> wgpu::Adapter {
         .expect("failed to request a wgpu adapter for WGSL validation")
 }
 
-fn adapter_options(force_fallback_adapter: bool) -> wgpu::RequestAdapterOptions<'static> {
+fn adapter_options(force_fallback_adapter: bool) -> wgpu::RequestAdapterOptions<'static, 'static> {
     wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: None,
