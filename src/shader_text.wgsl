@@ -8,14 +8,16 @@
 struct Uniforms {
     viewport: vec2<f32>,
     scroll_x: f32,
-    _pad: f32,
+    // Entrance reveal: composited opacity (0..1). Reuses the 16-byte pad.
+    appear_alpha: f32,
     // Fixed page-frame center (physical px).
     frame_center: vec2<f32>,
     // Fixed page-frame half-size (physical px).
     frame_half_size: vec2<f32>,
-    // Fixed page-frame corner radius (physical px) + pad.
+    // Fixed page-frame corner radius (physical px).
     frame_radius: f32,
-    frame_pad: f32,
+    // Entrance reveal: uniform scale about the frame center (0.92..1.0).
+    appear_scale: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -26,6 +28,7 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) appear_alpha: f32,
 };
 
 @vertex
@@ -46,7 +49,10 @@ fn vs_main(
     let c = corners[vi];
 
     let origin = vec2<f32>(xywh.x + u.scroll_x, xywh.y);
-    let world = vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w);
+    var world = vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w);
+
+    // Entrance reveal: scale about the fixed page-frame center.
+    world = u.frame_center + (world - u.frame_center) * u.appear_scale;
 
     let half_vp = u.viewport * 0.5;
     let clip = vec2<f32>(
@@ -63,6 +69,7 @@ fn vs_main(
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.color = color;
+    out.appear_alpha = u.appear_alpha;
     return out;
 }
 
@@ -82,5 +89,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frame_alpha = smoothstep(1.0, -1.0, fd);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
     // the pipeline's standard alpha blending.
-    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha);
+    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha * in.appear_alpha);
 }

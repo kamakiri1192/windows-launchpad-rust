@@ -24,7 +24,7 @@ use crate::bottom_control::ControlInstance;
 use crate::grid::{GridLayout, TileInstance};
 use crate::icon_pipeline::IconInstance;
 use crate::liquid_glass::capture::FallbackCapture;
-use crate::liquid_glass::LiquidGlassRenderer;
+use crate::liquid_glass::{EntranceReveal, LiquidGlassRenderer};
 use crate::text::GlyphQuad;
 use crate::UserEvent;
 
@@ -34,14 +34,16 @@ use crate::UserEvent;
 struct Uniforms {
     viewport: [f32; 2],
     scroll_x: f32,
-    _pad: f32,
+    /// Entrance reveal: composited opacity (0..1), 16-byte alignment pad reused.
+    appear_alpha: f32,
     /// Fixed page-frame center in physical px.
     frame_center: [f32; 2],
     /// Fixed page-frame half-size in physical px.
     frame_half_size: [f32; 2],
     /// Fixed page-frame corner radius in physical px.
     frame_radius: f32,
-    frame_pad: f32,
+    /// Entrance reveal: uniform scale about the frame center (0.92..1.0).
+    appear_scale: f32,
 }
 
 /// Viewport-only uniform for the bottom-control overlay + text shaders. They
@@ -51,6 +53,10 @@ struct Uniforms {
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ControlUniforms {
     viewport: [f32; 2],
+    /// Entrance reveal: composited opacity (0..1). Control is screen-fixed, so
+    /// only a fade applies (no frame-center scale).
+    appear_alpha: f32,
+    _pad: f32,
 }
 
 pub struct Renderer {
@@ -116,6 +122,11 @@ pub struct DrawArgs {
     pub scroll_x: f32,
     pub viewport: (u32, u32),
     pub defer_backdrop_capture: bool,
+    /// Entrance (appear) reveal: composited opacity (0..1). 1.0 = fully shown.
+    pub appear_alpha: f32,
+    /// Entrance reveal: uniform scale about the page-frame center (0.92..1.0).
+    /// 1.0 = at rest.
+    pub appear_scale: f32,
 }
 
 impl Renderer {
@@ -295,11 +306,11 @@ impl Renderer {
             bytemuck::bytes_of(&Uniforms {
                 viewport: [size.width as f32, size.height as f32],
                 scroll_x: 0.0,
-                _pad: 0.0,
+                appear_alpha: 1.0,
                 frame_center: [frame.0, frame.1],
                 frame_half_size: [frame.2, frame.3],
                 frame_radius: frame.4,
-                frame_pad: 0.0,
+                appear_scale: 1.0,
             }),
         );
 
@@ -998,18 +1009,18 @@ impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
         // Update uniforms (tiny, every frame).
-        let frame = self.frame_clip;
+        let frame_geom = self.frame_clip;
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::bytes_of(&Uniforms {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
                 scroll_x: args.scroll_x,
-                _pad: 0.0,
-                frame_center: [frame.0, frame.1],
-                frame_half_size: [frame.2, frame.3],
-                frame_radius: frame.4,
-                frame_pad: 0.0,
+                appear_alpha: args.appear_alpha,
+                frame_center: [frame_geom.0, frame_geom.1],
+                frame_half_size: [frame_geom.2, frame_geom.3],
+                frame_radius: frame_geom.4,
+                appear_scale: args.appear_scale,
             }),
         );
 
@@ -1067,6 +1078,11 @@ impl Renderer {
             &view,
             args.scroll_x,
             args.defer_backdrop_capture,
+            EntranceReveal {
+                alpha: args.appear_alpha,
+                scale: args.appear_scale,
+                center: [frame_geom.0, frame_geom.1],
+            },
         );
 
         {
@@ -1129,6 +1145,8 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&ControlUniforms {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
+                appear_alpha: args.appear_alpha,
+                _pad: 0.0,
             }),
         );
         {

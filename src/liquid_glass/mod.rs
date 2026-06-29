@@ -13,4 +13,4 @@ pub mod renderer;
 #[cfg(windows)]
 pub mod windows_capture;
 
-pub use renderer::LiquidGlassRenderer;
+pub use renderer::{EntranceReveal, LiquidGlassRenderer};

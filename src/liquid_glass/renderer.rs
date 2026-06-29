@@ -8,6 +8,20 @@ use super::geometry::{shapes_from_layout, with_control, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::grid::{GridApp, GridLayout};
 
+/// Entrance (appear) reveal parameters threaded through to the glass shaders:
+/// a composited opacity, a uniform scale about the frame center, and that
+/// center pivot itself. Bundled so the render path doesn't grow past clippy's
+/// argument limit.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EntranceReveal {
+    /// Composited opacity (0..1), 1.0 = fully shown.
+    pub alpha: f32,
+    /// Uniform scale about `center` (0.92..1.0), 1.0 = at rest.
+    pub scale: f32,
+    /// Page-frame center (physical px), the pivot for `scale`.
+    pub center: [f32; 2],
+}
+
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -28,6 +42,12 @@ struct GlassUniforms {
     ambient_strength: f32,
     blend: f32,
     max_displacement: f32,
+    /// Entrance reveal: composited opacity (0..1) applied to the glass alpha.
+    appear_alpha: f32,
+    /// Entrance reveal: uniform scale about the frame center (0.92..1.0).
+    appear_scale: f32,
+    /// Page-frame center (physical px), the pivot for `appear_scale`.
+    frame_center: [f32; 2],
     shape_count: u32,
     debug_flags: u32,
 }
@@ -150,6 +170,10 @@ struct GeometryKey {
     width: u32,
     height: u32,
     shape_count: u32,
+    /// Entrance reveal scale — the SDF scales shapes about the frame center,
+    /// so a geometry pass baked at one scale is invalid at another. Quantized
+    /// to avoid re-baking every animation sub-step.
+    appear_scale: f32,
 }
 
 impl LiquidGlassRenderer {
@@ -167,7 +191,19 @@ impl LiquidGlassRenderer {
         let capture_status = capture.status();
         log_capture_status(&capture_status);
 
-        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0);
+        let uniforms = uniforms_from_params(
+            &params,
+            debug,
+            width,
+            height,
+            0.0,
+            0,
+            EntranceReveal {
+                alpha: 1.0,
+                scale: 1.0,
+                center: [width as f32 * 0.5, height as f32 * 0.5],
+            },
+        );
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("liquid glass uniforms"),
             contents: bytemuck::bytes_of(&uniforms),
@@ -600,6 +636,10 @@ impl LiquidGlassRenderer {
         true
     }
 
+    /// Render the liquid-glass composite. The GPU context (device/queue/encoder/
+    /// target) is passed by reference each frame rather than stored, so the
+    /// argument count is inherent to the multi-pass render entry point.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -608,6 +648,7 @@ impl LiquidGlassRenderer {
         target: &wgpu::TextureView,
         scroll_x: f32,
         defer_backdrop_capture: bool,
+        reveal: EntranceReveal,
     ) {
         if !self.params.enabled || self.shape_count == 0 {
             return;
@@ -622,6 +663,7 @@ impl LiquidGlassRenderer {
             height,
             scroll_x,
             self.shape_count,
+            reveal,
         );
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -767,7 +809,7 @@ impl LiquidGlassRenderer {
             queue.submit(std::iter::once(enc.finish()));
         }
 
-        let geometry_key = self.geometry_key(scroll_x);
+        let geometry_key = self.geometry_key(scroll_x, reveal.scale);
         if self.last_geometry_key != Some(geometry_key) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass geometry pass"),
@@ -829,7 +871,7 @@ impl LiquidGlassRenderer {
         true
     }
 
-    fn geometry_key(&self, scroll_x: f32) -> GeometryKey {
+    fn geometry_key(&self, scroll_x: f32, appear_scale: f32) -> GeometryKey {
         let (width, height) = self.texture_size;
         GeometryKey {
             scroll_x: (scroll_x * 10.0).round() / 10.0,
@@ -839,6 +881,9 @@ impl LiquidGlassRenderer {
             width,
             height,
             shape_count: self.shape_count,
+            // Quantize to 0.01 steps so the geometry pass re-bakes only when
+            // the scale has visibly changed, not every animation sub-frame.
+            appear_scale: (appear_scale * 100.0).round() / 100.0,
         }
     }
 
@@ -876,6 +921,7 @@ fn uniforms_from_params(
     height: u32,
     scroll_x: f32,
     shape_count: u32,
+    reveal: EntranceReveal,
 ) -> GlassUniforms {
     GlassUniforms {
         viewport: [width as f32, height as f32],
@@ -899,6 +945,9 @@ fn uniforms_from_params(
         ambient_strength: params.ambient_strength,
         blend: params.blend,
         max_displacement: params.thickness * 10.0,
+        appear_alpha: reveal.alpha,
+        appear_scale: reveal.scale,
+        frame_center: reveal.center,
         shape_count,
         debug_flags: debug.flags(),
     }
