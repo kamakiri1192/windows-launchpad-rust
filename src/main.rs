@@ -253,8 +253,13 @@ impl App {
         if w == 0 {
             return 0;
         }
-        // position is the content offset; page = round(-position / page_extent).
-        let p = (-s.position / w as f32).round() as i32;
+        // position is the content offset; page = round(-position / page_extent),
+        // where page_extent is the content (liquid-glass) page width.
+        let page_w = self.layout.page_width(w.max(1) as f32);
+        if page_w <= 0.0 || !page_w.is_finite() {
+            return 0;
+        }
+        let p = (-s.position / page_w).round() as i32;
         p.clamp(0, self.layout.page_count.saturating_sub(1) as i32) as usize
     }
 

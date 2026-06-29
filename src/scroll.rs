@@ -33,7 +33,10 @@ pub enum Phase {
 /// Bounds for the scrollable content, in physical pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct ScrollBounds {
-    /// Extent (width for horizontal) of one page == one viewport.
+    /// Extent (width for horizontal) of one page == one content/panel width.
+    /// Set by the layout to the liquid-glass page-frame width (narrower than
+    /// the full viewport), so a page flip costs a proportionally smaller drag
+    /// and the rubber-band feel scales with the page rather than the window.
     pub page_extent: f32,
     pub page_count: usize,
 }
@@ -148,8 +151,8 @@ impl Scroller {
 
     pub fn set_bounds(&mut self, bounds: ScrollBounds) {
         self.bounds = bounds;
-        // The rubber-band dimension tracks the viewport (page) extent so the
-        // overshoot feel scales with window size, exactly like iOS.
+        // The rubber-band dimension tracks the content (page) extent so the
+        // overshoot feel scales with the page width, exactly like iOS.
         self.cfg.rubber_dimension = bounds.page_extent;
         // Re-clamp current position into the new range and re-snap if idle.
         let clamped = self
