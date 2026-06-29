@@ -402,17 +402,26 @@ impl App {
             r.set_icon_instances(&icon_instances);
         }
 
-        self.ensure_atlas_uploaded();
+        let atlas_grew = self.ensure_atlas_uploaded();
+        if atlas_grew {
+            // Growing the atlas changes UVs for icons that were already cached
+            // before this relayout, so refresh the icon instance buffer once
+            // more after the registry has been re-synced.
+            self.rebuild_icon_instances();
+        }
     }
 
     /// Upload (or grow) the GPU icon atlas to match the CPU atlas, then push
     /// the full pixel buffer once after the first allocation. Subsequent
     /// per-icon updates go through [`apply_icon`][Self::apply_icon].
-    fn ensure_atlas_uploaded(&mut self) {
+    fn ensure_atlas_uploaded(&mut self) -> bool {
         let needed = self.registry.slot_count().max(1);
         let grew = self.atlas.ensure_capacity(needed);
+        if grew {
+            self.resync_registry_uvs();
+        }
         let Some(r) = self.renderer.as_mut() else {
-            return;
+            return grew;
         };
         let (gw, gh) = (self.atlas.width(), self.atlas.height());
         let (cur_w, cur_h) = r.icon_atlas_size();
@@ -424,6 +433,7 @@ impl App {
             self.timer
                 .mark(prefix::STARTUP, "atlas + GPU texture upload");
         }
+        grew
     }
 
     /// Apply one freshly-extracted (or cached) icon: write it into the slot,
