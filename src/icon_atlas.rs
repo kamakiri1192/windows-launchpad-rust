@@ -170,7 +170,7 @@ impl IconAtlas {
             );
             grown.uvs[slot as usize] = Some(grown.uv_for_slot(slot));
         }
-        grown.uvs.resize(needed.max(self.capacity) as usize, None);
+        grown.uvs.resize(grown.capacity.max(needed) as usize, None);
         *self = grown;
         true
     }
@@ -428,6 +428,29 @@ mod tests {
         let (_, _, uv) = a.write_icon(5, &solid([1, 1, 1, 255]));
         assert!(a.capacity() >= 6);
         assert_eq!(a.uv(5), Some(uv));
+    }
+
+    #[test]
+    fn auto_grow_keeps_uv_bookkeeping_for_all_new_capacity() {
+        let mut a = IconAtlas::new(64);
+
+        // Slot 64 grows the atlas from 64 to a larger allocation. The UV table
+        // must keep the full new capacity, not just the 65 slots needed by
+        // this write, or later slots will be lost on the next grow.
+        a.write_icon(64, &solid([64, 0, 0, 255]));
+        assert!(a.capacity() >= 128);
+
+        let (_, _, uv100) = a.write_icon(100, &solid([100, 0, 0, 255]));
+        assert_eq!(a.uv(100), Some(uv100));
+
+        // Force a second grow. Slot 100 should migrate with the CPU atlas and
+        // keep a valid UV instead of disappearing.
+        a.write_icon(128, &solid([128, 0, 0, 255]));
+        let (x, y) = a.icon_origin(100);
+        let stride = a.width() as usize * 4;
+        let px = y as usize * stride + x as usize * 4;
+        assert_eq!(&a.rgba()[px..px + 4], &[100, 0, 0, 255]);
+        assert!(a.uv(100).is_some());
     }
 
     #[test]
