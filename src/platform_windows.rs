@@ -64,11 +64,17 @@ const ID_QUIT: u32 = 1002;
 const VK_SPACE: u16 = 0x20;
 const VK_LWIN: u16 = 0x5B;
 const VK_RWIN: u16 = 0x5C;
-/// VK_F24: a key that virtually no app or shell shortcut reacts to. We inject
-/// a quick F24 down/up right after a Win+Space so the OS sees an intervening
-/// keypress between Win-down and Win-up — which stops the shell from reading
-/// the release as a lone Win tap (the cause of the Start-menu popping).
-const VK_F24: u16 = 0x87;
+/// VK_F20: a key that no Windows shell shortcut reacts to. We inject a quick
+/// F20 down/up right after a Win+Space so the OS sees an intervening keypress
+/// between Win-down and Win-up — which stops the shell from reading the
+/// release as a lone Win tap (the cause of the Start-menu popping).
+///
+/// Why F20 and not F24: F24 (0x87) triggers the Snipping Tool / screenshot on
+/// Windows 11. F20 (0x83) is a defined VK but is not bound to any system
+/// shortcut, IME action, or accessibility feature. Other F-keys are also
+/// unsafe: F23 is the Copilot key, F17 is reserved at shutdown. See the MS
+/// virtual-key-codes table.
+const VK_F20: u16 = 0x83;
 /// Magic tag written into the dwExtraInfo of every key WE inject via
 /// SendInput, so our own LL hook can recognize and pass them through (the
 /// injected event would otherwise be re-swallowed, which is what broke the
@@ -266,7 +272,7 @@ fn space_held_now() -> bool {
     unsafe { GetAsyncKeyState(VK_SPACE as i32) < 0 }
 }
 
-/// Inject a quick VK_F24 down/up while Win is held, so the OS no longer sees
+/// Inject a quick VK_F20 down/up while Win is held, so the OS no longer sees
 /// a lone "Win down ... Win up" and therefore doesn't pop the Start menu on a
 /// consumed Win+Space. The injected events are tagged with INJECT_MAGIC and
 /// are also flagged LLKHF_INJECTED by the system, so our own hook recognizes
@@ -278,14 +284,14 @@ unsafe fn inject_dummy_key() -> bool {
     sent as usize == inputs.len()
 }
 
-/// Build one VK_F24 INPUT, tagged with INJECT_MAGIC. `up` selects key-up vs
+/// Build one VK_F20 INPUT, tagged with INJECT_MAGIC. `up` selects key-up vs
 /// key-down.
 fn dummy_input(up: bool) -> INPUT {
     INPUT {
         r#type: INPUT_TYPE(1), // INPUT_KEYBOARD
         Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: VIRTUAL_KEY(VK_F24),
+                wVk: VIRTUAL_KEY(VK_F20),
                 wScan: 0,
                 dwFlags: if up {
                     KEYBD_EVENT_FLAGS(KEYEVENTF_KEYUP.0)
@@ -322,7 +328,7 @@ static INJECTING: AtomicBool = AtomicBool::new(false);
 ///      our `INJECT_MAGIC` dwExtraInfo is passed straight to the next hook.
 ///
 /// 3. **Suppress the Start menu with a dummy key.** When Win+Space fires, we
-///    swallow Space AND inject a quick VK_F24 down/up while Win is still
+///    swallow Space AND inject a quick VK_F20 down/up while Win is still
 ///    held. The OS now sees "Win down, F24, Win up" instead of a bare Win
 ///    tap, so the shell does NOT open Start. This lets the real Win keyup
 ///    pass normally (Win+E etc. stay intact) — we don't touch Win at all.
