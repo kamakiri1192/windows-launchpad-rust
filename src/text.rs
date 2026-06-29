@@ -217,6 +217,34 @@ impl TextRenderer {
         self.raster_phase(placed, scale_factor, &[], color)
     }
 
+    /// Measure a single line of text's laid-out width in physical px without
+    /// rasterizing it into the atlas. Runs the *same* cosmic-text shaping as
+    /// [`layout_centered_line`] so the result matches what will be drawn
+    /// (ASCII / CJK / ligatures all accounted for). Returns 0.0 on an empty
+    /// or unshapable string.
+    pub fn measure_text(&mut self, spec: &CenteredLineSpec<'_>) -> f32 {
+        let CenteredLineSpec {
+            text,
+            font_size,
+            line_height,
+            family,
+            scale_factor,
+            ..
+        } = *spec;
+        let metrics = Metrics::new(font_size, line_height);
+        let attrs = Attrs::new().family(Family::Name(family));
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(Some(f32::MAX / 4.0), Some(line_height * 2.0 / scale_factor));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        match buffer.layout_runs().next() {
+            // line_w is in logical px → physical px.
+            Some(run) => run.line_w * scale_factor,
+            None => 0.0,
+        }
+    }
+
     // -- Phase 1: cosmic-text layout --------------------------------------
 
     fn layout_phase(&mut self, labels: &[Label], scale_factor: f32) -> Vec<PlacedGlyph> {

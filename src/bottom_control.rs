@@ -540,7 +540,7 @@ impl BottomControl {
         if geom.expand < 0.5 {
             return None;
         }
-        Some(geom.center.0 + geom.half_size.0 - 16.0)
+        Some(geom.center.0 + geom.half_size.0 - 20.0)
     }
 }
 
@@ -631,8 +631,10 @@ pub fn build_overlay_instances(
                         kind: [KIND_CARET, 0.0, 0.0, 0.0],
                     });
                 }
-                // Close × at the right inside padding.
-                let close_cx = cx + hw - 13.0;
+                // Close × at the right inside padding. Pad mirrors the left
+                // magnifier: the magnifier's visible ring outer edge sits ~15.5px
+                // in from the capsule edge, so we keep the × the same distance.
+                let close_cx = cx + hw - 20.0;
                 out.push(ControlInstance {
                     center: [close_cx, cy],
                     params: [7.0, a, 1.4, 0.0],
