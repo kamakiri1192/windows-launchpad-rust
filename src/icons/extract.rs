@@ -16,10 +16,11 @@
 //! All Win32 handles (`HICON`, `HBITMAP`, `HDC`) are wrapped in RAII guards so
 //! a panic or early return can't leak GDI objects.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use windows::core::{Interface, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{HANDLE, SIZE};
+use windows::core::{Interface, GUID, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{HANDLE, PROPERTYKEY, SIZE};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     DIB_RGB_COLORS, HBITMAP, HDC,
@@ -35,11 +36,11 @@ use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    FOLDERID_CommonStartMenu, FOLDERID_StartMenu, ILFree, IShellItem, IShellItemImageFactory,
-    IShellLinkW, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW,
-    SHGetImageList, SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS,
-    SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
-    SIIGBF_SCALEUP,
+    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_StartMenu, IEnumShellItems, ILFree,
+    IShellItem, IShellItem2, IShellItemImageFactory, IShellLinkW, SHCreateItemFromIDList,
+    SHCreateItemFromParsingName, SHGetFileInfoW, SHGetImageList, SHGetKnownFolderPath, ShellLink,
+    KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON, SHGFI_SYSICONINDEX,
+    SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
@@ -51,6 +52,12 @@ pub struct Shortcut {
     pub name: String,
     pub path: PathBuf,
 }
+
+const APPS_FOLDER_PREFIX: &str = r"shell:AppsFolder\";
+const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+    pid: 5,
+};
 
 /// Enumerate `.lnk` files under both the per-user and all-users Start Menus.
 ///
@@ -65,6 +72,7 @@ pub fn enumerate_start_menu() -> Vec<Shortcut> {
             collect_lnks(&path, &mut out);
         }
     }
+    collect_apps_folder_entries(&mut out);
     out
 }
 
@@ -77,6 +85,10 @@ pub fn enumerate_start_menu() -> Vec<Shortcut> {
 /// Returns `None` on any failure (missing icon, GDI error); the caller simply
 /// drops that tile back to the fallback color.
 pub fn extract_icon_from_lnk(lnk: &Path) -> Option<DecodedIcon> {
+    if is_apps_folder_uri(lnk) {
+        return extract_icon_from_apps_folder_uri(lnk);
+    }
+
     // A .lnk can carry its icon in two places:
     //   1. An explicit IconLocation (Discord, Chrome, Slack — Electron apps
     //      whose launcher exe has a generic icon, with the real icon pointed
@@ -336,6 +348,16 @@ fn get_path_hicon(path: &Path) -> Option<HICON> {
     get_hicon_from_system_image_list(index)
 }
 
+fn extract_icon_from_apps_folder_uri(path: &Path) -> Option<DecodedIcon> {
+    let wide = path_to_wide(path)?;
+    let factory: IShellItemImageFactory =
+        unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>) }.ok()?;
+    let flags = SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP;
+    let bitmap = unsafe { factory.GetImage(SIZE { cx: 256, cy: 256 }, flags) }.ok()?;
+    let _bitmap_guard = BitmapGuard(bitmap);
+    hbitmap_to_rgba(bitmap)
+}
+
 #[allow(dead_code)] // used by the ignored icon strategy probe test
 fn get_link_pidl_image(link: &IShellLinkW) -> Option<DecodedIcon> {
     // SAFETY: GetIDList returns a PIDL allocated by the shell; PidlGuard frees
@@ -577,6 +599,69 @@ fn collect_lnks(root: &Path, out: &mut Vec<Shortcut>) {
     }
 }
 
+/// Add packaged apps from the virtual `shell:AppsFolder` namespace.
+///
+/// Some modern apps (Store/MSIX packaged apps, including ChatGPT/Codex on
+/// machines where they are installed that way) do not always materialize as
+/// `.lnk` files under the filesystem Start Menu. The AppsFolder namespace is
+/// the shell's canonical app list; we import only package AUMIDs (`...!App`) and
+/// skip display names already found as real shortcuts to avoid obvious dupes.
+fn collect_apps_folder_entries(out: &mut Vec<Shortcut>) {
+    let mut existing_names: HashSet<String> = out
+        .iter()
+        .map(|shortcut| normalized_app_name(&shortcut.name))
+        .collect();
+
+    let root_wide = str_to_wide("shell:AppsFolder");
+    let root: IShellItem =
+        match unsafe { SHCreateItemFromParsingName(PCWSTR(root_wide.as_ptr()), None::<&IBindCtx>) }
+        {
+            Ok(root) => root,
+            Err(_) => return,
+        };
+    let enum_items: IEnumShellItems =
+        match unsafe { root.BindToHandler(None::<&IBindCtx>, &BHID_EnumItems) } {
+            Ok(items) => items,
+            Err(_) => return,
+        };
+
+    loop {
+        let mut item = [None];
+        let mut fetched = 0;
+        if unsafe { enum_items.Next(&mut item, Some(&mut fetched)) }.is_err() || fetched == 0 {
+            break;
+        }
+        let Some(item) = item[0].take() else {
+            continue;
+        };
+        let Some(app) = apps_folder_shortcut_from_item(item) else {
+            continue;
+        };
+        let normalized_name = normalized_app_name(&app.name);
+        if existing_names.contains(&normalized_name) {
+            continue;
+        }
+        existing_names.insert(normalized_name);
+        out.push(app);
+    }
+}
+
+fn apps_folder_shortcut_from_item(item: IShellItem) -> Option<Shortcut> {
+    let item2: IShellItem2 = item.cast().ok()?;
+    let aumid = take_pwstr_string(unsafe { item2.GetString(&PKEY_APPUSERMODEL_ID) }.ok()?)?;
+    if !is_packaged_aumid(&aumid) {
+        return None;
+    }
+
+    let name = normalize_shortcut_display_name(take_pwstr_string(
+        unsafe { item.GetDisplayName(SIGDN_NORMALDISPLAY) }.ok()?,
+    )?)?;
+    Some(Shortcut {
+        name,
+        path: PathBuf::from(apps_folder_uri(&aumid)),
+    })
+}
+
 /// `dwFileAttributes` mask for the directory bit, redefined locally because
 /// the crate's `FILE_ATTRIBUTE_DIRECTORY` constant route is verbose.
 const FILE_ATTRIBUTE_ATTRIBUTES_MASK: u32 = FILE_ATTRIBUTE_DIRECTORY.0;
@@ -600,6 +685,27 @@ fn normalize_shortcut_display_name(name: String) -> Option<String> {
     }
 }
 
+fn normalized_app_name(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn is_packaged_aumid(aumid: &str) -> bool {
+    aumid.contains('!')
+}
+
+fn apps_folder_uri(aumid: &str) -> String {
+    format!("{APPS_FOLDER_PREFIX}{aumid}")
+}
+
+fn is_apps_folder_uri(path: &Path) -> bool {
+    path.to_str()
+        .map(|s| {
+            s.len() > APPS_FOLDER_PREFIX.len()
+                && s[..APPS_FOLDER_PREFIX.len()].eq_ignore_ascii_case(APPS_FOLDER_PREFIX)
+        })
+        .unwrap_or(false)
+}
+
 fn file_stem_or_name(path: &Path, name: &str) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
@@ -617,9 +723,13 @@ fn is_dots(name: &[u16]) -> bool {
 /// all UTF-8 is representable, so this is mostly a guard).
 fn path_to_wide(path: &Path) -> Option<Vec<u16>> {
     let s = path.to_str()?;
+    Some(str_to_wide(s))
+}
+
+fn str_to_wide(s: &str) -> Vec<u16> {
     let mut v: Vec<u16> = s.encode_utf16().collect();
     v.push(0);
-    Some(v)
+    v
 }
 
 /// Decode a UTF-16 (possibly NUL-terminated) buffer into a `String`.
@@ -769,6 +879,15 @@ mod tests {
     #[test]
     fn normalize_shortcut_display_name_rejects_blank_names() {
         assert_eq!(normalize_shortcut_display_name("   ".to_string()), None);
+    }
+
+    #[test]
+    fn apps_folder_uri_round_trips_as_virtual_shortcut_path() {
+        let uri = apps_folder_uri("OpenAI.ChatGPT_abc123!App");
+        assert_eq!(uri, r"shell:AppsFolder\OpenAI.ChatGPT_abc123!App");
+        assert!(is_apps_folder_uri(Path::new(&uri)));
+        assert!(is_packaged_aumid("OpenAI.ChatGPT_abc123!App"));
+        assert!(!is_packaged_aumid("Desktop.AppUserModelId"));
     }
 
     #[test]
