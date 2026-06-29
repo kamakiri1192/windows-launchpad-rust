@@ -25,6 +25,7 @@
 //!   - Esc → quit.
 
 mod app_diff;
+mod app_icon;
 mod app_id;
 mod app_registry;
 mod app_scan;
@@ -68,7 +69,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::windows::WindowAttributesExtWindows;
-use winit::window::{Window, WindowId};
+use winit::window::{Icon, Window, WindowId};
 
 /// Cell edge (icon + padding) imported from the atlas module for readability.
 const CELL: u32 = icon_atlas::CELL;
@@ -1206,6 +1207,11 @@ fn initial_window_position(event_loop: &ActiveEventLoop) -> Option<PhysicalPosit
     ))
 }
 
+fn load_window_icon() -> Option<Icon> {
+    let icon = app_icon::load_rgba(Some(256))?;
+    Icon::from_rgba(icon.rgba, icon.width, icon.height).ok()
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
@@ -1259,6 +1265,10 @@ impl ApplicationHandler<UserEvent> for App {
                 INITIAL_WINDOW_HEIGHT,
             ))
             .with_min_inner_size(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+
+        if let Some(icon) = load_window_icon() {
+            attrs = attrs.with_window_icon(Some(icon));
+        }
 
         if let Some(position) = initial_window_position(event_loop) {
             attrs = attrs.with_position(position);
