@@ -115,6 +115,7 @@ pub struct Renderer {
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: Option<Buffer>,
     control_instance_count: u32,
+    control_glass_shape: Option<GlassShape>,
     badge_sources: Vec<EditBadgeSource>,
     badge_instance_buffer: Option<Buffer>,
     badge_instance_count: u32,
@@ -719,6 +720,7 @@ impl Renderer {
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: None,
             control_instance_count: 0,
+            control_glass_shape: None,
             badge_sources: Vec::new(),
             badge_instance_buffer: None,
             badge_instance_count: 0,
@@ -1007,6 +1009,7 @@ impl Renderer {
         &mut self,
         shape: Option<crate::liquid_glass::geometry::GlassShape>,
     ) {
+        self.control_glass_shape = shape;
         self.liquid_glass.set_control_shape(&self.device, shape);
     }
 
@@ -1344,7 +1347,7 @@ impl Renderer {
     fn update_edit_badges(&mut self, time: f32) {
         const KIND_BADGE_CLOSE: f32 = 4.0;
 
-        let mut shapes = Vec::with_capacity(self.badge_sources.len() + 1);
+        let mut shapes = Vec::with_capacity(self.badge_sources.len() + 2);
         let mut marks = Vec::with_capacity(self.badge_sources.len());
         let frame = self.frame_clip;
         let clip_shape = GlassShape::clip_rounded_rect(
@@ -1369,6 +1372,9 @@ impl Renderer {
 
         if !marks.is_empty() {
             shapes.insert(0, clip_shape);
+            if let Some(control) = self.control_glass_shape {
+                shapes.push(control);
+            }
         }
 
         self.liquid_glass.set_badge_shapes(&self.device, &shapes);
