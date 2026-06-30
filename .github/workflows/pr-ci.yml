@@ -3,9 +3,17 @@ name: PR CI
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: pr-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+  TARGET: x86_64-pc-windows-msvc
 
 jobs:
   rust:
@@ -18,12 +26,31 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install 1.89.0 --profile minimal
-          rustup component add clippy rustfmt --toolchain 1.89.0
-          rustup default 1.89.0
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          rustup component add clippy rustfmt --toolchain $env:RUST_VERSION
+          rustup default $env:RUST_VERSION
 
-      - name: Cache Cargo
+      - name: Install sccache
+        if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Enable shared read-only S3 sccache
+        if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
+        shell: pwsh
+        run: |
+          $prefix = "windows-launchpad-rust/$env:TARGET/rust-$env:RUST_VERSION/debug"
+          "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
+          "SCCACHE_BUCKET=${{ vars.SCCACHE_BUCKET }}" >> $env:GITHUB_ENV
+          "SCCACHE_REGION=${{ vars.AWS_REGION }}" >> $env:GITHUB_ENV
+          "SCCACHE_S3_KEY_PREFIX=$prefix" >> $env:GITHUB_ENV
+          "SCCACHE_S3_RW_MODE=READ_ONLY" >> $env:GITHUB_ENV
+          "SCCACHE_S3_NO_CREDENTIALS=true" >> $env:GITHUB_ENV
+          "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> $env:GITHUB_ENV
+
+      - name: Cache Cargo registry and git sources
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -36,3 +63,7 @@ jobs:
 
       - name: Build
         run: cargo build --locked
+
+      - name: Show sccache stats
+        if: always() && vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
+        run: sccache --show-stats
