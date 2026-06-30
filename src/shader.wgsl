@@ -31,8 +31,9 @@ struct InstanceIn {
     @location(0) origin: vec2<f32>,  // top-left in content px
     @location(1) size_r: vec2<f32>,  // (size, radius)
     @location(2) color: vec3<f32>,
+    @location(3) icon_index: f32,
     // Edit-mode animation: (phase, lift, scale, flags).
-    @location(3) extra: vec4<f32>,
+    @location(4) extra: vec4<f32>,
 };
 
 struct VsOut {
@@ -57,7 +58,8 @@ fn vs_main(
     @location(0) origin: vec2<f32>,
     @location(1) size_r: vec2<f32>,
     @location(2) color: vec3<f32>,
-    @location(3) extra: vec4<f32>,
+    @location(3) icon_index: f32,
+    @location(4) extra: vec4<f32>,
 ) -> VsOut {
     // 0..1 unit quad corners.
     var corners = array<vec2<f32>, 6>(
