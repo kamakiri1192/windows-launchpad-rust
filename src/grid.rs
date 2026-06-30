@@ -323,6 +323,10 @@ impl GridLayout {
             return None;
         }
 
+        if !self.frame_contains_point(viewport_w, screen_x, screen_y) {
+            return None;
+        }
+
         // Pages are spaced by the content page width, not the full viewport.
         let page_w = self.page_width(viewport_w);
 
@@ -381,6 +385,24 @@ impl GridLayout {
         }
 
         None
+    }
+
+    fn frame_contains_point(&self, viewport_w: f32, screen_x: f32, screen_y: f32) -> bool {
+        let (cx, cy, w, h) = self.frame_panel_rect(viewport_w);
+        let half_w = w * 0.5;
+        let half_h = h * 0.5;
+        let radius = self
+            .scaled(FRAME_CORNER_RADIUS)
+            .min(half_w)
+            .min(half_h)
+            .max(0.0);
+        let qx = (screen_x - cx).abs() - half_w + radius;
+        let qy = (screen_y - cy).abs() - half_h + radius;
+        let outside_x = qx.max(0.0);
+        let outside_y = qy.max(0.0);
+        let outside = (outside_x * outside_x + outside_y * outside_y).sqrt();
+        let inside = qx.max(qy).min(0.0);
+        outside + inside - radius <= 0.0
     }
 
     /// Produce the flat list of tile instances for real apps in the current layout.
@@ -748,6 +770,20 @@ mod tests {
         let y = g.margin_top + g.tile_size * 0.5;
 
         assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), Some(0));
+    }
+
+    #[test]
+    fn hit_test_ignores_tile_pixels_clipped_by_frame() {
+        let vw = 600.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + 1.0;
+        let y = g.margin_top + 1.0;
+
+        assert!(
+            !g.frame_contains_point(vw, x, y),
+            "test point should be inside the tile rect but outside the rounded frame"
+        );
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), None);
     }
 
     #[test]
