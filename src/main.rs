@@ -213,6 +213,10 @@ struct App {
     /// and read back by `measure_query_width`. `None` = not measured this
     /// frame yet.
     cached_query_width: Option<f32>,
+    /// Measured laid-out width (physical px) of the edit-mode Done label.
+    cached_done_width: Option<f32>,
+    /// 0 = normal bottom control width, 1 = edit-mode Done width.
+    edit_control_progress: f32,
     /// Last settled page index, used to detect page changes for the indicator.
     last_page: i32,
     /// Whether the pointer is currently over the control capsule (hover),
@@ -283,6 +287,8 @@ impl App {
             tile_springs: Vec::new(),
             control: bottom_control::BottomControl::new(),
             cached_query_width: None,
+            cached_done_width: None,
+            edit_control_progress: 0.0,
             last_page: 0,
             pointer_over_control: false,
             pressed_on_control: false,
@@ -344,12 +350,17 @@ impl App {
         let frame_bottom = self.frame_bottom_y();
         let page = self.current_page();
         let page_count = self.layout.page_count;
-        Some(self.control.resolve_scaled(
+        let edit_width = self.cached_done_width.map(|w| bottom_control::EditWidth {
+            half_width: bottom_control::done_half_width(w, self.scale_factor),
+            progress: self.edit_control_progress,
+        });
+        Some(self.control.resolve_scaled_with_edit_width(
             viewport,
             frame_bottom,
             page,
             page_count,
             self.scale_factor,
+            edit_width,
         ))
     }
 
@@ -357,11 +368,6 @@ impl App {
     /// and text for the current frame. Call this once per redraw, after the
     /// control has been ticked.
     fn render_bottom_control(&mut self) {
-        let (geom, layers) = match self.resolve_control() {
-            Some(v) => v,
-            None => return,
-        };
-
         // Gather all the immutable data first (avoid overlapping borrows with
         // the mutable renderer/text borrows below).
         let scale = self.scale_factor;
@@ -392,13 +398,29 @@ impl App {
                 let w = measure(&self.control.query) + measure(&self.control.preedit);
                 Some(w)
             };
+            let spec = text::CenteredLineSpec {
+                text: DONE_LABEL,
+                font_size: QUERY_LABEL_SIZE,
+                line_height: QUERY_LABEL_LINE,
+                family: QUERY_LABEL_FONT,
+                color: [1.0, 1.0, 1.0, 1.0],
+                center: (0.0, 0.0),
+                scale_factor: scale,
+            };
+            self.cached_done_width = Some(m.measure_text(&spec));
         }
+        let (geom, layers) = match self.resolve_control() {
+            Some(v) => v,
+            None => return,
+        };
         let query_width = self.measure_query_width();
         let caret_blink = caret_visibility(&self.control);
+        let edit_visual_progress = self.edit_visual_progress();
 
-        // 1) Procedural overlay instances (magnifier, dots, caret, close). In
-        // edit mode the control is just the "完了" text — drop the overlays.
-        let instances = if self.editing {
+        // 1) Procedural overlay instances (magnifier, dots, caret, close).
+        // While the Done-width morph is active, keep normal pill contents hidden
+        // so they don't overflow the narrower capsule.
+        let instances = if edit_visual_progress > 0.0 {
             Vec::new()
         } else {
             bottom_control::build_overlay_instances(&geom, &layers, query_width, caret_blink)
@@ -408,7 +430,14 @@ impl App {
         // text renderer so they share the glyph atlas. Done before touching the
         // renderer so the atlas upload + dirty clear happen in one place.
         let (quads, atlas_dirty) = if let Some(t) = self.text.as_mut() {
-            let q = self_layout_control_text(t, &geom, &layers, scale, &self.control, self.editing);
+            let q = self_layout_control_text(
+                t,
+                &geom,
+                &layers,
+                scale,
+                &self.control,
+                edit_visual_progress,
+            );
             (q, t.atlas_dirty)
         } else {
             (Vec::new(), false)
@@ -444,6 +473,30 @@ impl App {
             return 0.0;
         }
         self.cached_query_width.unwrap_or(0.0)
+    }
+
+    fn step_edit_control_width(&mut self, dt: f32) -> bool {
+        let target = if self.editing { 1.0 } else { 0.0 };
+        let duration = if self.editing {
+            bottom_control::EXPAND_DURATION
+        } else {
+            bottom_control::COLLAPSE_DURATION
+        };
+        let before = self.edit_control_progress;
+        self.edit_control_progress =
+            advance_unit_toward(self.edit_control_progress, target, dt, duration);
+        (self.edit_control_progress - before).abs() > 0.0001
+            || (self.edit_control_progress - target).abs() > 0.0001
+    }
+
+    fn edit_visual_progress(&self) -> f32 {
+        if self.editing {
+            1.0
+        } else if self.edit_control_progress > 0.001 {
+            self.edit_control_progress.max(0.0)
+        } else {
+            0.0
+        }
     }
 
     /// Search text used for live filtering. This intentionally includes the
@@ -2297,6 +2350,7 @@ impl ApplicationHandler<UserEvent> for App {
                 };
                 self.last_redraw = Some(now);
                 let control_animating = self.control.tick(now, control_dt);
+                let edit_control_animating = self.step_edit_control_width(control_dt);
 
                 // Upload the control's capsule + overlays before the render.
                 // This also measures query + preedit width for the IME cursor.
@@ -2325,6 +2379,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if scroller_animating
                     || auto_scroll_started
                     || control_animating
+                    || edit_control_animating
                     || springs_animating
                     || self.editing
                 {
@@ -2433,6 +2488,7 @@ impl SpringPos for crate::icon_pipeline::IconInstance {
 const QUERY_LABEL_FONT: &str = "Yu Gothic UI";
 const QUERY_LABEL_SIZE: f32 = 13.0;
 const QUERY_LABEL_LINE: f32 = 18.0;
+const DONE_LABEL: &str = "完了";
 
 /// Build the text glyph quads for the control's active layers. A free function
 /// (not a method) so it can borrow `&mut TextRenderer` and `&BottomControl`
@@ -2443,7 +2499,7 @@ fn self_layout_control_text(
     layers: &[bottom_control::ControlLayer],
     scale: f32,
     control: &bottom_control::BottomControl,
-    editing: bool,
+    edit_visual_progress: f32,
 ) -> Vec<text::GlyphQuad> {
     let mut quads = Vec::new();
     const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
@@ -2452,15 +2508,15 @@ fn self_layout_control_text(
     /// it isn't committed yet.
     const PREEDIT_INK: [f32; 4] = [0.85, 0.92, 1.0, 0.88];
 
-    // In edit mode the control reads "完了" and acts as the Done button; we skip
-    // the normal pill/indicator/field content entirely.
-    if editing {
+    // While edit-mode width is morphing, keep the Done label centered and skip
+    // normal pill/indicator/field content so it cannot overflow the capsule.
+    if edit_visual_progress > 0.0 {
         let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-            text: "完了",
+            text: DONE_LABEL,
             font_size: QUERY_LABEL_SIZE,
             line_height: QUERY_LABEL_LINE,
             family: QUERY_LABEL_FONT,
-            color: INK,
+            color: mul_alpha(INK, edit_visual_progress.clamp(0.0, 1.0)),
             center: (geom.center.0, geom.center.1),
             scale_factor: scale,
         });
@@ -2585,6 +2641,19 @@ fn caret_visibility(control: &bottom_control::BottomControl) -> f32 {
         1.0
     } else {
         0.0
+    }
+}
+
+fn advance_unit_toward(v: f32, target: f32, dt: f32, duration: f32) -> f32 {
+    if duration <= 0.0 {
+        return target;
+    }
+    let dir = if target >= v { 1.0 } else { -1.0 };
+    let next = v + dir * dt.max(0.0) / duration;
+    if dir > 0.0 {
+        next.min(target)
+    } else {
+        next.max(target)
     }
 }
 

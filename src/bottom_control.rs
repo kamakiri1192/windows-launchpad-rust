@@ -84,6 +84,8 @@ pub const FIELD_HALF_WIDTH: f32 = 250.0;
 pub const CAPSULE_HEIGHT: f32 = 38.0;
 /// Capsule corner radius (half the height → fully rounded ends).
 pub const CAPSULE_RADIUS: f32 = CAPSULE_HEIGHT * 0.5;
+/// Horizontal padding around the edit-mode Done label.
+pub const DONE_HORIZONTAL_PADDING: f32 = 18.0;
 /// Vertical gap from the bottom of the fixed page frame to the capsule.
 const BOTTOM_MARGIN: f32 = 30.0;
 
@@ -157,6 +159,12 @@ impl ControlGeometry {
     pub const fn cy(&self) -> f32 {
         self.center.1
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EditWidth {
+    pub half_width: f32,
+    pub progress: f32,
 }
 
 /// The morphing bottom-center control.
@@ -426,6 +434,25 @@ impl BottomControl {
         page_count: usize,
         scale_factor: f32,
     ) -> (ControlGeometry, Vec<ControlLayer>) {
+        self.resolve_scaled_with_edit_width(
+            viewport,
+            frame_bottom,
+            page,
+            page_count,
+            scale_factor,
+            None,
+        )
+    }
+
+    pub fn resolve_scaled_with_edit_width(
+        &self,
+        viewport: (u32, u32),
+        frame_bottom: f32,
+        page: usize,
+        page_count: usize,
+        scale_factor: f32,
+        edit_width: Option<EditWidth>,
+    ) -> (ControlGeometry, Vec<ControlLayer>) {
         let scale = sanitize_scale(scale_factor);
         let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
         let center_x = vw * 0.5;
@@ -443,8 +470,16 @@ impl BottomControl {
         // out quickly and settles softly, which reads as "deliberate but
         // lively" rather than mechanical.
         let pill_hw = pill_half_width() * scale;
-        let hw = lerp(pill_hw, FIELD_HALF_WIDTH * scale, ease_ios_out(self.expand));
         let hh = capsule_height * 0.5;
+        let normal_hw = lerp(pill_hw, FIELD_HALF_WIDTH * scale, ease_ios_out(self.expand));
+        let hw = match edit_width {
+            Some(edit) if edit.progress > 0.0 => lerp(
+                normal_hw,
+                edit.half_width.max(hh),
+                ease_ios_out(edit.progress.clamp(0.0, 1.0)),
+            ),
+            _ => normal_hw,
+        };
 
         let geom = ControlGeometry {
             center: (center_x, center_y),
@@ -720,6 +755,14 @@ pub fn pill_half_width() -> f32 {
     46.0
 }
 
+/// Half-width for the edit-mode Done capsule, based on measured text width.
+pub fn done_half_width(label_width: f32, scale_factor: f32) -> f32 {
+    let scale = sanitize_scale(scale_factor);
+    let min_hw = CAPSULE_HEIGHT * scale * 0.5;
+    let content_hw = label_width.max(0.0) * 0.5 + DONE_HORIZONTAL_PADDING * scale;
+    content_hw.max(min_hw)
+}
+
 fn control_scale(geom: &ControlGeometry) -> f32 {
     (geom.half_size.1 / (CAPSULE_HEIGHT * 0.5)).max(0.01)
 }
@@ -983,6 +1026,38 @@ mod tests {
         c.expand = 1.0;
         let (g, _) = c.resolve((1280, 800), 600.0, 0, 3);
         assert!((g.half_size.0 - FIELD_HALF_WIDTH).abs() < 1e-2);
+    }
+
+    #[test]
+    fn done_half_width_tracks_text_width_and_scale() {
+        let label_width = 28.0;
+        let hw = done_half_width(label_width, 1.0);
+        assert!((hw - 32.0).abs() < 1e-3);
+
+        let scaled = done_half_width(label_width * 2.0, 2.0);
+        assert!((scaled - hw * 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn edit_width_morph_uses_done_half_width() {
+        let c = bc();
+        let done_hw = done_half_width(28.0, 1.0);
+        let (normal, _) = c.resolve((1280, 800), 600.0, 0, 3);
+        let (done, _) = c.resolve_scaled_with_edit_width(
+            (1280, 800),
+            600.0,
+            0,
+            3,
+            1.0,
+            Some(EditWidth {
+                half_width: done_hw,
+                progress: 1.0,
+            }),
+        );
+
+        assert!((normal.half_size.0 - pill_half_width()).abs() < 1e-3);
+        assert!((done.half_size.0 - done_hw).abs() < 1e-3);
+        assert!(done.half_size.0 < normal.half_size.0);
     }
 
     #[test]
