@@ -9,7 +9,9 @@ permissions:
   contents: read
 
 env:
-  R2_CACHE_PREFIX: windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/
+  R2_CACHE_PREFIXES: |
+    windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/
+    windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release/
   R2_CACHE_MAX_BYTES: 4294967296
 
 jobs:
@@ -19,11 +21,12 @@ jobs:
     if: vars.R2_SCCACHE_BUCKET != '' && vars.R2_ACCOUNT_ID != ''
 
     steps:
-      - name: Prune cache prefix to 4 GiB
+      - name: Prune cache prefixes to 4 GiB total
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
           R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
           R2_SCCACHE_BUCKET: ${{ vars.R2_SCCACHE_BUCKET }}
         run: |
@@ -35,19 +38,32 @@ jobs:
           fi
 
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          objects_json="$(mktemp)"
+          all_objects="$(mktemp)"
+          : > "${all_objects}"
 
-          aws s3api list-objects-v2 \
-            --endpoint-url "${endpoint}" \
-            --bucket "${R2_SCCACHE_BUCKET}" \
-            --prefix "${R2_CACHE_PREFIX}" \
-            --output json > "${objects_json}"
+          while IFS= read -r prefix; do
+            if [[ -z "${prefix}" ]]; then
+              continue
+            fi
 
-          total_bytes="$(jq '[.Contents[]?.Size] | add // 0' "${objects_json}")"
-          echo "Current R2 sccache bytes: ${total_bytes}"
+            objects_json="$(mktemp)"
+
+            aws s3api list-objects-v2 \
+              --endpoint-url "${endpoint}" \
+              --bucket "${R2_SCCACHE_BUCKET}" \
+              --prefix "${prefix}" \
+              --output json > "${objects_json}"
+
+            prefix_bytes="$(jq '[.Contents[]?.Size] | add // 0' "${objects_json}")"
+            echo "Current R2 sccache bytes for ${prefix}: ${prefix_bytes}"
+            jq -r '.Contents[]? | [.LastModified, .Size, .Key] | @tsv' "${objects_json}" >> "${all_objects}"
+          done <<< "${R2_CACHE_PREFIXES}"
+
+          total_bytes="$(awk -F '\t' '{ total += $2 } END { print total + 0 }' "${all_objects}")"
+          echo "Current combined R2 sccache bytes: ${total_bytes}"
 
           if (( total_bytes <= R2_CACHE_MAX_BYTES )); then
-            echo "R2 sccache prefix is within the 4 GiB budget."
+            echo "Combined R2 sccache prefixes are within the 4 GiB budget."
             exit 0
           fi
 
@@ -62,6 +78,6 @@ jobs:
               --bucket "${R2_SCCACHE_BUCKET}" \
               --key "${key}" >/dev/null
             total_bytes=$((total_bytes - size))
-          done < <(jq -r '.Contents[]? | [.LastModified, .Size, .Key] | @tsv' "${objects_json}" | sort)
+          done < <(sort "${all_objects}")
 
-          echo "Pruned R2 sccache bytes: ${total_bytes}"
+          echo "Pruned combined R2 sccache bytes: ${total_bytes}"

@@ -1,0 +1,89 @@
+name: Setup R2 sccache
+description: Enable Cloudflare R2-backed sccache when the GitHub target cache is not an exact hit.
+
+inputs:
+  cache-hit:
+    description: Exact GitHub target cache hit value from actions/cache/restore.
+    required: true
+  profile:
+    description: Cargo profile name used in the R2 cache prefix.
+    required: true
+  rust-version:
+    description: Rust toolchain version used in the R2 cache prefix.
+    required: true
+  target:
+    description: Rust target triple used in the R2 cache prefix.
+    required: true
+  r2-account-id:
+    description: Cloudflare account ID.
+    required: false
+  r2-bucket:
+    description: Cloudflare R2 bucket name.
+    required: false
+  r2-access-key-id:
+    description: R2 access key ID.
+    required: false
+  r2-secret-access-key:
+    description: R2 secret access key.
+    required: false
+
+outputs:
+  enabled:
+    description: Whether R2 sccache was enabled.
+    value: ${{ steps.configure.outputs.enabled }}
+  prefix:
+    description: R2 cache prefix used for sccache objects.
+    value: ${{ steps.configure.outputs.prefix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install sccache
+      if: inputs.cache-hit != 'true' && inputs.r2-bucket != '' && inputs.r2-account-id != ''
+      uses: mozilla-actions/sccache-action@v0.0.10
+
+    - name: Configure R2 sccache
+      id: configure
+      shell: pwsh
+      env:
+        R2_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        R2_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+      run: |
+        if ("${{ inputs.cache-hit }}" -eq "true") {
+          "GitHub target cache exact hit; skipping R2 sccache."
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        if ([string]::IsNullOrWhiteSpace("${{ inputs.r2-bucket }}") -or [string]::IsNullOrWhiteSpace("${{ inputs.r2-account-id }}")) {
+          "R2 repository variables are not configured; skipping R2 sccache."
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:R2_ACCESS_KEY_ID) -or [string]::IsNullOrWhiteSpace($env:R2_SECRET_ACCESS_KEY)) {
+          "R2 credentials are not configured; skipping R2 sccache."
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        $prefix = "windows-launchpad-rust/${{ inputs.target }}/rust-${{ inputs.rust-version }}/${{ inputs.profile }}/"
+        $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
+
+        "Using R2 sccache prefix after GitHub target cache miss: $prefix"
+        "CARGO_INCREMENTAL=0" >> $env:GITHUB_ENV
+        "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
+        "SCCACHE_BUCKET=${{ inputs.r2-bucket }}" >> $env:GITHUB_ENV
+        "SCCACHE_REGION=auto" >> $env:GITHUB_ENV
+        "SCCACHE_ENDPOINT=$endpoint" >> $env:GITHUB_ENV
+        "SCCACHE_S3_KEY_PREFIX=$prefix" >> $env:GITHUB_ENV
+        "SCCACHE_S3_USE_SSL=true" >> $env:GITHUB_ENV
+        "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> $env:GITHUB_ENV
+        "AWS_ACCESS_KEY_ID=$env:R2_ACCESS_KEY_ID" >> $env:GITHUB_ENV
+        "AWS_SECRET_ACCESS_KEY=$env:R2_SECRET_ACCESS_KEY" >> $env:GITHUB_ENV
+        "AWS_DEFAULT_REGION=auto" >> $env:GITHUB_ENV
+        "enabled=true" >> $env:GITHUB_OUTPUT
+        "prefix=$prefix" >> $env:GITHUB_OUTPUT

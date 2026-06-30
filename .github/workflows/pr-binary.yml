@@ -20,8 +20,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
   TARGET: x86_64-pc-windows-msvc
   BIN_NAME: launchpad-windows
+  TARGET_CACHE_PATH: target
 
 jobs:
   build:
@@ -39,18 +41,52 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ env.TARGET }}
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal --target $env:TARGET
+          rustup default $env:RUST_VERSION
 
-      - name: Cache Rust build outputs
+      - name: Restore GitHub target cache
+        id: target-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl', '.github/workflows/pr-binary.yml', '.github/actions/setup-r2-sccache/action.yml') }}
+          restore-keys: |
+            windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
+
+      - name: Enable R2 sccache on GitHub cache miss
+        id: r2-sccache
+        uses: ./.github/actions/setup-r2-sccache
+        with:
+          cache-hit: ${{ steps.target-cache.outputs.cache-hit }}
+          profile: release
+          rust-version: ${{ env.RUST_VERSION }}
+          target: ${{ env.TARGET }}
+          r2-account-id: ${{ vars.R2_ACCOUNT_ID }}
+          r2-bucket: ${{ vars.R2_SCCACHE_BUCKET }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Cache Cargo registry and git sources
         uses: Swatinem/rust-cache@v2
         with:
-          key: pr-binary-${{ env.TARGET }}
+          cache-targets: false
 
       - name: Build release binary
         shell: pwsh
         run: cargo build --release --locked --target $env:TARGET
+
+      - name: Show sccache stats
+        if: always() && steps.r2-sccache.outputs.enabled == 'true'
+        run: sccache --show-stats
+
+      - name: Save GitHub target cache
+        if: success() && steps.target-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
       - name: Package review artifact
         id: package

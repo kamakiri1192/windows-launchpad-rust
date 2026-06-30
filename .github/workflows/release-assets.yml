@@ -11,6 +11,12 @@ concurrency:
   group: release-assets-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+  TARGET: x86_64-pc-windows-msvc
+  TARGET_CACHE_PATH: target
+
 jobs:
   windows-binary:
     name: Build and attach Windows binary
@@ -22,14 +28,49 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install 1.89.0 --profile minimal
-          rustup default 1.89.0
+          rustup toolchain install $env:RUST_VERSION --profile minimal --target $env:TARGET
+          rustup default $env:RUST_VERSION
 
-      - name: Cache Cargo
+      - name: Restore GitHub target cache
+        id: target-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl', '.github/workflows/release-assets.yml', '.github/actions/setup-r2-sccache/action.yml') }}
+          restore-keys: |
+            windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
+
+      - name: Enable R2 sccache on GitHub cache miss
+        id: r2-sccache
+        uses: ./.github/actions/setup-r2-sccache
+        with:
+          cache-hit: ${{ steps.target-cache.outputs.cache-hit }}
+          profile: release
+          rust-version: ${{ env.RUST_VERSION }}
+          target: ${{ env.TARGET }}
+          r2-account-id: ${{ vars.R2_ACCOUNT_ID }}
+          r2-bucket: ${{ vars.R2_SCCACHE_BUCKET }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Cache Cargo registry and git sources
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target $env:TARGET
+
+      - name: Show sccache stats
+        if: always() && steps.r2-sccache.outputs.enabled == 'true'
+        run: sccache --show-stats
+
+      - name: Save GitHub target cache
+        if: success() && steps.target-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
       - name: Package binary
         id: package
@@ -39,7 +80,7 @@ jobs:
           $dist = "dist"
           $assetPath = "$dist/launchpad-windows-$tag-windows-x86_64.zip"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
-          Copy-Item "target\release\launchpad-windows.exe" "$dist\launchpad-windows.exe"
+          Copy-Item "target\$env:TARGET\release\launchpad-windows.exe" "$dist\launchpad-windows.exe"
           Compress-Archive -Path "$dist\launchpad-windows.exe" -DestinationPath $assetPath -Force
           Add-Content -Path $env:GITHUB_OUTPUT -Value "asset_path=$assetPath"
 
