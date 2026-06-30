@@ -15,7 +15,7 @@ GitHub Actions cache is useful for Cargo registry and git source caches, but it 
 
 ## Cache flow
 
-1. Restore `target/` from GitHub Actions cache using a key derived from the Rust version, target triple, source files, shaders, and CI workflow.
+1. Restore `target/` from GitHub Actions cache using a key derived from the Rust version, target triple, source files, and shaders.
 2. Enable R2 `sccache` when the repository variables and secrets are configured.
 3. If the GitHub key is an exact hit, Cargo should have little compiler work left, so R2 operations stay small.
 4. Run formatting, Clippy, tests, and build.
@@ -77,7 +77,7 @@ Also configure an R2 object lifecycle rule for the same prefix:
 - Prefix: `windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release/`
 - Action: expire objects after 7 days
 
-That lifecycle rule is intentionally short because GitHub Actions cache should handle repeated runs of the same PR commit. R2 is only the fallback for cold or changed builds.
+That lifecycle rule is intentionally short because GitHub Actions cache should handle repeated runs of the same PR commit. R2 is the shared compiler-output layer for cold, changed, or cross-workflow builds.
 
 You can set the rule from the Cloudflare dashboard under the bucket's Object Lifecycle Rules, or with Wrangler:
 
@@ -95,4 +95,4 @@ After a run, check the `sccache --show-stats` output. Useful numbers are:
 - compile requests
 - non-cacheable calls
 
-If the hit rate is low, check whether the Rust version, target, profile, or feature flags differ between the warm-up workflow and the PR workflow.
+If the hit rate is low, check whether the Rust version, target, profile, or feature flags differ between the workflows.
