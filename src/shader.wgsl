@@ -171,22 +171,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
         discard;
     }
-    if alpha <= 0.001 {
-        discard;
-    }
-    var a = alpha;
+    var frame_a = 1.0;
     if !dragged {
-        a = clip_to_frame(in.pos.xy, alpha);
+        frame_a = frame_alpha(in.pos.xy);
     }
-    if a <= 0.001 {
-        discard;
-    }
+    let body_a = alpha * frame_a;
     // Subtle top→bottom sheen for a touch of depth.
     let sheen = mix(1.08, 0.86, clamp(in.uv.y / in.size_r.x + 0.5, 0.0, 1.0));
     var col = in.color * sheen;
+    var a = body_a;
 
     // Edit-mode delete badge: a red circle with a white ✕ in the top-left
     // corner. Shown on every wiggling (editing) tile that isn't being dragged.
+    // The badge bypasses the squircle mask so the icon corner cannot cut it.
     if wiggling && !dragged {
         // Badge center sits at the tile's top-left corner. In local coords,
         // negative Y is the top edge because screen-space Y grows downward.
@@ -194,7 +191,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let badge_center = vec2<f32>(-half_size + badge_r, -half_size + badge_r);
         let bp = in.uv - badge_center;
         let bd = length(bp) - badge_r;
-        let badge_a = smoothstep(aa, -aa, bd);
+        let badge_a = smoothstep(aa, -aa, bd) * frame_a;
         if badge_a > 0.001 {
             // Two short crossing segments for the ✕, centered on the badge.
             let p = bp / (badge_r * 0.55);
@@ -211,15 +208,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
+    if a <= 0.001 {
+        discard;
+    }
+
     return vec4<f32>(col, a);
 }
 
-// Clip `alpha` against the fixed page frame's rounded rect. `frag` is the
-// fragment's physical-pixel position. Returns the (possibly zeroed) alpha.
-fn clip_to_frame(frag: vec2<f32>, alpha: f32) -> f32 {
+// Alpha against the fixed page frame's rounded rect. `frag` is the fragment's
+// physical-pixel position.
+fn frame_alpha(frag: vec2<f32>) -> f32 {
     let local = frag - u.frame_center;
     let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
     // 1px AA edge around the frame border.
     let faa = 1.0;
-    return min(alpha, smoothstep(faa, -faa, fd));
+    return smoothstep(faa, -faa, fd);
 }

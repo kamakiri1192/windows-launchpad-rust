@@ -166,20 +166,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
         frame_alpha = smoothstep(aa, -aa, fd);
     }
-    let a = mask * frame_alpha;
-    if a <= 0.001 {
-        discard;
-    }
+    let body_a = mask * frame_alpha;
 
     // Sample straight-alpha from the atlas, then premultiply for correct
     // blending (the pipeline uses PREMULTIPLIED_ALPHA_BLENDING over the tiles).
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
-    let out_a = sampled.a * a;
+    let out_a = sampled.a * body_a;
     var col = sampled.rgb * out_a;
 
     // Edit-mode delete badge: mirror the tile shader so icons with atlases also
     // show the same badge. Needs to live here because the icon pass draws after
-    // the tile pass and would otherwise cover the badge.
+    // the tile pass and would otherwise cover the badge. It bypasses the
+    // squircle mask so the icon corner cannot cut it.
     var final_a = out_a;
     if wiggling && !dragged {
         let badge_r = min(in.size_r.x * 0.13, 11.0);
@@ -187,7 +185,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let badge_center = vec2<f32>(-half_size + badge_r, -half_size + badge_r);
         let bp = in.local - badge_center;
         let bd = length(bp) - badge_r;
-        let badge_a = smoothstep(aa, -aa, bd);
+        let badge_a = smoothstep(aa, -aa, bd) * frame_alpha;
         if badge_a > 0.001 {
             let p = bp / (badge_r * 0.55);
             let seg = min(abs(p.x - p.y), abs(p.x + p.y));
@@ -196,6 +194,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             col = mix(col, vec3<f32>(1.0, 1.0, 1.0) * badge_a, cross_a * 0.9);
             final_a = max(final_a, badge_a);
         }
+    }
+    if final_a <= 0.001 {
+        discard;
     }
 
     return vec4<f32>(col, final_a);
