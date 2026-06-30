@@ -3,9 +3,9 @@
 The CI workflows use two cache layers:
 
 1. GitHub Actions cache stores each workflow's Rust `target/` directory for an exact source snapshot.
-2. Cloudflare R2-backed `sccache` is enabled only when the exact GitHub `target/` cache is not found.
+2. Cloudflare R2-backed `sccache` is enabled whenever R2 is configured.
 
-This keeps normal reruns on GitHub cache and uses R2 only for cold or changed builds. R2 is the shared layer that crosses PR checks, PR review binaries, and release builds.
+This keeps normal reruns fast with GitHub cache while still letting R2 collect compiler outputs from any compile work that remains. R2 is the shared layer that crosses PR checks, PR review binaries, and release builds.
 
 ## Why this exists
 
@@ -16,12 +16,14 @@ GitHub Actions cache is useful for Cargo registry and git source caches, but it 
 ## Cache flow
 
 1. Restore `target/` from GitHub Actions cache using a key derived from the Rust version, target triple, source files, shaders, and CI workflow.
-2. If that key is an exact hit, build normally without enabling R2.
-3. If the key is a miss or only a restore-key match, enable R2 `sccache`.
+2. Enable R2 `sccache` when the repository variables and secrets are configured.
+3. If the GitHub key is an exact hit, Cargo should have little compiler work left, so R2 operations stay small.
 4. Run formatting, Clippy, tests, and build.
 5. On success, save the current `target/` directory back to GitHub Actions cache under the exact source key.
 
-The second run of the same source snapshot should hit the workflow's GitHub target cache and avoid R2 operations.
+R2 uploads happen during Cargo commands, not in a separate upload step. When `RUSTC_WRAPPER=sccache` is active, `sccache` reads and writes compiler outputs while `cargo clippy`, `cargo test`, or `cargo build` invokes `rustc`.
+
+The second run of the same source snapshot should hit the workflow's GitHub target cache. R2 still stays enabled, but it only reads or writes for compiler work that Cargo actually performs.
 
 ## R2 cache layout
 

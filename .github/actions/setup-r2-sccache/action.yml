@@ -1,10 +1,11 @@
 name: Setup R2 sccache
-description: Enable Cloudflare R2-backed sccache when the GitHub target cache is not an exact hit.
+description: Enable Cloudflare R2-backed sccache when R2 is configured.
 
 inputs:
   cache-hit:
-    description: Exact GitHub target cache hit value from actions/cache/restore.
-    required: true
+    description: Exact GitHub target cache hit value from actions/cache/restore. Logged for context only.
+    required: false
+    default: ""
   profile:
     description: Cargo profile name used in the R2 cache prefix.
     required: true
@@ -39,7 +40,7 @@ runs:
   using: composite
   steps:
     - name: Install sccache
-      if: inputs.cache-hit != 'true' && inputs.r2-bucket != '' && inputs.r2-account-id != ''
+      if: inputs.r2-bucket != '' && inputs.r2-account-id != ''
       uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Configure R2 sccache
@@ -49,13 +50,6 @@ runs:
         R2_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
         R2_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
       run: |
-        if ("${{ inputs.cache-hit }}" -eq "true") {
-          "GitHub target cache exact hit; skipping R2 sccache."
-          "enabled=false" >> $env:GITHUB_OUTPUT
-          "prefix=" >> $env:GITHUB_OUTPUT
-          exit 0
-        }
-
         if ([string]::IsNullOrWhiteSpace("${{ inputs.r2-bucket }}") -or [string]::IsNullOrWhiteSpace("${{ inputs.r2-account-id }}")) {
           "R2 repository variables are not configured; skipping R2 sccache."
           "enabled=false" >> $env:GITHUB_OUTPUT
@@ -72,6 +66,10 @@ runs:
 
         $prefix = "windows-launchpad-rust/${{ inputs.target }}/rust-${{ inputs.rust-version }}/${{ inputs.profile }}/"
         $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
+
+        if ("${{ inputs.cache-hit }}" -eq "true") {
+          "GitHub target cache exact hit; still enabling R2 sccache for any compiler work that remains."
+        }
 
         $env:CARGO_INCREMENTAL = "0"
         $env:RUSTC_WRAPPER = "sccache"
@@ -94,7 +92,7 @@ runs:
           exit 0
         }
 
-        "Using R2 sccache prefix after GitHub target cache miss: $prefix"
+        "Using R2 sccache prefix: $prefix"
         "CARGO_INCREMENTAL=0" >> $env:GITHUB_ENV
         "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
         "SCCACHE_BUCKET=${{ inputs.r2-bucket }}" >> $env:GITHUB_ENV

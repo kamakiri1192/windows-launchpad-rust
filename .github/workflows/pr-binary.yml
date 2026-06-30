@@ -55,7 +55,7 @@ jobs:
           restore-keys: |
             windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
 
-      - name: Enable R2 sccache on GitHub cache miss
+      - name: Enable R2 sccache
         id: r2-sccache
         uses: ./.github/actions/setup-r2-sccache
         with:
