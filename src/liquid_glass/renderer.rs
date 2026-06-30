@@ -106,6 +106,7 @@ pub struct LiquidGlassRenderer {
     badge_shape_buffer: wgpu::Buffer,
     badge_shape_count: u32,
     badge_shapes: Vec<GlassShape>,
+    control_shape_buffer: wgpu::Buffer,
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
@@ -138,6 +139,7 @@ pub struct LiquidGlassRenderer {
     blur_up_bind_groups: [wgpu::BindGroup; 3],
     final_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
+    control_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
     last_capture_at: Option<Instant>,
     last_geometry_key: Option<GeometryKey>,
@@ -181,6 +183,7 @@ impl LiquidGlassRenderer {
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
         let badge_shape_buffer = create_shape_buffer(device, &[]);
+        let control_shape_buffer = create_shape_buffer(device, &[]);
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
@@ -255,6 +258,12 @@ impl LiquidGlassRenderer {
             &geometry_bind_group_layout,
             &uniform_buffer,
             &badge_shape_buffer,
+        );
+        let control_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &uniform_buffer,
+            &control_shape_buffer,
         );
         let final_bind_group = create_final_bind_group(
             device,
@@ -412,6 +421,7 @@ impl LiquidGlassRenderer {
             badge_shape_buffer,
             badge_shape_count,
             badge_shapes: Vec::new(),
+            control_shape_buffer,
             base_shapes: Vec::new(),
             control_shape: None,
             geometry_texture,
@@ -436,6 +446,7 @@ impl LiquidGlassRenderer {
             blur_up_bind_groups,
             final_bind_group,
             badge_geometry_bind_group,
+            control_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
             last_capture_at: None,
             last_geometry_key: None,
@@ -536,11 +547,21 @@ impl LiquidGlassRenderer {
 
     /// Replace just the bottom-control capsule shape. Pass `None` to hide the
     /// control entirely.
-    pub fn set_control_shape(&mut self, _device: &wgpu::Device, shape: Option<GlassShape>) {
+    pub fn set_control_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
         if self.control_shape == shape {
             return;
         }
         self.control_shape = shape;
+
+        let shapes = shape.map(|shape| [shape]);
+        let shape_slice = shapes.as_ref().map_or(&[][..], |shapes| shapes.as_slice());
+        self.control_shape_buffer = create_shape_buffer(device, shape_slice);
+        self.control_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &self.geometry_bind_group_layout,
+            &self.uniform_buffer,
+            &self.control_shape_buffer,
+        );
     }
 
     /// Replace the edit-mode delete-badge glass shapes. These are rendered as
@@ -928,7 +949,6 @@ impl LiquidGlassRenderer {
 
     pub fn render_control(
         &mut self,
-        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
@@ -936,17 +956,9 @@ impl LiquidGlassRenderer {
         if !self.params.enabled {
             return;
         }
-        let Some(shape) = self.control_shape else {
+        if self.control_shape.is_none() {
             return;
-        };
-
-        let shape_buffer = create_shape_buffer(device, &[shape]);
-        let bind_group = create_geometry_bind_group(
-            device,
-            &self.geometry_bind_group_layout,
-            &self.uniform_buffer,
-            &shape_buffer,
-        );
+        }
 
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
@@ -970,7 +982,7 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &self.control_geometry_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
