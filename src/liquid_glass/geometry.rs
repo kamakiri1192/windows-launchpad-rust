@@ -21,9 +21,12 @@ pub struct GlassShape {
 /// - 2 = fixed rounded rectangle that lives *outside* the frame clip (the
 ///   bottom-center control capsule). Rendered as glass but never clipped to
 ///   the frame.
+/// - 3 = fixed rounded rectangle used only as a clip mask. It is not rendered
+///   as glass.
 const SHAPE_SCROLLING: u32 = 0;
 const SHAPE_FIXED: u32 = 1;
 const SHAPE_CONTROL: u32 = 2;
+const SHAPE_CLIP_ONLY: u32 = 3;
 
 impl GlassShape {
     pub fn rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
@@ -41,6 +44,13 @@ impl GlassShape {
     /// sits below the frame.
     pub fn control_rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
         Self::with_kind(center, size, radius, SHAPE_CONTROL)
+    }
+
+    /// A fixed rounded rectangle that clips scrolling shapes but is not part
+    /// of the rendered glass union. Used by overlay passes that need the page
+    /// frame as a mask without redrawing the frame itself.
+    pub fn clip_rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
+        Self::with_kind(center, size, radius, SHAPE_CLIP_ONLY)
     }
 
     fn with_kind(center: [f32; 2], size: [f32; 2], radius: f32, shape_type: u32) -> Self {

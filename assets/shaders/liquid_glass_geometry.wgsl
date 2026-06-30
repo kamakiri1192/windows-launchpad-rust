@@ -67,6 +67,9 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
     let count = min(u.shape_count, arrayLength(&shapes));
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
+        if shape.shape_type == 3u {
+            continue;
+        }
         // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
         // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
         let cx = select(shape.center.x + u.scroll_x, shape.center.x, shape.shape_type != 0u);
@@ -86,7 +89,7 @@ fn frame_sdf(pixel: vec2<f32>) -> f32 {
     var d = 1.0e6;
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
-        if shape.shape_type == 1u {
+        if shape.shape_type == 1u || shape.shape_type == 3u {
             let local = pixel - shape.center;
             d = sdf_rrect(local, shape.size * 0.5, shape.radius);
             return d;
