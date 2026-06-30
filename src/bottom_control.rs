@@ -590,6 +590,12 @@ const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
 const DOT_ACTIVE: [f32; 4] = [1.0, 1.0, 1.0, 0.96];
 /// Inactive indicator dot color.
 const DOT_IDLE: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
+/// Fallback measured width for the compact pill label "検索", in physical px
+/// at the default control scale. Used only before the text renderer is ready.
+pub const SEARCH_PILL_LABEL_FALLBACK_WIDTH: f32 = 28.0;
+
+const SEARCH_PILL_MAG_SIZE: f32 = 11.0;
+const SEARCH_PILL_CONTENT_GAP: f32 = 6.0;
 
 /// Build the procedural overlay instances for one frame of the control. The
 /// text glyphs are laid out separately by the caller (via the text renderer);
@@ -601,6 +607,7 @@ const DOT_IDLE: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
 pub fn build_overlay_instances(
     geom: &ControlGeometry,
     layers: &[ControlLayer],
+    pill_label_width: f32,
     query_width: f32,
     caret_blink: f32,
 ) -> Vec<ControlInstance> {
@@ -618,8 +625,8 @@ pub fn build_overlay_instances(
             Visual::SearchPill => {
                 // Compact pill: magnifier on the left, "検索" label to its right.
                 // The label text is drawn separately; here only the magnifier.
-                let mag_size = 11.0 * scale;
-                let mag_cx = cx - hw + mag_size + 8.0 * scale;
+                let mag_size = SEARCH_PILL_MAG_SIZE * scale;
+                let mag_cx = search_pill_magnifier_x(geom, pill_label_width);
                 out.push(ControlInstance {
                     center: [mag_cx, cy],
                     params: [mag_size, a, 0.0, 0.0],
@@ -692,6 +699,26 @@ pub fn field_text_origin_x(geom: &ControlGeometry) -> f32 {
     let mag_size = 11.0 * scale;
     let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 10.0 * scale;
     mag_cx + mag_size + 6.0 * scale
+}
+
+/// Center X for the compact search pill magnifier. The compact pill content is
+/// centered as a group: magnifier width + gap + measured label width.
+pub fn search_pill_magnifier_x(geom: &ControlGeometry, label_width: f32) -> f32 {
+    let scale = control_scale(geom);
+    let mag_size = SEARCH_PILL_MAG_SIZE * scale;
+    let gap = SEARCH_PILL_CONTENT_GAP * scale;
+    let label_width = label_width.max(0.0);
+    let content_width = mag_size * 2.0 + gap + label_width;
+    geom.center.0 - content_width * 0.5 + mag_size
+}
+
+/// Center X for the compact search pill label, paired with
+/// [`search_pill_magnifier_x`].
+pub fn search_pill_label_center_x(geom: &ControlGeometry, label_width: f32) -> f32 {
+    let scale = control_scale(geom);
+    let mag_size = SEARCH_PILL_MAG_SIZE * scale;
+    let gap = SEARCH_PILL_CONTENT_GAP * scale;
+    search_pill_magnifier_x(geom, label_width) + mag_size + gap + label_width.max(0.0) * 0.5
 }
 
 /// Build the Liquid Glass capsule shape for the control this frame, ready to
@@ -974,6 +1001,25 @@ mod tests {
         assert!((g.half_size.1 - CAPSULE_HEIGHT * 0.5).abs() < 1e-3);
         // Default pill shows one SearchPill layer.
         assert!(layers.iter().any(|l| l.visual == Visual::SearchPill));
+    }
+
+    #[test]
+    fn search_pill_content_group_is_centered() {
+        let c = bc();
+        let (g, _) = c.resolve((1280, 800), 600.0, 0, 3);
+        let label_width = 29.0;
+        let scale = control_scale(&g);
+        let mag_size = SEARCH_PILL_MAG_SIZE * scale;
+        let gap = SEARCH_PILL_CONTENT_GAP * scale;
+
+        let mag_cx = search_pill_magnifier_x(&g, label_width);
+        let label_cx = search_pill_label_center_x(&g, label_width);
+        let left = mag_cx - mag_size;
+        let right = label_cx + label_width * 0.5;
+        let total_width = mag_size * 2.0 + gap + label_width;
+
+        assert!((right - left - total_width).abs() < 1e-3);
+        assert!((((left + right) * 0.5) - g.center.0).abs() < 1e-3);
     }
 
     #[test]

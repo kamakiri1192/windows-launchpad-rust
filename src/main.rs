@@ -369,6 +369,7 @@ impl App {
         // as drawing), so the caret and IME anchor line up with the glyphs
         // regardless of ASCII/CJK widths. Cached for the frame so
         // `measure_query_width` can read it back under `&self`.
+        let mut pill_label_width = bottom_control::SEARCH_PILL_LABEL_FALLBACK_WIDTH * scale;
         if let Some(m) = self.text.as_mut() {
             self.cached_query_width = {
                 let mut measure = |s: &str| -> f32 {
@@ -390,6 +391,7 @@ impl App {
                 // plus the in-flight IME preedit. Without the preedit width,
                 // the caret stays put while the user types Japanese.
                 let w = measure(&self.control.query) + measure(&self.control.preedit);
+                pill_label_width = measure("検索");
                 Some(w)
             };
         }
@@ -401,14 +403,28 @@ impl App {
         let instances = if self.editing {
             Vec::new()
         } else {
-            bottom_control::build_overlay_instances(&geom, &layers, query_width, caret_blink)
+            bottom_control::build_overlay_instances(
+                &geom,
+                &layers,
+                pill_label_width,
+                query_width,
+                caret_blink,
+            )
         };
 
         // 2) Text glyphs (label / query / placeholder). Built via the shared
         // text renderer so they share the glyph atlas. Done before touching the
         // renderer so the atlas upload + dirty clear happen in one place.
         let (quads, atlas_dirty) = if let Some(t) = self.text.as_mut() {
-            let q = self_layout_control_text(t, &geom, &layers, scale, &self.control, self.editing);
+            let q = self_layout_control_text(
+                t,
+                &geom,
+                &layers,
+                scale,
+                &self.control,
+                self.editing,
+                pill_label_width,
+            );
             (q, t.atlas_dirty)
         } else {
             (Vec::new(), false)
@@ -2444,6 +2460,7 @@ fn self_layout_control_text(
     scale: f32,
     control: &bottom_control::BottomControl,
     editing: bool,
+    pill_label_width: f32,
 ) -> Vec<text::GlyphQuad> {
     let mut quads = Vec::new();
     const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
@@ -2476,9 +2493,8 @@ fn self_layout_control_text(
         match layer.visual {
             bottom_control::Visual::SearchPill => {
                 // "検索" label to the right of the magnifier.
-                let mag_size = 11.0 * scale;
-                let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 8.0 * scale;
-                let label_center_x = mag_cx + mag_size + 6.0 * scale + 14.0 * scale;
+                let label_center_x =
+                    bottom_control::search_pill_label_center_x(geom, pill_label_width);
                 let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                     text: "検索",
                     font_size: QUERY_LABEL_SIZE,
@@ -2502,7 +2518,7 @@ fn self_layout_control_text(
                         line_height: QUERY_LABEL_LINE,
                         family: QUERY_LABEL_FONT,
                         color: mul_alpha(PLACEHOLDER, a),
-                        center: (origin_x + 14.0 * scale, geom.center.1),
+                        center: (origin_x + pill_label_width * 0.5, geom.center.1),
                         scale_factor: scale,
                     });
                     quads.append(&mut q);
