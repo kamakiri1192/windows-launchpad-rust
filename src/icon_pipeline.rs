@@ -6,8 +6,12 @@
 //! UV rect into the shared icon atlas. The fragment shader samples the atlas
 //! and masks it to the rounded squircle shape.
 
-/// One drawable icon instance, matching the WGSL `@location(0..1)` instance
-/// attributes. 32 bytes for clean GPU alignment.
+/// One drawable icon instance, matching the WGSL `@location(0..2)` instance
+/// attributes. 48 bytes for clean GPU alignment.
+///
+/// `extra` carries the edit-mode animation parameters (mirroring `TileInstance`):
+/// `(phase, lift, scale, flags)` where flags bit 0 = wiggling and bit 1 = being
+/// dragged (lifted + pointer-following, frame clip bypassed).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IconInstance {
@@ -21,12 +25,14 @@ pub struct IconInstance {
     pub v0: f32,
     pub u1: f32,
     pub v1: f32,
+    /// Edit-mode animation: `(phase, lift, scale, flags)`.
+    pub extra: [f32; 4],
 }
 
 impl IconInstance {
     /// Vertex attributes describing this struct for `wgpu::VertexBufferLayout`.
-    pub const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+    pub const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<IconInstance>() as wgpu::BufferAddress,

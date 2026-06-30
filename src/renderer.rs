@@ -24,6 +24,7 @@ use crate::bottom_control::ControlInstance;
 use crate::grid::{GridLayout, TileInstance};
 use crate::icon_pipeline::IconInstance;
 use crate::liquid_glass::capture::FallbackCapture;
+use crate::liquid_glass::geometry::GlassShape;
 use crate::liquid_glass::LiquidGlassRenderer;
 use crate::text::GlyphQuad;
 use crate::UserEvent;
@@ -34,14 +35,20 @@ use crate::UserEvent;
 struct Uniforms {
     viewport: [f32; 2],
     scroll_x: f32,
-    _pad: f32,
+    /// Global animation clock (seconds). Drives the edit-mode wiggle.
+    time: f32,
     /// Fixed page-frame center in physical px.
     frame_center: [f32; 2],
     /// Fixed page-frame half-size in physical px.
     frame_half_size: [f32; 2],
     /// Fixed page-frame corner radius in physical px.
     frame_radius: f32,
-    frame_pad: f32,
+    /// 1.0 while an edit-mode drag is in flight, else 0.0. Tells the dragged
+    /// instance's vertex shader to follow `drag_pos` instead of its home cell.
+    drag_active: f32,
+    /// Pointer position (screen px) the dragged icon follows. Only meaningful
+    /// while `drag_active` is 1.0.
+    drag_pos: [f32; 2],
 }
 
 /// Viewport-only uniform for the bottom-control overlay + text shaders. They
@@ -51,6 +58,8 @@ struct Uniforms {
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ControlUniforms {
     viewport: [f32; 2],
+    scroll_x: f32,
+    _pad: f32,
 }
 
 pub struct Renderer {
@@ -88,6 +97,7 @@ pub struct Renderer {
     icon_pipeline: RenderPipeline,
     icon_instance_buffer: Option<Buffer>,
     icon_instance_count: u32,
+    dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
 
@@ -106,6 +116,9 @@ pub struct Renderer {
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: Option<Buffer>,
     control_instance_count: u32,
+    badge_sources: Vec<EditBadgeSource>,
+    badge_instance_buffer: Option<Buffer>,
+    badge_instance_count: u32,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: Option<Buffer>,
@@ -116,6 +129,13 @@ pub struct DrawArgs {
     pub scroll_x: f32,
     pub viewport: (u32, u32),
     pub defer_backdrop_capture: bool,
+    /// Global animation clock in seconds, fed to the shaders for the edit-mode
+    /// wiggle. Caller accumulates this from the redraw cadence.
+    pub time: f32,
+    /// 1.0 while an edit-mode drag is in flight, else 0.0.
+    pub drag_active: f32,
+    /// Pointer position (screen px) the dragged icon follows while dragging.
+    pub drag_pos: (f32, f32),
 }
 
 impl Renderer {
@@ -279,7 +299,7 @@ impl Renderer {
 
         // Instance buffer: written once. Empty app list here — `rebuild_instances`
         // (called from App::relayout after icons load) supplies the real one.
-        let instances = layout.build_instances(config.width as f32, &[]);
+        let instances = layout.build_instances(config.width as f32, &[], &[]);
         let instance_count = instances.len() as u32;
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instance buffer"),
@@ -295,11 +315,12 @@ impl Renderer {
             bytemuck::bytes_of(&Uniforms {
                 viewport: [size.width as f32, size.height as f32],
                 scroll_x: 0.0,
-                _pad: 0.0,
+                time: 0.0,
                 frame_center: [frame.0, frame.1],
                 frame_half_size: [frame.2, frame.3],
                 frame_radius: frame.4,
-                frame_pad: 0.0,
+                drag_active: 0.0,
+                drag_pos: [0.0, 0.0],
             }),
         );
 
@@ -690,6 +711,7 @@ impl Renderer {
             icon_pipeline,
             icon_instance_buffer: None,
             icon_instance_count: 0,
+            dragged_icon_instance: false,
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
@@ -698,6 +720,9 @@ impl Renderer {
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: None,
             control_instance_count: 0,
+            badge_sources: Vec::new(),
+            badge_instance_buffer: None,
+            badge_instance_count: 0,
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: None,
@@ -733,8 +758,13 @@ impl Renderer {
     ///
     /// Call after a resize (or any change to tile data) so the GPU sees the
     /// new tile positions. The buffer is reallocated to fit.
-    pub fn rebuild_instances(&mut self, layout: &GridLayout, apps: &[crate::grid::GridApp<'_>]) {
-        let instances = layout.build_instances(self.config.width as f32, apps);
+    pub fn rebuild_instances(
+        &mut self,
+        layout: &GridLayout,
+        apps: &[crate::grid::GridApp<'_>],
+        anim: &[crate::grid::TileAnim],
+    ) {
+        let instances = layout.build_instances(self.config.width as f32, apps, anim);
         self.instance_count = instances.len() as u32;
         self.instance_buffer = self
             .device
@@ -746,6 +776,22 @@ impl Renderer {
         self.liquid_glass
             .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
         self.frame_clip = frame_clip(layout, self.config.width);
+    }
+
+    /// Push a caller-built tile instance list to the GPU, reallocating the
+    /// buffer to fit. Used by the reorder animation, which overrides the tile
+    /// positions with per-tile spring offsets before uploading.
+    pub fn set_tile_instances(&mut self, instances: &[crate::grid::TileInstance]) {
+        self.instance_count = instances.len() as u32;
+        self.instance_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("instance buffer"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
+        self.badge_sources = edit_badge_sources(instances);
+        self.update_edit_badges(0.0);
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -938,6 +984,10 @@ impl Renderer {
     /// Replace the per-icon instance buffer (one entry per tile with an icon).
     pub fn set_icon_instances(&mut self, instances: &[IconInstance]) {
         self.icon_instance_count = instances.len() as u32;
+        self.dragged_icon_instance = instances
+            .last()
+            .map(|i| (i.extra[3] as u32 & 2) != 0)
+            .unwrap_or(false);
         if instances.is_empty() {
             self.icon_instance_buffer = None;
             return;
@@ -1005,11 +1055,12 @@ impl Renderer {
             bytemuck::bytes_of(&Uniforms {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
                 scroll_x: args.scroll_x,
-                _pad: 0.0,
+                time: args.time,
                 frame_center: [frame.0, frame.1],
                 frame_half_size: [frame.2, frame.3],
                 frame_radius: frame.4,
-                frame_pad: 0.0,
+                drag_active: args.drag_active,
+                drag_pos: [args.drag_pos.0, args.drag_pos.1],
             }),
         );
 
@@ -1069,6 +1120,19 @@ impl Renderer {
             args.defer_backdrop_capture,
         );
 
+        let drag_active = args.drag_active > 0.5 && self.instance_count > 0;
+        let normal_tile_count = if drag_active {
+            self.instance_count - 1
+        } else {
+            self.instance_count
+        };
+        let drag_icon_active = self.dragged_icon_instance && self.icon_instance_count > 0;
+        let normal_icon_count = if drag_icon_active {
+            self.icon_instance_count - 1
+        } else {
+            self.icon_instance_count
+        };
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tile pass"),
@@ -1086,26 +1150,26 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Color tiles. Skip entirely when there are no instances: an empty
-            // vertex buffer has no valid slice, and `draw` with zero instances
-            // is a no-op anyway.
-            if self.instance_count > 0 {
+
+            // Normal color tiles. The dragged tile, if any, is withheld and
+            // drawn again after badges so its lifted visual unit stays above
+            // every non-dragged edit badge.
+            if normal_tile_count > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
                 // 6 verts per quad (two tris), instance_count quads.
-                pass.draw(0..6, 0..self.instance_count);
+                pass.draw(0..6, 0..normal_tile_count);
             }
 
-            // Icons: drawn over the color tiles before the labels. Samples the
-            // icon atlas through the shared (uniform + texture + sampler) bind
-            // group. Tiles without an icon simply aren't in this buffer.
-            if self.icon_instance_count > 0 {
+            // Normal icons: drawn over the color tiles before labels. The
+            // dragged icon, if any, is withheld until after text.
+            if normal_icon_count > 0 {
                 if let Some(buf) = self.icon_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.icon_pipeline);
                     pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.icon_instance_count);
+                    pass.draw(0..6, 0..normal_icon_count);
                 }
             }
 
@@ -1121,16 +1185,87 @@ impl Renderer {
             }
         }
 
-        // Bottom-control overlays: drawn last so they sit above everything.
-        // Update the viewport-only control uniform, then run the procedural
-        // shape pass and the text pass.
+        // Edit badges sit above the normal grid but below the lifted dragged
+        // icon. The bottom control remains a later, screen-fixed overlay.
+        self.update_edit_badges(args.time);
         self.queue.write_buffer(
             &self.control_uniform_buffer,
             0,
             bytemuck::bytes_of(&ControlUniforms {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
+                scroll_x: args.scroll_x,
+                _pad: 0.0,
             }),
         );
+        self.liquid_glass
+            .render_badges(&self.queue, &mut encoder, &view, args.scroll_x);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("edit badge foreground pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if self.badge_instance_count > 0 {
+                if let Some(buf) = self.badge_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.badge_instance_count);
+                }
+            }
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("drag overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            if drag_active {
+                let stride =
+                    std::mem::size_of::<crate::grid::TileInstance>() as wgpu::BufferAddress;
+                let offset = stride * normal_tile_count as wgpu::BufferAddress;
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..));
+                pass.draw(0..6, 0..1);
+            }
+            if drag_icon_active {
+                if let Some(buf) = self.icon_instance_buffer.as_ref() {
+                    let stride = std::mem::size_of::<crate::icon_pipeline::IconInstance>()
+                        as wgpu::BufferAddress;
+                    let offset = stride * normal_icon_count as wgpu::BufferAddress;
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(offset..));
+                    pass.draw(0..6, 0..1);
+                }
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),
@@ -1191,6 +1326,91 @@ fn default_backends() -> Backends {
     {
         Backends::DX12 | Backends::VULKAN
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EditBadgeSource {
+    base_center: [f32; 2],
+    tile_center: [f32; 2],
+    radius: f32,
+    phase: f32,
+}
+
+impl Renderer {
+    fn update_edit_badges(&mut self, time: f32) {
+        const KIND_BADGE_CLOSE: f32 = 4.0;
+
+        let mut shapes = Vec::with_capacity(self.badge_sources.len());
+        let mut marks = Vec::with_capacity(self.badge_sources.len());
+        for source in &self.badge_sources {
+            let center = animated_badge_center(*source, time);
+            shapes.push(GlassShape::rounded_rect(
+                center,
+                [source.radius * 2.15, source.radius * 2.15],
+                source.radius,
+            ));
+            marks.push(ControlInstance {
+                center,
+                params: [source.radius, 0.92, (source.radius * 0.13).max(1.4), 0.0],
+                color: [1.0, 1.0, 1.0, 0.92],
+                kind: [KIND_BADGE_CLOSE, 0.0, 0.0, 0.0],
+            });
+        }
+
+        self.liquid_glass.set_badge_shapes(&self.device, &shapes);
+        self.badge_instance_count = marks.len() as u32;
+        self.badge_instance_buffer = if marks.is_empty() {
+            None
+        } else {
+            Some(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("badge foreground instance buffer"),
+                        contents: bytemuck::cast_slice(&marks),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    }),
+            )
+        };
+    }
+}
+
+fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
+    const FLAG_WIGGLE: u32 = crate::grid::TileAnim::FLAG_WIGGLE;
+    const FLAG_DRAG: u32 = crate::grid::TileAnim::FLAG_DRAG;
+
+    let mut sources = Vec::new();
+    for tile in instances {
+        let flags = tile.extra[3] as u32;
+        if flags & FLAG_WIGGLE == 0 || flags & FLAG_DRAG != 0 {
+            continue;
+        }
+
+        let radius = (tile.size * 0.16).clamp(9.0, 13.5);
+        let center = [tile.x + radius * 0.95, tile.y + radius * 0.95];
+        sources.push(EditBadgeSource {
+            base_center: center,
+            tile_center: [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5],
+            radius,
+            phase: tile.extra[0],
+        });
+    }
+
+    sources
+}
+
+fn animated_badge_center(source: EditBadgeSource, time: f32) -> [f32; 2] {
+    let t = time + source.phase;
+    let rot = (t * 8.0).sin() * 0.06;
+    let dy = (t * 8.0).sin().abs() * 2.0;
+    let rel_x = source.base_center[0] - source.tile_center[0];
+    let rel_y = source.base_center[1] - source.tile_center[1];
+    let cosr = rot.cos();
+    let sinr = rot.sin();
+
+    [
+        source.tile_center[0] + rel_x * cosr - rel_y * sinr,
+        source.tile_center[1] + rel_x * sinr + rel_y * cosr - dy,
+    ]
 }
 
 /// Frame clip geometry for the tile/icon/text shaders: `(cx, cy, hw, hh, r)`

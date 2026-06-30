@@ -14,6 +14,8 @@
 
 struct Uniforms {
     viewport: vec2<f32>,
+    scroll_x: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -62,7 +64,11 @@ fn vs_main(
     // radius.
     let extent = element_extent(kind.x, params.x);
 
-    let world = vec2<f32>(center.x + c.x * extent, center.y - c.y * extent);
+    var element_center = center;
+    if kind.x > 3.5 {
+        element_center.x = element_center.x + u.scroll_x;
+    }
+    let world = vec2<f32>(element_center.x + c.x * extent, element_center.y - c.y * extent);
     let local = vec2<f32>(c.x * extent, -c.y * extent);
 
     let half_vp = u.viewport * 0.5;
@@ -144,7 +150,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let q = abs(p) - vec2<f32>(w, h);
         let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0);
         coverage = 1.0 - smoothstep(-1.0, 1.0, d);
-    } else {
+    } else if kind < 3.5 {
         // Close button: an × made of two crossed segments, each centered at
         // the origin. sd_segment measures distance to [0, b], so we shift p by
         // +b/2 to center the segment on the origin.
@@ -156,6 +162,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p + b1, 2.0 * b1, w);
         let d2 = sd_segment(p + b2, 2.0 * b2, w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
+    } else {
+        // Edit badge: the glass disk is rendered by Liquid Glass; this pass
+        // only paints the iOS-style close glyph.
+        let r = in.params.x;
+        let w = max(in.params.z, 1.0);
+        let len = r * 0.50;
+        let b1 = vec2<f32>(len, len);
+        let b2 = vec2<f32>(-len, len);
+        let d1 = sd_segment(p + b1, 2.0 * b1, w);
+        let d2 = sd_segment(p + b2, 2.0 * b2, w);
+        let close = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
+        let ring_d = abs(sd_circle(p, r * 0.82)) - max(w * 0.45, 0.7);
+        let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.28;
+        coverage = max(close, ring);
     }
 
     let a = coverage * alpha;

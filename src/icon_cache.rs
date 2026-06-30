@@ -284,6 +284,60 @@ impl IconCache {
         tx.commit()
     }
 
+    /// Read the user-customized app display order (drag-to-reorder result).
+    /// Returns an empty vec when no order has been stored yet (or the blob is
+    /// unreadable), which makes the registry fall back to name sort.
+    pub fn get_app_order(&self) -> Vec<AppId> {
+        self.kv_get(APP_ORDER_KEY)
+            .map(|b| deserialize_app_ids(&b))
+            .unwrap_or_default()
+    }
+
+    /// Persist the current user display order. Called after a drag-to-reorder
+    /// completes (and on hide) so the layout survives across launches. Cheap
+    /// (one small blob upsert under the existing WAL connection).
+    pub fn put_app_order(&self, ids: &[AppId]) -> rusqlite::Result<()> {
+        let bytes = serialize_app_ids(ids);
+        self.kv_put(APP_ORDER_KEY, &bytes)
+    }
+
+    /// Read the list of apps the user hid via the edit-mode ✕ badge. Empty when
+    /// nothing has been hidden.
+    pub fn get_hidden_ids(&self) -> Vec<AppId> {
+        self.kv_get(HIDDEN_KEY)
+            .map(|b| deserialize_app_ids(&b))
+            .unwrap_or_default()
+    }
+
+    /// Persist the current hidden-app list.
+    pub fn put_hidden_ids(&self, ids: &[AppId]) -> rusqlite::Result<()> {
+        let bytes = serialize_app_ids(ids);
+        self.kv_put(HIDDEN_KEY, &bytes)
+    }
+
+    /// Generic single-blob read from the `kv` table. Returns `None` when the key
+    /// is absent or the row can't be decoded.
+    fn kv_get(&self, key: &str) -> Option<Vec<u8>> {
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        conn.query_row("SELECT value FROM kv WHERE key = ?1", params![key], |r| {
+            r.get::<_, Vec<u8>>(0)
+        })
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// Generic single-blob upsert into the `kv` table.
+    fn kv_put(&self, key: &str, value: &[u8]) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        conn.execute(
+            "INSERT INTO kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     /// Total cached icon count (for startup logging).
     pub fn count(&self) -> usize {
         let conn = self.conn.lock().expect("cache mutex poisoned");
@@ -318,6 +372,62 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// `kv` key under which the user-customized app display order is stored.
+const APP_ORDER_KEY: &str = "app_order";
+/// `kv` key under which the user-hidden app ids are stored.
+const HIDDEN_KEY: &str = "hidden_ids";
+
+/// Serialize a slice of `AppId`s into a compact blob: `count:u32` followed by,
+/// for each id, `len:u32` + the normalized string bytes (little-endian). This
+/// avoids a serde dependency and keeps the format self-describing so future
+/// additions can be detected by length checks.
+fn serialize_app_ids(ids: &[AppId]) -> Vec<u8> {
+    let total: usize = ids.iter().map(|id| id.as_ref().len()).sum();
+    let mut out = Vec::with_capacity(4 + ids.len() * 4 + total);
+    out.extend_from_slice(&(ids.len() as u32).to_le_bytes());
+    for id in ids {
+        let s = id.as_ref();
+        out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        out.extend_from_slice(s.as_bytes());
+    }
+    out
+}
+
+/// Inverse of [`serialize_app_ids`]. Returns an empty vec on any malformed
+/// input (truncated, bad length, non-UTF-8) so a corrupt blob just falls back
+/// to name-sort instead of panicking.
+fn deserialize_app_ids(bytes: &[u8]) -> Vec<AppId> {
+    parse_app_ids(bytes).unwrap_or_default()
+}
+
+/// Pure parse step: returns `None` on any malformed/truncated input. Split out
+/// so the top-level helper stays `?`-free (its return type is `Vec`, not
+/// `Option`).
+fn parse_app_ids(bytes: &[u8]) -> Option<Vec<AppId>> {
+    let read_u32 = |buf: &[u8], i: usize| -> Option<u32> {
+        let c = buf.get(i..i + 4)?;
+        Some(u32::from_le_bytes(c.try_into().unwrap()))
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    let count = read_u32(bytes, i)? as usize;
+    i += 4;
+    out.try_reserve(count).ok()?;
+    for _ in 0..count {
+        let len = read_u32(bytes, i)? as usize;
+        i += 4;
+        let s = std::str::from_utf8(bytes.get(i..i + len)?).ok()?;
+        out.push(AppId::from_normalized(s.to_string()));
+        i += len;
+    }
+    // Reject partial records (count claimed more than we could read).
+    if out.len() == count {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn open_at(path: &Path) -> rusqlite::Result<IconCache> {
@@ -594,6 +704,50 @@ mod tests {
         let app = id("app1");
         let p = probe(&app, 10);
         assert!(is_cache_valid(&p, &e));
+    }
+
+    #[test]
+    fn app_order_round_trips() {
+        let c = cache();
+        let ids = vec![
+            id("c:/programdata/app3.lnk"),
+            id("c:/users/me/app1.lnk"),
+            id("c:/users/me/app2.lnk"),
+        ];
+        c.put_app_order(&ids).unwrap();
+        assert_eq!(c.get_app_order(), ids);
+    }
+
+    #[test]
+    fn app_order_empty_when_unset() {
+        let c = cache();
+        assert!(c.get_app_order().is_empty());
+    }
+
+    #[test]
+    fn app_order_upsert_replaces_previous() {
+        let c = cache();
+        c.put_app_order(&[id("a"), id("b")]).unwrap();
+        c.put_app_order(&[id("c")]).unwrap();
+        assert_eq!(c.get_app_order(), vec![id("c")]);
+    }
+
+    #[test]
+    fn hidden_ids_round_trips() {
+        let c = cache();
+        let ids = vec![id("hidden1"), id("hidden2")];
+        c.put_hidden_ids(&ids).unwrap();
+        assert_eq!(c.get_hidden_ids(), ids);
+    }
+
+    #[test]
+    fn deserialize_rejects_truncated_blob() {
+        // count=3 but only one id follows → must return empty, not panic.
+        let bad = serialize_app_ids(&[id("only")]);
+        // Overwrite the count to claim more entries than exist.
+        let mut bad = bad;
+        bad[0] = 3;
+        assert!(deserialize_app_ids(&bad).is_empty());
     }
 
     #[test]

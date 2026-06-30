@@ -103,6 +103,9 @@ pub struct LiquidGlassRenderer {
     uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     shape_count: u32,
+    badge_shape_buffer: wgpu::Buffer,
+    badge_shape_count: u32,
+    badge_shapes: Vec<GlassShape>,
     /// The base shapes (frame + tile halos) without the bottom control. Kept
     /// so the shape buffer can be rebuilt when only the control changes.
     base_shapes: Vec<GlassShape>,
@@ -135,6 +138,7 @@ pub struct LiquidGlassRenderer {
     /// blur_levels[i] (or the full-res blur texture for i == 2).
     blur_up_bind_groups: [wgpu::BindGroup; 3],
     final_bind_group: wgpu::BindGroup,
+    badge_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
     last_capture_at: Option<Instant>,
     last_geometry_key: Option<GeometryKey>,
@@ -177,6 +181,8 @@ impl LiquidGlassRenderer {
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
+        let badge_shape_buffer = create_shape_buffer(device, &[]);
+        let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
@@ -244,6 +250,12 @@ impl LiquidGlassRenderer {
             &geometry_bind_group_layout,
             &uniform_buffer,
             &shape_buffer,
+        );
+        let badge_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &uniform_buffer,
+            &badge_shape_buffer,
         );
         let final_bind_group = create_final_bind_group(
             device,
@@ -398,6 +410,9 @@ impl LiquidGlassRenderer {
             uniform_buffer,
             shape_buffer,
             shape_count,
+            badge_shape_buffer,
+            badge_shape_count,
+            badge_shapes: Vec::new(),
             base_shapes: Vec::new(),
             control_shape: None,
             geometry_texture,
@@ -421,6 +436,7 @@ impl LiquidGlassRenderer {
             blur_down_bind_groups,
             blur_up_bind_groups,
             final_bind_group,
+            badge_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
             last_capture_at: None,
             last_geometry_key: None,
@@ -528,6 +544,26 @@ impl LiquidGlassRenderer {
         }
         self.control_shape = shape;
         self.rebuild_shape_buffer(device);
+    }
+
+    /// Replace the edit-mode delete-badge glass shapes. These are rendered as
+    /// a separate Liquid Glass overlay after the app tiles/icons, so the badge
+    /// actually refracts through the Liquid Glass shader instead of being a
+    /// plain painted circle in the tile shader.
+    pub fn set_badge_shapes(&mut self, device: &wgpu::Device, shapes: &[GlassShape]) {
+        if self.badge_shapes.as_slice() == shapes {
+            return;
+        }
+        self.badge_shapes.clear();
+        self.badge_shapes.extend_from_slice(shapes);
+        self.badge_shape_buffer = create_shape_buffer(device, &self.badge_shapes);
+        self.badge_shape_count = self.badge_shapes.len() as u32;
+        self.badge_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &self.geometry_bind_group_layout,
+            &self.uniform_buffer,
+            &self.badge_shape_buffer,
+        );
     }
 
     /// Rebuild the GPU shape buffer from `base_shapes` + the optional control.
@@ -820,6 +856,78 @@ impl LiquidGlassRenderer {
             upload_time,
             render_started.elapsed(),
         );
+    }
+
+    pub fn render_badges(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        scroll_x: f32,
+    ) {
+        if !self.params.enabled || self.badge_shape_count == 0 {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            width,
+            height,
+            scroll_x,
+            self.badge_shape_count,
+        );
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass badge geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &self.badge_geometry_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass badge final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // The badge pass reuses the main geometry texture, so force the base
+        // glass pass to repaint its mask next frame instead of reusing the
+        // now-overwritten badge mask.
+        self.last_geometry_key = None;
     }
 
     fn should_capture(&self, defer_backdrop_capture: bool) -> bool {

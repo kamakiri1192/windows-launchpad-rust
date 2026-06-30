@@ -11,3 +11,5 @@
   invalidation rules, and corruption recovery.
 - [APP_REFRESH.md](APP_REFRESH.md) — live Start Menu change detection
   (added / updated / removed) and click-stability via stable app ids.
+- [EDIT_MODE_VISUAL_QA.md](EDIT_MODE_VISUAL_QA.md) — manual visual QA for
+  edit-mode reordering, screenshots, persistence checks, and hit-test logic.

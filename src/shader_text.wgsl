@@ -8,14 +8,18 @@
 struct Uniforms {
     viewport: vec2<f32>,
     scroll_x: f32,
-    _pad: f32,
+    // Global animation clock (seconds). Drives the edit-mode wiggle.
+    time: f32,
     // Fixed page-frame center (physical px).
     frame_center: vec2<f32>,
     // Fixed page-frame half-size (physical px).
     frame_half_size: vec2<f32>,
-    // Fixed page-frame corner radius (physical px) + pad.
+    // Fixed page-frame corner radius (physical px).
     frame_radius: f32,
-    frame_pad: f32,
+    // 1.0 while an edit-mode drag is in flight, else 0.0.
+    drag_active: f32,
+    // Pointer position (screen px) the dragged icon follows while dragging.
+    drag_pos: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
