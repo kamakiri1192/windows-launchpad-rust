@@ -94,6 +94,7 @@ pub struct Renderer {
     icon_pipeline: RenderPipeline,
     icon_instance_buffer: Option<Buffer>,
     icon_instance_count: u32,
+    dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
 
@@ -704,6 +705,7 @@ impl Renderer {
             icon_pipeline,
             icon_instance_buffer: None,
             icon_instance_count: 0,
+            dragged_icon_instance: false,
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
@@ -971,6 +973,10 @@ impl Renderer {
     /// Replace the per-icon instance buffer (one entry per tile with an icon).
     pub fn set_icon_instances(&mut self, instances: &[IconInstance]) {
         self.icon_instance_count = instances.len() as u32;
+        self.dragged_icon_instance = instances
+            .last()
+            .map(|i| (i.extra[3] as u32 & 2) != 0)
+            .unwrap_or(false);
         if instances.is_empty() {
             self.icon_instance_buffer = None;
             return;
@@ -1120,26 +1126,38 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Color tiles. Skip entirely when there are no instances: an empty
-            // vertex buffer has no valid slice, and `draw` with zero instances
-            // is a no-op anyway.
-            if self.instance_count > 0 {
+            let drag_active = args.drag_active > 0.5 && self.instance_count > 0;
+            let normal_tile_count = if drag_active {
+                self.instance_count - 1
+            } else {
+                self.instance_count
+            };
+            let drag_icon_active = self.dragged_icon_instance && self.icon_instance_count > 0;
+            let normal_icon_count = if drag_icon_active {
+                self.icon_instance_count - 1
+            } else {
+                self.icon_instance_count
+            };
+
+            // Normal color tiles. The dragged tile, if any, is withheld and
+            // drawn again after icons/text so its background stays above the
+            // rest of the grid as one lifted visual unit.
+            if normal_tile_count > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
                 // 6 verts per quad (two tris), instance_count quads.
-                pass.draw(0..6, 0..self.instance_count);
+                pass.draw(0..6, 0..normal_tile_count);
             }
 
-            // Icons: drawn over the color tiles before the labels. Samples the
-            // icon atlas through the shared (uniform + texture + sampler) bind
-            // group. Tiles without an icon simply aren't in this buffer.
-            if self.icon_instance_count > 0 {
+            // Normal icons: drawn over the color tiles before labels. The
+            // dragged icon, if any, is withheld until after text.
+            if normal_icon_count > 0 {
                 if let Some(buf) = self.icon_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.icon_pipeline);
                     pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.icon_instance_count);
+                    pass.draw(0..6, 0..normal_icon_count);
                 }
             }
 
@@ -1151,6 +1169,30 @@ impl Renderer {
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.text_instance_count);
+                }
+            }
+
+            // Drag overlay: tile background first, then its icon, both after
+            // normal icons/text. This keeps the lifted icon from visually
+            // slipping behind neighboring icons.
+            if drag_active {
+                let stride =
+                    std::mem::size_of::<crate::grid::TileInstance>() as wgpu::BufferAddress;
+                let offset = stride * normal_tile_count as wgpu::BufferAddress;
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..));
+                pass.draw(0..6, 0..1);
+            }
+            if drag_icon_active {
+                if let Some(buf) = self.icon_instance_buffer.as_ref() {
+                    let stride = std::mem::size_of::<crate::icon_pipeline::IconInstance>()
+                        as wgpu::BufferAddress;
+                    let offset = stride * normal_icon_count as wgpu::BufferAddress;
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(offset..));
+                    pass.draw(0..6, 0..1);
                 }
             }
         }
