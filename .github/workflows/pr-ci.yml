@@ -34,11 +34,12 @@ jobs:
         if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
         uses: mozilla-actions/sccache-action@v0.0.10
 
-      - name: Enable shared read-only S3 sccache
+      - name: Enable shared anonymous read-only S3 sccache
         if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
         shell: pwsh
         run: |
           $prefix = "windows-launchpad-rust/$env:TARGET/rust-$env:RUST_VERSION/debug"
+          "Using anonymous read-only sccache S3 prefix: $prefix"
           "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
           "SCCACHE_BUCKET=${{ vars.SCCACHE_BUCKET }}" >> $env:GITHUB_ENV
           "SCCACHE_REGION=${{ vars.AWS_REGION }}" >> $env:GITHUB_ENV
