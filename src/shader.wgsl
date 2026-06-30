@@ -163,16 +163,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let dragged = (u32(in.flags) & u32(FLAG_DRAG)) != 0u;
     let wiggling = (u32(in.flags) & u32(FLAG_WIGGLE)) != 0u;
 
-    // A dragged icon casts a soft shadow around its squircle before we hit the
-    // opaque body. The shadow fades out over ~16px past the edge.
-    if dragged && alpha <= 0.001 {
-        let shadow_width = max(8.0, in.size_r.x * 0.18);
-        let shadow_a = smoothstep(shadow_width, 0.0, d) * 0.45;
-        if shadow_a > 0.001 {
-            return vec4<f32>(vec3<f32>(0.0, 0.0, 0.0), shadow_a);
-        }
-        discard;
-    }
     var frame_a = 1.0;
     if !dragged {
         frame_a = frame_alpha(in.pos.xy);
