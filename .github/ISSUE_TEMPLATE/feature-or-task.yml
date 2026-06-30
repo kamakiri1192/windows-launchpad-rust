@@ -1,0 +1,69 @@
+name: Feature / Task
+about: Track a feature, bugfix, documentation task, or investigation
+labels: []
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: 何をしたい Issue なのかを短く書いてください。
+      placeholder: 例）検索入力中に候補をサジェスト表示する。
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: なぜ必要か、現状の課題、利用者にとっての困りごとを書いてください。
+      placeholder: 例）アプリ名を覚えていない場合でも、目的から起動したいアプリを探せるようにしたい。
+    validations:
+      required: true
+
+  - type: textarea
+    id: approach
+    attributes:
+      label: 対応方針
+      description: 実装や調査の進め方を書いてください。未確定なら候補でも大丈夫です。
+      placeholder: |
+        - まずはアプリ名一致で候補を出す。
+        - 次に用途別キーワード辞書を追加する。
+        - UI は下部コントロールの上に表示する。
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: 受け入れ条件
+      description: 完了と判断できる条件をチェックリストで書いてください。
+      value: |
+        - [ ] 
+        - [ ] 
+        - [ ] 
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation-notes
+    attributes:
+      label: 実装メモ / 調査メモ
+      description: 関連ファイル、既存仕様、調査リンク、注意点を書いてください。
+      placeholder: |
+        - `src/main.rs` の入力処理と連動する。
+        - `docs/BOTTOM_CONTROL.md` の状態遷移を参照する。
+    validations:
+      required: false
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: 確認項目
+      description: 実装後に確認するコマンドや手動 QA を書いてください。
+      value: |
+        - [ ] `cargo fmt` が通る。
+        - [ ] `cargo test` が通る。
+        - [ ] `cargo clippy --all-targets --all-features` が通る。
+        - [ ] `cargo build --release` が通る。
+    validations:
+      required: false
