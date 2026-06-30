@@ -94,7 +94,7 @@ const EDIT_EDGE_SCROLL_ZONE: f32 = 72.0;
 /// A grid press that hasn't yet been classified as a scroll drag, a click, or a
 /// long-press into edit mode. While present, the scroller is *not* in
 /// `Dragging` — we hold off until the gesture reveals its intent.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PendingPress {
     /// When the press started (for long-press timing).
     start: Instant,
@@ -104,6 +104,16 @@ struct PendingPress {
     /// The app under the pointer at press start, if any. Entering edit mode
     /// lifts this app into a drag immediately.
     app_index: Option<usize>,
+    /// Stable id of the app under the pointer at press start. Quick release
+    /// launches this id, not whatever happens to be under the release point.
+    app_id: Option<AppId>,
+}
+
+fn pending_press_launch_id(press: &PendingPress, release_x: f32, release_y: f32) -> Option<&AppId> {
+    let dx = release_x - press.x;
+    let dy = release_y - press.y;
+    let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
+    is_click.then_some(press.app_id.as_ref()).flatten()
 }
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
@@ -1122,12 +1132,14 @@ impl App {
         let x = self.pointer_phys_x;
         let y = self.pointer_phys_y;
         let app_index = self.app_index_at_pointer(x, y);
+        let app_id = app_index.and_then(|idx| self.visible_app_ids().get(idx).cloned());
         debug_log!("edit-press: pending x={x:.1} y={y:.1} app_index={app_index:?}");
         self.pending_press = Some(PendingPress {
             start: now,
             x,
             y,
             app_index,
+            app_id,
         });
         self.request_redraw();
     }
@@ -1200,7 +1212,7 @@ impl App {
     /// A press is pending; check whether movement past `CLICK_SLOP_PHYS`
     /// promotes it to a real scroll drag. Returns true if it was promoted.
     fn maybe_promote_press_to_drag(&mut self) -> bool {
-        let Some(p) = self.pending_press else {
+        let Some(p) = self.pending_press.as_ref() else {
             return false;
         };
         let dx = self.pointer_phys_x - p.x;
@@ -1208,10 +1220,12 @@ impl App {
         if dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS {
             return false;
         }
+        let start_x = p.x;
+        let start_y = p.y;
         // Promote: start the scroll drag from the original anchor, then apply
         // the current pointer so the page follows the gesture from here.
         self.pending_press = None;
-        self.handle_drag_start(p.x, p.y);
+        self.handle_drag_start(start_x, start_y);
         if self.scroller.as_ref().map(|s| s.phase) == Some(Phase::Dragging) {
             self.handle_drag_move(self.pointer_phys_x);
         }
@@ -1221,7 +1235,7 @@ impl App {
     /// Check whether the pending press has been held long enough to enter edit
     /// mode. Called from `about_to_wait`. Returns true if edit mode was entered.
     fn maybe_long_press_into_edit(&mut self, now: Instant) -> bool {
-        let Some(p) = self.pending_press else {
+        let Some(p) = self.pending_press.as_ref() else {
             return false;
         };
         // Only a press that hasn't moved past slop can become a long-press.
@@ -1234,7 +1248,8 @@ impl App {
             return false;
         }
         // Enter edit mode and immediately lift the pressed app into a drag.
-        self.enter_edit_mode(p.app_index);
+        let app_index = p.app_index;
+        self.enter_edit_mode(app_index);
         true
     }
 
@@ -2176,9 +2191,13 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                         // A pending press that released without dragging and
                         // without a long-press is a click → launch the app.
-                        if self.pending_press.take().is_some() {
-                            if let Some(app) =
-                                self.resolve_clicked_app(self.pointer_phys_x, self.pointer_phys_y)
+                        if let Some(press) = self.pending_press.take() {
+                            if let Some(app) = pending_press_launch_id(
+                                &press,
+                                self.pointer_phys_x,
+                                self.pointer_phys_y,
+                            )
+                            .and_then(|id| self.registry.launch_info(id))
                             {
                                 let link_path = app.link_path.clone();
                                 let name = app.name.clone();
@@ -2718,6 +2737,60 @@ fn spawn_bridge<T: Send + 'static>(
             }
         })
         .expect("spawn channel-bridge");
+}
+
+#[cfg(test)]
+mod pending_press_tests {
+    use std::time::Instant;
+
+    use super::{pending_press_launch_id, PendingPress};
+    use crate::app_id::AppId;
+
+    #[test]
+    fn launches_only_pressed_app_id() {
+        let pressed = AppId::from_normalized("pressed-app");
+        let press = PendingPress {
+            start: Instant::now(),
+            x: 100.0,
+            y: 100.0,
+            app_index: Some(3),
+            app_id: Some(pressed.clone()),
+        };
+
+        assert_eq!(
+            pending_press_launch_id(&press, 103.0, 102.0),
+            Some(&pressed)
+        );
+    }
+
+    #[test]
+    fn press_without_app_never_launches_release_target() {
+        let press = PendingPress {
+            start: Instant::now(),
+            x: 100.0,
+            y: 100.0,
+            app_index: None,
+            app_id: None,
+        };
+
+        assert_eq!(pending_press_launch_id(&press, 103.0, 102.0), None);
+    }
+
+    #[test]
+    fn movement_past_click_slop_does_not_launch() {
+        let press = PendingPress {
+            start: Instant::now(),
+            x: 100.0,
+            y: 100.0,
+            app_index: Some(0),
+            app_id: Some(AppId::from_normalized("pressed-app")),
+        };
+
+        assert_eq!(
+            pending_press_launch_id(&press, 100.0 + super::CLICK_SLOP_PHYS + 1.0, 100.0),
+            None
+        );
+    }
 }
 
 #[cfg(test)]
