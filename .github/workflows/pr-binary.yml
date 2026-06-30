@@ -46,14 +46,18 @@ jobs:
           rustup toolchain install $env:RUST_VERSION --profile minimal --target $env:TARGET
           rustup default $env:RUST_VERSION
 
-      - name: Restore GitHub target cache
+      - name: Restore R2 target cache
         id: target-cache
-        uses: actions/cache/restore@v4
+        uses: ./.github/actions/r2-target-cache
         with:
+          mode: restore
           path: ${{ env.TARGET_CACHE_PATH }}
-          key: windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl') }}
-          restore-keys: |
-            windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
+          key: windows-launchpad-rust/target-cache/release/${{ env.TARGET }}/rust-${{ env.RUST_VERSION }}/${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs') }}.tar.zst
+          restore-prefix: windows-launchpad-rust/target-cache/release/${{ env.TARGET }}/rust-${{ env.RUST_VERSION }}/
+          r2-account-id: ${{ vars.R2_ACCOUNT_ID }}
+          r2-bucket: ${{ vars.R2_SCCACHE_BUCKET }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Enable R2 sccache
         id: r2-sccache
@@ -81,21 +85,18 @@ jobs:
         if: always() && steps.r2-sccache.outputs.enabled == 'true'
         run: sccache --show-stats
 
-      - name: Lookup GitHub target cache before save
-        id: target-cache-before-save
+      - name: Save R2 target cache
         if: success() && steps.target-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: ./.github/actions/r2-target-cache
         with:
+          mode: save
           path: ${{ env.TARGET_CACHE_PATH }}
-          key: ${{ steps.target-cache.outputs.cache-primary-key }}
-          lookup-only: true
-
-      - name: Save GitHub target cache
-        if: success() && steps.target-cache.outputs.cache-hit != 'true' && steps.target-cache-before-save.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.TARGET_CACHE_PATH }}
-          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+          key: windows-launchpad-rust/target-cache/release/${{ env.TARGET }}/rust-${{ env.RUST_VERSION }}/${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs') }}.tar.zst
+          restore-prefix: windows-launchpad-rust/target-cache/release/${{ env.TARGET }}/rust-${{ env.RUST_VERSION }}/
+          r2-account-id: ${{ vars.R2_ACCOUNT_ID }}
+          r2-bucket: ${{ vars.R2_SCCACHE_BUCKET }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Package review artifact
         id: package

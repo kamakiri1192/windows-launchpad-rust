@@ -1,4 +1,4 @@
-name: R2 sccache maintenance
+name: R2 cache maintenance
 
 on:
   workflow_dispatch:
@@ -12,16 +12,18 @@ env:
   R2_CACHE_PREFIXES: |
     windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/
     windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release/
-  R2_CACHE_MAX_BYTES: 4294967296
+    windows-launchpad-rust/target-cache/debug/x86_64-pc-windows-msvc/rust-1.89.0/
+    windows-launchpad-rust/target-cache/release/x86_64-pc-windows-msvc/rust-1.89.0/
+  R2_CACHE_MAX_BYTES: 8589934592
 
 jobs:
   prune:
-    name: Prune R2 sccache
+    name: Prune R2 caches
     runs-on: ubuntu-latest
     if: vars.R2_SCCACHE_BUCKET != '' && vars.R2_ACCOUNT_ID != ''
 
     steps:
-      - name: Prune cache prefixes to 4 GiB total
+      - name: Prune cache prefixes to 8 GiB total
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -63,7 +65,7 @@ jobs:
           echo "Current combined R2 sccache bytes: ${total_bytes}"
 
           if (( total_bytes <= R2_CACHE_MAX_BYTES )); then
-            echo "Combined R2 sccache prefixes are within the 4 GiB budget."
+            echo "Combined R2 cache prefixes are within the 8 GiB budget."
             exit 0
           fi
 

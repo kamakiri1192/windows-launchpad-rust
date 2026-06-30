@@ -1,0 +1,205 @@
+name: R2 target cache
+description: Restore or save a compressed target directory archive in Cloudflare R2.
+
+inputs:
+  mode:
+    description: restore or save.
+    required: true
+  path:
+    description: Target directory path to cache.
+    required: true
+  key:
+    description: Exact R2 object key for the cache archive.
+    required: true
+  restore-prefix:
+    description: R2 object prefix used to find the newest fallback archive.
+    required: true
+  r2-account-id:
+    description: Cloudflare account ID.
+    required: false
+  r2-bucket:
+    description: Cloudflare R2 bucket name.
+    required: false
+  r2-access-key-id:
+    description: R2 access key ID.
+    required: false
+  r2-secret-access-key:
+    description: R2 secret access key.
+    required: false
+
+outputs:
+  cache-hit:
+    description: Whether the exact target cache key was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+  restored-key:
+    description: R2 object key restored, including fallback keys.
+    value: ${{ steps.restore.outputs.restored-key }}
+  saved:
+    description: Whether a target cache archive was uploaded.
+    value: ${{ steps.save.outputs.saved }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore target cache from R2
+      id: restore
+      if: inputs.mode == 'restore'
+      shell: pwsh
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+        AWS_DEFAULT_REGION: auto
+      run: |
+        "cache-hit=false" >> $env:GITHUB_OUTPUT
+        "restored-key=" >> $env:GITHUB_OUTPUT
+
+        if ([string]::IsNullOrWhiteSpace("${{ inputs.r2-bucket }}") -or [string]::IsNullOrWhiteSpace("${{ inputs.r2-account-id }}")) {
+          "R2 repository variables are not configured; skipping target cache restore."
+          exit 0
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:AWS_ACCESS_KEY_ID) -or [string]::IsNullOrWhiteSpace($env:AWS_SECRET_ACCESS_KEY)) {
+          "R2 credentials are not configured; skipping target cache restore."
+          exit 0
+        }
+
+        if (!(Get-Command aws -ErrorAction SilentlyContinue)) {
+          "::warning::AWS CLI is not available; skipping target cache restore."
+          exit 0
+        }
+
+        if (!(Get-Command zstd -ErrorAction SilentlyContinue)) {
+          "::warning::zstd is not available; skipping target cache restore."
+          exit 0
+        }
+
+        $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
+        $bucket = "${{ inputs.r2-bucket }}"
+        $exactKey = "${{ inputs.key }}"
+        $restorePrefix = "${{ inputs.restore-prefix }}"
+        $objectKey = ""
+        $exactHit = "false"
+
+        aws s3api head-object --endpoint-url $endpoint --bucket $bucket --key $exactKey *> $null
+        if ($LASTEXITCODE -eq 0) {
+          $objectKey = $exactKey
+          $exactHit = "true"
+        } else {
+          $objectsJson = aws s3api list-objects-v2 --endpoint-url $endpoint --bucket $bucket --prefix $restorePrefix --output json
+          if ($LASTEXITCODE -ne 0) {
+            "::warning::Failed to list R2 target cache objects; skipping restore."
+            exit 0
+          }
+
+          $objects = $objectsJson | ConvertFrom-Json
+          $latest = @($objects.Contents) |
+            Where-Object { $_.Key -like "*.tar.zst" } |
+            Sort-Object LastModified -Descending |
+            Select-Object -First 1
+
+          if ($null -eq $latest) {
+            "No R2 target cache archive found for prefix: $restorePrefix"
+            exit 0
+          }
+
+          $objectKey = $latest.Key
+        }
+
+        $archive = Join-Path $env:RUNNER_TEMP "target-cache.tar.zst"
+        aws s3 cp --endpoint-url $endpoint "s3://$bucket/$objectKey" $archive
+        if ($LASTEXITCODE -ne 0) {
+          "::warning::Failed to download R2 target cache archive: $objectKey"
+          exit 0
+        }
+
+        $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+        $workspaceWithSeparator = $workspace.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+        $targetPath = [System.IO.Path]::GetFullPath((Join-Path $workspace "${{ inputs.path }}"))
+        if ($targetPath -ne $workspace -and !$targetPath.StartsWith($workspaceWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
+          "::warning::Target cache path is outside the workspace; skipping restore: $targetPath"
+          exit 0
+        }
+
+        if (Test-Path "${{ inputs.path }}") {
+          Remove-Item -Recurse -Force "${{ inputs.path }}"
+        }
+
+        tar --use-compress-program zstd -xf $archive
+        if ($LASTEXITCODE -ne 0) {
+          "::warning::Failed to extract R2 target cache archive: $objectKey"
+          exit 0
+        }
+
+        "Restored R2 target cache: $objectKey"
+        "cache-hit=$exactHit" >> $env:GITHUB_OUTPUT
+        "restored-key=$objectKey" >> $env:GITHUB_OUTPUT
+
+    - name: Save target cache to R2
+      id: save
+      if: inputs.mode == 'save'
+      shell: pwsh
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+        AWS_DEFAULT_REGION: auto
+      run: |
+        "saved=false" >> $env:GITHUB_OUTPUT
+
+        if ([string]::IsNullOrWhiteSpace("${{ inputs.r2-bucket }}") -or [string]::IsNullOrWhiteSpace("${{ inputs.r2-account-id }}")) {
+          "R2 repository variables are not configured; skipping target cache save."
+          exit 0
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:AWS_ACCESS_KEY_ID) -or [string]::IsNullOrWhiteSpace($env:AWS_SECRET_ACCESS_KEY)) {
+          "R2 credentials are not configured; skipping target cache save."
+          exit 0
+        }
+
+        if (!(Get-Command aws -ErrorAction SilentlyContinue)) {
+          "::warning::AWS CLI is not available; skipping target cache save."
+          exit 0
+        }
+
+        if (!(Get-Command zstd -ErrorAction SilentlyContinue)) {
+          "::warning::zstd is not available; skipping target cache save."
+          exit 0
+        }
+
+        $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+        $workspaceWithSeparator = $workspace.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+        $targetPath = [System.IO.Path]::GetFullPath((Join-Path $workspace "${{ inputs.path }}"))
+        if ($targetPath -ne $workspace -and !$targetPath.StartsWith($workspaceWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
+          "::warning::Target cache path is outside the workspace; skipping save: $targetPath"
+          exit 0
+        }
+
+        if (!(Test-Path "${{ inputs.path }}")) {
+          "Target cache path does not exist; skipping save: ${{ inputs.path }}"
+          exit 0
+        }
+
+        $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
+        $bucket = "${{ inputs.r2-bucket }}"
+        $objectKey = "${{ inputs.key }}"
+
+        aws s3api head-object --endpoint-url $endpoint --bucket $bucket --key $objectKey *> $null
+        if ($LASTEXITCODE -eq 0) {
+          "R2 target cache already exists: $objectKey"
+          exit 0
+        }
+
+        $archive = Join-Path $env:RUNNER_TEMP "target-cache.tar.zst"
+        tar --use-compress-program zstd -cf $archive "${{ inputs.path }}"
+        if ($LASTEXITCODE -ne 0) {
+          "::warning::Failed to create target cache archive; skipping save."
+          exit 0
+        }
+
+        aws s3 cp --endpoint-url $endpoint $archive "s3://$bucket/$objectKey"
+        if ($LASTEXITCODE -ne 0) {
+          "::warning::Failed to upload R2 target cache archive: $objectKey"
+          exit 0
+        }
+
+        "Saved R2 target cache: $objectKey"
+        "saved=true" >> $env:GITHUB_OUTPUT

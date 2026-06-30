@@ -3,7 +3,7 @@ description: Enable Cloudflare R2-backed sccache when R2 is configured.
 
 inputs:
   cache-hit:
-    description: Exact GitHub target cache hit value from actions/cache/restore. Logged for context only.
+    description: Exact target cache hit value. Logged for context only.
     required: false
     default: ""
   profile:
@@ -68,7 +68,7 @@ runs:
         $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
 
         if ("${{ inputs.cache-hit }}" -eq "true") {
-          "GitHub target cache exact hit; still enabling R2 sccache for any compiler work that remains."
+          "Target cache exact hit; still enabling R2 sccache for any compiler work that remains."
         }
 
         $env:CARGO_INCREMENTAL = "0"
