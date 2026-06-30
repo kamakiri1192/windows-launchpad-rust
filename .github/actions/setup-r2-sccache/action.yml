@@ -1,0 +1,108 @@
+name: Setup R2 sccache
+description: Enable Cloudflare R2-backed sccache when R2 is configured.
+
+inputs:
+  cache-hit:
+    description: Exact GitHub target cache hit value from actions/cache/restore. Logged for context only.
+    required: false
+    default: ""
+  profile:
+    description: Cargo profile name used in the R2 cache prefix.
+    required: true
+  rust-version:
+    description: Rust toolchain version used in the R2 cache prefix.
+    required: true
+  target:
+    description: Rust target triple used in the R2 cache prefix.
+    required: true
+  r2-account-id:
+    description: Cloudflare account ID.
+    required: false
+  r2-bucket:
+    description: Cloudflare R2 bucket name.
+    required: false
+  r2-access-key-id:
+    description: R2 access key ID.
+    required: false
+  r2-secret-access-key:
+    description: R2 secret access key.
+    required: false
+
+outputs:
+  enabled:
+    description: Whether R2 sccache was enabled.
+    value: ${{ steps.configure.outputs.enabled }}
+  prefix:
+    description: R2 cache prefix used for sccache objects.
+    value: ${{ steps.configure.outputs.prefix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install sccache
+      if: inputs.r2-bucket != '' && inputs.r2-account-id != ''
+      uses: mozilla-actions/sccache-action@v0.0.10
+
+    - name: Configure R2 sccache
+      id: configure
+      shell: pwsh
+      env:
+        R2_ACCESS_KEY_ID: ${{ inputs.r2-access-key-id }}
+        R2_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-access-key }}
+      run: |
+        if ([string]::IsNullOrWhiteSpace("${{ inputs.r2-bucket }}") -or [string]::IsNullOrWhiteSpace("${{ inputs.r2-account-id }}")) {
+          "R2 repository variables are not configured; skipping R2 sccache."
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:R2_ACCESS_KEY_ID) -or [string]::IsNullOrWhiteSpace($env:R2_SECRET_ACCESS_KEY)) {
+          "R2 credentials are not configured; skipping R2 sccache."
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        $prefix = "windows-launchpad-rust/${{ inputs.target }}/rust-${{ inputs.rust-version }}/${{ inputs.profile }}/"
+        $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
+
+        if ("${{ inputs.cache-hit }}" -eq "true") {
+          "GitHub target cache exact hit; still enabling R2 sccache for any compiler work that remains."
+        }
+
+        $env:CARGO_INCREMENTAL = "0"
+        $env:RUSTC_WRAPPER = "sccache"
+        $env:SCCACHE_BUCKET = "${{ inputs.r2-bucket }}"
+        $env:SCCACHE_REGION = "auto"
+        $env:SCCACHE_ENDPOINT = $endpoint
+        $env:SCCACHE_S3_KEY_PREFIX = $prefix
+        $env:SCCACHE_S3_USE_SSL = "true"
+        $env:SCCACHE_IGNORE_SERVER_IO_ERROR = "1"
+        $env:AWS_ACCESS_KEY_ID = $env:R2_ACCESS_KEY_ID
+        $env:AWS_SECRET_ACCESS_KEY = $env:R2_SECRET_ACCESS_KEY
+        $env:AWS_DEFAULT_REGION = "auto"
+
+        sccache rustc -vV
+        if ($LASTEXITCODE -ne 0) {
+          "::warning::R2 sccache smoke test failed; continuing without R2 sccache."
+          sccache --stop-server | Out-Null
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=$prefix" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        "Using R2 sccache prefix: $prefix"
+        "CARGO_INCREMENTAL=0" >> $env:GITHUB_ENV
+        "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
+        "SCCACHE_BUCKET=${{ inputs.r2-bucket }}" >> $env:GITHUB_ENV
+        "SCCACHE_REGION=auto" >> $env:GITHUB_ENV
+        "SCCACHE_ENDPOINT=$endpoint" >> $env:GITHUB_ENV
+        "SCCACHE_S3_KEY_PREFIX=$prefix" >> $env:GITHUB_ENV
+        "SCCACHE_S3_USE_SSL=true" >> $env:GITHUB_ENV
+        "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> $env:GITHUB_ENV
+        "AWS_ACCESS_KEY_ID=$env:R2_ACCESS_KEY_ID" >> $env:GITHUB_ENV
+        "AWS_SECRET_ACCESS_KEY=$env:R2_SECRET_ACCESS_KEY" >> $env:GITHUB_ENV
+        "AWS_DEFAULT_REGION=auto" >> $env:GITHUB_ENV
+        "enabled=true" >> $env:GITHUB_OUTPUT
+        "prefix=$prefix" >> $env:GITHUB_OUTPUT

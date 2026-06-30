@@ -1,0 +1,83 @@
+name: R2 sccache maintenance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 19 * * *"
+
+permissions:
+  contents: read
+
+env:
+  R2_CACHE_PREFIXES: |
+    windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/
+    windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release/
+  R2_CACHE_MAX_BYTES: 4294967296
+
+jobs:
+  prune:
+    name: Prune R2 sccache
+    runs-on: ubuntu-latest
+    if: vars.R2_SCCACHE_BUCKET != '' && vars.R2_ACCOUNT_ID != ''
+
+    steps:
+      - name: Prune cache prefixes to 4 GiB total
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_SCCACHE_BUCKET: ${{ vars.R2_SCCACHE_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "R2 credentials are not configured; skipping prune."
+            exit 0
+          fi
+
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          all_objects="$(mktemp)"
+          : > "${all_objects}"
+
+          while IFS= read -r prefix; do
+            if [[ -z "${prefix}" ]]; then
+              continue
+            fi
+
+            objects_json="$(mktemp)"
+
+            aws s3api list-objects-v2 \
+              --endpoint-url "${endpoint}" \
+              --bucket "${R2_SCCACHE_BUCKET}" \
+              --prefix "${prefix}" \
+              --output json > "${objects_json}"
+
+            prefix_bytes="$(jq '[.Contents[]?.Size] | add // 0' "${objects_json}")"
+            echo "Current R2 sccache bytes for ${prefix}: ${prefix_bytes}"
+            jq -r '.Contents[]? | [.LastModified, .Size, .Key] | @tsv' "${objects_json}" >> "${all_objects}"
+          done <<< "${R2_CACHE_PREFIXES}"
+
+          total_bytes="$(awk -F '\t' '{ total += $2 } END { print total + 0 }' "${all_objects}")"
+          echo "Current combined R2 sccache bytes: ${total_bytes}"
+
+          if (( total_bytes <= R2_CACHE_MAX_BYTES )); then
+            echo "Combined R2 sccache prefixes are within the 4 GiB budget."
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r _last_modified size key; do
+            if (( total_bytes <= R2_CACHE_MAX_BYTES )); then
+              break
+            fi
+
+            echo "Deleting ${key} (${size} bytes)"
+            aws s3api delete-object \
+              --endpoint-url "${endpoint}" \
+              --bucket "${R2_SCCACHE_BUCKET}" \
+              --key "${key}" >/dev/null
+            total_bytes=$((total_bytes - size))
+          done < <(sort "${all_objects}")
+
+          echo "Pruned combined R2 sccache bytes: ${total_bytes}"
