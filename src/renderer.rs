@@ -1270,6 +1270,9 @@ impl Renderer {
             }
         }
 
+        self.liquid_glass
+            .render_control(&self.device, &self.queue, &mut encoder, &view);
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),
