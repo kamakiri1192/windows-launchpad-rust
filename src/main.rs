@@ -424,7 +424,7 @@ impl App {
             return;
         };
         let shape = bottom_control::glass_shape(&geom);
-        r.set_control_glass_shape(shape);
+        r.set_control_glass_shape(shape, !self.editing);
         if atlas_dirty {
             if let Some(t) = self.text.as_ref() {
                 r.upload_atlas(t.atlas_rgba());

@@ -1005,12 +1005,17 @@ impl Renderer {
     /// Push the bottom-control's glass capsule shape into the Liquid Glass
     /// geometry buffer. `None` hides the control. Called every frame from the
     /// app (the geometry is tiny and rebuilt cheaply).
+    ///
+    /// In edit mode the control is drawn by the later overlay pass so it stays
+    /// above the grid without being composited twice.
     pub fn set_control_glass_shape(
         &mut self,
         shape: Option<crate::liquid_glass::geometry::GlassShape>,
+        draw_in_base_pass: bool,
     ) {
         self.control_glass_shape = shape;
-        self.liquid_glass.set_control_shape(&self.device, shape);
+        self.liquid_glass
+            .set_control_shape(&self.device, if draw_in_base_pass { shape } else { None });
     }
 
     /// Replace the procedural overlay instances (magnifier, dots, caret,
