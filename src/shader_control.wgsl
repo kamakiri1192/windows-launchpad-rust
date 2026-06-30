@@ -13,9 +13,9 @@
 // paints the foreground ink.
 
 struct Uniforms {
-    viewport: vec2<f32>,
-    scroll_x: f32,
-    _pad: f32,
+    viewport_scroll: vec4<f32>,
+    frame_center_radius: vec4<f32>,
+    frame_half_size: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -66,12 +66,12 @@ fn vs_main(
 
     var element_center = center;
     if kind.x > 3.5 {
-        element_center.x = element_center.x + u.scroll_x;
+        element_center.x = element_center.x + u.viewport_scroll.z;
     }
     let world = vec2<f32>(element_center.x + c.x * extent, element_center.y - c.y * extent);
     let local = vec2<f32>(c.x * extent, -c.y * extent);
 
-    let half_vp = u.viewport * 0.5;
+    let half_vp = u.viewport_scroll.xy * 0.5;
     let clip = vec2<f32>(
         (world.x / half_vp.x) - 1.0,
         1.0 - (world.y / half_vp.y),
@@ -107,6 +107,18 @@ fn sd_segment(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let ba = b;
     let h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
     return length(pa - ba * h) - r;
+}
+
+fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
+    let rr = min(r, min(b.x, b.y));
+    let q = abs(p) - b + vec2<f32>(rr);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - rr;
+}
+
+fn frame_alpha(pixel: vec2<f32>) -> f32 {
+    let local = pixel - u.frame_center_radius.xy;
+    let d = sd_round_box(local, u.frame_half_size.xy, u.frame_center_radius.z);
+    return smoothstep(1.0, -1.0, d);
 }
 
 @fragment
@@ -176,6 +188,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let ring_d = abs(sd_circle(p, r * 0.82)) - max(w * 0.45, 0.7);
         let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.28;
         coverage = max(close, ring);
+    }
+
+    if kind > 3.5 {
+        coverage = coverage * frame_alpha(in.pos.xy);
     }
 
     let a = coverage * alpha;

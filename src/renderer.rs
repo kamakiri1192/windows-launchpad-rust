@@ -51,15 +51,14 @@ struct Uniforms {
     drag_pos: [f32; 2],
 }
 
-/// Viewport-only uniform for the bottom-control overlay + text shaders. They
-/// don't need scroll or frame data (the control is screen-fixed and not
-/// clipped to the frame).
+/// Uniform for the bottom-control overlay + text shaders. The bottom control
+/// uses only the viewport; edit badges also use scroll and the page frame clip.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ControlUniforms {
-    viewport: [f32; 2],
-    scroll_x: f32,
-    _pad: f32,
+    viewport_scroll: [f32; 4],
+    frame_center_radius: [f32; 4],
+    frame_half_size: [f32; 4],
 }
 
 pub struct Renderer {
@@ -1048,7 +1047,7 @@ impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
         // Update uniforms (tiny, every frame).
-        let frame = self.frame_clip;
+        let clip = self.frame_clip;
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -1056,9 +1055,9 @@ impl Renderer {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
                 scroll_x: args.scroll_x,
                 time: args.time,
-                frame_center: [frame.0, frame.1],
-                frame_half_size: [frame.2, frame.3],
-                frame_radius: frame.4,
+                frame_center: [clip.0, clip.1],
+                frame_half_size: [clip.2, clip.3],
+                frame_radius: clip.4,
                 drag_active: args.drag_active,
                 drag_pos: [args.drag_pos.0, args.drag_pos.1],
             }),
@@ -1192,9 +1191,14 @@ impl Renderer {
             &self.control_uniform_buffer,
             0,
             bytemuck::bytes_of(&ControlUniforms {
-                viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
-                scroll_x: args.scroll_x,
-                _pad: 0.0,
+                viewport_scroll: [
+                    args.viewport.0 as f32,
+                    args.viewport.1 as f32,
+                    args.scroll_x,
+                    0.0,
+                ],
+                frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
+                frame_half_size: [clip.2, clip.3, 0.0, 0.0],
             }),
         );
         self.liquid_glass
@@ -1265,6 +1269,9 @@ impl Renderer {
                 }
             }
         }
+
+        self.liquid_glass
+            .render_control(&self.device, &self.queue, &mut encoder, &view);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1340,8 +1347,14 @@ impl Renderer {
     fn update_edit_badges(&mut self, time: f32) {
         const KIND_BADGE_CLOSE: f32 = 4.0;
 
-        let mut shapes = Vec::with_capacity(self.badge_sources.len());
+        let mut shapes = Vec::with_capacity(self.badge_sources.len() + 1);
         let mut marks = Vec::with_capacity(self.badge_sources.len());
+        let frame = self.frame_clip;
+        let clip_shape = GlassShape::clip_rounded_rect(
+            [frame.0, frame.1],
+            [frame.2 * 2.0, frame.3 * 2.0],
+            frame.4,
+        );
         for source in &self.badge_sources {
             let center = animated_badge_center(*source, time);
             shapes.push(GlassShape::rounded_rect(
@@ -1355,6 +1368,10 @@ impl Renderer {
                 color: [1.0, 1.0, 1.0, 0.92],
                 kind: [KIND_BADGE_CLOSE, 0.0, 0.0, 0.0],
             });
+        }
+
+        if !marks.is_empty() {
+            shapes.insert(0, clip_shape);
         }
 
         self.liquid_glass.set_badge_shapes(&self.device, &shapes);

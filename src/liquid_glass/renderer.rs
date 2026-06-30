@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 
 use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
-use super::geometry::{shapes_from_layout, with_control, GlassShape};
+use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::grid::{GridApp, GridLayout};
 
@@ -106,11 +106,10 @@ pub struct LiquidGlassRenderer {
     badge_shape_buffer: wgpu::Buffer,
     badge_shape_count: u32,
     badge_shapes: Vec<GlassShape>,
-    /// The base shapes (frame + tile halos) without the bottom control. Kept
-    /// so the shape buffer can be rebuilt when only the control changes.
+    /// The base shapes (frame + tile halos). The bottom control renders later
+    /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
-    /// The optional bottom-control capsule appended after the base shapes.
-    /// `None` = no control; `Some(s)` = appended as the last shape.
+    /// The optional bottom-control capsule. It is not part of `base_shapes`.
     control_shape: Option<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
@@ -535,15 +534,13 @@ impl LiquidGlassRenderer {
         self.rebuild_shape_buffer(device);
     }
 
-    /// Replace just the bottom-control capsule shape (the last shape in the
-    /// buffer). Cheaper than a full `rebuild_shapes` — only re-uploads the
-    /// shape storage buffer. Pass `None` to hide the control entirely.
-    pub fn set_control_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
+    /// Replace just the bottom-control capsule shape. Pass `None` to hide the
+    /// control entirely.
+    pub fn set_control_shape(&mut self, _device: &wgpu::Device, shape: Option<GlassShape>) {
         if self.control_shape == shape {
             return;
         }
         self.control_shape = shape;
-        self.rebuild_shape_buffer(device);
     }
 
     /// Replace the edit-mode delete-badge glass shapes. These are rendered as
@@ -566,11 +563,10 @@ impl LiquidGlassRenderer {
         );
     }
 
-    /// Rebuild the GPU shape buffer from `base_shapes` + the optional control.
+    /// Rebuild the GPU shape buffer from the base frame + tile halo shapes.
     fn rebuild_shape_buffer(&mut self, device: &wgpu::Device) {
-        let shapes = with_control(self.base_shapes.clone(), self.control_shape);
-        self.shape_buffer = create_shape_buffer(device, &shapes);
-        self.shape_count = shapes.len() as u32;
+        self.shape_buffer = create_shape_buffer(device, &self.base_shapes);
+        self.shape_count = self.base_shapes.len() as u32;
         self.geometry_bind_group = create_geometry_bind_group(
             device,
             &self.geometry_bind_group_layout,
@@ -927,6 +923,79 @@ impl LiquidGlassRenderer {
         // The badge pass reuses the main geometry texture, so force the base
         // glass pass to repaint its mask next frame instead of reusing the
         // now-overwritten badge mask.
+        self.last_geometry_key = None;
+    }
+
+    pub fn render_control(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) {
+        if !self.params.enabled {
+            return;
+        }
+        let Some(shape) = self.control_shape else {
+            return;
+        };
+
+        let shape_buffer = create_shape_buffer(device, &[shape]);
+        let bind_group = create_geometry_bind_group(
+            device,
+            &self.geometry_bind_group_layout,
+            &self.uniform_buffer,
+            &shape_buffer,
+        );
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass control geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass control final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
         self.last_geometry_key = None;
     }
 
