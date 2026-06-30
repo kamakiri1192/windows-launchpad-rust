@@ -1,0 +1,67 @@
+name: R2 sccache maintenance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 19 * * *"
+
+permissions:
+  contents: read
+
+env:
+  R2_CACHE_PREFIX: windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/
+  R2_CACHE_MAX_BYTES: 4294967296
+
+jobs:
+  prune:
+    name: Prune R2 sccache
+    runs-on: ubuntu-latest
+    if: vars.R2_SCCACHE_BUCKET != '' && vars.R2_ACCOUNT_ID != ''
+
+    steps:
+      - name: Prune cache prefix to 4 GiB
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_SCCACHE_BUCKET: ${{ vars.R2_SCCACHE_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "R2 credentials are not configured; skipping prune."
+            exit 0
+          fi
+
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          objects_json="$(mktemp)"
+
+          aws s3api list-objects-v2 \
+            --endpoint-url "${endpoint}" \
+            --bucket "${R2_SCCACHE_BUCKET}" \
+            --prefix "${R2_CACHE_PREFIX}" \
+            --output json > "${objects_json}"
+
+          total_bytes="$(jq '[.Contents[]?.Size] | add // 0' "${objects_json}")"
+          echo "Current R2 sccache bytes: ${total_bytes}"
+
+          if (( total_bytes <= R2_CACHE_MAX_BYTES )); then
+            echo "R2 sccache prefix is within the 4 GiB budget."
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r _last_modified size key; do
+            if (( total_bytes <= R2_CACHE_MAX_BYTES )); then
+              break
+            fi
+
+            echo "Deleting ${key} (${size} bytes)"
+            aws s3api delete-object \
+              --endpoint-url "${endpoint}" \
+              --bucket "${R2_SCCACHE_BUCKET}" \
+              --key "${key}" >/dev/null
+            total_bytes=$((total_bytes - size))
+          done < <(jq -r '.Contents[]? | [.LastModified, .Size, .Key] | @tsv' "${objects_json}" | sort)
+
+          echo "Pruned R2 sccache bytes: ${total_bytes}"
