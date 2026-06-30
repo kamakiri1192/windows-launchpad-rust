@@ -164,16 +164,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
     } else {
         // Edit badge: the glass disk is rendered by Liquid Glass; this pass
-        // only paints the iOS-style removal glyph.
+        // only paints the iOS-style close glyph.
         let r = in.params.x;
         let w = max(in.params.z, 1.0);
-        let len = r * 0.56;
-        let b = vec2<f32>(len * 2.0, 0.0);
-        let d = sd_segment(p + vec2<f32>(len, 0.0), b, w);
-        let minus = 1.0 - smoothstep(-1.0, 1.0, d);
+        let len = r * 0.50;
+        let b1 = vec2<f32>(len, len);
+        let b2 = vec2<f32>(-len, len);
+        let d1 = sd_segment(p + b1, 2.0 * b1, w);
+        let d2 = sd_segment(p + b2, 2.0 * b2, w);
+        let close = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
         let ring_d = abs(sd_circle(p, r * 0.82)) - max(w * 0.45, 0.7);
         let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.28;
-        coverage = max(minus, ring);
+        coverage = max(close, ring);
     }
 
     let a = coverage * alpha;

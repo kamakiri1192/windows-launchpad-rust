@@ -116,6 +116,7 @@ pub struct Renderer {
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: Option<Buffer>,
     control_instance_count: u32,
+    badge_sources: Vec<EditBadgeSource>,
     badge_instance_buffer: Option<Buffer>,
     badge_instance_count: u32,
     control_text_pipeline: RenderPipeline,
@@ -719,6 +720,7 @@ impl Renderer {
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: None,
             control_instance_count: 0,
+            badge_sources: Vec::new(),
             badge_instance_buffer: None,
             badge_instance_count: 0,
             control_text_pipeline,
@@ -788,22 +790,8 @@ impl Renderer {
                 contents: bytemuck::cast_slice(instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
-        let (badge_shapes, badge_marks) = edit_badge_instances(instances);
-        self.liquid_glass
-            .set_badge_shapes(&self.device, &badge_shapes);
-        self.badge_instance_count = badge_marks.len() as u32;
-        self.badge_instance_buffer = if badge_marks.is_empty() {
-            None
-        } else {
-            Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("badge foreground instance buffer"),
-                        contents: bytemuck::cast_slice(&badge_marks),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    }),
-            )
-        };
+        self.badge_sources = edit_badge_sources(instances);
+        self.update_edit_badges(0.0);
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -1223,6 +1211,7 @@ impl Renderer {
         // Bottom-control overlays: drawn last so they sit above everything.
         // Update the viewport-only control uniform, then run the procedural
         // shape pass and the text pass.
+        self.update_edit_badges(args.time);
         self.queue.write_buffer(
             &self.control_uniform_buffer,
             0,
@@ -1304,13 +1293,57 @@ fn default_backends() -> Backends {
     }
 }
 
-fn edit_badge_instances(instances: &[TileInstance]) -> (Vec<GlassShape>, Vec<ControlInstance>) {
+#[derive(Debug, Clone, Copy)]
+struct EditBadgeSource {
+    base_center: [f32; 2],
+    tile_center: [f32; 2],
+    radius: f32,
+    phase: f32,
+}
+
+impl Renderer {
+    fn update_edit_badges(&mut self, time: f32) {
+        const KIND_BADGE_CLOSE: f32 = 4.0;
+
+        let mut shapes = Vec::with_capacity(self.badge_sources.len());
+        let mut marks = Vec::with_capacity(self.badge_sources.len());
+        for source in &self.badge_sources {
+            let center = animated_badge_center(*source, time);
+            shapes.push(GlassShape::rounded_rect(
+                center,
+                [source.radius * 2.15, source.radius * 2.15],
+                source.radius,
+            ));
+            marks.push(ControlInstance {
+                center,
+                params: [source.radius, 0.92, (source.radius * 0.13).max(1.4), 0.0],
+                color: [1.0, 1.0, 1.0, 0.92],
+                kind: [KIND_BADGE_CLOSE, 0.0, 0.0, 0.0],
+            });
+        }
+
+        self.liquid_glass.set_badge_shapes(&self.device, &shapes);
+        self.badge_instance_count = marks.len() as u32;
+        self.badge_instance_buffer = if marks.is_empty() {
+            None
+        } else {
+            Some(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("badge foreground instance buffer"),
+                        contents: bytemuck::cast_slice(&marks),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    }),
+            )
+        };
+    }
+}
+
+fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
     const FLAG_WIGGLE: u32 = crate::grid::TileAnim::FLAG_WIGGLE;
     const FLAG_DRAG: u32 = crate::grid::TileAnim::FLAG_DRAG;
-    const KIND_BADGE_MINUS: f32 = 4.0;
 
-    let mut shapes = Vec::new();
-    let mut marks = Vec::new();
+    let mut sources = Vec::new();
     for tile in instances {
         let flags = tile.extra[3] as u32;
         if flags & FLAG_WIGGLE == 0 || flags & FLAG_DRAG != 0 {
@@ -1319,20 +1352,30 @@ fn edit_badge_instances(instances: &[TileInstance]) -> (Vec<GlassShape>, Vec<Con
 
         let radius = (tile.size * 0.16).clamp(9.0, 13.5);
         let center = [tile.x + radius * 0.95, tile.y + radius * 0.95];
-        shapes.push(GlassShape::rounded_rect(
-            center,
-            [radius * 2.15, radius * 2.15],
+        sources.push(EditBadgeSource {
+            base_center: center,
+            tile_center: [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5],
             radius,
-        ));
-        marks.push(ControlInstance {
-            center,
-            params: [radius, 0.92, (radius * 0.13).max(1.4), 0.0],
-            color: [1.0, 1.0, 1.0, 0.92],
-            kind: [KIND_BADGE_MINUS, 0.0, 0.0, 0.0],
+            phase: tile.extra[0],
         });
     }
 
-    (shapes, marks)
+    sources
+}
+
+fn animated_badge_center(source: EditBadgeSource, time: f32) -> [f32; 2] {
+    let t = time + source.phase;
+    let rot = (t * 8.0).sin() * 0.06;
+    let dy = (t * 8.0).sin().abs() * 2.0;
+    let rel_x = source.base_center[0] - source.tile_center[0];
+    let rel_y = source.base_center[1] - source.tile_center[1];
+    let cosr = rot.cos();
+    let sinr = rot.sin();
+
+    [
+        source.tile_center[0] + rel_x * cosr - rel_y * sinr,
+        source.tile_center[1] + rel_x * sinr + rel_y * cosr - dy,
+    ]
 }
 
 /// Frame clip geometry for the tile/icon/text shaders: `(cx, cy, hw, hh, r)`
