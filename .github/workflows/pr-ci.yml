@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.TARGET_CACHE_PATH }}
-          key: windows-target-debug-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl', '.github/workflows/pr-ci.yml', '.github/actions/setup-r2-sccache/action.yml') }}
+          key: windows-target-debug-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl') }}
           restore-keys: |
             windows-target-debug-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
 
