@@ -74,8 +74,17 @@ jobs:
         if: always() && steps.r2-sccache.outputs.enabled == 'true'
         run: sccache --show-stats
 
-      - name: Save GitHub target cache
+      - name: Lookup GitHub target cache before save
+        id: target-cache-before-save
         if: success() && steps.target-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+          lookup-only: true
+
+      - name: Save GitHub target cache
+        if: success() && steps.target-cache.outputs.cache-hit != 'true' && steps.target-cache-before-save.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.TARGET_CACHE_PATH }}
