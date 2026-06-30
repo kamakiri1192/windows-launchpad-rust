@@ -61,6 +61,8 @@ When enabled, the workflow configures `sccache` for Cloudflare R2:
 
 `CARGO_INCREMENTAL=0` is set when R2 sccache is enabled so CI compiler calls are more cacheable.
 
+The shared setup action smoke-tests R2 with `sccache rustc -vV` before enabling `RUSTC_WRAPPER` for the Cargo steps. If R2 credentials or bucket settings are wrong, the workflow logs a warning and continues without R2.
+
 ## R2 cost controls
 
 Cloudflare R2's Standard storage free tier includes 10 GB-month of storage, 1 million Class A operations, 10 million Class B operations, and free egress. The target budget for this repository is lower: keep the combined `debug` and `release` `sccache` prefixes around 4 GiB.

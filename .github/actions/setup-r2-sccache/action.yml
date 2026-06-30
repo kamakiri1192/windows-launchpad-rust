@@ -73,6 +73,27 @@ runs:
         $prefix = "windows-launchpad-rust/${{ inputs.target }}/rust-${{ inputs.rust-version }}/${{ inputs.profile }}/"
         $endpoint = "https://${{ inputs.r2-account-id }}.r2.cloudflarestorage.com"
 
+        $env:CARGO_INCREMENTAL = "0"
+        $env:RUSTC_WRAPPER = "sccache"
+        $env:SCCACHE_BUCKET = "${{ inputs.r2-bucket }}"
+        $env:SCCACHE_REGION = "auto"
+        $env:SCCACHE_ENDPOINT = $endpoint
+        $env:SCCACHE_S3_KEY_PREFIX = $prefix
+        $env:SCCACHE_S3_USE_SSL = "true"
+        $env:SCCACHE_IGNORE_SERVER_IO_ERROR = "1"
+        $env:AWS_ACCESS_KEY_ID = $env:R2_ACCESS_KEY_ID
+        $env:AWS_SECRET_ACCESS_KEY = $env:R2_SECRET_ACCESS_KEY
+        $env:AWS_DEFAULT_REGION = "auto"
+
+        sccache rustc -vV
+        if ($LASTEXITCODE -ne 0) {
+          "::warning::R2 sccache smoke test failed; continuing without R2 sccache."
+          sccache --stop-server | Out-Null
+          "enabled=false" >> $env:GITHUB_OUTPUT
+          "prefix=$prefix" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
         "Using R2 sccache prefix after GitHub target cache miss: $prefix"
         "CARGO_INCREMENTAL=0" >> $env:GITHUB_ENV
         "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
