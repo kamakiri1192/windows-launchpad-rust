@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: pr-ci-${{ github.event.pull_request.number || github.ref }}
@@ -30,22 +31,35 @@ jobs:
           rustup component add clippy rustfmt --toolchain $env:RUST_VERSION
           rustup default $env:RUST_VERSION
 
+      - name: Configure AWS credentials for shared sccache
+        if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != '' && vars.AWS_SCCACHE_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_SCCACHE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: launchpad-pr-sccache
+          mask-aws-account-id: true
+
       - name: Install sccache
         if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
         uses: mozilla-actions/sccache-action@v0.0.10
 
-      - name: Enable shared anonymous read-only S3 sccache
+      - name: Enable shared S3 sccache
         if: vars.SCCACHE_BUCKET != '' && vars.AWS_REGION != ''
         shell: pwsh
         run: |
           $prefix = "windows-launchpad-rust/$env:TARGET/rust-$env:RUST_VERSION/debug"
-          "Using anonymous read-only sccache S3 prefix: $prefix"
+          if ("${{ vars.AWS_SCCACHE_ROLE_ARN }}" -eq "") {
+            "Using anonymous read-only sccache S3 prefix: $prefix"
+            "SCCACHE_S3_RW_MODE=READ_ONLY" >> $env:GITHUB_ENV
+            "SCCACHE_S3_NO_CREDENTIALS=true" >> $env:GITHUB_ENV
+          } else {
+            "Using authenticated read/write sccache S3 prefix: $prefix"
+          }
           "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
           "SCCACHE_BUCKET=${{ vars.SCCACHE_BUCKET }}" >> $env:GITHUB_ENV
           "SCCACHE_REGION=${{ vars.AWS_REGION }}" >> $env:GITHUB_ENV
           "SCCACHE_S3_KEY_PREFIX=$prefix" >> $env:GITHUB_ENV
-          "SCCACHE_S3_RW_MODE=READ_ONLY" >> $env:GITHUB_ENV
-          "SCCACHE_S3_NO_CREDENTIALS=true" >> $env:GITHUB_ENV
           "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> $env:GITHUB_ENV
 
       - name: Cache Cargo registry and git sources

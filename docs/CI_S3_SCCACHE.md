@@ -1,8 +1,8 @@
-# Shared S3 sccache for PR CI
+# Shared S3 sccache for CI
 
-The PR CI workflow can read from an S3-backed `sccache` store so Rust builds can reuse compiler outputs across pull requests.
+The PR CI workflow can use an S3-backed `sccache` store so Rust builds can reuse compiler outputs across pull requests.
 
-This PR only adds the read path. It does not add a workflow that writes or warms the cache.
+When `AWS_SCCACHE_ROLE_ARN` is configured, PR CI authenticates to AWS with GitHub OIDC and uses the cache in read/write mode. Without that role, PR CI falls back to anonymous read-only mode.
 
 ## Why this exists
 
@@ -10,7 +10,7 @@ GitHub Actions cache is useful for Cargo registry and git source caches, but it 
 
 `sccache` keys compiler outputs by the actual compiler inputs instead of the pull request number, so the same dependency crate can be reused across PRs when the Rust version, target, and compiler flags match.
 
-## PR cache layout
+## Cache layout
 
 The PR workflow uses a stable prefix that intentionally does not include a PR number or branch name:
 
@@ -18,30 +18,46 @@ The PR workflow uses a stable prefix that intentionally does not include a PR nu
 
 This is what allows cache hits across different PRs.
 
-## Required repository variables for PR reads
+## Required repository variables
 
-Set these repository variables before enabling the PR cache read path:
+Set these repository variables before enabling S3 sccache:
 
 - `SCCACHE_BUCKET`: S3 bucket name used by sccache.
 - `AWS_REGION`: S3 bucket region.
+- `AWS_SCCACHE_ROLE_ARN`: IAM role ARN that PR CI assumes with GitHub OIDC. If this is omitted, PR CI uses anonymous read-only S3 access instead.
 
 ## PR behavior
 
-Pull request workflows use the shared S3 cache in anonymous read-only mode:
+Pull request workflows have two cache modes.
+
+With `AWS_SCCACHE_ROLE_ARN`, PR CI requests short-lived AWS credentials and uses the S3 cache in read/write mode. This means PR builds can populate the shared cache directly.
+
+Without `AWS_SCCACHE_ROLE_ARN`, PR CI uses anonymous read-only mode:
 
 - `SCCACHE_S3_RW_MODE=READ_ONLY`
 - `SCCACHE_S3_NO_CREDENTIALS=true`
 - `SCCACHE_IGNORE_SERVER_IO_ERROR=1`
 
-This avoids giving PR builds AWS credentials, including write credentials. It also means the configured bucket or prefix must allow unauthenticated reads for cache hits to work.
+Anonymous read-only mode requires the configured bucket or prefix to allow unauthenticated reads for cache hits to work.
 
-The PR workflow still falls back to a normal local build if the repository variables are missing, the bucket is private, or S3 is unavailable.
+The PR workflow skips S3 sccache entirely if `SCCACHE_BUCKET` or `AWS_REGION` is missing.
 
-## Warming the cache
+## AWS permissions
 
-Cache objects must be written by a trusted workflow or another trusted process outside this PR. That writer can run on `main`, a scheduled workflow, or a manual workflow with AWS credentials.
+The IAM role used by `AWS_SCCACHE_ROLE_ARN` should be scoped to this repository's GitHub OIDC subject and to this cache prefix. It needs permission to read and write cache objects under:
 
-If a future trusted GitHub Actions writer is added, keep it separate from `pull_request` and use an IAM role such as `AWS_SCCACHE_ROLE_ARN` there. Do not expose write credentials to PR code.
+- `s3://<SCCACHE_BUCKET>/windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/*`
+
+Because PR code can run build scripts, read/write mode should only be used when PRs are trusted for this repository.
+
+The role policy needs object access for the cache prefix:
+
+- `s3:GetObject`
+- `s3:PutObject`
+
+Add `s3:ListBucket` with a prefix condition for `windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/*` only if the chosen bucket policy requires listing.
+
+## Checking the cache
 
 After a run, check the `sccache --show-stats` output. Useful numbers are:
 
