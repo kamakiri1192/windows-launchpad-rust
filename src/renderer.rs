@@ -24,6 +24,7 @@ use crate::bottom_control::ControlInstance;
 use crate::grid::{GridLayout, TileInstance};
 use crate::icon_pipeline::IconInstance;
 use crate::liquid_glass::capture::FallbackCapture;
+use crate::liquid_glass::geometry::GlassShape;
 use crate::liquid_glass::LiquidGlassRenderer;
 use crate::text::GlyphQuad;
 use crate::UserEvent;
@@ -57,6 +58,8 @@ struct Uniforms {
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ControlUniforms {
     viewport: [f32; 2],
+    scroll_x: f32,
+    _pad: f32,
 }
 
 pub struct Renderer {
@@ -113,6 +116,8 @@ pub struct Renderer {
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: Option<Buffer>,
     control_instance_count: u32,
+    badge_instance_buffer: Option<Buffer>,
+    badge_instance_count: u32,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: Option<Buffer>,
@@ -714,6 +719,8 @@ impl Renderer {
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: None,
             control_instance_count: 0,
+            badge_instance_buffer: None,
+            badge_instance_count: 0,
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: None,
@@ -781,6 +788,22 @@ impl Renderer {
                 contents: bytemuck::cast_slice(instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
+        let (badge_shapes, badge_marks) = edit_badge_instances(instances);
+        self.liquid_glass
+            .set_badge_shapes(&self.device, &badge_shapes);
+        self.badge_instance_count = badge_marks.len() as u32;
+        self.badge_instance_buffer = if badge_marks.is_empty() {
+            None
+        } else {
+            Some(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("badge foreground instance buffer"),
+                        contents: bytemuck::cast_slice(&badge_marks),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    }),
+            )
+        };
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -1205,8 +1228,12 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&ControlUniforms {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
+                scroll_x: args.scroll_x,
+                _pad: 0.0,
             }),
         );
+        self.liquid_glass
+            .render_badges(&self.queue, &mut encoder, &view, args.scroll_x);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),
@@ -1224,6 +1251,14 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if self.badge_instance_count > 0 {
+                if let Some(buf) = self.badge_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.badge_instance_count);
+                }
+            }
             if self.control_instance_count > 0 {
                 if let Some(buf) = self.control_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);
@@ -1267,6 +1302,37 @@ fn default_backends() -> Backends {
     {
         Backends::DX12 | Backends::VULKAN
     }
+}
+
+fn edit_badge_instances(instances: &[TileInstance]) -> (Vec<GlassShape>, Vec<ControlInstance>) {
+    const FLAG_WIGGLE: u32 = crate::grid::TileAnim::FLAG_WIGGLE;
+    const FLAG_DRAG: u32 = crate::grid::TileAnim::FLAG_DRAG;
+    const KIND_BADGE_MINUS: f32 = 4.0;
+
+    let mut shapes = Vec::new();
+    let mut marks = Vec::new();
+    for tile in instances {
+        let flags = tile.extra[3] as u32;
+        if flags & FLAG_WIGGLE == 0 || flags & FLAG_DRAG != 0 {
+            continue;
+        }
+
+        let radius = (tile.size * 0.16).clamp(9.0, 13.5);
+        let center = [tile.x + radius * 0.95, tile.y + radius * 0.95];
+        shapes.push(GlassShape::rounded_rect(
+            center,
+            [radius * 2.15, radius * 2.15],
+            radius,
+        ));
+        marks.push(ControlInstance {
+            center,
+            params: [radius, 0.92, (radius * 0.13).max(1.4), 0.0],
+            color: [1.0, 1.0, 1.0, 0.92],
+            kind: [KIND_BADGE_MINUS, 0.0, 0.0, 0.0],
+        });
+    }
+
+    (shapes, marks)
 }
 
 /// Frame clip geometry for the tile/icon/text shaders: `(cx, cy, hw, hh, r)`

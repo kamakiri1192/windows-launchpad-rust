@@ -176,7 +176,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Edit-mode delete badge: a red circle with a white ✕ in the top-left
     // corner. Shown on every wiggling (editing) tile that isn't being dragged.
     // The badge bypasses the squircle mask so the icon corner cannot cut it.
-    if wiggling && !dragged {
+    if false {
         // Badge center sits at the tile's top-left corner. In local coords,
         // negative Y is the top edge because screen-space Y grows downward.
         let badge_r = min(in.size_r.x * 0.13, 11.0);

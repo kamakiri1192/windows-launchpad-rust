@@ -179,7 +179,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // the tile pass and would otherwise cover the badge. It bypasses the
     // squircle mask so the icon corner cannot cut it.
     var final_a = out_a;
-    if wiggling && !dragged {
+    if false {
         let badge_r = min(in.size_r.x * 0.13, 11.0);
         // Top-left badge; local negative Y is the screen-space top edge.
         let badge_center = vec2<f32>(-half_size + badge_r, -half_size + badge_r);
