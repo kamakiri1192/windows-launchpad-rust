@@ -1120,6 +1120,19 @@ impl Renderer {
             args.defer_backdrop_capture,
         );
 
+        let drag_active = args.drag_active > 0.5 && self.instance_count > 0;
+        let normal_tile_count = if drag_active {
+            self.instance_count - 1
+        } else {
+            self.instance_count
+        };
+        let drag_icon_active = self.dragged_icon_instance && self.icon_instance_count > 0;
+        let normal_icon_count = if drag_icon_active {
+            self.icon_instance_count - 1
+        } else {
+            self.icon_instance_count
+        };
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tile pass"),
@@ -1137,22 +1150,10 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let drag_active = args.drag_active > 0.5 && self.instance_count > 0;
-            let normal_tile_count = if drag_active {
-                self.instance_count - 1
-            } else {
-                self.instance_count
-            };
-            let drag_icon_active = self.dragged_icon_instance && self.icon_instance_count > 0;
-            let normal_icon_count = if drag_icon_active {
-                self.icon_instance_count - 1
-            } else {
-                self.icon_instance_count
-            };
 
             // Normal color tiles. The dragged tile, if any, is withheld and
-            // drawn again after icons/text so its background stays above the
-            // rest of the grid as one lifted visual unit.
+            // drawn again after badges so its lifted visual unit stays above
+            // every non-dragged edit badge.
             if normal_tile_count > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -1182,35 +1183,10 @@ impl Renderer {
                     pass.draw(0..6, 0..self.text_instance_count);
                 }
             }
-
-            // Drag overlay: tile background first, then its icon, both after
-            // normal icons/text. This keeps the lifted icon from visually
-            // slipping behind neighboring icons.
-            if drag_active {
-                let stride =
-                    std::mem::size_of::<crate::grid::TileInstance>() as wgpu::BufferAddress;
-                let offset = stride * normal_tile_count as wgpu::BufferAddress;
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..));
-                pass.draw(0..6, 0..1);
-            }
-            if drag_icon_active {
-                if let Some(buf) = self.icon_instance_buffer.as_ref() {
-                    let stride = std::mem::size_of::<crate::icon_pipeline::IconInstance>()
-                        as wgpu::BufferAddress;
-                    let offset = stride * normal_icon_count as wgpu::BufferAddress;
-                    pass.set_pipeline(&self.icon_pipeline);
-                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(offset..));
-                    pass.draw(0..6, 0..1);
-                }
-            }
         }
 
-        // Bottom-control overlays: drawn last so they sit above everything.
-        // Update the viewport-only control uniform, then run the procedural
-        // shape pass and the text pass.
+        // Edit badges sit above the normal grid but below the lifted dragged
+        // icon. The bottom control remains a later, screen-fixed overlay.
         self.update_edit_badges(args.time);
         self.queue.write_buffer(
             &self.control_uniform_buffer,
@@ -1225,7 +1201,7 @@ impl Renderer {
             .render_badges(&self.queue, &mut encoder, &view, args.scroll_x);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("control overlay pass"),
+                label: Some("edit badge foreground pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -1248,6 +1224,65 @@ impl Renderer {
                     pass.draw(0..6, 0..self.badge_instance_count);
                 }
             }
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("drag overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            if drag_active {
+                let stride =
+                    std::mem::size_of::<crate::grid::TileInstance>() as wgpu::BufferAddress;
+                let offset = stride * normal_tile_count as wgpu::BufferAddress;
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..));
+                pass.draw(0..6, 0..1);
+            }
+            if drag_icon_active {
+                if let Some(buf) = self.icon_instance_buffer.as_ref() {
+                    let stride = std::mem::size_of::<crate::icon_pipeline::IconInstance>()
+                        as wgpu::BufferAddress;
+                    let offset = stride * normal_icon_count as wgpu::BufferAddress;
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(offset..));
+                    pass.draw(0..6, 0..1);
+                }
+            }
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("control overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
             if self.control_instance_count > 0 {
                 if let Some(buf) = self.control_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);
