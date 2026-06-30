@@ -69,7 +69,49 @@ impl<'a> From<&'a AppEntry> for GridApp<'a> {
     }
 }
 
-/// One drawable tile, matching the WGSL `@location(0..3)` instance attributes.
+/// Per-app edit-mode animation parameters, packed into the tile/icon instance
+/// `extra` vec4.
+///
+/// - `phase` — wiggle phase offset (seconds), per-app so icons wobble out of
+///   sync. Ignored unless `FLAG_WIGGLE` is set.
+/// - `lift` — vertical lift in physical px (dragged icon rises above the grid).
+/// - `scale` — uniform scale multiplier (dragged icon is enlarged).
+/// - `flags` — bitfield; bit 0 = wiggling, bit 1 = dragged (bypass frame clip).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TileAnim {
+    pub phase: f32,
+    pub lift: f32,
+    pub scale: f32,
+    pub flags: u32,
+}
+
+impl TileAnim {
+    /// Bit set in `flags` while edit mode is active (icon should wiggle).
+    pub const FLAG_WIGGLE: u32 = 1 << 0;
+    /// Bit set in `flags` while this icon is the one being dragged (lifted,
+    /// pointer-following, frame clip bypassed).
+    pub const FLAG_DRAG: u32 = 1 << 1;
+
+    /// An all-zero animation (the resting state — no wiggle, no lift).
+    pub const IDLE: Self = Self {
+        phase: 0.0,
+        lift: 0.0,
+        scale: 1.0,
+        flags: 0,
+    };
+
+    #[inline]
+    fn to_extra(self) -> [f32; 4] {
+        [self.phase, self.lift, self.scale, self.flags as f32]
+    }
+}
+
+/// One drawable tile, matching the WGSL `@location(0..4)` instance attributes.
+/// 48 bytes for clean GPU alignment.
+///
+/// `extra` carries the edit-mode animation parameters:
+/// `(phase, lift, scale, flags)` where flags bit 0 = wiggling and bit 1 = being
+/// dragged (lifted + pointer-following, frame clip bypassed).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TileInstance {
@@ -84,14 +126,20 @@ pub struct TileInstance {
     pub b: f32,
     /// Icon index into the atlas. `-1.0` means "no icon → render the color
     /// tile as a fallback". Otherwise it's the atlas entry index as a float.
-    /// Reuses the old `_pad` slot so the struct stays 32 bytes.
     pub icon_index: f32,
+    /// Edit-mode animation: `(phase, lift, scale, flags)`.
+    pub extra: [f32; 4],
 }
 
 impl TileInstance {
     /// Vertex attributes describing this struct for `wgpu::VertexBufferLayout`.
-    pub const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32];
+    pub const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x2,
+        2 => Float32x3,
+        3 => Float32,
+        4 => Float32x4
+    ];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<TileInstance>() as wgpu::BufferAddress,
@@ -239,6 +287,33 @@ impl GridLayout {
         scroll_x: f32,
         app_count: usize,
     ) -> Option<usize> {
+        self.hit_test_cell(viewport_w, screen_x, screen_y, scroll_x, app_count, true)
+    }
+
+    /// Return the tile-cell index under a screen-space pointer, excluding label
+    /// text and allowing callers to pass a larger `cell_count` than the number
+    /// of visible apps. Used by edit-mode drag/drop so empty final-page slots
+    /// can be valid drop targets.
+    pub fn hit_test_tile_cell(
+        &self,
+        viewport_w: f32,
+        screen_x: f32,
+        screen_y: f32,
+        scroll_x: f32,
+        cell_count: usize,
+    ) -> Option<usize> {
+        self.hit_test_cell(viewport_w, screen_x, screen_y, scroll_x, cell_count, false)
+    }
+
+    fn hit_test_cell(
+        &self,
+        viewport_w: f32,
+        screen_x: f32,
+        screen_y: f32,
+        scroll_x: f32,
+        cell_count: usize,
+        include_label: bool,
+    ) -> Option<usize> {
         if viewport_w <= 0.0
             || !viewport_w.is_finite()
             || !screen_x.is_finite()
@@ -251,17 +326,6 @@ impl GridLayout {
         // Pages are spaced by the content page width, not the full viewport.
         let page_w = self.page_width(viewport_w);
 
-        let content_x = screen_x - scroll_x;
-        if content_x < 0.0 {
-            return None;
-        }
-
-        let page = (content_x / page_w).floor() as usize;
-        if page >= self.page_count {
-            return None;
-        }
-
-        let x_in_page = content_x - page as f32 * page_w - self.margin_left;
         let y_in_grid = screen_y - self.margin_top;
         if y_in_grid < 0.0 {
             return None;
@@ -271,29 +335,52 @@ impl GridLayout {
         let step_y = self.tile_size + self.row_gap;
         let label_click_extra_x = self.scaled(LABEL_CLICK_EXTRA_X);
         let label_click_extra_y = self.scaled(LABEL_CLICK_EXTRA_Y);
-        let col = ((x_in_page + label_click_extra_x) / step_x).floor() as usize;
         let row = (y_in_grid / step_y).floor() as usize;
-        if col >= self.cols || row >= self.rows {
+        if row >= self.rows {
             return None;
         }
 
-        let tile_x = col as f32 * step_x;
         let tile_y = row as f32 * step_y;
-        let in_tile = x_in_page >= tile_x
-            && x_in_page <= tile_x + self.tile_size
-            && y_in_grid >= tile_y
-            && y_in_grid <= tile_y + self.tile_size;
-        let in_label = x_in_page >= tile_x - label_click_extra_x
-            && x_in_page <= tile_x + self.tile_size + label_click_extra_x
-            && y_in_grid >= tile_y + self.tile_size
-            && y_in_grid <= tile_y + self.tile_size + label_click_extra_y;
-        if !in_tile && !in_label {
-            return None;
+        let content_x = screen_x - scroll_x;
+
+        for page in 0..self.page_count {
+            // Mirror tile placement exactly: x = page * page_w + margin_left +
+            // col * step_x. The grid can be centered in the viewport while
+            // page_w is narrower than the viewport, so deriving `page` from
+            // content_x / page_w before subtracting margin_left misclassifies
+            // the rightmost columns as the next page.
+            let x_in_page = content_x - page as f32 * page_w - self.margin_left;
+            if x_in_page < -label_click_extra_x {
+                continue;
+            }
+
+            let col = ((x_in_page + label_click_extra_x) / step_x).floor() as usize;
+            if col >= self.cols {
+                continue;
+            }
+
+            let tile_x = col as f32 * step_x;
+            let in_tile = x_in_page >= tile_x
+                && x_in_page <= tile_x + self.tile_size
+                && y_in_grid >= tile_y
+                && y_in_grid <= tile_y + self.tile_size;
+            let in_label = include_label
+                && x_in_page >= tile_x - label_click_extra_x
+                && x_in_page <= tile_x + self.tile_size + label_click_extra_x
+                && y_in_grid >= tile_y + self.tile_size
+                && y_in_grid <= tile_y + self.tile_size + label_click_extra_y;
+            if !in_tile && !in_label {
+                continue;
+            }
+
+            let per_page = self.cols * self.rows;
+            let index = page * per_page + row * self.cols + col;
+            if index < cell_count {
+                return Some(index);
+            }
         }
 
-        let per_page = self.cols * self.rows;
-        let index = page * per_page + row * self.cols + col;
-        (index < app_count).then_some(index)
+        None
     }
 
     /// Produce the flat list of tile instances for real apps in the current layout.
@@ -308,7 +395,12 @@ impl GridLayout {
     /// Tiles are filled left-to-right, top-to-bottom across pages. Apps without
     /// loaded icon UVs still get color fallback tiles. Empty slots after the
     /// last app are skipped.
-    pub fn build_instances(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<TileInstance> {
+    pub fn build_instances(
+        &self,
+        viewport_w: f32,
+        apps: &[GridApp<'_>],
+        anim: &[TileAnim],
+    ) -> Vec<TileInstance> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
@@ -323,6 +415,7 @@ impl GridLayout {
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let (r_, g_, b_) = app_color(idx);
             let icon_index = if app.uv.is_some() { idx as f32 } else { -1.0 };
+            let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
             out.push(TileInstance {
                 x,
                 y,
@@ -332,6 +425,7 @@ impl GridLayout {
                 g: g_,
                 b: b_,
                 icon_index,
+                extra: anim.to_extra(),
             });
         }
         out
@@ -345,6 +439,7 @@ impl GridLayout {
         &self,
         viewport_w: f32,
         apps: &[GridApp<'_>],
+        anim: &[TileAnim],
     ) -> Vec<crate::icon_pipeline::IconInstance> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
@@ -361,6 +456,7 @@ impl GridLayout {
             let page_origin_x = (p as f32) * page_w;
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
+            let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
             out.push(crate::icon_pipeline::IconInstance {
                 x,
                 y,
@@ -370,6 +466,7 @@ impl GridLayout {
                 v0: uv.v0,
                 u1: uv.u1,
                 v1: uv.v1,
+                extra: anim.to_extra(),
             });
         }
         out
@@ -409,6 +506,21 @@ impl GridLayout {
     #[inline]
     pub fn scaled(&self, value: f32) -> f32 {
         value * self.scale
+    }
+
+    /// The home-cell top-left position (content px) for the app at display
+    /// index `idx`, mirroring what `build_instances` computes. Used to drive
+    /// per-tile position springs for reorder animations.
+    pub fn tile_position(&self, viewport_w: f32, idx: usize) -> (f32, f32) {
+        let per_page = self.cols * self.rows;
+        let p = idx / per_page;
+        let row_in_page = idx % per_page;
+        let r = row_in_page / self.cols;
+        let c = row_in_page % self.cols;
+        let page_origin_x = (p as f32) * self.page_width(viewport_w);
+        let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
+        let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
+        (x, y)
     }
 }
 
@@ -529,7 +641,7 @@ mod tests {
         let apps = fake_apps(g.total_tiles());
         assert_eq!(g.total_tiles(), 7 * 5 * 3);
         assert_eq!(
-            g.build_instances(1280.0, &view(&apps)).len(),
+            g.build_instances(1280.0, &view(&apps), &[]).len(),
             g.total_tiles()
         );
     }
@@ -539,7 +651,7 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps = fake_apps(g.total_tiles());
-        let inst = g.build_instances(vw, &view(&apps));
+        let inst = g.build_instances(vw, &view(&apps), &[]);
         let page_w = g.page_width(vw);
         let p0 = inst[0].x;
         let p1 = inst[7 * 5].x; // first tile of page 1
@@ -619,7 +731,7 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps = fake_apps(g.total_tiles());
-        let inst = g.build_instances(vw, &view(&apps));
+        let inst = g.build_instances(vw, &view(&apps), &[]);
         let grid_w = g.cols as f32 * g.tile_size + (g.cols - 1) as f32 * g.gap;
         let expected_left = (vw - grid_w) * 0.5;
         assert!(
@@ -646,6 +758,45 @@ mod tests {
         let y = g.margin_top + g.tile_size + 24.0;
 
         assert_eq!(g.hit_test_app(vw, x, y, 0.0, g.total_tiles()), Some(0));
+    }
+
+    #[test]
+    fn tile_cell_hit_test_excludes_label_area_for_edit_drop() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let x = g.margin_left + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size + 24.0;
+
+        assert_eq!(g.hit_test_tile_cell(vw, x, y, 0.0, g.total_tiles()), None);
+    }
+
+    #[test]
+    fn tile_cell_hit_test_allows_empty_slots() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let step_x = g.tile_size + g.gap;
+        let x = g.margin_left + step_x + g.tile_size * 0.5;
+        let y = g.margin_top + g.tile_size * 0.5;
+
+        assert_eq!(g.hit_test_app(vw, x, y, 0.0, 1), None);
+        assert_eq!(g.hit_test_tile_cell(vw, x, y, 0.0, 2), Some(1));
+    }
+
+    #[test]
+    fn tile_cell_hit_test_allows_rightmost_column() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let step_x = g.tile_size + g.gap;
+        let y = g.margin_top + g.tile_size * 0.5;
+
+        for col in [g.cols - 2, g.cols - 1] {
+            let x = g.margin_left + col as f32 * step_x + g.tile_size * 0.5;
+            assert_eq!(
+                g.hit_test_tile_cell(vw, x, y, 0.0, g.total_tiles()),
+                Some(col),
+                "column {col} should be reachable"
+            );
+        }
     }
 
     #[test]
@@ -720,7 +871,7 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps = fake_apps(g.total_tiles());
-        let inst = g.build_instances(vw, &view(&apps));
+        let inst = g.build_instances(vw, &view(&apps), &[]);
         // fake_apps gives even indices an icon (uv.is_some()).
         for (i, tile) in inst.iter().enumerate() {
             if apps[i].uv.is_some() {
@@ -739,7 +890,7 @@ mod tests {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
         let apps: Vec<OwnedApp> = vec![];
-        let inst = g.build_instances(vw, &view(&apps));
+        let inst = g.build_instances(vw, &view(&apps), &[]);
         assert!(inst.is_empty());
     }
 
@@ -752,7 +903,7 @@ mod tests {
         let apps = fake_apps(app_count);
 
         assert_eq!(g.page_count, 2);
-        assert_eq!(g.build_instances(vw, &view(&apps)).len(), app_count);
+        assert_eq!(g.build_instances(vw, &view(&apps), &[]).len(), app_count);
         assert_eq!(g.build_labels(vw, &view(&apps)).len(), app_count);
     }
 

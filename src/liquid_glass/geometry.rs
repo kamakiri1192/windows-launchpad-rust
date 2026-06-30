@@ -75,7 +75,7 @@ pub fn shapes_from_layout(
 
     shapes.extend(
         layout
-            .build_instances(viewport_w, apps)
+            .build_instances(viewport_w, apps, &[])
             .iter()
             .map(|tile| shape_from_tile(layout, tile)),
     );

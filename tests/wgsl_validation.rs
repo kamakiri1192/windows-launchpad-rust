@@ -4,16 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const LAUNCHPAD_UNIFORMS_SIZE: u64 = 40;
+const LAUNCHPAD_UNIFORMS_SIZE: u64 = 48;
 const GLASS_UNIFORMS_SIZE: u64 = 80;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-const TILE_ATTRIBS: [wgpu::VertexAttribute; 4] =
-    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32];
+const TILE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32, 4 => Float32x4];
 const TILE_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-    array_stride: 32,
+    array_stride: 48,
     step_mode: wgpu::VertexStepMode::Instance,
     attributes: &TILE_ATTRIBS,
 };
@@ -26,10 +25,10 @@ const GLYPH_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout
     attributes: &GLYPH_ATTRIBS,
 };
 
-const ICON_ATTRIBS: [wgpu::VertexAttribute; 2] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+const ICON_ATTRIBS: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 const ICON_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-    array_stride: 32,
+    array_stride: 48,
     step_mode: wgpu::VertexStepMode::Instance,
     attributes: &ICON_ATTRIBS,
 };

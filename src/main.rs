@@ -83,6 +83,28 @@ const MIN_WINDOW_HEIGHT: f64 = 480.0;
 /// drop and re-acquire focus as the OS shuffles windows). Without this the
 /// just-summoned launcher would instantly hide again on some machines.
 const SUMMON_FOCUS_GRACE: Duration = Duration::from_millis(500);
+/// How long a press must be held (without dragging past `CLICK_SLOP_PHYS`) to
+/// enter edit mode. iOS home-screen long-press is ~450–500 ms; we use 500 ms to
+/// avoid accidental triggers during a slow scroll.
+const LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(500);
+/// While dragging an icon in edit mode, holding it this close to the page-frame
+/// edge starts a one-page autoscroll.
+const EDIT_EDGE_SCROLL_ZONE: f32 = 72.0;
+
+/// A grid press that hasn't yet been classified as a scroll drag, a click, or a
+/// long-press into edit mode. While present, the scroller is *not* in
+/// `Dragging` — we hold off until the gesture reveals its intent.
+#[derive(Debug, Clone, Copy)]
+struct PendingPress {
+    /// When the press started (for long-press timing).
+    start: Instant,
+    /// Pointer position at press start (physical px).
+    x: f32,
+    y: f32,
+    /// The app under the pointer at press start, if any. Entering edit mode
+    /// lifts this app into a drag immediately.
+    app_index: Option<usize>,
+}
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
 /// event, this carries icon-worker results and refresh-watcher diffs.
@@ -150,6 +172,28 @@ struct App {
     drag_start_x: f32,
     drag_start_y: f32,
     first_frame_rendered: bool,
+
+    // ---- edit mode (iOS-style drag-to-reorder) ----
+    /// True while the launcher is in the wiggling, reorderable state. Entered
+    /// via long-press on an icon; exited via Esc / outside click / Done.
+    editing: bool,
+    /// A press is currently held down on the grid (not on the control) and we
+    /// haven't yet decided whether it's a scroll drag, a click, or a long-press
+    /// into edit mode. `Some` holds the press start time + pointer + app id.
+    pending_press: Option<PendingPress>,
+    /// The app currently being dragged in edit mode (lifted off the grid). Its
+    /// tile is drawn at the pointer instead of its home cell.
+    drag_app: Option<AppId>,
+    /// Pointer position the dragged tile follows (physical px, screen space).
+    drag_x: f32,
+    drag_y: f32,
+    /// Accumulated wiggle animation phase (seconds). Only advances while
+    /// `editing`.
+    wiggle_phase: f32,
+    /// Per-visible-app position springs. Each spring is keyed by `AppId` so it
+    /// follows the app across reorder operations: the old cell remains the
+    /// current spring value, and the app's new cell becomes the target.
+    tile_springs: Vec<(AppId, scroll::Spring2)>,
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
@@ -220,6 +264,13 @@ impl App {
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
+            editing: false,
+            pending_press: None,
+            drag_app: None,
+            drag_x: 0.0,
+            drag_y: 0.0,
+            wiggle_phase: 0.0,
+            tile_springs: Vec::new(),
             control: bottom_control::BottomControl::new(),
             cached_query_width: None,
             last_page: 0,
@@ -335,15 +386,19 @@ impl App {
         let query_width = self.measure_query_width();
         let caret_blink = caret_visibility(&self.control);
 
-        // 1) Procedural overlay instances (magnifier, dots, caret, close).
-        let instances =
-            bottom_control::build_overlay_instances(&geom, &layers, query_width, caret_blink);
+        // 1) Procedural overlay instances (magnifier, dots, caret, close). In
+        // edit mode the control is just the "完了" text — drop the overlays.
+        let instances = if self.editing {
+            Vec::new()
+        } else {
+            bottom_control::build_overlay_instances(&geom, &layers, query_width, caret_blink)
+        };
 
         // 2) Text glyphs (label / query / placeholder). Built via the shared
         // text renderer so they share the glyph atlas. Done before touching the
         // renderer so the atlas upload + dirty clear happen in one place.
         let (quads, atlas_dirty) = if let Some(t) = self.text.as_mut() {
-            let q = self_layout_control_text(t, &geom, &layers, scale, &self.control);
+            let q = self_layout_control_text(t, &geom, &layers, scale, &self.control, self.editing);
             (q, t.atlas_dirty)
         } else {
             (Vec::new(), false)
@@ -423,11 +478,15 @@ impl App {
     /// Build an owned snapshot of the currently visible app list in display order.
     /// Returns owned data so it doesn't hold a borrow on `self` while the
     /// renderer mutates.
+    ///
+    /// Apps the user hid via the edit-mode ✕ badge are excluded here (same path
+    /// as the search filter), so they never reach the grid or click resolution.
     fn grid_apps_owned(&self) -> Vec<(String, Option<icons::UvRect>)> {
         let query = self.visible_search_query();
         self.registry
             .apps()
             .iter()
+            .filter(|rec| !self.registry.is_hidden(&rec.app_id))
             .filter(|rec| Self::matches_search(&rec.name, &query))
             .map(|rec| (rec.name.clone(), rec.uv))
             .collect()
@@ -438,6 +497,7 @@ impl App {
         self.registry
             .apps()
             .iter()
+            .filter(|rec| !self.registry.is_hidden(&rec.app_id))
             .filter(|rec| Self::matches_search(&rec.name, &query))
             .map(|rec| rec.app_id.clone())
             .collect()
@@ -488,9 +548,29 @@ impl App {
             }
         }
 
+        let visible_ids = self.visible_app_ids();
+        let anim = self.edit_anim(&visible_ids);
+        // Update the per-tile position springs to the new home cells (keeping
+        // each spring's current value so tiles glide from where they were).
+        self.update_tile_springs(&visible_ids, w as f32);
+        // Build the instances and override each tile's position with its spring
+        // value so a reorder (or relayout) animates the icons sliding into place
+        // rather than snapping. Done before the renderer borrow so we can read
+        // the springs under &self.
+        let mut tile_instances = self.layout.build_instances(w as f32, &apps, &anim);
+        self.apply_spring_positions(&visible_ids, &mut tile_instances);
+        let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
+        self.apply_spring_positions(&visible_ids, &mut icon_instances);
+        // While dragging, lift the dragged app off the grid: remove it from the
+        // normal instance list and append a pointer-following copy at the end so
+        // it draws on top of everything else.
+        self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
         if let Some(r) = self.renderer.as_mut() {
-            r.rebuild_instances(&self.layout, &apps);
-            let icon_instances = self.layout.build_icon_instances(w as f32, &apps);
+            // The liquid-glass shape rebuild uses the resting positions (the
+            // glass doesn't need to follow the slide); the tile/icon instance
+            // buffers carry the spring-adjusted positions.
+            r.rebuild_instances(&self.layout, &apps, &anim);
+            r.set_tile_instances(&tile_instances);
             r.set_icon_instances(&icon_instances);
         }
 
@@ -616,7 +696,10 @@ impl App {
             })
             .collect();
         let (w, _h) = self.viewport_phys();
-        let icon_instances = self.layout.build_icon_instances(w as f32, &apps);
+        let visible_ids = self.visible_app_ids();
+        let anim = self.edit_anim(&visible_ids);
+        let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
+        self.apply_spring_positions(&visible_ids, &mut icon_instances);
         if let Some(r) = self.renderer.as_mut() {
             r.set_icon_instances(&icon_instances);
         }
@@ -1029,6 +1112,301 @@ impl App {
         launch
     }
 
+    // ---- edit mode (iOS-style reorder) -----------------------------------
+
+    /// Begin a grid press. Instead of immediately starting a scroll drag (the
+    /// old behavior), we record the press and wait to see whether it becomes a
+    /// drag (→ scroll), a quick release (→ click/launch), or a long-press
+    /// (→ enter edit mode). The scroller stays `Idle` until intent is clear.
+    fn begin_grid_press(&mut self, now: Instant) {
+        let x = self.pointer_phys_x;
+        let y = self.pointer_phys_y;
+        let app_index = self.app_index_at_pointer(x, y);
+        debug_log!("edit-press: pending x={x:.1} y={y:.1} app_index={app_index:?}");
+        self.pending_press = Some(PendingPress {
+            start: now,
+            x,
+            y,
+            app_index,
+        });
+        self.request_redraw();
+    }
+
+    /// Resolve the visible-grid index under the pointer (or `None` if it's over
+    /// empty space / the label gap that isn't a real cell). Used both for
+    /// long-press target and drop-target detection.
+    fn app_index_at_pointer(&self, x: f32, y: f32) -> Option<usize> {
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let visible_ids = self.visible_app_ids();
+        self.layout
+            .hit_test_app(w as f32, x, y, scroll_x, visible_ids.len())
+    }
+
+    /// Resolve a tile-cell index for edit-mode drag/drop. Unlike app click
+    /// hit-testing this excludes labels and allows the empty slot immediately
+    /// after the last visible app, so dropping at the final page tail works.
+    fn edit_drop_index_at_pointer(&self, x: f32, y: f32) -> Option<usize> {
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        self.layout
+            .hit_test_tile_cell(w as f32, x, y, scroll_x, self.layout.total_tiles())
+    }
+
+    /// True if the pointer (physical px) is over the ✕ badge of the app at
+    /// `idx`. The badge sits at the tile's top-left corner, with a radius
+    /// matching the shader's badge radius (≈13% of the tile size, max 11px). A
+    /// little slop is added so the hit area is forgiving on a touch screen.
+    fn badge_hit(&self, idx: usize, x: f32, y: f32) -> bool {
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let (tx, ty) = self.layout.tile_position(w as f32, idx);
+        let badge_r = (self.layout.tile_size * 0.13).min(11.0) + 6.0; // +6px slop
+        let cx = tx + scroll_x + badge_r;
+        let cy = ty + badge_r;
+        let dx = x - cx;
+        let dy = y - cy;
+        dx * dx + dy * dy <= badge_r * badge_r
+    }
+
+    /// Hide an app from the launcher (the ✕ badge action): removes it from the
+    /// visible stream, persists the hidden list, and relayouts. Reversible by
+    /// clearing the hidden list later. Stays a no-op if already hidden.
+    fn hide_app(&mut self, id: &AppId) {
+        if self.registry.is_hidden(id) {
+            return;
+        }
+        self.registry.hide(id);
+        // Drop the app from the user order too so it doesn't linger invisibly.
+        let mut order: Vec<AppId> = self
+            .registry
+            .order()
+            .iter()
+            .filter(|x| *x != id)
+            .cloned()
+            .collect();
+        order.push(id.clone());
+        self.registry.set_order(order);
+        self.persist_hidden();
+        self.persist_user_order();
+        // Drop any in-flight drag of the just-hidden app.
+        if self.drag_app.as_ref() == Some(id) {
+            self.drag_app = None;
+        }
+        self.relayout();
+        self.request_redraw();
+    }
+
+    /// A press is pending; check whether movement past `CLICK_SLOP_PHYS`
+    /// promotes it to a real scroll drag. Returns true if it was promoted.
+    fn maybe_promote_press_to_drag(&mut self) -> bool {
+        let Some(p) = self.pending_press else {
+            return false;
+        };
+        let dx = self.pointer_phys_x - p.x;
+        let dy = self.pointer_phys_y - p.y;
+        if dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS {
+            return false;
+        }
+        // Promote: start the scroll drag from the original anchor, then apply
+        // the current pointer so the page follows the gesture from here.
+        self.pending_press = None;
+        self.handle_drag_start(p.x, p.y);
+        if self.scroller.as_ref().map(|s| s.phase) == Some(Phase::Dragging) {
+            self.handle_drag_move(self.pointer_phys_x);
+        }
+        true
+    }
+
+    /// Check whether the pending press has been held long enough to enter edit
+    /// mode. Called from `about_to_wait`. Returns true if edit mode was entered.
+    fn maybe_long_press_into_edit(&mut self, now: Instant) -> bool {
+        let Some(p) = self.pending_press else {
+            return false;
+        };
+        // Only a press that hasn't moved past slop can become a long-press.
+        let dx = self.pointer_phys_x - p.x;
+        let dy = self.pointer_phys_y - p.y;
+        if dx * dx + dy * dy > CLICK_SLOP_PHYS * CLICK_SLOP_PHYS {
+            return false;
+        }
+        if now.duration_since(p.start) < LONG_PRESS_THRESHOLD {
+            return false;
+        }
+        // Enter edit mode and immediately lift the pressed app into a drag.
+        self.enter_edit_mode(p.app_index);
+        true
+    }
+
+    /// Enter edit mode, optionally lifting `app_index` straight into a drag
+    /// (the long-press path). Edit mode is idempotent.
+    fn enter_edit_mode(&mut self, app_index: Option<usize>) {
+        let was_editing = self.editing;
+        self.editing = true;
+        self.pending_press = None;
+        self.wiggle_phase = 0.0;
+        // Cancel any in-flight scroll so the page sits still while editing.
+        if let Some(s) = self.scroller.as_mut() {
+            if s.phase != Phase::Idle {
+                s.phase = Phase::Idle;
+                s.velocity = 0.0;
+            }
+        }
+        // Lift the long-pressed app (if any) into a drag.
+        if let Some(idx) = app_index {
+            let visible = self.visible_app_ids();
+            if let Some(id) = visible.get(idx).cloned() {
+                self.drag_app = Some(id);
+                self.drag_x = self.pointer_phys_x;
+                self.drag_y = self.pointer_phys_y;
+            }
+        }
+        if !was_editing {
+            debug_log!("edit-mode: entered");
+        }
+        self.relayout();
+        self.request_redraw();
+    }
+
+    /// Exit edit mode. Commits any in-progress drag (if the lifted app was
+    /// dropped on a valid cell) and persists the resulting order. Safe to call
+    /// when not editing.
+    fn exit_edit_mode(&mut self) {
+        if !self.editing {
+            return;
+        }
+        // If a drag was in flight, finalize it as a drop at the current cell.
+        if self.drag_app.is_some() {
+            self.commit_reorder();
+        }
+        self.editing = false;
+        self.drag_app = None;
+        self.pending_press = None;
+        self.relayout();
+        debug_log!("edit-mode: exited");
+        self.request_redraw();
+    }
+
+    /// Update the dragged tile's follow position during an edit-mode move.
+    fn handle_edit_drag_move(&mut self) {
+        if self.drag_app.is_some() {
+            self.drag_x = self.pointer_phys_x;
+            self.drag_y = self.pointer_phys_y;
+            // Live reorder: move the dragged app to the cell under the pointer
+            // so other icons shift around it.
+            self.live_reorder();
+            self.maybe_autoscroll_edit_drag();
+            self.request_redraw();
+        }
+    }
+
+    /// Move `drag_app` to the visible cell currently under the pointer (if it's
+    /// a different cell). No-op when the pointer is off the grid.
+    fn live_reorder(&mut self) {
+        let Some(drag_id) = self.drag_app.clone() else {
+            return;
+        };
+        let Some(target_idx) = self.edit_drop_index_at_pointer(self.drag_x, self.drag_y) else {
+            return;
+        };
+        let visible = self.visible_app_ids();
+        let Some(drag_pos) = visible.iter().position(|id| id == &drag_id) else {
+            return;
+        };
+        let insert_idx = target_idx.min(visible.len());
+        if insert_idx == drag_pos {
+            return;
+        }
+        debug_log!(
+            "edit-reorder: moving drag_pos={drag_pos} target_idx={target_idx} insert_idx={insert_idx}"
+        );
+        self.reorder_by_index(&drag_id, insert_idx);
+    }
+
+    /// Start a one-page autoscroll if the lifted edit-mode icon is held near a
+    /// page-frame edge. Returns true when a new page glide was started.
+    fn maybe_autoscroll_edit_drag(&mut self) -> bool {
+        if !self.editing || self.drag_app.is_none() {
+            return false;
+        }
+
+        let (w, _h) = self.viewport_phys();
+        let (cx, cy, panel_w, panel_h) = self.layout.frame_panel_rect(w.max(1) as f32);
+        let top = cy - panel_h * 0.5;
+        let bottom = cy + panel_h * 0.5;
+        if self.drag_y < top || self.drag_y > bottom {
+            return false;
+        }
+
+        let zone = self
+            .layout
+            .scaled(EDIT_EDGE_SCROLL_ZONE)
+            .min(panel_w * 0.25)
+            .max(24.0);
+        let left = cx - panel_w * 0.5;
+        let right = cx + panel_w * 0.5;
+        let grid_left = self.layout.margin_left;
+        let grid_right = self.layout.margin_left + self.layout.grid_w();
+        let left_zone = zone.min((grid_left - left).max(0.0));
+        let right_zone = zone.min((right - grid_right).max(0.0));
+        let current = self.current_page();
+        let target = if left_zone > 0.0 && self.drag_x <= left + left_zone && current > 0 {
+            Some(current - 1)
+        } else if right_zone > 0.0
+            && self.drag_x >= right - right_zone
+            && current + 1 < self.layout.page_count
+        {
+            Some(current + 1)
+        } else {
+            None
+        };
+
+        let Some(target) = target else {
+            return false;
+        };
+        let Some(scroller) = self.scroller.as_mut() else {
+            return false;
+        };
+        if scroller.phase != Phase::Idle {
+            return false;
+        }
+        if scroller.settle_to_page(target) {
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Finalize the in-flight drag: drop the dragged app onto the current cell
+    /// and persist the new order.
+    fn commit_reorder(&mut self) {
+        self.live_reorder();
+        self.persist_user_order();
+    }
+
+    /// Reorder the registry so that `drag_id` moves to `insert_idx` in the
+    /// visible order, shifting the apps between them. Hidden apps are preserved
+    /// after the visible stream.
+    fn reorder_by_index(&mut self, drag_id: &AppId, insert_idx: usize) {
+        // Build the current visible order from the registry's display order,
+        // then move drag_id to the requested visible insertion index.
+        let mut order: Vec<AppId> = self
+            .visible_app_ids()
+            .into_iter()
+            // Append hidden apps at the end so they're preserved but never
+            // repositioned visibly.
+            .chain(self.registry.hidden().iter().cloned())
+            .collect();
+        let Some(drag_pos) = order.iter().position(|i| i == drag_id) else {
+            return;
+        };
+        let id = order.remove(drag_pos);
+        order.insert(insert_idx.min(order.len()), id);
+        self.registry.set_order(order);
+        self.relayout();
+    }
+
     /// Hit-test the pointer, then resolve the clicked app **by stable id**
     /// (not positional index), so a rescan that shifted the list can't launch
     /// the wrong app. Returns an owned snapshot safe to use after the
@@ -1053,6 +1431,171 @@ impl App {
         }
     }
 
+    /// Build the per-app edit-mode animation parameters. Each visible app gets
+    /// a `TileAnim`; outside edit mode they're all `IDLE`.
+    ///
+    /// - In edit mode, every app wiggles (FLAG_WIGGLE + a per-app phase offset
+    ///   so they don't all swing in lockstep).
+    /// - The app being dragged (if any) is lifted (`lift`), enlarged (`scale`),
+    ///   and flagged `FLAG_DRAG` so the shader bypasses the frame clip and
+    ///   follows the pointer instead of its home cell.
+    fn edit_anim(&self, visible_ids: &[AppId]) -> Vec<grid::TileAnim> {
+        if !self.editing {
+            return Vec::new();
+        }
+        let drag_id = self.drag_app.as_ref();
+        visible_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let is_drag = drag_id.map(|d| d == id).unwrap_or(false);
+                if is_drag {
+                    grid::TileAnim {
+                        phase: self.wiggle_phase + i as f32 * 0.37,
+                        lift: 24.0 * self.scale_factor.max(1.0),
+                        scale: 1.15,
+                        flags: grid::TileAnim::FLAG_WIGGLE | grid::TileAnim::FLAG_DRAG,
+                    }
+                } else {
+                    grid::TileAnim {
+                        phase: self.wiggle_phase + i as f32 * 0.37,
+                        lift: 0.0,
+                        scale: 1.0,
+                        flags: grid::TileAnim::FLAG_WIGGLE,
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Realign `tile_springs` with the current visible app set. Existing
+    /// springs are matched by `AppId`, not position, so a reordered app keeps
+    /// its previous cell as the spring value and glides to its new home cell.
+    fn update_tile_springs(&mut self, visible_ids: &[AppId], viewport_w: f32) {
+        let mut old = std::mem::take(&mut self.tile_springs);
+        self.tile_springs.reserve(visible_ids.len());
+        for (i, id) in visible_ids.iter().enumerate() {
+            let (x, y) = self.layout.tile_position(viewport_w, i);
+            if let Some(pos) = old.iter().position(|(spring_id, _)| spring_id == id) {
+                let (_, mut spring) = old.swap_remove(pos);
+                spring.glide_to(x, y);
+                self.tile_springs.push((id.clone(), spring));
+            } else {
+                self.tile_springs
+                    .push((id.clone(), scroll::Spring2::at(x, y)));
+            }
+        }
+    }
+
+    /// Override each instance's position with its spring value, so the tile
+    /// slides from where it was toward its home cell. Works for both
+    /// `TileInstance` and `IconInstance` via the [`SpringPos`] trait.
+    fn apply_spring_positions<T: SpringPos>(&self, visible_ids: &[AppId], instances: &mut [T]) {
+        for (id, inst) in visible_ids.iter().zip(instances.iter_mut()) {
+            if let Some((_, spring)) = self
+                .tile_springs
+                .iter()
+                .find(|(spring_id, _)| spring_id == id)
+            {
+                inst.set_pos(spring.x.value, spring.y.value);
+            }
+        }
+    }
+
+    /// While an edit-mode drag is in flight, move the dragged app's tile + icon
+    /// to the end of the instance lists so it draws on top of everything else —
+    /// but keep it as the *same* instance, not a duplicate. The shader uses
+    /// `drag_pos` to make that trailing instance follow the pointer.
+    fn lift_dragged_instances(
+        &self,
+        tile_instances: &mut Vec<grid::TileInstance>,
+        icon_instances: &mut Vec<crate::icon_pipeline::IconInstance>,
+        _visible_ids: &[AppId],
+    ) {
+        let is_drag = |flags: f32| (flags as u32 & grid::TileAnim::FLAG_DRAG) != 0;
+
+        if let Some(pos) = tile_instances.iter().position(|t| is_drag(t.extra[3])) {
+            let item = tile_instances.swap_remove(pos);
+            tile_instances.push(item);
+        }
+        if let Some(pos) = icon_instances.iter().position(|i| is_drag(i.extra[3])) {
+            let item = icon_instances.swap_remove(pos);
+            icon_instances.push(item);
+        }
+    }
+
+    /// Advance every tile position spring by `dt`. Returns `true` while any
+    /// spring is still animating (so the caller keeps redrawing).
+    fn step_tile_springs(&mut self, dt: f32) -> bool {
+        let cfg = self.scroller.as_ref().map(|s| s.cfg).unwrap_or_default();
+        let mut any = false;
+        for (_, s) in &mut self.tile_springs {
+            if s.step(dt, &cfg) {
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// Rebuild + re-push the tile/icon instance buffers using the current
+    /// spring positions, without recomputing the layout. Called every frame
+    /// while the springs are animating so the slide is visible.
+    fn refresh_spring_instances(&mut self) {
+        let owned = self.grid_apps_owned();
+        let apps: Vec<grid::GridApp<'_>> = owned
+            .iter()
+            .map(|(name, uv)| grid::GridApp {
+                name: name.as_str(),
+                uv: *uv,
+            })
+            .collect();
+        let (w, _h) = self.viewport_phys();
+        let visible_ids = self.visible_app_ids();
+        let anim = self.edit_anim(&visible_ids);
+        let mut tile_instances = self.layout.build_instances(w as f32, &apps, &anim);
+        self.apply_spring_positions(&visible_ids, &mut tile_instances);
+        let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
+        self.apply_spring_positions(&visible_ids, &mut icon_instances);
+        self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_tile_instances(&tile_instances);
+            r.set_icon_instances(&icon_instances);
+        }
+    }
+
+    /// Load the persisted user customization (drag-to-reorder result + hidden
+    /// apps) into the registry. Called once at startup, before the first scan
+    /// is ingested, so apps are placed in the user's arrangement from the first
+    /// frame. A missing or corrupt store is a no-op (registry stays name-sorted
+    /// with nothing hidden).
+    fn load_customization(&mut self) {
+        let order = self.cache.get_app_order();
+        if !order.is_empty() {
+            self.registry.set_order(order);
+        }
+        let hidden = self.cache.get_hidden_ids();
+        if !hidden.is_empty() {
+            self.registry.set_hidden(hidden);
+        }
+    }
+
+    /// Persist the current display order so it survives across launches. Called
+    /// after a drag-to-reorder completes (and on hide). Cheap: one small blob
+    /// upsert. Errors are logged but never panic the UI.
+    fn persist_user_order(&self) {
+        if let Err(e) = self.cache.put_app_order(self.registry.order()) {
+            eprintln!("layout: failed to persist app order: {e}");
+        }
+    }
+
+    /// Persist the current hidden-app list. Called after a hide/unhide change.
+    fn persist_hidden(&self) {
+        let ids: Vec<AppId> = self.registry.hidden().iter().cloned().collect();
+        if let Err(e) = self.cache.put_hidden_ids(&ids) {
+            eprintln!("layout: failed to persist hidden ids: {e}");
+        }
+    }
+
     /// Hide the launcher window and reset transient UI state (search field,
     /// scroll position, IME), but keep the process + event loop alive so it
     /// can be summoned again. Idempotent: a no-op if already hidden.
@@ -1066,6 +1609,11 @@ impl App {
             r.window.set_visible(false);
             r.window.set_ime_allowed(false);
         }
+        // Exit edit mode if active, persisting any reorder before we vanish.
+        if self.editing {
+            self.exit_edit_mode();
+        }
+        self.pending_press = None;
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
         self.control.press_close();
@@ -1120,6 +1668,13 @@ impl App {
     /// bottom control. Decides whether it hit the close (×) button, and
     /// otherwise toggles the search field open/closed.
     fn handle_control_click(&mut self, x: f32, y: f32) {
+        // In edit mode the bottom control acts as the "Done" button: clicking
+        // it exits edit mode (and persists any reorder) instead of opening the
+        // search field.
+        if self.editing {
+            self.exit_edit_mode();
+            return;
+        }
         let viewport = self.viewport_phys();
         let frame_bottom = self.frame_bottom_y();
         // Close-button hit region (only meaningful when the field is open).
@@ -1345,6 +1900,15 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
 
+                // Edit mode takes precedence over everything except the search
+                // field: Esc exits edit mode (doesn't hide), Enter/Done would
+                // too. This branch sits before `wants_keyboard` so an open
+                // search field still defers to edit-mode Esc.
+                if self.editing && key_code == Some(winit::keyboard::KeyCode::Escape) {
+                    self.exit_edit_mode();
+                    return;
+                }
+
                 // While the search field has focus, the control eats most keys.
                 if self.control.wants_keyboard() {
                     let handled = match key_code {
@@ -1499,12 +2063,32 @@ impl ApplicationHandler<UserEvent> for App {
                 if dragging {
                     self.handle_drag_end();
                 }
+                // An edit-mode drag whose pointer leaves the window is finalized
+                // where it last was (iOS keeps the icon where you let go).
+                if self.editing && self.drag_app.is_some() {
+                    self.commit_reorder();
+                    self.drag_app = None;
+                    self.relayout();
+                }
+                // A pending long-press is cancelled when the pointer leaves.
+                self.pending_press = None;
                 // Drop a pending control press if the pointer leaves.
                 self.pressed_on_control = false;
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.pointer_phys_x = position.x as f32;
                 self.pointer_phys_y = position.y as f32;
+                // Edit-mode drag: follow the pointer and live-reorder.
+                if self.editing && self.drag_app.is_some() {
+                    self.handle_edit_drag_move();
+                    return;
+                }
+                // A pending press may promote to a real scroll drag once it
+                // moves past slop. If it does, the scroller is now Dragging and
+                // the move has already been applied.
+                if self.pending_press.is_some() && self.maybe_promote_press_to_drag() {
+                    return;
+                }
                 let dragging = self
                     .scroller
                     .as_ref()
@@ -1534,7 +2118,38 @@ impl ApplicationHandler<UserEvent> for App {
                         if over_control {
                             return;
                         }
-                        self.handle_drag_start(self.pointer_phys_x, self.pointer_phys_y);
+                        // Edit mode: clicking an icon lifts it into a drag;
+                        // clicking its ✕ badge hides it; clicking empty space
+                        // exits edit mode (outside click).
+                        if self.editing {
+                            let px = self.pointer_phys_x;
+                            let py = self.pointer_phys_y;
+                            let idx = self.app_index_at_pointer(px, py);
+                            if let Some(idx) = idx {
+                                let visible = self.visible_app_ids();
+                                if let Some(id) = visible.get(idx).cloned() {
+                                    debug_log!("edit-drag: press idx={idx}");
+                                    // ✕ badge hit takes precedence over a drag.
+                                    if self.badge_hit(idx, px, py) {
+                                        self.hide_app(&id);
+                                        return;
+                                    }
+                                    self.drag_app = Some(id);
+                                    self.drag_x = px;
+                                    self.drag_y = py;
+                                    self.relayout();
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
+                            // Empty space → exit edit mode (and persist).
+                            self.exit_edit_mode();
+                            return;
+                        }
+                        // Normal mode: defer the scroll drag until the gesture
+                        // resolves (drag past slop, or quick release, or long-
+                        // press into edit mode).
+                        self.begin_grid_press(Instant::now());
                     }
                     ElementState::Released => {
                         if self.pressed_on_control {
@@ -1551,15 +2166,43 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                             return;
                         }
+                        // Edit-mode drag release: drop the icon here and persist.
+                        if self.editing && self.drag_app.is_some() {
+                            self.commit_reorder();
+                            self.drag_app = None;
+                            self.relayout();
+                            self.request_redraw();
+                            return;
+                        }
+                        // A pending press that released without dragging and
+                        // without a long-press is a click → launch the app.
+                        if self.pending_press.take().is_some() {
+                            if let Some(app) =
+                                self.resolve_clicked_app(self.pointer_phys_x, self.pointer_phys_y)
+                            {
+                                let link_path = app.link_path.clone();
+                                let name = app.name.clone();
+                                self.hide();
+                                match launch::open_shortcut(&link_path) {
+                                    Ok(()) => eprintln!("launched {}", name),
+                                    Err(err) => eprintln!(
+                                        "failed to launch {} ({}): {}",
+                                        name,
+                                        link_path.display(),
+                                        err
+                                    ),
+                                }
+                            }
+                            return;
+                        }
                         if let Some(app) = self.handle_pointer_release() {
                             // Dismiss first, launch second. `hide()` hands the
-                            // hide straight to the DWM (a few ms) and resets
-                            // the UI, while `ShellExecuteW` resolves the
-                            // shortcut and spawns the target (tens to hundreds
-                            // of ms). Doing them in this order makes the
-                            // launcher feel like it vanishes the instant you
-                            // click, instead of freezing on screen until the
-                            // target app starts.
+                            // hide straight to the DWM (a few ms) and resets the
+                            // UI, while `ShellExecuteW` resolves the shortcut and
+                            // spawns the target (tens to hundreds of ms). Doing
+                            // them in this order makes the launcher feel like it
+                            // vanishes the instant you click, instead of freezing
+                            // on screen until the target app starts.
                             let link_path = app.link_path.clone();
                             let name = app.name.clone();
                             self.hide();
@@ -1595,6 +2238,27 @@ impl ApplicationHandler<UserEvent> for App {
                     .as_ref()
                     .map(|s| s.is_animating())
                     .unwrap_or(false);
+                let auto_scroll_started = self.maybe_autoscroll_edit_drag();
+                if self.editing && self.drag_app.is_some() {
+                    self.live_reorder();
+                }
+
+                // Advance the wiggle animation phase while editing. dt is taken
+                // from the redraw cadence (clamped like the control's).
+                let anim_dt = match self.last_redraw {
+                    Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
+                    None => 1.0 / 60.0,
+                };
+                if self.editing {
+                    self.wiggle_phase += anim_dt;
+                }
+
+                // Advance the per-tile position springs and re-push the
+                // instance buffers if any are still sliding (reorder animation).
+                let springs_animating = self.step_tile_springs(anim_dt);
+                if springs_animating {
+                    self.refresh_spring_instances();
+                }
 
                 // Detect a page change (settled page differs from the last
                 // tracked one) and arm the transient page indicator.
@@ -1629,6 +2293,9 @@ impl ApplicationHandler<UserEvent> for App {
                         scroll_x,
                         viewport: vp,
                         defer_backdrop_capture: dragging,
+                        time: self.wiggle_phase,
+                        drag_active: if self.drag_app.is_some() { 1.0 } else { 0.0 },
+                        drag_pos: (self.drag_x, self.drag_y),
                     });
                 }
 
@@ -1636,7 +2303,12 @@ impl ApplicationHandler<UserEvent> for App {
                     self.first_frame_rendered = true;
                     self.timer.mark(prefix::STARTUP, "first frame rendered");
                 }
-                if scroller_animating || control_animating {
+                if scroller_animating
+                    || auto_scroll_started
+                    || control_animating
+                    || springs_animating
+                    || self.editing
+                {
                     self.request_redraw();
                 }
             }
@@ -1657,7 +2329,13 @@ impl ApplicationHandler<UserEvent> for App {
                         .last_summon
                         .map(|t| t.elapsed() < SUMMON_FOCUS_GRACE)
                         .unwrap_or(false);
-                    if in_grace {
+                    // While editing we don't auto-hide on focus loss: clicking
+                    // outside the launcher to dismiss edit mode would itself
+                    // blur the window, and we want to exit edit mode cleanly
+                    // (persisting the reorder) rather than vanish mid-edit.
+                    if self.editing {
+                        debug_log!("window_event: Focused(false) ignored (editing)");
+                    } else if in_grace {
                         debug_log!("window_event: Focused(false) ignored (within summon grace)");
                     } else {
                         self.hide();
@@ -1687,7 +2365,17 @@ impl ApplicationHandler<UserEvent> for App {
         let control_animating = self.control.mode.is_morphing()
             || matches!(self.control.mode, bottom_control::Mode::Indicator)
             || matches!(self.control.mode, bottom_control::Mode::Field);
-        if scroller_animating || control_animating {
+
+        // Long-press timer: if a press is still pending, keep redrawing so we
+        // notice when it crosses LONG_PRESS_THRESHOLD and enter edit mode.
+        let long_press_pending = self.pending_press.is_some();
+        if long_press_pending {
+            self.maybe_long_press_into_edit(Instant::now());
+        }
+
+        // Edit mode keeps redrawing so the wiggle animation advances and the
+        // dragged tile tracks the pointer smoothly.
+        if scroller_animating || control_animating || self.editing || long_press_pending {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -1698,6 +2386,27 @@ impl ApplicationHandler<UserEvent> for App {
 fn mul_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
     c[3] *= a.clamp(0.0, 1.0);
     c
+}
+
+/// Trait for instance types that carry an `(x, y)` position we can rewrite in
+/// place — used by the reorder animation to override a tile/icon's home cell
+/// with its spring value.
+trait SpringPos {
+    fn set_pos(&mut self, x: f32, y: f32);
+}
+
+impl SpringPos for grid::TileInstance {
+    fn set_pos(&mut self, x: f32, y: f32) {
+        self.x = x;
+        self.y = y;
+    }
+}
+
+impl SpringPos for crate::icon_pipeline::IconInstance {
+    fn set_pos(&mut self, x: f32, y: f32) {
+        self.x = x;
+        self.y = y;
+    }
 }
 
 // Shared font metrics for the bottom-control text (label / query / placeholder
@@ -1715,6 +2424,7 @@ fn self_layout_control_text(
     layers: &[bottom_control::ControlLayer],
     scale: f32,
     control: &bottom_control::BottomControl,
+    editing: bool,
 ) -> Vec<text::GlyphQuad> {
     let mut quads = Vec::new();
     const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
@@ -1722,6 +2432,22 @@ fn self_layout_control_text(
     /// Preedit (in-flight IME composition) is shown slightly dimmer to hint
     /// it isn't committed yet.
     const PREEDIT_INK: [f32; 4] = [0.85, 0.92, 1.0, 0.88];
+
+    // In edit mode the control reads "完了" and acts as the Done button; we skip
+    // the normal pill/indicator/field content entirely.
+    if editing {
+        let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+            text: "完了",
+            font_size: QUERY_LABEL_SIZE,
+            line_height: QUERY_LABEL_LINE,
+            family: QUERY_LABEL_FONT,
+            color: INK,
+            center: (geom.center.0, geom.center.1),
+            scale_factor: scale,
+        });
+        quads.append(&mut q);
+        return quads;
+    }
 
     for layer in layers {
         let a = layer.alpha;
@@ -1964,6 +2690,9 @@ fn main() {
     {
         app._os = Some(os);
     }
+    // Restore the user's saved layout (drag-to-reorder + hidden apps) before the
+    // first scan lands, so apps appear in the user's arrangement from frame one.
+    app.load_customization();
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("event loop error: {e}");
         std::process::exit(1);

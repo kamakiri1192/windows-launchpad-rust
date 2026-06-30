@@ -323,6 +323,31 @@ impl Scroller {
         !matches!(self.phase, Phase::Idle)
     }
 
+    /// Programmatically glide to a page boundary. Used by edit-mode
+    /// drag-to-reorder when the lifted icon is held near a page edge.
+    ///
+    /// Returns `true` when a new settle animation was started.
+    pub fn settle_to_page(&mut self, page: usize) -> bool {
+        let max_page = self.bounds.page_count.saturating_sub(1);
+        let page = page.min(max_page);
+        let target = -(page as f32) * self.bounds.page_extent;
+        if self.phase == Phase::Idle && (self.position - target).abs() < self.cfg.settle_eps {
+            return false;
+        }
+        if self.phase == Phase::Settling
+            && (self.settle_target - target).abs() < self.cfg.settle_eps
+        {
+            return false;
+        }
+        self.velocity = 0.0;
+        self.last_time = None;
+        self.begin_settle_to(
+            target.clamp(self.bounds.min_pos(), self.bounds.max_pos()),
+            false,
+        );
+        true
+    }
+
     /// Reset the timer used for dt (call when the app resumes after a pause).
     #[allow(dead_code)]
     pub fn reset_clock(&mut self) {
@@ -448,6 +473,101 @@ impl Scroller {
             return 0.0;
         }
         (last.1 - chosen.1) / dt
+    }
+}
+
+// ---- Generic spring (reused from the scroller's Settling ODE) ---------------
+
+/// A critically/under-damped 1D spring, useful for animating a single scalar
+/// toward a target with an iOS-like glide. The integration is the same semi-
+/// implicit Euler step the scroller uses in [`Phase::Settling`], so the feel
+/// matches the page-snap motion.
+#[derive(Debug, Clone, Copy)]
+pub struct Spring {
+    pub value: f32,
+    pub velocity: f32,
+    pub target: f32,
+}
+
+impl Spring {
+    pub fn at(value: f32) -> Self {
+        Self {
+            value,
+            velocity: 0.0,
+            target: value,
+        }
+    }
+
+    /// Snap instantly to `target` (no animation).
+    pub fn snap_to(&mut self, target: f32) {
+        self.target = target;
+        self.value = target;
+        self.velocity = 0.0;
+    }
+
+    /// Set a new target the spring glides toward from its current value.
+    pub fn glide_to(&mut self, target: f32) {
+        self.target = target;
+    }
+
+    /// True once the spring has come to rest at its target.
+    pub fn settled(&self, cfg: &PhysicsConfig) -> bool {
+        (self.value - self.target).abs() < cfg.settle_eps && self.velocity.abs() < cfg.settle_eps
+    }
+
+    /// Advance one step. Returns `true` while still animating.
+    pub fn step(&mut self, dt: f32, cfg: &PhysicsConfig) -> bool {
+        let dx = self.value - self.target;
+        let acc = -cfg.spring_omega * cfg.spring_omega * dx
+            - 2.0 * cfg.spring_zeta * cfg.spring_omega * self.velocity;
+        self.velocity += acc * dt;
+        self.value += self.velocity * dt;
+        if self.settled(cfg) {
+            self.value = self.target;
+            self.velocity = 0.0;
+            false
+        } else {
+            true
+        }
+    }
+}
+
+/// A 2D spring (two independent [`Spring`]s on x and y). Convenient for
+/// animating a point — e.g. a tile's offset as it slides to a new cell during a
+/// drag-to-reorder.
+#[derive(Debug, Clone, Copy)]
+pub struct Spring2 {
+    pub x: Spring,
+    pub y: Spring,
+}
+
+impl Spring2 {
+    pub fn at(x: f32, y: f32) -> Self {
+        Self {
+            x: Spring::at(x),
+            y: Spring::at(y),
+        }
+    }
+
+    pub fn glide_to(&mut self, x: f32, y: f32) {
+        self.x.glide_to(x);
+        self.y.glide_to(y);
+    }
+
+    pub fn snap_to(&mut self, x: f32, y: f32) {
+        self.x.snap_to(x);
+        self.y.snap_to(y);
+    }
+
+    /// Advance both axes. Returns `true` while either is still animating.
+    pub fn step(&mut self, dt: f32, cfg: &PhysicsConfig) -> bool {
+        let a = self.x.step(dt, cfg);
+        let b = self.y.step(dt, cfg);
+        a || b
+    }
+
+    pub fn settled(&self, cfg: &PhysicsConfig) -> bool {
+        self.x.settled(cfg) && self.y.settled(cfg)
     }
 }
 
@@ -728,5 +848,69 @@ mod tests {
             s.velocity
         );
         assert_eq!(s.phase, Phase::Settling);
+    }
+
+    #[test]
+    fn settle_to_page_starts_programmatic_page_glide() {
+        let mut s = Scroller::new(bounds(4));
+        assert!(s.settle_to_page(2));
+        assert_eq!(s.phase, Phase::Settling);
+        assert_eq!(s.settle_target, -2000.0);
+        assert_eq!(s.velocity, 0.0);
+    }
+
+    #[test]
+    fn settle_to_page_is_noop_when_already_on_target() {
+        let mut s = Scroller::new(bounds(4));
+        s.position = -1000.0;
+        assert!(!s.settle_to_page(1));
+        assert_eq!(s.phase, Phase::Idle);
+    }
+
+    // ---- generic Spring ----
+
+    #[test]
+    fn spring_glides_to_target_and_settles() {
+        let cfg = PhysicsConfig::default();
+        let mut s = Spring::at(0.0);
+        s.glide_to(100.0);
+        let mut animating = true;
+        for _ in 0..2000 {
+            animating = s.step(1.0 / 120.0, &cfg);
+            if !animating {
+                break;
+            }
+        }
+        assert!(!animating, "spring must come to rest");
+        assert!((s.value - 100.0).abs() < cfg.settle_eps);
+    }
+
+    #[test]
+    fn spring_snap_instantly_reaches_target() {
+        let cfg = PhysicsConfig::default();
+        let mut s = Spring::at(0.0);
+        s.snap_to(50.0);
+        assert!(
+            !s.step(1.0 / 120.0, &cfg),
+            "snapped spring is already settled"
+        );
+        assert_eq!(s.value, 50.0);
+    }
+
+    #[test]
+    fn spring2_advances_both_axes() {
+        let cfg = PhysicsConfig::default();
+        let mut s = Spring2::at(0.0, 10.0);
+        s.glide_to(20.0, 30.0);
+        let mut animating = true;
+        for _ in 0..4000 {
+            animating = s.step(1.0 / 120.0, &cfg);
+            if !animating {
+                break;
+            }
+        }
+        assert!(!animating);
+        assert!((s.x.value - 20.0).abs() < cfg.settle_eps);
+        assert!((s.y.value - 30.0).abs() < cfg.settle_eps);
     }
 }

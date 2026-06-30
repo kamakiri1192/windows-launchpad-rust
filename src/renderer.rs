@@ -34,14 +34,20 @@ use crate::UserEvent;
 struct Uniforms {
     viewport: [f32; 2],
     scroll_x: f32,
-    _pad: f32,
+    /// Global animation clock (seconds). Drives the edit-mode wiggle.
+    time: f32,
     /// Fixed page-frame center in physical px.
     frame_center: [f32; 2],
     /// Fixed page-frame half-size in physical px.
     frame_half_size: [f32; 2],
     /// Fixed page-frame corner radius in physical px.
     frame_radius: f32,
-    frame_pad: f32,
+    /// 1.0 while an edit-mode drag is in flight, else 0.0. Tells the dragged
+    /// instance's vertex shader to follow `drag_pos` instead of its home cell.
+    drag_active: f32,
+    /// Pointer position (screen px) the dragged icon follows. Only meaningful
+    /// while `drag_active` is 1.0.
+    drag_pos: [f32; 2],
 }
 
 /// Viewport-only uniform for the bottom-control overlay + text shaders. They
@@ -116,6 +122,13 @@ pub struct DrawArgs {
     pub scroll_x: f32,
     pub viewport: (u32, u32),
     pub defer_backdrop_capture: bool,
+    /// Global animation clock in seconds, fed to the shaders for the edit-mode
+    /// wiggle. Caller accumulates this from the redraw cadence.
+    pub time: f32,
+    /// 1.0 while an edit-mode drag is in flight, else 0.0.
+    pub drag_active: f32,
+    /// Pointer position (screen px) the dragged icon follows while dragging.
+    pub drag_pos: (f32, f32),
 }
 
 impl Renderer {
@@ -279,7 +292,7 @@ impl Renderer {
 
         // Instance buffer: written once. Empty app list here — `rebuild_instances`
         // (called from App::relayout after icons load) supplies the real one.
-        let instances = layout.build_instances(config.width as f32, &[]);
+        let instances = layout.build_instances(config.width as f32, &[], &[]);
         let instance_count = instances.len() as u32;
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instance buffer"),
@@ -295,11 +308,12 @@ impl Renderer {
             bytemuck::bytes_of(&Uniforms {
                 viewport: [size.width as f32, size.height as f32],
                 scroll_x: 0.0,
-                _pad: 0.0,
+                time: 0.0,
                 frame_center: [frame.0, frame.1],
                 frame_half_size: [frame.2, frame.3],
                 frame_radius: frame.4,
-                frame_pad: 0.0,
+                drag_active: 0.0,
+                drag_pos: [0.0, 0.0],
             }),
         );
 
@@ -733,8 +747,13 @@ impl Renderer {
     ///
     /// Call after a resize (or any change to tile data) so the GPU sees the
     /// new tile positions. The buffer is reallocated to fit.
-    pub fn rebuild_instances(&mut self, layout: &GridLayout, apps: &[crate::grid::GridApp<'_>]) {
-        let instances = layout.build_instances(self.config.width as f32, apps);
+    pub fn rebuild_instances(
+        &mut self,
+        layout: &GridLayout,
+        apps: &[crate::grid::GridApp<'_>],
+        anim: &[crate::grid::TileAnim],
+    ) {
+        let instances = layout.build_instances(self.config.width as f32, apps, anim);
         self.instance_count = instances.len() as u32;
         self.instance_buffer = self
             .device
@@ -746,6 +765,20 @@ impl Renderer {
         self.liquid_glass
             .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
         self.frame_clip = frame_clip(layout, self.config.width);
+    }
+
+    /// Push a caller-built tile instance list to the GPU, reallocating the
+    /// buffer to fit. Used by the reorder animation, which overrides the tile
+    /// positions with per-tile spring offsets before uploading.
+    pub fn set_tile_instances(&mut self, instances: &[crate::grid::TileInstance]) {
+        self.instance_count = instances.len() as u32;
+        self.instance_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("instance buffer"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
     }
 
     pub fn handle_liquid_glass_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -1005,11 +1038,12 @@ impl Renderer {
             bytemuck::bytes_of(&Uniforms {
                 viewport: [args.viewport.0 as f32, args.viewport.1 as f32],
                 scroll_x: args.scroll_x,
-                _pad: 0.0,
+                time: args.time,
                 frame_center: [frame.0, frame.1],
                 frame_half_size: [frame.2, frame.3],
                 frame_radius: frame.4,
-                frame_pad: 0.0,
+                drag_active: args.drag_active,
+                drag_pos: [args.drag_pos.0, args.drag_pos.1],
             }),
         );
 
