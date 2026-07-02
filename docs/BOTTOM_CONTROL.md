@@ -104,6 +104,27 @@ The renderer pieces:
 | `←` / `→` | Move the caret one character |
 | Swipe / page change | Briefly show the page indicator, then return to the pill |
 
+## Edit mode: Done + Settings gear
+
+While the launcher is in edit mode (icons wiggling after a long-press), the
+control shrinks to the Done capsule and a **second glass capsule** — a circular
+settings gear — appears beside it:
+
+```
+        ┌──────┐
+        │ 完了 │  ⚙
+        └──────┘
+```
+
+- The Done capsule slides left so the pair stays centered.
+- The gear capsule is a separate `GlassShape` (`edit_gear_geometry` in
+  `bottom_control.rs`) rendered through the same `gear_shape` glass pass used
+  by no other state, with a procedural gear glyph (`KIND_GEAR`).
+- Both fade in/out together via `edit_visual_progress`.
+- Clicking the Done capsule exits edit mode; clicking the gear opens the
+  settings overlay (and exits edit mode first). Hit-testing is split inside
+  `handle_control_click`.
+
 ## Resize behavior
 
 The capsule is recomputed every frame from the current viewport and the

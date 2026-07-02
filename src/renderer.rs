@@ -115,6 +115,10 @@ pub struct Renderer {
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: Option<Buffer>,
     control_instance_count: u32,
+    /// Corner gear ink instances (settings entry). Drawn in the control
+    /// overlay pass alongside the bottom-control ink.
+    gear_instance_buffer: Option<Buffer>,
+    gear_instance_count: u32,
     badge_sources: Vec<EditBadgeSource>,
     badge_instance_buffer: Option<Buffer>,
     badge_instance_count: u32,
@@ -122,6 +126,12 @@ pub struct Renderer {
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: Option<Buffer>,
     control_text_instance_count: u32,
+    /// Settings overlay ink (close ×) + title text instances, drawn in a final
+    /// overlay pass on top of the panel glass. They reuse the control pipelines.
+    settings_instance_buffer: Option<Buffer>,
+    settings_instance_count: u32,
+    settings_text_instance_buffer: Option<Buffer>,
+    settings_text_instance_count: u32,
 }
 
 pub struct DrawArgs {
@@ -719,6 +729,8 @@ impl Renderer {
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: None,
             control_instance_count: 0,
+            gear_instance_buffer: None,
+            gear_instance_count: 0,
             badge_sources: Vec::new(),
             badge_instance_buffer: None,
             badge_instance_count: 0,
@@ -726,6 +738,10 @@ impl Renderer {
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: None,
             control_text_instance_count: 0,
+            settings_instance_buffer: None,
+            settings_instance_count: 0,
+            settings_text_instance_buffer: None,
+            settings_text_instance_count: 0,
         })
     }
 
@@ -1010,6 +1026,23 @@ impl Renderer {
         self.liquid_glass.set_control_shape(&self.device, shape);
     }
 
+    /// Push the corner gear's glass capsule shape. `None` hides it.
+    pub fn set_gear_glass_shape(
+        &mut self,
+        shape: Option<crate::liquid_glass::geometry::GlassShape>,
+    ) {
+        self.liquid_glass.set_gear_shape(&self.device, shape);
+    }
+
+    /// Push the settings overlay panel shape. `None` hides it.
+    pub fn set_settings_panel_glass_shape(
+        &mut self,
+        shape: Option<crate::liquid_glass::geometry::GlassShape>,
+    ) {
+        self.liquid_glass
+            .set_settings_panel_shape(&self.device, shape);
+    }
+
     /// Replace the procedural overlay instances (magnifier, dots, caret,
     /// close ×) for the bottom control.
     pub fn set_control_instances(&mut self, instances: &[ControlInstance]) {
@@ -1022,6 +1055,56 @@ impl Renderer {
             &wgpu::util::BufferInitDescriptor {
                 label: Some("control instance buffer"),
                 contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
+    /// Replace the corner gear ink instances. Drawn in the same control
+    /// overlay pass as the bottom-control ink (they share the pipeline).
+    pub fn set_gear_instances(&mut self, instances: &[ControlInstance]) {
+        self.gear_instance_count = instances.len() as u32;
+        if instances.is_empty() {
+            self.gear_instance_buffer = None;
+            return;
+        }
+        self.gear_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("gear instance buffer"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
+    /// Replace the settings overlay ink instances (close ×). Drawn in a final
+    /// overlay pass on top of the panel glass.
+    pub fn set_settings_instances(&mut self, instances: &[ControlInstance]) {
+        self.settings_instance_count = instances.len() as u32;
+        if instances.is_empty() {
+            self.settings_instance_buffer = None;
+            return;
+        }
+        self.settings_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("settings instance buffer"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
+    /// Replace the settings overlay text quads (title).
+    pub fn set_settings_text_instances(&mut self, quads: &[GlyphQuad]) {
+        self.settings_text_instance_count = quads.len() as u32;
+        if quads.is_empty() {
+            self.settings_text_instance_buffer = None;
+            return;
+        }
+        self.settings_text_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("settings text instance buffer"),
+                contents: bytemuck::cast_slice(quads),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             },
         ));
@@ -1273,6 +1356,12 @@ impl Renderer {
         self.liquid_glass
             .render_control(&self.queue, &mut encoder, &view);
 
+        // Corner gear glass capsule (independent of the bottom control). Drawn
+        // here so it composites over the grid + control; the gear ink glyph is
+        // drawn in the control overlay pass below alongside the control ink.
+        self.liquid_glass
+            .render_gear(&self.queue, &mut encoder, &view);
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),
@@ -1298,12 +1387,62 @@ impl Renderer {
                     pass.draw(0..6, 0..self.control_instance_count);
                 }
             }
+            // Corner gear ink shares the control ink pipeline.
+            if self.gear_instance_count > 0 {
+                if let Some(buf) = self.gear_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.gear_instance_count);
+                }
+            }
             if self.control_text_instance_count > 0 {
                 if let Some(buf) = self.control_text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_text_pipeline);
                     pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.control_text_instance_count);
+                }
+            }
+        }
+
+        // Settings overlay panel — drawn last so it composites over everything
+        // (grid, control, gear).
+        self.liquid_glass
+            .render_settings_panel(&self.queue, &mut encoder, &view);
+
+        // Settings panel ink (close ×) + title text, on top of the panel glass.
+        if self.settings_instance_count > 0 || self.settings_text_instance_count > 0 {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("settings overlay pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if self.settings_instance_count > 0 {
+                if let Some(buf) = self.settings_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.settings_instance_count);
+                }
+            }
+            if self.settings_text_instance_count > 0 {
+                if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_text_pipeline);
+                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.settings_text_instance_count);
                 }
             }
         }
