@@ -594,9 +594,8 @@ impl App {
                 center: (cx, cy - hh * 0.35),
                 scale_factor: scale,
             };
-            let q = t.layout_centered_line(&spec);
             // atlas_dirty set by layout if new glyphs were added.
-            q
+            t.layout_centered_line(&spec)
         } else {
             Vec::new()
         };
