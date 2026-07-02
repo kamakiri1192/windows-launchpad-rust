@@ -25,11 +25,14 @@ use std::sync::mpsc;
 use std::thread;
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     HBITMAP,
 };
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
     VIRTUAL_KEY,
@@ -39,13 +42,13 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, InsertMenuItemW,
-    PostMessageW, RegisterClassExW, SetForegroundWindow, SetWindowsHookExW, TrackPopupMenu,
-    TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, HICON, HWND_MESSAGE, ICONINFO,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENUITEMINFOW, MENU_ITEM_MASK, MENU_ITEM_STATE,
-    MENU_ITEM_TYPE, MSG, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_COMMAND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WNDCLASSEXW,
+    DestroyIcon, DestroyMenu, DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW,
+    InsertMenuItemW, PostMessageW, RegisterClassExW, SetForegroundWindow, SetWindowsHookExW,
+    TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, HICON,
+    HWND_MESSAGE, ICONINFO, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENUITEMINFOW, MENU_ITEM_MASK,
+    MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WNDCLASSEXW,
 };
 
 use crate::{app_icon, UserEvent};
@@ -107,6 +110,91 @@ const TPM_LEFTALIGN: u32 = 0x0000;
 const TPM_BOTTOMALIGN: u32 = 0x0020;
 const TPM_RIGHTBUTTON: u32 = 0x0002;
 const TPM_RETURNCMD: u32 = 0x0100;
+
+/// Stable OS-wide mutex name for the resident process. Keep this unchanged so
+/// debug and release builds agree on the same single-instance boundary.
+pub const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\LaunchpadWindowsSingleInstance";
+
+/// Holds the named mutex that proves this process is the only launcher
+/// instance. Dropping it releases the mutex during normal shutdown; crashes are
+/// handled by the OS.
+pub struct SingleInstanceGuard {
+    mutex: HANDLE,
+}
+
+#[derive(Debug)]
+pub enum SingleInstanceError {
+    AlreadyRunning,
+    Windows(windows::core::Error),
+}
+
+impl std::fmt::Display for SingleInstanceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyRunning => f.write_str("another Launchpad instance is already running"),
+            Self::Windows(e) => write!(f, "failed to create single-instance mutex: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SingleInstanceError {}
+
+impl SingleInstanceError {
+    pub fn is_already_running(&self) -> bool {
+        matches!(self, Self::AlreadyRunning)
+    }
+}
+
+impl SingleInstanceGuard {
+    /// Acquire the process-wide single-instance mutex. If another process owns
+    /// it already, ask that process to show its window and return
+    /// `AlreadyRunning` so the caller can exit before spawning workers.
+    pub fn acquire() -> Result<Self, SingleInstanceError> {
+        let mutex =
+            unsafe { CreateMutexW(None, false, w!("Local\\LaunchpadWindowsSingleInstance")) }
+                .map_err(SingleInstanceError::Windows)?;
+
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            unsafe {
+                let _ = CloseHandle(mutex);
+            }
+            summon_existing_instance();
+            return Err(SingleInstanceError::AlreadyRunning);
+        }
+
+        Ok(Self { mutex })
+    }
+}
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if !self.mutex.is_invalid() {
+            unsafe {
+                let _ = CloseHandle(self.mutex);
+            }
+        }
+    }
+}
+
+/// Best-effort handoff from a second process to the resident process. The
+/// tray owner is a message-only window, so we search under HWND_MESSAGE.
+fn summon_existing_instance() {
+    unsafe {
+        let hwnd = FindWindowExW(
+            Some(HWND_MESSAGE),
+            None,
+            w!("LaunchpadTray"),
+            w!("Launchpad"),
+        );
+        let Ok(hwnd) = hwnd else {
+            return;
+        };
+        if hwnd.is_invalid() {
+            return;
+        }
+        let _ = PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(ID_SHOW as usize), LPARAM(0));
+    }
+}
 
 /// Handle to the OS-integration thread. Dropping it requests the thread to
 /// exit, unregisters the hook, and removes the tray icon. Kept alive for the
