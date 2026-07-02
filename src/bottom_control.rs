@@ -56,13 +56,19 @@ impl ControlInstance {
 
 /// Element kind values matching `shader_control.wgsl`.
 const KIND_MAGNIFIER: f32 = 0.0;
-const KIND_DOT: f32 = 1.0;
-const KIND_CARET: f32 = 2.0;
+pub const KIND_DOT: f32 = 1.0;
+pub const KIND_CARET: f32 = 2.0;
 /// Close button (×). Public so the settings panel can draw one too.
 pub const KIND_CLOSE: f32 = 3.0;
 /// Settings gear (ring + radial teeth). Drawn frame-independent, so unlike the
 /// edit badge (kind 4) it is neither scroll-coupled nor frame-masked.
 pub const KIND_GEAR: f32 = 5.0;
+/// Rounded rectangle ink/fill used by the settings panel.
+pub const KIND_ROUND_RECT: f32 = 6.0;
+/// Check mark used by the settings panel's selected rows.
+pub const KIND_CHECK: f32 = 7.0;
+/// Chevron used by settings action rows.
+pub const KIND_CHEVRON: f32 = 8.0;
 
 // ---- tunables ---------------------------------------------------------------
 
