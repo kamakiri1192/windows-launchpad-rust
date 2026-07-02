@@ -22,7 +22,7 @@ Build artifacts go under `target/` and should not be committed. `Cargo.toml` and
 - `cargo clippy --all-targets --all-features`: runs lint checks across crate targets.
 - `cargo test`: runs all Rust tests once they are added.
 
-Use a Rust toolchain compatible with `rust-version = "1.85"`.
+Use a Rust toolchain compatible with `rust-version = "1.89"`.
 
 ## Coding Style & Naming Conventions
 
