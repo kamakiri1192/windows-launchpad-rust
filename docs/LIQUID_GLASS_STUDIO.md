@@ -3,7 +3,13 @@
 `liquid_glass_studio` is a development-only simulator for tuning the shared
 Liquid Glass shaders outside the launcher UI.
 
-Run it with:
+Run it by double-clicking:
+
+```text
+run_liquid_glass_studio.cmd
+```
+
+Or from a shell with:
 
 ```powershell
 cargo run --bin liquid_glass_studio --locked
