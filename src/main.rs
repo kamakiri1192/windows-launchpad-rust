@@ -3866,6 +3866,19 @@ fn dump_atlas_png(atlas: &IconAtlas) {
 }
 
 fn main() {
+    #[cfg(windows)]
+    let _single_instance = match platform_windows::SingleInstanceGuard::acquire() {
+        Ok(guard) => guard,
+        Err(e) if e.is_already_running() => {
+            crate::debug_log!("single-instance: existing instance signaled");
+            return;
+        }
+        Err(e) => {
+            eprintln!("single-instance: {e}");
+            std::process::exit(1);
+        }
+    };
+
     let timer = StartupTimer::new();
     timer.mark(prefix::STARTUP, "process start");
     startup_timer::install(timer.clone());
