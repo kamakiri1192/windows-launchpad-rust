@@ -96,9 +96,15 @@ pub const CAPSULE_HEIGHT: f32 = 38.0;
 pub const CAPSULE_RADIUS: f32 = CAPSULE_HEIGHT * 0.5;
 /// Horizontal padding around the edit-mode Done label.
 pub const DONE_HORIZONTAL_PADDING: f32 = 18.0;
+/// Nominal laid-out width of the edit-mode Done label at 1x scale. The actual
+/// Done capsule still uses measured text width; this keeps the idle Search
+/// pill visually aligned before edit-mode text measurement is available.
+const NOMINAL_DONE_LABEL_WIDTH: f32 = 28.0;
+/// Nominal laid-out width of the idle Search label at 1x scale.
+pub const SEARCH_LABEL_WIDTH: f32 = 28.0;
 /// Gap between the edit-mode Done capsule and the settings gear capsule, in
 /// physical px (scaled by DPI).
-pub const EDIT_GEAR_GAP: f32 = 10.0;
+pub const EDIT_GEAR_GAP: f32 = 16.0;
 /// Vertical gap from the bottom of the fixed page frame to the capsule.
 const BOTTOM_MARGIN: f32 = 30.0;
 
@@ -678,8 +684,8 @@ pub fn build_overlay_instances(
             Visual::SearchPill => {
                 // Compact pill: magnifier on the left, "検索" label to its right.
                 // The label text is drawn separately; here only the magnifier.
-                let mag_size = 11.0 * scale;
-                let mag_cx = cx - hw + mag_size + 8.0 * scale;
+                let (mag_cx, _) = search_pill_content_centers(geom);
+                let mag_size = search_magnifier_size(scale);
                 out.push(ControlInstance {
                     center: [mag_cx, cy],
                     params: [mag_size, a, 0.0, 0.0],
@@ -749,9 +755,24 @@ pub fn build_overlay_instances(
 /// relative to the control. Used by the caller to lay out the query glyphs.
 pub fn field_text_origin_x(geom: &ControlGeometry) -> f32 {
     let scale = control_scale(geom);
-    let mag_size = 11.0 * scale;
+    let mag_size = search_magnifier_size(scale);
     let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 10.0 * scale;
     mag_cx + mag_size + 6.0 * scale
+}
+
+/// Centers of the idle Search pill's magnifier and label. The pair is centered
+/// as one content group, so widening the capsule does not leave the label
+/// visually left-aligned.
+pub fn search_pill_content_centers(geom: &ControlGeometry) -> (f32, f32) {
+    let scale = control_scale(geom);
+    let mag_size = search_magnifier_size(scale);
+    let label_width = SEARCH_LABEL_WIDTH * scale;
+    let gap = 6.0 * scale;
+    let group_width = mag_size * 2.0 + gap + label_width;
+    let group_left = geom.center.0 - group_width * 0.5;
+    let mag_cx = group_left + mag_size;
+    let label_cx = group_left + mag_size * 2.0 + gap + label_width * 0.5;
+    (mag_cx, label_cx)
 }
 
 /// Build the Liquid Glass capsule shape for the control this frame, ready to
@@ -780,6 +801,7 @@ pub fn glass_shape(geom: &ControlGeometry) -> Option<crate::liquid_glass::geomet
 pub struct EditGearGeometry {
     pub center: (f32, f32),
     pub radius: f32,
+    pub glass_radius: f32,
 }
 
 /// Resolve the edit-mode gear capsule center + radius. Returns `None` when the
@@ -805,6 +827,8 @@ pub fn edit_gear_geometry(
     let capsule_height = CAPSULE_HEIGHT * scale;
     let hh = capsule_height * 0.5;
     let gear_r = hh;
+    let glass_grow = ease_ios_out((p * 1.2).clamp(0.0, 1.0));
+    let glass_r = (gear_r * glass_grow).max(1.0);
     let edge_inset = 8.0 * scale;
     let center_y = (frame_bottom + BOTTOM_MARGIN * scale + capsule_height * 0.5)
         .min(vh - capsule_height * 0.5 - edge_inset)
@@ -813,13 +837,18 @@ pub fn edit_gear_geometry(
     // The Done capsule center, mirroring the offset applied in resolve.
     let pair_shift = gear_r + EDIT_GEAR_GAP * scale * 0.5 + gear_r;
     let done_cx = vw * 0.5 - p * pair_shift * 0.5;
-    // Gear sits to the right of the Done capsule: done right edge + gap + radius.
-    let gear_cx = done_cx + done_half_width + EDIT_GEAR_GAP * scale + gear_r;
+    // Grow from the Done capsule's right edge, then settle into the final
+    // gap. Because the glass pass smooth-unions both SDFs, this reads as a
+    // small liquid bud pulling away into the settings gear.
+    let attached_cx = done_cx + done_half_width + glass_r * 0.38;
+    let final_cx = done_cx + done_half_width + EDIT_GEAR_GAP * scale + gear_r;
+    let gear_cx = lerp(attached_cx, final_cx, ease_ios_out(p));
 
     Some((
         EditGearGeometry {
             center: (gear_cx, center_y),
             radius: gear_r,
+            glass_radius: glass_r,
         },
         p,
     ))
@@ -829,8 +858,8 @@ pub fn edit_gear_geometry(
 pub fn edit_gear_glass_shape(geom: &EditGearGeometry) -> crate::liquid_glass::geometry::GlassShape {
     crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
         [geom.center.0, geom.center.1],
-        [geom.radius * 2.0, geom.radius * 2.0],
-        geom.radius,
+        [geom.glass_radius * 2.0, geom.glass_radius * 2.0],
+        geom.glass_radius,
     )
 }
 
@@ -856,8 +885,7 @@ pub fn edit_gear_hit(geom: &EditGearGeometry, x: f32, y: f32) -> bool {
 
 /// Half-width of the compact search pill (content-aware: magnifier + label).
 pub fn pill_half_width() -> f32 {
-    // Magnifier (~16px) + gap + 2-char label "検索" (~28px) + side padding.
-    46.0
+    edit_pair_half_width(done_half_width(NOMINAL_DONE_LABEL_WIDTH, 1.0), 1.0)
 }
 
 /// Half-width for the edit-mode Done capsule, based on measured text width.
@@ -868,8 +896,19 @@ pub fn done_half_width(label_width: f32, scale_factor: f32) -> f32 {
     content_hw.max(min_hw)
 }
 
+/// Half-width of the full edit-mode control pair: Done capsule + gap + gear.
+pub fn edit_pair_half_width(done_half_width: f32, scale_factor: f32) -> f32 {
+    let scale = sanitize_scale(scale_factor);
+    let gear_r = CAPSULE_HEIGHT * scale * 0.5;
+    done_half_width + EDIT_GEAR_GAP * scale * 0.5 + gear_r
+}
+
 fn control_scale(geom: &ControlGeometry) -> f32 {
     (geom.half_size.1 / (CAPSULE_HEIGHT * 0.5)).max(0.01)
+}
+
+fn search_magnifier_size(scale: f32) -> f32 {
+    11.0 * scale
 }
 
 /// Linear advancement: moves `v` toward `target` at a constant rate so it
@@ -1144,6 +1183,26 @@ mod tests {
     }
 
     #[test]
+    fn search_pill_width_matches_nominal_done_gear_pair() {
+        let done_hw = done_half_width(28.0, 1.0);
+        assert!((pill_half_width() - edit_pair_half_width(done_hw, 1.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn search_pill_content_group_is_centered() {
+        let c = bc();
+        let (geom, _) = c.resolve((1280, 800), 600.0, 0, 3);
+        let (mag_cx, label_cx) = search_pill_content_centers(&geom);
+        let scale = control_scale(&geom);
+        let mag_size = search_magnifier_size(scale);
+        let label_width = SEARCH_LABEL_WIDTH * scale;
+        let group_left = mag_cx - mag_size;
+        let group_right = label_cx + label_width * 0.5;
+
+        assert!(((group_left + group_right) * 0.5 - geom.center.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn edit_width_morph_uses_done_half_width() {
         let c = bc();
         let done_hw = done_half_width(28.0, 1.0);
@@ -1163,6 +1222,19 @@ mod tests {
         assert!((normal.half_size.0 - pill_half_width()).abs() < 1e-3);
         assert!((done.half_size.0 - done_hw).abs() < 1e-3);
         assert!(done.half_size.0 < normal.half_size.0);
+    }
+
+    #[test]
+    fn edit_gear_settles_with_configured_gap() {
+        let done_hw = done_half_width(28.0, 1.0);
+        let (gear, _) =
+            edit_gear_geometry((1280, 800), 600.0, 1.0, done_hw, 1.0).expect("edit gear geometry");
+        let pair_shift = gear.radius + EDIT_GEAR_GAP * 0.5 + gear.radius;
+        let done_cx = 1280.0 * 0.5 - pair_shift * 0.5;
+        let done_right = done_cx + done_hw;
+        let gear_left = gear.center.0 - gear.radius;
+
+        assert!((gear_left - done_right - EDIT_GEAR_GAP).abs() < 1e-3);
     }
 
     #[test]

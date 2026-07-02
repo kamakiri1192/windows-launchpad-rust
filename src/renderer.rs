@@ -1356,12 +1356,6 @@ impl Renderer {
         self.liquid_glass
             .render_control(&self.queue, &mut encoder, &view);
 
-        // Corner gear glass capsule (independent of the bottom control). Drawn
-        // here so it composites over the grid + control; the gear ink glyph is
-        // drawn in the control overlay pass below alongside the control ink.
-        self.liquid_glass
-            .render_gear(&self.queue, &mut encoder, &view);
-
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),

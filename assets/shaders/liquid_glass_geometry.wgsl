@@ -98,18 +98,21 @@ fn frame_sdf(pixel: vec2<f32>) -> f32 {
     return d;
 }
 
-// Signed distance to the bottom control (the shape_type == 2 shape). It lives
-// outside the page frame and must NOT be clipped to it.
+// Signed distance to frame-independent controls (shape_type == 2). These live
+// outside the page frame and must NOT be clipped to it. Multiple control shapes
+// are smooth-unioned so paired capsules can visibly attach and separate.
 fn control_sdf(pixel: vec2<f32>) -> f32 {
     let count = min(u.shape_count, arrayLength(&shapes));
+    var d = 1.0e6;
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
         if shape.shape_type == 2u {
             let local = pixel - shape.center;
-            return sdf_rrect(local, shape.size * 0.5, shape.radius);
+            let shape_d = sdf_rrect(local, shape.size * 0.5, shape.radius);
+            d = smooth_union(d, shape_d, u.blend);
         }
     }
-    return 1.0e6;
+    return d;
 }
 
 fn encode_displacement(v: vec2<f32>) -> vec2<f32> {

@@ -3696,9 +3696,7 @@ fn self_layout_control_text(
         match layer.visual {
             bottom_control::Visual::SearchPill => {
                 // "検索" label to the right of the magnifier.
-                let mag_size = 11.0 * scale;
-                let mag_cx = geom.center.0 - geom.half_size.0 + mag_size + 8.0 * scale;
-                let label_center_x = mag_cx + mag_size + 6.0 * scale + 14.0 * scale;
+                let (_, label_center_x) = bottom_control::search_pill_content_centers(geom);
                 let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                     text: "検索",
                     font_size: QUERY_LABEL_SIZE,
