@@ -17,6 +17,7 @@ be summoned again instantly. Real quit happens via the tray icon.
 | Launch an app (click its tile) | Launch the app and hide the launcher |
 | Tray icon → left click | Summon |
 | Tray icon → right click → 表示 (Show) | Summon |
+| Tray icon → right click → 設定 (Settings) | Open the settings overlay (summons first if hidden) |
 | Tray icon → right click → 終了 (Quit) | **Really quit** the app |
 | `M`   | Toggle the OS window frame on/off (borderless by default; bring the title bar + resize edges back for debugging) |
 | `R`   | Clear the icon cache and re-extract every icon live (recover from a corrupted/stale cache without restarting) |
@@ -65,6 +66,20 @@ the full state machine.
 | `←` / `→` | Move the caret one character |
 | `Esc` (while the field is open) | Collapse to the pill (does **not** quit) |
 | Page change (swipe) | Briefly show the page indicator, then return to the pill |
+
+## Edit mode (drag-to-reorder)
+
+Enter edit mode by long-pressing an app icon. While wiggling, a `[完了] [⚙]`
+pair appears at the bottom center.
+
+| Input | Action |
+|-------|--------|
+| Long-press an icon | Enter edit mode (icons wiggle) |
+| Drag an icon | Reorder across pages |
+| Click an icon's ✕ badge | Hide that app from the grid |
+| Click `完了` (Done) | Exit edit mode (persist reorder) |
+| Click `⚙` (gear) | Open the settings overlay |
+| `Esc` / click empty space | Exit edit mode |
 
 ## Liquid Glass master switch
 

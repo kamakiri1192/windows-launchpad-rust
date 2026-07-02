@@ -58,7 +58,11 @@ impl ControlInstance {
 const KIND_MAGNIFIER: f32 = 0.0;
 const KIND_DOT: f32 = 1.0;
 const KIND_CARET: f32 = 2.0;
-const KIND_CLOSE: f32 = 3.0;
+/// Close button (×). Public so the settings panel can draw one too.
+pub const KIND_CLOSE: f32 = 3.0;
+/// Settings gear (ring + radial teeth). Drawn frame-independent, so unlike the
+/// edit badge (kind 4) it is neither scroll-coupled nor frame-masked.
+pub const KIND_GEAR: f32 = 5.0;
 
 // ---- tunables ---------------------------------------------------------------
 
@@ -86,6 +90,9 @@ pub const CAPSULE_HEIGHT: f32 = 38.0;
 pub const CAPSULE_RADIUS: f32 = CAPSULE_HEIGHT * 0.5;
 /// Horizontal padding around the edit-mode Done label.
 pub const DONE_HORIZONTAL_PADDING: f32 = 18.0;
+/// Gap between the edit-mode Done capsule and the settings gear capsule, in
+/// physical px (scaled by DPI).
+pub const EDIT_GEAR_GAP: f32 = 10.0;
 /// Vertical gap from the bottom of the fixed page frame to the capsule.
 const BOTTOM_MARGIN: f32 = 30.0;
 
@@ -481,8 +488,20 @@ impl BottomControl {
             _ => normal_hw,
         };
 
+        // In edit mode a second capsule (the settings gear) sits to the right
+        // of the Done capsule. To keep the pair visually centered, shift the
+        // Done capsule left by half the gear pair width, eased in with the
+        // same edit progress so it slides as it shrinks.
+        let edit_offset = match edit_width {
+            Some(edit) if edit.progress > 0.0 => {
+                let gear_r = hh;
+                let pair_shift = gear_r + EDIT_GEAR_GAP * scale * 0.5 + gear_r;
+                ease_ios_out(edit.progress.clamp(0.0, 1.0)) * pair_shift * 0.5
+            }
+            _ => 0.0,
+        };
         let geom = ControlGeometry {
-            center: (center_x, center_y),
+            center: (center_x - edit_offset, center_y),
             half_size: (hw, hh),
             radius: capsule_radius,
             expand: self.expand,
@@ -745,6 +764,86 @@ pub fn glass_shape(geom: &ControlGeometry) -> Option<crate::liquid_glass::geomet
             geom.radius,
         ),
     )
+}
+
+// ---- edit-mode settings gear (second capsule beside Done) ------------------
+
+/// Geometry for the edit-mode settings gear capsule: its center in physical px
+/// and the glass capsule radius. A circular capsule the same height as the
+/// Done pill, placed to its right.
+pub struct EditGearGeometry {
+    pub center: (f32, f32),
+    pub radius: f32,
+}
+
+/// Resolve the edit-mode gear capsule center + radius. Returns `None` when the
+/// edit morph isn't active (progress <= 0). `done_half_width` is the resolved
+/// half-width of the Done capsule; `done_center_x` is inferred from the
+/// viewport center minus the same pair-shift used in resolve.
+///
+/// `alpha` (0..1) is the cross-fade alpha tied to the edit progress so the
+/// gear fades in/out with the Done label.
+pub fn edit_gear_geometry(
+    viewport: (u32, u32),
+    frame_bottom: f32,
+    scale_factor: f32,
+    done_half_width: f32,
+    edit_progress: f32,
+) -> Option<(EditGearGeometry, f32)> {
+    let p = ease_ios_out(edit_progress.clamp(0.0, 1.0));
+    if p <= 0.0 {
+        return None;
+    }
+    let scale = sanitize_scale(scale_factor);
+    let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
+    let capsule_height = CAPSULE_HEIGHT * scale;
+    let hh = capsule_height * 0.5;
+    let gear_r = hh;
+    let edge_inset = 8.0 * scale;
+    let center_y = (frame_bottom + BOTTOM_MARGIN * scale + capsule_height * 0.5)
+        .min(vh - capsule_height * 0.5 - edge_inset)
+        .max(capsule_height * 0.5 + edge_inset);
+
+    // The Done capsule center, mirroring the offset applied in resolve.
+    let pair_shift = gear_r + EDIT_GEAR_GAP * scale * 0.5 + gear_r;
+    let done_cx = vw * 0.5 - p * pair_shift * 0.5;
+    // Gear sits to the right of the Done capsule: done right edge + gap + radius.
+    let gear_cx = done_cx + done_half_width + EDIT_GEAR_GAP * scale + gear_r;
+
+    Some((
+        EditGearGeometry {
+            center: (gear_cx, center_y),
+            radius: gear_r,
+        },
+        p,
+    ))
+}
+
+/// Glass capsule shape for the edit-mode gear (a circle).
+pub fn edit_gear_glass_shape(geom: &EditGearGeometry) -> crate::liquid_glass::geometry::GlassShape {
+    crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
+        [geom.center.0, geom.center.1],
+        [geom.radius * 2.0, geom.radius * 2.0],
+        geom.radius,
+    )
+}
+
+/// Procedural ink instance (the gear glyph) for the edit-mode capsule.
+pub fn edit_gear_instance(geom: &EditGearGeometry, alpha: f32) -> ControlInstance {
+    let glyph_size = geom.radius * 0.62;
+    ControlInstance {
+        center: [geom.center.0, geom.center.1],
+        params: [glyph_size, alpha, 0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        kind: [KIND_GEAR, 0.0, 0.0, 0.0],
+    }
+}
+
+/// Hit-test the edit-mode gear at physical-px pointer `(x, y)`.
+pub fn edit_gear_hit(geom: &EditGearGeometry, x: f32, y: f32) -> bool {
+    let dx = x - geom.center.0;
+    let dy = y - geom.center.1;
+    dx * dx + dy * dy <= geom.radius * geom.radius
 }
 
 // ---- free helpers -----------------------------------------------------------

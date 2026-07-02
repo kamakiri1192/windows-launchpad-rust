@@ -56,7 +56,8 @@ const WM_TRAYICON: u32 = 0x8000; // WM_APP
 
 /// Menu item ids for the tray popup.
 const ID_SHOW: u32 = 1001;
-const ID_QUIT: u32 = 1002;
+const ID_SETTINGS: u32 = 1002;
+const ID_QUIT: u32 = 1003;
 
 // Virtual key codes. The `windows` crate exposes `VK_*` behind the
 // `Win32_UI_Input_KeyboardAndMouse` feature; the constants are stable and
@@ -514,6 +515,10 @@ extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 crate::debug_log!("tray: → Summon");
                 send_from_tray(UserEvent::Summon);
             }
+            ID_SETTINGS => {
+                crate::debug_log!("tray: → ToggleSettings");
+                send_from_tray(UserEvent::ToggleSettings);
+            }
             ID_QUIT => {
                 crate::debug_log!("tray: → QuitRequested");
                 send_from_tray(UserEvent::QuitRequested);
@@ -539,6 +544,8 @@ fn show_tray_menu(hwnd: HWND) {
         // Build the menu items. Use wide, NUL-terminated UTF-16 strings.
         let mut show_text: Vec<u16> = "表示".encode_utf16().collect();
         show_text.push(0);
+        let mut settings_text: Vec<u16> = "設定".encode_utf16().collect();
+        settings_text.push(0);
         let mut quit_text: Vec<u16> = "終了".encode_utf16().collect();
         quit_text.push(0);
 
@@ -554,6 +561,18 @@ fn show_tray_menu(hwnd: HWND) {
         };
         let _ = InsertMenuItemW(menu, 0, true, &show_item);
 
+        let settings_item = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MENU_ITEM_MASK(MIIM_STRING | MIIM_ID | MIIM_STATE),
+            fType: MENU_ITEM_TYPE(MFT_STRING),
+            fState: MENU_ITEM_STATE(MFS_ENABLED),
+            wID: ID_SETTINGS,
+            dwTypeData: windows::core::PWSTR(settings_text.as_mut_ptr()),
+            cch: (settings_text.len() - 1) as u32,
+            ..Default::default()
+        };
+        let _ = InsertMenuItemW(menu, 1, true, &settings_item);
+
         let quit_item = MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MENU_ITEM_MASK(MIIM_STRING | MIIM_ID | MIIM_STATE),
@@ -564,7 +583,7 @@ fn show_tray_menu(hwnd: HWND) {
             cch: (quit_text.len() - 1) as u32,
             ..Default::default()
         };
-        let _ = InsertMenuItemW(menu, 1, true, &quit_item);
+        let _ = InsertMenuItemW(menu, 2, true, &quit_item);
 
         // Required for the menu to dismiss on outside click.
         let _ = SetForegroundWindow(hwnd);

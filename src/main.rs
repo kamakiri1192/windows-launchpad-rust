@@ -136,6 +136,8 @@ pub(crate) enum UserEvent {
     Summon,
     /// User asked to really quit (tray "Quit"). Ends the event loop.
     QuitRequested,
+    /// Toggle the settings overlay (tray "Settings" / gear button).
+    ToggleSettings,
 }
 
 /// Shared inbox the worker + watcher push into; the event loop drains it on
@@ -225,6 +227,11 @@ struct App {
     /// True while the left button is held down *and* the press started on the
     /// control capsule. Such a release is a control click, not an app launch.
     pressed_on_control: bool,
+    /// True while the left button is held down *and* the press started on the
+    /// settings panel close button. Such a release closes the overlay.
+    pressed_on_settings: bool,
+    /// True while the settings overlay panel is shown on top of the grid.
+    settings_open: bool,
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     last_redraw: Option<Instant>,
@@ -292,6 +299,8 @@ impl App {
             last_page: 0,
             pointer_over_control: false,
             pressed_on_control: false,
+            pressed_on_settings: false,
+            settings_open: false,
             last_redraw: None,
             visible: true,
             last_summon: None,
@@ -461,6 +470,150 @@ impl App {
         }
         r.set_control_instances(&instances);
         r.set_control_text_instances(&quads);
+    }
+
+    /// Lay out and upload the edit-mode settings gear capsule (the second
+    /// capsule shown beside the Done button in edit mode). Hidden at all other
+    /// times. See `bottom_control::edit_gear_geometry`.
+    fn render_gear(&mut self) {
+        // The gear only appears in edit mode, alongside the Done capsule.
+        let edit_progress = self.edit_visual_progress();
+        let show = self.visible && edit_progress > 0.0 && !self.settings_open;
+        if !show {
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_gear_glass_shape(None);
+                r.set_gear_instances(&[]);
+            }
+            return;
+        }
+        let viewport = self.viewport_phys();
+        let frame_bottom = self.frame_bottom_y();
+        let scale = self.scale_factor;
+        let done_hw = self
+            .cached_done_width
+            .map(|w| bottom_control::done_half_width(w, scale))
+            .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
+        let Some((geom, alpha)) = bottom_control::edit_gear_geometry(
+            viewport,
+            frame_bottom,
+            scale,
+            done_hw,
+            edit_progress,
+        ) else {
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_gear_glass_shape(None);
+                r.set_gear_instances(&[]);
+            }
+            return;
+        };
+        let instance = bottom_control::edit_gear_instance(&geom, alpha);
+        let shape = bottom_control::edit_gear_glass_shape(&geom);
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_gear_glass_shape(Some(shape));
+            r.set_gear_instances(&[instance]);
+        }
+    }
+
+    /// Center of the placeholder settings panel in physical px.
+    fn settings_panel_center(&self) -> (f32, f32) {
+        let (w, h) = self.viewport_phys();
+        (w as f32 * 0.5, h as f32 * 0.5)
+    }
+
+    /// Half-extents + corner radius of the settings panel, in physical px.
+    fn settings_panel_half(&self) -> (f32, f32, f32) {
+        let s = self.scale_factor;
+        (
+            SETTINGS_PANEL_HALF_W * s,
+            SETTINGS_PANEL_HALF_H * s,
+            SETTINGS_PANEL_RADIUS * s,
+        )
+    }
+
+    /// True when physical-px point `(x, y)` is inside the settings panel rect.
+    fn settings_panel_contains(&self, x: f32, y: f32) -> bool {
+        let (cx, cy) = self.settings_panel_center();
+        let (hw, hh, _r) = self.settings_panel_half();
+        x >= cx - hw && x <= cx + hw && y >= cy - hh && y <= cy + hh
+    }
+
+    /// True when `(x, y)` is over the panel's close (×) button.
+    fn settings_panel_hit_close(&self, x: f32, y: f32) -> bool {
+        let (cx, cy) = self.settings_panel_center();
+        let (hw, hh, _r) = self.settings_panel_half();
+        let s = self.scale_factor;
+        let btn_r = SETTINGS_CLOSE_HALF * s;
+        // Top-right inset of the panel.
+        let bx = cx + hw - btn_r * 2.0;
+        let by = cy - hh + btn_r * 2.0;
+        let dx = x - bx;
+        let dy = y - by;
+        dx * dx + dy * dy <= btn_r * btn_r
+    }
+
+    /// Lay out and upload the settings overlay panel (glass + title text +
+    /// close ×) for the current frame. No-op when the overlay is closed.
+    fn render_settings_panel(&mut self) {
+        if !self.settings_open {
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_settings_panel_glass_shape(None);
+                r.set_settings_instances(&[]);
+                r.set_settings_text_instances(&[]);
+            }
+            return;
+        }
+
+        let scale = self.scale_factor;
+        let (cx, cy) = self.settings_panel_center();
+        let (hw, hh, radius) = self.settings_panel_half();
+
+        // Glass panel (frame-independent rounded rect).
+        let shape = crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
+            [cx, cy],
+            [hw * 2.0, hh * 2.0],
+            radius,
+        );
+
+        // Close × glyph at the top-right inset.
+        let btn_r = SETTINGS_CLOSE_HALF * scale;
+        let close = bottom_control::ControlInstance {
+            center: [cx + hw - btn_r * 2.0, cy - hh + btn_r * 2.0],
+            params: [btn_r, 0.82, 0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            kind: [bottom_control::KIND_CLOSE, 0.0, 0.0, 0.0],
+        };
+
+        // Title text: lay out the quads and flush the glyph atlas if needed.
+        let title_quads = if let Some(t) = self.text.as_mut() {
+            let spec = text::CenteredLineSpec {
+                text: SETTINGS_TITLE,
+                font_size: SETTINGS_TITLE_SIZE,
+                line_height: SETTINGS_TITLE_LINE,
+                family: SETTINGS_TITLE_FONT,
+                color: [1.0, 1.0, 1.0, 1.0],
+                center: (cx, cy - hh * 0.35),
+                scale_factor: scale,
+            };
+            // atlas_dirty set by layout if new glyphs were added.
+            t.layout_centered_line(&spec)
+        } else {
+            Vec::new()
+        };
+
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_settings_panel_glass_shape(Some(shape));
+            r.set_settings_instances(&[close]);
+            // Upload the atlas if the title added any glyphs this frame.
+            if let Some(t) = self.text.as_ref() {
+                if t.atlas_dirty {
+                    r.upload_atlas(t.atlas_rgba());
+                }
+            }
+            r.set_settings_text_instances(&title_quads);
+        }
+        if let Some(t) = self.text.as_mut() {
+            t.atlas_dirty = false;
+        }
     }
 
     /// Measure the current visible search text's laid-out width in physical px (for caret
@@ -1355,6 +1508,42 @@ impl App {
         self.request_redraw();
     }
 
+    /// Open the settings overlay. Dismisses edit mode and the search field so
+    /// they cannot be interacted with underneath the panel.
+    fn open_settings(&mut self) {
+        if self.editing {
+            self.exit_edit_mode();
+        }
+        if self.control.wants_keyboard() {
+            self.control.press_close();
+            self.search_input_changed();
+        }
+        self.pending_press = None;
+        self.pressed_on_control = false;
+        self.settings_open = true;
+        debug_log!("settings: opened");
+        self.request_redraw();
+    }
+
+    /// Close the settings overlay if it is open. Safe to call when closed.
+    fn close_settings(&mut self) {
+        if !self.settings_open {
+            return;
+        }
+        self.settings_open = false;
+        debug_log!("settings: closed");
+        self.request_redraw();
+    }
+
+    /// Toggle the settings overlay.
+    fn toggle_settings(&mut self) {
+        if self.settings_open {
+            self.close_settings();
+        } else {
+            self.open_settings();
+        }
+    }
+
     /// Update the dragged tile's follow position during an edit-mode move.
     fn handle_edit_drag_move(&mut self) {
         if self.drag_app.is_some() {
@@ -1681,6 +1870,8 @@ impl App {
         if self.editing {
             self.exit_edit_mode();
         }
+        // Close the settings overlay so a re-summon starts clean.
+        self.settings_open = false;
         self.pending_press = None;
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
@@ -1736,10 +1927,29 @@ impl App {
     /// bottom control. Decides whether it hit the close (×) button, and
     /// otherwise toggles the search field open/closed.
     fn handle_control_click(&mut self, x: f32, y: f32) {
-        // In edit mode the bottom control acts as the "Done" button: clicking
-        // it exits edit mode (and persists any reorder) instead of opening the
-        // search field.
+        // In edit mode the bottom control shows two capsules: [完了] on the
+        // left and a settings gear [⚙] on the right. Decide which was clicked.
         if self.editing {
+            let viewport = self.viewport_phys();
+            let frame_bottom = self.frame_bottom_y();
+            let scale = self.scale_factor;
+            let done_hw = self
+                .cached_done_width
+                .map(|w| bottom_control::done_half_width(w, scale))
+                .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
+            if let Some((gear, _)) = bottom_control::edit_gear_geometry(
+                viewport,
+                frame_bottom,
+                scale,
+                done_hw,
+                self.edit_visual_progress(),
+            ) {
+                if bottom_control::edit_gear_hit(&gear, x, y) {
+                    self.open_settings();
+                    return;
+                }
+            }
+            // Otherwise it's the Done capsule.
             self.exit_edit_mode();
             return;
         }
@@ -1869,6 +2079,14 @@ impl ApplicationHandler<UserEvent> for App {
                 // teardown, so no manual cleanup is needed.
                 std::process::exit(0);
             }
+            UserEvent::ToggleSettings => {
+                // Tray "Settings": ensure the window is visible first so the
+                // overlay is actually shown.
+                if !self.visible {
+                    self.summon();
+                }
+                self.toggle_settings();
+            }
         }
     }
 
@@ -1967,6 +2185,14 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
+
+                // The settings overlay takes precedence over everything: Esc
+                // closes it (doesn't hide the launcher), mirroring how edit mode
+                // and the search field swallow Esc rather than quitting.
+                if self.settings_open && key_code == Some(winit::keyboard::KeyCode::Escape) {
+                    self.close_settings();
+                    return;
+                }
 
                 // Edit mode takes precedence over everything except the search
                 // field: Esc exits edit mode (doesn't hide), Enter/Done would
@@ -2172,16 +2398,51 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        // If the press starts on the control capsule, mark it
-                        // so the release is treated as a control click and NOT
-                        // as a scroll drag.
-                        let over_control = self.control.hit_test_scaled(
+                        // While the settings overlay is open, presses are
+                        // consumed by the overlay: an inside-panel click may
+                        // hit the close button, an outside click closes the
+                        // overlay. No grid interaction is possible underneath.
+                        if self.settings_open {
+                            self.pressed_on_settings = self
+                                .settings_panel_hit_close(self.pointer_phys_x, self.pointer_phys_y);
+                            // Always swallow: outside clicks are handled on
+                            // release (close), inside clicks may hit the ×.
+                            return;
+                        }
+                        // If the press starts on the control capsule (or, in
+                        // edit mode, the adjacent settings gear capsule), mark
+                        // it so the release is treated as a control click and
+                        // NOT as a scroll drag.
+                        let mut over_control = self.control.hit_test_scaled(
                             self.viewport_phys(),
                             self.frame_bottom_y(),
                             self.pointer_phys_x,
                             self.pointer_phys_y,
                             self.scale_factor,
                         );
+                        // In edit mode the gear capsule sits beside the Done
+                        // capsule but is not part of the control shape, so hit
+                        // it explicitly.
+                        if !over_control && self.editing {
+                            let scale = self.scale_factor;
+                            let done_hw = self
+                                .cached_done_width
+                                .map(|w| bottom_control::done_half_width(w, scale))
+                                .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
+                            if let Some((gear, _)) = bottom_control::edit_gear_geometry(
+                                self.viewport_phys(),
+                                self.frame_bottom_y(),
+                                scale,
+                                done_hw,
+                                self.edit_visual_progress(),
+                            ) {
+                                over_control = bottom_control::edit_gear_hit(
+                                    &gear,
+                                    self.pointer_phys_x,
+                                    self.pointer_phys_y,
+                                );
+                            }
+                        }
                         self.pressed_on_control = over_control;
                         if over_control {
                             return;
@@ -2220,6 +2481,21 @@ impl ApplicationHandler<UserEvent> for App {
                         self.begin_grid_press(Instant::now());
                     }
                     ElementState::Released => {
+                        // Settings overlay open: handle close-button + outside
+                        // clicks. Nothing underneath is reachable.
+                        if self.settings_open {
+                            let was_close = self.pressed_on_settings;
+                            self.pressed_on_settings = false;
+                            let px = self.pointer_phys_x;
+                            let py = self.pointer_phys_y;
+                            if was_close && self.settings_panel_hit_close(px, py) {
+                                self.close_settings();
+                            } else if !self.settings_panel_contains(px, py) {
+                                // Outside the panel → dismiss (like a modal).
+                                self.close_settings();
+                            }
+                            return;
+                        }
                         if self.pressed_on_control {
                             self.pressed_on_control = false;
                             // Only count as a click if it stayed on the capsule.
@@ -2355,6 +2631,10 @@ impl ApplicationHandler<UserEvent> for App {
                 // Upload the control's capsule + overlays before the render.
                 // This also measures query + preedit width for the IME cursor.
                 self.render_bottom_control();
+                // Upload the corner gear capsule + glyph (if shown).
+                self.render_gear();
+                // Upload the settings overlay panel (if open).
+                self.render_settings_panel();
 
                 // Sync the OS IME with the search field (on while focused,
                 // parked at the caret) so Japanese / other IME input works.
@@ -2382,6 +2662,7 @@ impl ApplicationHandler<UserEvent> for App {
                     || edit_control_animating
                     || springs_animating
                     || self.editing
+                    || self.settings_open
                 {
                     self.request_redraw();
                 }
@@ -2407,8 +2688,12 @@ impl ApplicationHandler<UserEvent> for App {
                     // outside the launcher to dismiss edit mode would itself
                     // blur the window, and we want to exit edit mode cleanly
                     // (persisting the reorder) rather than vanish mid-edit.
+                    // The settings overlay gets the same treatment so it isn't
+                    // dismissed by a momentary focus shuffle.
                     if self.editing {
                         debug_log!("window_event: Focused(false) ignored (editing)");
+                    } else if self.settings_open {
+                        debug_log!("window_event: Focused(false) ignored (settings open)");
                     } else if in_grace {
                         debug_log!("window_event: Focused(false) ignored (within summon grace)");
                     } else {
@@ -2449,7 +2734,12 @@ impl ApplicationHandler<UserEvent> for App {
 
         // Edit mode keeps redrawing so the wiggle animation advances and the
         // dragged tile tracks the pointer smoothly.
-        if scroller_animating || control_animating || self.editing || long_press_pending {
+        if scroller_animating
+            || control_animating
+            || self.editing
+            || long_press_pending
+            || self.settings_open
+        {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -2489,6 +2779,23 @@ const QUERY_LABEL_FONT: &str = "Yu Gothic UI";
 const QUERY_LABEL_SIZE: f32 = 13.0;
 const QUERY_LABEL_LINE: f32 = 18.0;
 const DONE_LABEL: &str = "完了";
+
+// ---- settings overlay (placeholder panel) ----------------------------------
+
+/// Title shown in the placeholder settings panel.
+const SETTINGS_TITLE: &str = "設定";
+/// Half-size of the placeholder settings panel (logical px), scaled by the
+/// DPI at draw time. Deliberately modest; the real Mac-style panel replaces
+/// this in a follow-up.
+const SETTINGS_PANEL_HALF_W: f32 = 220.0;
+const SETTINGS_PANEL_HALF_H: f32 = 150.0;
+const SETTINGS_PANEL_RADIUS: f32 = 28.0;
+/// Title font for the settings panel.
+const SETTINGS_TITLE_FONT: &str = "Yu Gothic UI";
+const SETTINGS_TITLE_SIZE: f32 = 20.0;
+const SETTINGS_TITLE_LINE: f32 = 26.0;
+/// Radius of the close (×) button glyph at the panel's top-right, in logical px.
+const SETTINGS_CLOSE_HALF: f32 = 10.0;
 
 /// Build the text glyph quads for the control's active layers. A free function
 /// (not a method) so it can borrow `&mut TextRenderer` and `&BottomControl`

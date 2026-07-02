@@ -107,6 +107,17 @@ pub struct LiquidGlassRenderer {
     badge_shape_count: u32,
     badge_shapes: Vec<GlassShape>,
     control_shape_buffer: wgpu::Buffer,
+    /// Optional gear/settings capsule (independent of the bottom control).
+    /// Used by the `GearStyle::Corner` variant, which renders a separate
+    /// glass disk at the bottom-left. `None` when hidden.
+    gear_shape: Option<GlassShape>,
+    gear_shape_buffer: wgpu::Buffer,
+    gear_geometry_bind_group: wgpu::BindGroup,
+    /// Optional settings overlay panel (a large frame-independent glass
+    /// rectangle). `None` when the overlay is closed.
+    settings_panel_shape: Option<GlassShape>,
+    settings_panel_shape_buffer: wgpu::Buffer,
+    settings_panel_geometry_bind_group: wgpu::BindGroup,
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
@@ -184,6 +195,8 @@ impl LiquidGlassRenderer {
         let shape_count = shapes.len() as u32;
         let badge_shape_buffer = create_shape_buffer(device, &[]);
         let control_shape_buffer = create_shape_buffer(device, &[]);
+        let gear_shape_buffer = create_shape_buffer(device, &[]);
+        let settings_panel_shape_buffer = create_shape_buffer(device, &[]);
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
@@ -264,6 +277,18 @@ impl LiquidGlassRenderer {
             &geometry_bind_group_layout,
             &uniform_buffer,
             &control_shape_buffer,
+        );
+        let gear_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &uniform_buffer,
+            &gear_shape_buffer,
+        );
+        let settings_panel_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &uniform_buffer,
+            &settings_panel_shape_buffer,
         );
         let final_bind_group = create_final_bind_group(
             device,
@@ -422,6 +447,12 @@ impl LiquidGlassRenderer {
             badge_shape_count,
             badge_shapes: Vec::new(),
             control_shape_buffer,
+            gear_shape: None,
+            gear_shape_buffer,
+            gear_geometry_bind_group,
+            settings_panel_shape: None,
+            settings_panel_shape_buffer,
+            settings_panel_geometry_bind_group,
             base_shapes: Vec::new(),
             control_shape: None,
             geometry_texture,
@@ -561,6 +592,42 @@ impl LiquidGlassRenderer {
             &self.geometry_bind_group_layout,
             &self.uniform_buffer,
             &self.control_shape_buffer,
+        );
+    }
+
+    /// Replace the corner gear/settings capsule shape. Pass `None` to hide it.
+    pub fn set_gear_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
+        if self.gear_shape == shape {
+            return;
+        }
+        self.gear_shape = shape;
+
+        let shapes = shape.map(|shape| [shape]);
+        let shape_slice = shapes.as_ref().map_or(&[][..], |shapes| shapes.as_slice());
+        self.gear_shape_buffer = create_shape_buffer(device, shape_slice);
+        self.gear_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &self.geometry_bind_group_layout,
+            &self.uniform_buffer,
+            &self.gear_shape_buffer,
+        );
+    }
+
+    /// Replace the settings overlay panel shape. Pass `None` to hide it.
+    pub fn set_settings_panel_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
+        if self.settings_panel_shape == shape {
+            return;
+        }
+        self.settings_panel_shape = shape;
+
+        let shapes = shape.map(|shape| [shape]);
+        let shape_slice = shapes.as_ref().map_or(&[][..], |shapes| shapes.as_slice());
+        self.settings_panel_shape_buffer = create_shape_buffer(device, shape_slice);
+        self.settings_panel_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &self.geometry_bind_group_layout,
+            &self.uniform_buffer,
+            &self.settings_panel_shape_buffer,
         );
     }
 
@@ -989,6 +1056,139 @@ impl LiquidGlassRenderer {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass control final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        self.last_geometry_key = None;
+    }
+
+    /// Render the corner gear capsule (a frame-independent Liquid Glass disk),
+    /// mirroring `render_control` but against the gear shape buffer. No-op when
+    /// no gear shape is set.
+    pub fn render_gear(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) {
+        if !self.params.enabled {
+            return;
+        }
+        if self.gear_shape.is_none() {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass gear geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &self.gear_geometry_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass gear final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        self.last_geometry_key = None;
+    }
+
+    /// Render the settings overlay panel glass. Drawn last (over everything),
+    /// so it composites above the grid, control, and gear.
+    pub fn render_settings_panel(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) {
+        if !self.params.enabled {
+            return;
+        }
+        if self.settings_panel_shape.is_none() {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass settings panel geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &self.settings_panel_geometry_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass settings panel final pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
                     depth_slice: None,

@@ -25,6 +25,8 @@ struct Uniforms {
 //   1 = indicator dot
 //   2 = caret (vertical bar)
 //   3 = close button (×)
+//   4 = edit badge close glyph (scroll-coupled, frame-masked)
+//   5 = settings gear (ring + radial teeth)
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -65,7 +67,9 @@ fn vs_main(
     let extent = element_extent(kind.x, params.x);
 
     var element_center = center;
-    if kind.x > 3.5 {
+    // Only the edit-badge glyph (kind 4) scrolls with the tiles. The gear
+    // (kind 5) is a frame-independent control and must not move with scroll.
+    if kind.x > 3.5 && kind.x < 4.5 {
         element_center.x = element_center.x + u.viewport_scroll.z;
     }
     let world = vec2<f32>(element_center.x + c.x * extent, element_center.y - c.y * extent);
@@ -91,6 +95,10 @@ fn element_extent(kind: f32, size: f32) -> f32 {
     if kind < 0.5 {
         // magnifier: ring radius + handle length.
         return size * 2.4;
+    }
+    if kind > 4.5 {
+        // gear: teeth extend just past the ring radius.
+        return size * 1.4;
     }
     // dot / caret / close: a square of side ~2*size fits the shape.
     return size * 1.6;
@@ -174,7 +182,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p + b1, 2.0 * b1, w);
         let d2 = sd_segment(p + b2, 2.0 * b2, w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
-    } else {
+    } else if kind < 4.5 {
         // Edit badge: the glass disk is rendered by Liquid Glass; this pass
         // only paints the iOS-style close glyph.
         let r = in.params.x;
@@ -188,9 +196,41 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let ring_d = abs(sd_circle(p, r * 0.82)) - max(w * 0.45, 0.7);
         let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.28;
         coverage = max(close, ring);
+    } else {
+        // Settings gear: an annulus (ring) plus 8 short radial teeth. `size`
+        // is the outer tooth-tip radius; the ring sits at 0.62*size.
+        let size = in.params.x;
+        let tooth_r = size;
+        let ring_r = size * 0.62;
+        let ring_w = max(size * 0.16, 1.2);
+        let d_outer = sd_circle(p, ring_r + ring_w * 0.5);
+        let d_inner = sd_circle(p, ring_r - ring_w * 0.5);
+        let ring = (1.0 - smoothstep(-1.0, 1.0, d_outer)) * smoothstep(-1.0, 1.0, d_inner);
+        // Teeth: 8 rounded boxes radiating from the origin. Each tooth is a
+        // thin radial bar centered just outside the ring. Accumulate the
+        // union of all tooth coverages, then union with the ring.
+        let tooth_len = (tooth_r - ring_r) * 0.95;
+        let tooth_w = max(size * 0.09, 0.9);
+        var tooth_union: f32 = 0.0;
+        for (var i = 0; i < 8; i = i + 1) {
+            let ang = f32(i) * (6.2831853 / 8.0);
+            let ca = cos(ang);
+            let sa = sin(ang);
+            // Rotate p into the tooth's local frame (long axis = x), then
+            // translate to the tooth center and test a rounded box.
+            let rx = p.x * ca + p.y * sa;
+            let ry = -p.x * sa + p.y * ca;
+            let q = vec2<f32>(rx, ry) - vec2<f32>(ring_r + tooth_len * 0.5, 0.0);
+            let d = sd_round_box(q, vec2<f32>(tooth_len * 0.5, tooth_w), tooth_w * 0.4);
+            let t = 1.0 - smoothstep(-1.0, 1.0, d);
+            tooth_union = max(tooth_union, t);
+        }
+        coverage = max(ring, tooth_union);
     }
 
-    if kind > 3.5 {
+    // Only the edit-badge glyph (kind 4) is masked to the page frame. The
+    // gear (kind 5) and all bottom-control ink are frame-independent.
+    if kind > 3.5 && kind < 4.5 {
         coverage = coverage * frame_alpha(in.pos.xy);
     }
 
