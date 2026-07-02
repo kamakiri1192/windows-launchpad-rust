@@ -27,6 +27,9 @@ struct Uniforms {
 //   3 = close button (×)
 //   4 = edit badge close glyph (scroll-coupled, frame-masked)
 //   5 = settings gear (ring + radial teeth)
+//   6 = rounded rectangle
+//   7 = check mark
+//   8 = chevron
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -64,7 +67,7 @@ fn vs_main(
     // Half-extent of the bounding box for this element (px). For the
     // magnifier we add room for the handle; for dots/caret/close it is the
     // radius.
-    let extent = element_extent(kind.x, params.x);
+    let extent = element_extent(kind.x, params);
 
     var element_center = center;
     // Only the edit-badge glyph (kind 4) scrolls with the tiles. The gear
@@ -91,14 +94,22 @@ fn vs_main(
 }
 
 // Bounding-box half-extent (px) for each element kind, given its base size.
-fn element_extent(kind: f32, size: f32) -> f32 {
+fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
+    let size = params.x;
     if kind < 0.5 {
         // magnifier: ring radius + handle length.
         return size * 2.4;
     }
-    if kind > 4.5 {
+    if kind > 4.5 && kind < 5.5 {
         // gear: teeth extend just past the ring radius.
         return size * 1.4;
+    }
+    if kind > 5.5 && kind < 6.5 {
+        // rounded rectangle: params.z carries half-width.
+        return max(params.z, size) * 1.05;
+    }
+    if kind > 6.5 {
+        return size * 1.8;
     }
     // dot / caret / close: a square of side ~2*size fits the shape.
     return size * 1.6;
@@ -196,7 +207,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let ring_d = abs(sd_circle(p, r * 0.82)) - max(w * 0.45, 0.7);
         let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.28;
         coverage = max(close, ring);
-    } else {
+    } else if kind < 5.5 {
         // Settings gear: an annulus (ring) plus 8 short radial teeth. `size`
         // is the outer tooth-tip radius; the ring sits at 0.62*size.
         let size = in.params.x;
@@ -226,6 +237,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             tooth_union = max(tooth_union, t);
         }
         coverage = max(ring, tooth_union);
+    } else if kind < 6.5 {
+        // Rounded rectangle. params: (half-height, alpha, half-width, radius).
+        let half_h = in.params.x;
+        let half_w = max(in.params.z, 0.0);
+        let radius = max(in.params.w, 0.0);
+        let d = sd_round_box(p, vec2<f32>(half_w, half_h), radius);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, d);
+    } else if kind < 7.5 {
+        // Check mark.
+        let r = in.params.x;
+        let w = max(in.params.z, 1.0);
+        let a = vec2<f32>(-0.42 * r, -0.02 * r);
+        let b = vec2<f32>(-0.12 * r, 0.32 * r);
+        let c = vec2<f32>(0.48 * r, -0.36 * r);
+        let d1 = sd_segment(p - a, b - a, w);
+        let d2 = sd_segment(p - b, c - b, w);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
+    } else {
+        // Chevron pointing right.
+        let r = in.params.x;
+        let w = max(in.params.z, 1.0);
+        let a = vec2<f32>(-0.22 * r, -0.46 * r);
+        let b = vec2<f32>(0.28 * r, 0.0);
+        let c = vec2<f32>(-0.22 * r, 0.46 * r);
+        let d1 = sd_segment(p - a, b - a, w);
+        let d2 = sd_segment(p - b, c - b, w);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
     }
 
     // Only the edit-badge glyph (kind 4) is masked to the page frame. The

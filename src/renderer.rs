@@ -111,6 +111,7 @@ pub struct Renderer {
     // ink on top: procedural shapes (magnifier, dots, caret, close) and the
     // cosmic-text glyphs for the label / query / placeholder.
     control_pipeline: RenderPipeline,
+    control_opaque_pipeline: RenderPipeline,
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: Option<Buffer>,
@@ -128,6 +129,8 @@ pub struct Renderer {
     control_text_instance_count: u32,
     /// Settings overlay ink (close ×) + title text instances, drawn in a final
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
+    settings_backdrop_instance_buffer: Option<Buffer>,
+    settings_backdrop_instance_count: u32,
     settings_instance_buffer: Option<Buffer>,
     settings_instance_count: u32,
     settings_text_instance_buffer: Option<Buffer>,
@@ -660,6 +663,36 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let control_opaque_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("control opaque overlay pipeline"),
+                layout: Some(&control_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &control_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[ControlInstance::LAYOUT],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &control_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
 
         // Control text pipeline: same bind group (uniform + atlas + sampler).
         let control_text_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -725,6 +758,7 @@ impl Renderer {
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
             control_pipeline,
+            control_opaque_pipeline,
             control_uniform_buffer,
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: None,
@@ -738,6 +772,8 @@ impl Renderer {
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: None,
             control_text_instance_count: 0,
+            settings_backdrop_instance_buffer: None,
+            settings_backdrop_instance_count: 0,
             settings_instance_buffer: None,
             settings_instance_count: 0,
             settings_text_instance_buffer: None,
@@ -1071,6 +1107,23 @@ impl Renderer {
         self.gear_instance_buffer = Some(self.device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("gear instance buffer"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
+    }
+
+    /// Replace the opaque settings panel backdrop instances. These are drawn
+    /// before the regular settings ink so launcher glass cannot show through.
+    pub fn set_settings_backdrop_instances(&mut self, instances: &[ControlInstance]) {
+        self.settings_backdrop_instance_count = instances.len() as u32;
+        if instances.is_empty() {
+            self.settings_backdrop_instance_buffer = None;
+            return;
+        }
+        self.settings_backdrop_instance_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("settings backdrop instance buffer"),
                 contents: bytemuck::cast_slice(instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             },
@@ -1412,6 +1465,31 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
 
         // Settings panel ink (close ×) + title text, on top of the panel glass.
+        if self.settings_backdrop_instance_count > 0 {
+            if let Some(buf) = self.settings_backdrop_instance_buffer.as_ref() {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("settings backdrop opaque pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.control_opaque_pipeline);
+                pass.set_bind_group(0, &self.control_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..self.settings_backdrop_instance_count);
+            }
+        }
+
         if self.settings_instance_count > 0 || self.settings_text_instance_count > 0 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("settings overlay pass"),

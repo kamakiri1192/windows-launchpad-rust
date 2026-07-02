@@ -25,6 +25,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::app_id::AppId;
 use crate::icons::normalize::DecodedIcon;
+use crate::settings::Settings;
 use crate::startup_timer::{self, prefix};
 
 /// Bumped on any breaking change to the on-disk layout. A mismatch invalidates
@@ -315,6 +316,21 @@ impl IconCache {
         self.kv_put(HIDDEN_KEY, &bytes)
     }
 
+    /// Read persisted launcher settings. Missing or corrupt settings fall back
+    /// to defaults so a bad preferences blob never blocks startup.
+    pub fn get_settings(&self) -> Settings {
+        self.kv_get(SETTINGS_KEY)
+            .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Persist launcher settings as a JSON blob in the generic kv table.
+    pub fn put_settings(&self, settings: &Settings) -> rusqlite::Result<()> {
+        let bytes = serde_json::to_vec(settings)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.kv_put(SETTINGS_KEY, &bytes)
+    }
+
     /// Generic single-blob read from the `kv` table. Returns `None` when the key
     /// is absent or the row can't be decoded.
     fn kv_get(&self, key: &str) -> Option<Vec<u8>> {
@@ -378,6 +394,8 @@ fn now_unix() -> u64 {
 const APP_ORDER_KEY: &str = "app_order";
 /// `kv` key under which the user-hidden app ids are stored.
 const HIDDEN_KEY: &str = "hidden_ids";
+/// `kv` key under which the settings panel preferences are stored.
+const SETTINGS_KEY: &str = "settings";
 
 /// Serialize a slice of `AppId`s into a compact blob: `count:u32` followed by,
 /// for each id, `len:u32` + the normalized string bytes (little-endian). This
