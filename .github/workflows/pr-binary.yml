@@ -28,7 +28,21 @@ env:
 jobs:
   build:
     name: Build PR review binary
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'build:windows-binary')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'build:windows-binary'
+          ) ||
+          (
+            github.event.action != 'labeled' &&
+            contains(github.event.pull_request.labels.*.name, 'build:windows-binary')
+          )
+        )
+      )
     runs-on: windows-latest
     timeout-minutes: 30
 
