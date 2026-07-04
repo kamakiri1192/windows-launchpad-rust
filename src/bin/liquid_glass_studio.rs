@@ -7,21 +7,25 @@ use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
+#[cfg(windows)]
+use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 const INITIAL_WIDTH: u32 = 1180;
 const INITIAL_HEIGHT: u32 = 760;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 const SHAPE_SCROLLING: u32 = 0;
 const SHAPE_CLIP_ONLY: u32 = 3;
 const UI_PANEL_WIDTH: f32 = 324.0;
 const UI_PANEL_MARGIN: f32 = 18.0;
-const UI_ROW_HEIGHT: f32 = 45.0;
+const UI_ROW_HEIGHT: f32 = 42.0;
 const UI_SLIDER_TRACK_WIDTH: f32 = 150.0;
 const UI_SLIDER_TRACK_HEIGHT: f32 = 6.0;
+const UI_BUTTON_WIDTH: f32 = 116.0;
+const UI_BUTTON_HEIGHT: f32 = 30.0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -106,6 +110,36 @@ impl Default for StudioParams {
     }
 }
 
+impl StudioParams {
+    fn launchpad_defaults() -> Self {
+        Self {
+            thickness: 26.0,
+            refractive_index: 1.42,
+            chromatic_aberration: 0.075,
+            blur_radius: 16.0,
+            saturation: 1.34,
+            glass_color: [0.94, 0.98, 1.0, 0.045],
+            light_direction: normalize2([-0.45, -0.9]),
+            light_intensity: 1.25,
+            ambient_strength: 0.28,
+            blend: 26.0,
+        }
+    }
+
+    fn is_launchpad_defaults(self) -> bool {
+        let defaults = Self::launchpad_defaults();
+        nearly_equal(self.thickness, defaults.thickness)
+            && nearly_equal(self.refractive_index, defaults.refractive_index)
+            && nearly_equal(self.chromatic_aberration, defaults.chromatic_aberration)
+            && nearly_equal(self.blur_radius, defaults.blur_radius)
+            && nearly_equal(self.saturation, defaults.saturation)
+            && nearly_equal(self.glass_color[3], defaults.glass_color[3])
+            && nearly_equal(self.light_intensity, defaults.light_intensity)
+            && nearly_equal(self.ambient_strength, defaults.ambient_strength)
+            && nearly_equal(self.blend, defaults.blend)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct DebugOptions {
     show_backdrop_texture: bool,
@@ -151,6 +185,54 @@ impl Default for StudioControls {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundPreset {
+    ColorField,
+    Black,
+    White,
+    SplitTone,
+    Checkerboard,
+    TextContrast,
+}
+
+impl BackgroundPreset {
+    const ALL: [Self; 6] = [
+        Self::ColorField,
+        Self::Black,
+        Self::White,
+        Self::SplitTone,
+        Self::Checkerboard,
+        Self::TextContrast,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ColorField => "COLOR FIELD",
+            Self::Black => "BLACK",
+            Self::White => "WHITE",
+            Self::SplitTone => "SPLIT TONE",
+            Self::Checkerboard => "CHECKER",
+            Self::TextContrast => "TEXT TEST",
+        }
+    }
+
+    fn next(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|preset| *preset == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+
+    fn previous(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|preset| *preset == self)
+            .unwrap_or(0);
+        Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SliderId {
     Thickness,
     RefractiveIndex,
@@ -180,6 +262,14 @@ const SLIDERS: [SliderId; 12] = [
     SliderId::SpringDamping,
     SliderId::StretchFactor,
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ButtonId {
+    LaunchpadDefaults,
+    AppComposite,
+    BackgroundPrevious,
+    BackgroundNext,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct StudioUi {
@@ -310,10 +400,15 @@ impl ApplicationHandler for StudioApp {
             return;
         }
 
-        let attrs = WindowAttributes::default()
+        let mut attrs = WindowAttributes::default()
             .with_title("Liquid Glass Studio")
+            .with_transparent(true)
             .with_inner_size(LogicalSize::new(INITIAL_WIDTH, INITIAL_HEIGHT))
             .with_min_inner_size(LogicalSize::new(980, 760));
+        #[cfg(windows)]
+        {
+            attrs = attrs.with_no_redirection_bitmap(true);
+        }
         let window = event_loop
             .create_window(attrs)
             .expect("create studio window");
@@ -378,9 +473,27 @@ impl ApplicationHandler for StudioApp {
                     return;
                 }
                 if let Some(renderer) = self.renderer.as_mut() {
+                    let width = renderer.config.width as f32;
+                    let height = renderer.config.height as f32;
+                    if let Some(button) = button_at(width, height, self.ui.pointer) {
+                        match button {
+                            ButtonId::LaunchpadDefaults => {
+                                renderer.params = StudioParams::launchpad_defaults();
+                                renderer.debug = DebugOptions::default();
+                                renderer.draw_backdrop_layer = false;
+                            }
+                            ButtonId::AppComposite => {
+                                renderer.draw_backdrop_layer = !renderer.draw_backdrop_layer;
+                            }
+                            ButtonId::BackgroundPrevious => renderer.cycle_backdrop(-1),
+                            ButtonId::BackgroundNext => renderer.cycle_backdrop(1),
+                        }
+                        renderer.update_title();
+                        return;
+                    }
                     let consumed = self.ui.begin_pointer(
-                        renderer.config.width as f32,
-                        renderer.config.height as f32,
+                        width,
+                        height,
                         self.ui.pointer,
                         &mut renderer.params,
                         &mut self.controls,
@@ -488,13 +601,23 @@ struct StudioRenderer {
     ui_uniform_buffer: wgpu::Buffer,
     ui_bind_group: wgpu::BindGroup,
     ui_instance_buffer: wgpu::Buffer,
+    backdrop_preset: BackgroundPreset,
+    draw_backdrop_layer: bool,
     last_title_update: Instant,
 }
 
 impl StudioRenderer {
     async fn new(window: Window) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut dx12 = wgpu::Dx12BackendOptions::from_env_or_default();
+        if wgpu::Dx12SwapchainKind::from_env().is_none() {
+            dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: default_backends(),
+            backend_options: wgpu::BackendOptions {
+                dx12,
+                ..wgpu::BackendOptions::from_env_or_default()
+            },
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = unsafe {
@@ -533,12 +656,12 @@ impl StudioRenderer {
             height: size.height.max(1),
             present_mode: select_present_mode(&caps.present_modes),
             desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            alpha_mode: select_alpha_mode(&caps.alpha_modes),
             view_formats: vec![],
         };
         surface.configure(&device, &config);
 
-        let params = StudioParams::default();
+        let params = StudioParams::launchpad_defaults();
         let debug = DebugOptions::default();
         let uniforms = uniforms_from_params(&params, debug, config.width, config.height, 0);
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -561,7 +684,14 @@ impl StudioRenderer {
             create_geometry_texture(&device, config.width, config.height);
         let (backdrop_texture, backdrop_view) =
             create_backdrop_texture(&device, config.width, config.height);
-        upload_backdrop(&queue, &backdrop_texture, config.width, config.height);
+        let backdrop_preset = BackgroundPreset::ColorField;
+        upload_backdrop(
+            &queue,
+            &backdrop_texture,
+            config.width,
+            config.height,
+            backdrop_preset,
+        );
         let (blur_texture, blur_view) = create_blur_texture_raw(
             &device,
             config.width,
@@ -840,6 +970,8 @@ impl StudioRenderer {
             ui_uniform_buffer,
             ui_bind_group,
             ui_instance_buffer,
+            backdrop_preset,
+            draw_backdrop_layer: false,
             last_title_update: Instant::now() - Duration::from_secs(1),
         })
     }
@@ -861,6 +993,7 @@ impl StudioRenderer {
             &backdrop_texture,
             self.config.width,
             self.config.height,
+            self.backdrop_preset,
         );
         let (blur_texture, blur_view) = create_blur_texture_raw(
             &self.device,
@@ -990,9 +1123,85 @@ impl StudioRenderer {
             &controls,
             self.debug,
             show_anchor,
+            self.backdrop_preset,
+            self.draw_backdrop_layer,
+            !surface_preserves_alpha(self.config.alpha_mode),
             ui,
         );
         self.ui_instance_buffer = create_ui_instance_buffer(&self.device, &ui_instances);
+
+        let blur_levels = studio_blur_level_count(&self.params, self.debug);
+        for i in 0..blur_levels {
+            let label = format!("studio liquid glass blur downsample L{i}->L{}", i + 1);
+            let mut blur_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some(label.as_str()),
+                    });
+            {
+                let mut pass = blur_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.blur_levels[i].1,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blur_downsample_pipeline);
+                pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.queue.submit(std::iter::once(blur_encoder.finish()));
+        }
+
+        for j in 0..blur_levels {
+            let dst = if j == blur_levels - 1 {
+                &self.blur_view
+            } else {
+                &self.blur_levels[blur_levels - 2 - j].1
+            };
+            let bind_idx = 3 - blur_levels + j;
+            let label = format!(
+                "studio liquid glass blur upsample L{}->L{}",
+                blur_levels - j,
+                blur_levels - 1 - j
+            );
+            let mut blur_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some(label.as_str()),
+                    });
+            {
+                let mut pass = blur_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: dst,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blur_upsample_pipeline);
+                pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.queue.submit(std::iter::once(blur_encoder.finish()));
+        }
 
         let mut encoder = self
             .device
@@ -1000,7 +1209,8 @@ impl StudioRenderer {
                 label: Some("studio liquid glass encoder"),
             });
 
-        {
+        let draw_backdrop_layer = self.effective_draw_backdrop_layer();
+        if draw_backdrop_layer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("studio background pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1020,17 +1230,15 @@ impl StudioRenderer {
             pass.set_pipeline(&self.background_pipeline);
             pass.set_bind_group(0, &self.background_bind_group, &[]);
             pass.draw(0..3, 0..1);
-        }
-
-        for i in 0..3 {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("studio liquid glass blur downsample pass"),
+        } else {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("studio transparent clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.blur_levels[i].1,
+                    view: &target,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1039,36 +1247,7 @@ impl StudioRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.blur_downsample_pipeline);
-            pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        for i in 0..3 {
-            let dst = if i == 2 {
-                &self.blur_view
-            } else {
-                &self.blur_levels[1 - i].1
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("studio liquid glass blur upsample pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dst,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.blur_upsample_pipeline);
-            pass.set_bind_group(0, &self.blur_up_bind_groups[i], &[]);
-            pass.draw(0..3, 0..1);
+            drop(pass);
         }
 
         {
@@ -1149,12 +1328,52 @@ impl StudioRenderer {
     fn update_title(&mut self) {
         self.last_title_update = Instant::now();
         self.window.set_title(&format!(
-            "Liquid Glass Studio | sliders: thickness {:.0}  merge {:.0}  blur {:.0}  chroma {:.3}  U panel  Space anchor  R reset",
+            "Liquid Glass Studio | {}  bg {}  composite {}  thickness {:.0}  merge {:.0}  blur {:.0}  chroma {:.3}  U panel  R app reset",
+            if self.params.is_launchpad_defaults() {
+                "APP DEFAULTS"
+            } else {
+                "TUNED"
+            },
+            self.backdrop_preset.label(),
+            if self.draw_backdrop_layer {
+                "preview"
+            } else if !surface_preserves_alpha(self.config.alpha_mode) {
+                "app-sim"
+            } else {
+                "app"
+            },
             self.params.thickness,
             self.params.blend,
             self.params.blur_radius,
             self.params.chromatic_aberration,
         ));
+    }
+
+    fn set_backdrop_preset(&mut self, preset: BackgroundPreset) {
+        if self.backdrop_preset == preset {
+            return;
+        }
+        self.backdrop_preset = preset;
+        upload_backdrop(
+            &self.queue,
+            &self.backdrop_texture,
+            self.config.width,
+            self.config.height,
+            self.backdrop_preset,
+        );
+    }
+
+    fn cycle_backdrop(&mut self, direction: i32) {
+        let preset = if direction < 0 {
+            self.backdrop_preset.previous()
+        } else {
+            self.backdrop_preset.next()
+        };
+        self.set_backdrop_preset(preset);
+    }
+
+    fn effective_draw_backdrop_layer(&self) -> bool {
+        self.draw_backdrop_layer || !surface_preserves_alpha(self.config.alpha_mode)
     }
 }
 
@@ -1201,9 +1420,18 @@ fn handle_key(
                 !renderer.debug.disable_chromatic_aberration;
         }
         KeyCode::KeyL => renderer.debug.disable_blur = !renderer.debug.disable_blur,
-        KeyCode::KeyR => {
-            renderer.params = StudioParams::default();
+        KeyCode::KeyN => renderer.cycle_backdrop(1),
+        KeyCode::KeyP => renderer.cycle_backdrop(-1),
+        KeyCode::KeyM => {
+            renderer.params = StudioParams::launchpad_defaults();
             renderer.debug = DebugOptions::default();
+            renderer.draw_backdrop_layer = false;
+        }
+        KeyCode::KeyR => {
+            renderer.params = StudioParams::launchpad_defaults();
+            renderer.debug = DebugOptions::default();
+            renderer.set_backdrop_preset(BackgroundPreset::ColorField);
+            renderer.draw_backdrop_layer = false;
             *controls = StudioControls::default();
             *show_anchor = true;
         }
@@ -1300,6 +1528,20 @@ fn uniforms_from_params(
     }
 }
 
+fn studio_blur_level_count(params: &StudioParams, debug: DebugOptions) -> usize {
+    if debug.disable_blur {
+        return 0;
+    }
+    let radius = params.blur_radius;
+    if radius < 6.0 {
+        1
+    } else if radius < 16.0 {
+        2
+    } else {
+        3
+    }
+}
+
 fn ui_panel_rect(width: f32, height: f32) -> (f32, f32, f32, f32) {
     let h = (height - UI_PANEL_MARGIN * 2.0).max(420.0);
     (
@@ -1311,7 +1553,7 @@ fn ui_panel_rect(width: f32, height: f32) -> (f32, f32, f32, f32) {
 }
 
 fn slider_row_y(index: usize) -> f32 {
-    UI_PANEL_MARGIN + 86.0 + index as f32 * UI_ROW_HEIGHT
+    UI_PANEL_MARGIN + 118.0 + index as f32 * UI_ROW_HEIGHT
 }
 
 fn slider_track_rect(width: f32, index: usize) -> (f32, f32, f32, f32) {
@@ -1322,6 +1564,41 @@ fn slider_track_rect(width: f32, index: usize) -> (f32, f32, f32, f32) {
         UI_SLIDER_TRACK_WIDTH,
         UI_SLIDER_TRACK_HEIGHT,
     )
+}
+
+fn background_button_rect(width: f32, height: f32, id: ButtonId) -> (f32, f32, f32, f32) {
+    let (panel_x, panel_y, _, panel_h) = ui_panel_rect(width, height);
+    match id {
+        ButtonId::LaunchpadDefaults => (panel_x + 24.0, panel_y + 74.0, UI_BUTTON_WIDTH, 26.0),
+        ButtonId::AppComposite => (panel_x + 156.0, panel_y + 74.0, UI_BUTTON_WIDTH, 26.0),
+        ButtonId::BackgroundPrevious => (
+            panel_x + 24.0,
+            panel_y + panel_h - 42.0,
+            UI_BUTTON_WIDTH,
+            UI_BUTTON_HEIGHT,
+        ),
+        ButtonId::BackgroundNext => (
+            panel_x + 156.0,
+            panel_y + panel_h - 42.0,
+            UI_BUTTON_WIDTH,
+            UI_BUTTON_HEIGHT,
+        ),
+    }
+}
+
+fn button_at(width: f32, height: f32, pointer: [f32; 2]) -> Option<ButtonId> {
+    for button in [
+        ButtonId::LaunchpadDefaults,
+        ButtonId::AppComposite,
+        ButtonId::BackgroundPrevious,
+        ButtonId::BackgroundNext,
+    ] {
+        let (x, y, w, h) = background_button_rect(width, height, button);
+        if pointer[0] >= x && pointer[0] <= x + w && pointer[1] >= y && pointer[1] <= y + h {
+            return Some(button);
+        }
+    }
+    None
 }
 
 fn slider_at(width: f32, height: f32, pointer: [f32; 2]) -> Option<SliderId> {
@@ -1421,6 +1698,7 @@ fn set_slider_from_pointer(
     set_slider_value(id, min + (max - min) * t, params, controls);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_ui_instances(
     width: f32,
     height: f32,
@@ -1428,6 +1706,9 @@ fn build_ui_instances(
     controls: &StudioControls,
     debug: DebugOptions,
     show_anchor: bool,
+    backdrop_preset: BackgroundPreset,
+    draw_backdrop_layer: bool,
+    app_mode_simulated: bool,
     ui: StudioUi,
 ) -> Vec<UiInstance> {
     if !ui.visible {
@@ -1443,6 +1724,8 @@ fn build_ui_instances(
     let active_color = [0.58, 0.88, 1.0, 0.96];
     let track_color = [0.20, 0.27, 0.34, 0.72];
     let fill_color = [0.44, 0.74, 0.92, 0.88];
+    let button_color = [0.16, 0.22, 0.28, 0.86];
+    let button_hover_color = [0.24, 0.34, 0.42, 0.92];
 
     instances.push(UiInstance::rect(
         [panel_x + panel_w * 0.5, panel_y + panel_h * 0.5],
@@ -1470,6 +1753,46 @@ fn build_ui_instances(
         panel_y + 50.0,
         1.9,
         "DEV CONTROLS",
+        muted_text,
+    );
+    push_button(
+        &mut instances,
+        width,
+        height,
+        ButtonId::LaunchpadDefaults,
+        "APP RESET",
+        ui.pointer,
+        button_color,
+        button_hover_color,
+        text_color,
+    );
+    push_button(
+        &mut instances,
+        width,
+        height,
+        ButtonId::AppComposite,
+        if draw_backdrop_layer {
+            "PREVIEW"
+        } else if app_mode_simulated {
+            "APP SIM"
+        } else {
+            "APP MODE"
+        },
+        ui.pointer,
+        button_color,
+        button_hover_color,
+        text_color,
+    );
+    push_text(
+        &mut instances,
+        panel_x + 24.0,
+        panel_y + 104.0,
+        1.35,
+        if params.is_launchpad_defaults() {
+            "APP DEFAULTS ACTIVE"
+        } else {
+            "PARAMS TUNED"
+        },
         muted_text,
     );
 
@@ -1521,7 +1844,7 @@ fn build_ui_instances(
         ));
     }
 
-    let footer_y = panel_y + panel_h - 56.0;
+    let footer_y = panel_y + panel_h - 110.0;
     let anchor = if show_anchor {
         "ANCHOR ON"
     } else {
@@ -1564,13 +1887,80 @@ fn build_ui_instances(
     push_text(
         &mut instances,
         panel_x + 24.0,
-        panel_y + panel_h - 24.0,
+        footer_y + 40.0,
         1.45,
-        "U HIDE  R RESET",
+        backdrop_preset.label(),
         muted_text,
+    );
+    push_text(
+        &mut instances,
+        panel_x + 170.0,
+        footer_y + 40.0,
+        1.45,
+        if draw_backdrop_layer {
+            "PREVIEW"
+        } else if app_mode_simulated {
+            "APP SIM"
+        } else {
+            "APP MODE"
+        },
+        muted_text,
+    );
+    push_button(
+        &mut instances,
+        width,
+        height,
+        ButtonId::BackgroundPrevious,
+        "PREV",
+        ui.pointer,
+        button_color,
+        button_hover_color,
+        text_color,
+    );
+    push_button(
+        &mut instances,
+        width,
+        height,
+        ButtonId::BackgroundNext,
+        "NEXT",
+        ui.pointer,
+        button_color,
+        button_hover_color,
+        text_color,
     );
 
     instances
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_button(
+    instances: &mut Vec<UiInstance>,
+    width: f32,
+    height: f32,
+    id: ButtonId,
+    label: &str,
+    pointer: [f32; 2],
+    color: [f32; 4],
+    hover_color: [f32; 4],
+    text_color: [f32; 4],
+) {
+    let (x, y, w, h) = background_button_rect(width, height, id);
+    let hovered = pointer[0] >= x && pointer[0] <= x + w && pointer[1] >= y && pointer[1] <= y + h;
+    instances.push(UiInstance::rect(
+        [x + w * 0.5, y + h * 0.5],
+        [w, h],
+        8.0,
+        if hovered { hover_color } else { color },
+    ));
+    let label_width = label.chars().count() as f32 * 6.0 * 1.65;
+    push_text(
+        instances,
+        x + (w - label_width) * 0.5,
+        y + 9.0,
+        1.65,
+        label,
+        text_color,
+    );
 }
 
 fn slider_value_label(id: SliderId, value: f32) -> String {
@@ -1775,8 +2165,14 @@ fn blur_level_extent(width: u32, height: u32, level: u32) -> (u32, u32) {
     (width, height)
 }
 
-fn upload_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) {
-    let pixels = make_backdrop(width.max(1), height.max(1));
+fn upload_backdrop(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    preset: BackgroundPreset,
+) {
+    let pixels = make_backdrop(width.max(1), height.max(1), preset);
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -1794,7 +2190,18 @@ fn upload_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, hei
     );
 }
 
-fn make_backdrop(width: u32, height: u32) -> Vec<u8> {
+fn make_backdrop(width: u32, height: u32, preset: BackgroundPreset) -> Vec<u8> {
+    match preset {
+        BackgroundPreset::ColorField => make_color_field_backdrop(width, height),
+        BackgroundPreset::Black => make_solid_backdrop(width, height, [0.0, 0.0, 0.0]),
+        BackgroundPreset::White => make_solid_backdrop(width, height, [1.0, 1.0, 1.0]),
+        BackgroundPreset::SplitTone => make_split_tone_backdrop(width, height),
+        BackgroundPreset::Checkerboard => make_checkerboard_backdrop(width, height),
+        BackgroundPreset::TextContrast => make_text_contrast_backdrop(width, height),
+    }
+}
+
+fn make_color_field_backdrop(width: u32, height: u32) -> Vec<u8> {
     let mut pixels = vec![0u8; (width * height * 4) as usize];
     for y in 0..height {
         for x in 0..width {
@@ -1818,6 +2225,195 @@ fn make_backdrop(width: u32, height: u32) -> Vec<u8> {
         }
     }
     pixels
+}
+
+fn make_solid_backdrop(width: u32, height: u32, color: [f32; 3]) -> Vec<u8> {
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            write_pixel(&mut pixels, width, x, y, color);
+        }
+    }
+    pixels
+}
+
+fn make_split_tone_backdrop(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let quadrant = (x >= width / 2, y >= height / 2);
+            let color = match quadrant {
+                (false, false) => [0.0, 0.0, 0.0],
+                (true, false) => [1.0, 1.0, 1.0],
+                (false, true) => [0.08, 0.10, 0.13],
+                (true, true) => [0.90, 0.92, 0.86],
+            };
+            write_pixel(&mut pixels, width, x, y, color);
+        }
+    }
+    draw_backdrop_text(
+        &mut pixels,
+        width,
+        height,
+        42,
+        42,
+        4,
+        "BLACK",
+        [1.0, 1.0, 1.0],
+    );
+    draw_backdrop_text(
+        &mut pixels,
+        width,
+        height,
+        width / 2 + 42,
+        42,
+        4,
+        "WHITE",
+        [0.0, 0.0, 0.0],
+    );
+    draw_backdrop_text(
+        &mut pixels,
+        width,
+        height,
+        42,
+        height / 2 + 42,
+        4,
+        "DARK TEXT",
+        [0.82, 0.90, 1.0],
+    );
+    draw_backdrop_text(
+        &mut pixels,
+        width,
+        height,
+        width / 2 + 42,
+        height / 2 + 42,
+        4,
+        "LIGHT TEXT",
+        [0.08, 0.08, 0.08],
+    );
+    pixels
+}
+
+fn make_checkerboard_backdrop(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let checker = ((x / 64) + (y / 64)) % 2 == 0;
+            let fine = x % 64 < 2 || y % 64 < 2;
+            let base: f32 = if checker { 0.92 } else { 0.08 };
+            let edge: f32 = if fine { 0.18 } else { 0.0 };
+            let value = if checker {
+                (base - edge).max(0.0)
+            } else {
+                (base + edge).min(1.0)
+            };
+            write_pixel(&mut pixels, width, x, y, [value, value, value]);
+        }
+    }
+    draw_backdrop_text(
+        &mut pixels,
+        width,
+        height,
+        48,
+        48,
+        3,
+        "CHECKER CONTRAST",
+        [0.0, 0.48, 1.0],
+    );
+    pixels
+}
+
+fn make_text_contrast_backdrop(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let fx = x as f32 / width.max(1) as f32;
+            let fy = y as f32 / height.max(1) as f32;
+            let band = ((fy * 10.0).floor() as u32) % 2 == 0;
+            let base = if band {
+                0.12 + fx * 0.28
+            } else {
+                0.88 - fx * 0.24
+            };
+            let tint = if band {
+                [base * 0.8, base * 0.95, base * 1.25]
+            } else {
+                [base * 1.05, base, base * 0.86]
+            };
+            write_pixel(&mut pixels, width, x, y, tint);
+        }
+    }
+
+    let lines = [
+        ("WHITE TEXT ON DARK", [0.98, 0.98, 0.98]),
+        ("BLACK TEXT ON LIGHT", [0.02, 0.02, 0.02]),
+        ("LOW CONTRAST LIGHT", [0.68, 0.72, 0.76]),
+        ("LOW CONTRAST DARK", [0.32, 0.36, 0.40]),
+        ("SATURATED COLOR", [0.0, 0.52, 1.0]),
+    ];
+    for (index, (text, color)) in lines.iter().enumerate() {
+        draw_backdrop_text(
+            &mut pixels,
+            width,
+            height,
+            54,
+            64 + index as u32 * 86,
+            4,
+            text,
+            *color,
+        );
+    }
+    pixels
+}
+
+fn write_pixel(pixels: &mut [u8], width: u32, x: u32, y: u32, color: [f32; 3]) {
+    let idx = ((y * width + x) * 4) as usize;
+    pixels[idx] = (color[0].clamp(0.0, 1.0) * 255.0) as u8;
+    pixels[idx + 1] = (color[1].clamp(0.0, 1.0) * 255.0) as u8;
+    pixels[idx + 2] = (color[2].clamp(0.0, 1.0) * 255.0) as u8;
+    pixels[idx + 3] = 255;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_backdrop_text(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    scale: u32,
+    text: &str,
+    color: [f32; 3],
+) {
+    let mut cursor = x;
+    for ch in text.chars() {
+        if ch == ' ' {
+            cursor += scale * 4;
+            continue;
+        }
+        if let Some(glyph) = glyph_5x7(ch) {
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..5u32 {
+                    let mask = 1u8 << (4 - col);
+                    if (*bits & mask) == 0 {
+                        continue;
+                    }
+                    for py in 0..scale {
+                        for px in 0..scale {
+                            let dst_x = cursor + col * scale + px;
+                            let dst_y = y + row as u32 * scale + py;
+                            if dst_x < width && dst_y < height {
+                                write_pixel(pixels, width, dst_x, dst_y, color);
+                            }
+                        }
+                    }
+                }
+            }
+            cursor += scale * 6;
+        } else {
+            cursor += scale * 3;
+        }
+    }
 }
 
 fn create_background_bind_group(
@@ -2120,6 +2716,30 @@ fn select_present_mode(available: &[wgpu::PresentMode]) -> wgpu::PresentMode {
     }
 }
 
+fn select_alpha_mode(available: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
+    let selected = if available.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        wgpu::CompositeAlphaMode::PreMultiplied
+    } else if available.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+        wgpu::CompositeAlphaMode::PostMultiplied
+    } else if available.contains(&wgpu::CompositeAlphaMode::Auto) {
+        wgpu::CompositeAlphaMode::Auto
+    } else {
+        wgpu::CompositeAlphaMode::Opaque
+    };
+    eprintln!(
+        "studio surface alpha_mode: {:?} (available: {:?})",
+        selected, available
+    );
+    selected
+}
+
+fn surface_preserves_alpha(alpha_mode: wgpu::CompositeAlphaMode) -> bool {
+    matches!(
+        alpha_mode,
+        wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::PostMultiplied
+    )
+}
+
 fn default_backends() -> wgpu::Backends {
     #[cfg(windows)]
     {
@@ -2138,6 +2758,10 @@ fn normalize2(v: [f32; 2]) -> [f32; 2] {
     } else {
         [v[0] / len, v[1] / len]
     }
+}
+
+fn nearly_equal(a: f32, b: f32) -> bool {
+    (a - b).abs() <= 0.001
 }
 
 fn main() {

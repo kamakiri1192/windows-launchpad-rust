@@ -41,6 +41,7 @@ pub struct DebugOptions {
     pub disable_chromatic_aberration: bool,
     pub disable_edge_lighting: bool,
     pub disable_blur: bool,
+    pub force_white_backdrop: bool,
 }
 
 impl DebugOptions {

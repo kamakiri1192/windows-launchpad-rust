@@ -122,7 +122,7 @@ from shader problems when the glass looks wrong.
 
 | Key | Flag | What it shows |
 |-----|------|---------------|
-| `B` | show_backdrop_texture        | The raw captured backdrop, fullscreen opaque |
+| `B` | show_backdrop_texture        | The raw captured backdrop, fullscreen opaque; transparent areas are intentionally filled |
 | `G` | show_geometry_texture        | The geometry texture RGB (displacement XY + height) |
 | `D` | show_displacement            | The displacement vectors (R, G, 0.5) |
 | `A` | show_alpha_mask              | The glass alpha mask as grayscale |
@@ -130,9 +130,11 @@ from shader problems when the glass looks wrong.
 | `C` | disable_chromatic_aberration | Turn chromatic aberration off |
 | `E` | disable_edge_lighting        | Turn edge lighting / specular off |
 | `L` | disable_blur                 | Turn the blur pyramid off (final samples the sharp backdrop) |
+| `W` | force_white_backdrop         | Ignore capture and feed a solid white backdrop into Liquid Glass |
 
 Debug flags are bit-packed into `debug_flags` in the stderr log (bit 0 = `B`,
-bit 1 = `G`, ... bit 7 = `L`).
+bit 1 = `G`, ... bit 7 = `L`). `W` is logged separately as
+`white_backdrop=true`.
 
 ## Transparency notes (Windows)
 

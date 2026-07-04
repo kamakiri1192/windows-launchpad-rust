@@ -9,7 +9,7 @@ use super::params::{DebugOptions, LiquidGlassParams};
 use crate::grid::{GridApp, GridLayout};
 
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 #[repr(C)]
@@ -153,6 +153,7 @@ pub struct LiquidGlassRenderer {
     texture_size: (u32, u32),
     last_capture_at: Option<Instant>,
     last_geometry_key: Option<GeometryKey>,
+    force_white_backdrop_uploaded: bool,
     stats: RenderStats,
 }
 
@@ -473,6 +474,7 @@ impl LiquidGlassRenderer {
             texture_size: (width.max(1), height.max(1)),
             last_capture_at: None,
             last_geometry_key: None,
+            force_white_backdrop_uploaded: false,
             stats: RenderStats::new(),
         }
     }
@@ -506,6 +508,7 @@ impl LiquidGlassRenderer {
         self.blur_levels = blur_levels;
         self.texture_size = (width, height);
         self.last_geometry_key = None;
+        self.force_white_backdrop_uploaded = false;
         let (down, up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
@@ -673,6 +676,10 @@ impl LiquidGlassRenderer {
             }
             KeyCode::KeyE => self.debug.disable_edge_lighting = !self.debug.disable_edge_lighting,
             KeyCode::KeyL => self.debug.disable_blur = !self.debug.disable_blur,
+            KeyCode::KeyW => {
+                self.debug.force_white_backdrop = !self.debug.force_white_backdrop;
+                self.force_white_backdrop_uploaded = false;
+            }
             KeyCode::KeyV => self.params.enabled = !self.params.enabled,
             KeyCode::Digit1 => self.params.thickness = (self.params.thickness - 2.0).max(6.0),
             KeyCode::Digit2 => self.params.thickness = (self.params.thickness + 2.0).min(48.0),
@@ -698,13 +705,14 @@ impl LiquidGlassRenderer {
         }
 
         eprintln!(
-            "liquid glass params: enabled={} thickness={:.1} ri={:.2} chroma={:.3} blur={:.1} saturation={:.2} debug_flags={:#010b}",
+            "liquid glass params: enabled={} thickness={:.1} ri={:.2} chroma={:.3} blur={:.1} saturation={:.2} white_backdrop={} debug_flags={:#010b}",
             self.params.enabled,
             self.params.thickness,
             self.params.refractive_index,
             self.params.chromatic_aberration,
             self.params.blur_radius,
             self.params.saturation,
+            self.debug.force_white_backdrop,
             self.debug.flags()
         );
         true
@@ -738,9 +746,25 @@ impl LiquidGlassRenderer {
         let mut captured = false;
         let mut capture_time = Duration::ZERO;
         let mut upload_time = Duration::ZERO;
-        if self.should_capture(defer_backdrop_capture) {
+        if self.debug.force_white_backdrop {
+            let upload_started = Instant::now();
+            if !self.force_white_backdrop_uploaded || self.using_gpu_backdrop {
+                upload_solid_backdrop(queue, &self.backdrop_texture, width, height, 255);
+                self.bind_cpu_backdrop(device);
+                self.gpu_backdrop_texture = None;
+                self.using_gpu_backdrop = false;
+                self.force_white_backdrop_uploaded = true;
+            }
+            captured = true;
+            upload_time = upload_started.elapsed();
+            self.last_capture_at = Some(Instant::now());
+        } else if self.should_capture(defer_backdrop_capture) {
+            self.force_white_backdrop_uploaded = false;
             let capture_started = Instant::now();
-            if let Some(gpu_frame) = self.capture.latest_frame_texture(device, width, height) {
+            if let Some(gpu_frame) = self
+                .capture
+                .latest_frame_texture(device, queue, width, height)
+            {
                 capture_time = capture_started.elapsed();
                 if let GpuCaptureFrame::New { texture, view } = gpu_frame {
                     if !self.using_gpu_backdrop {
@@ -1326,6 +1350,30 @@ fn blur_level_extent(width: u32, height: u32, level: u32) -> (u32, u32) {
 
 fn upload_initial_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) {
     let pixels = vec![0u8; (width.max(1) * height.max(1) * 4) as usize];
+    upload_backdrop_pixels(queue, texture, width, height, &pixels);
+}
+
+fn upload_solid_backdrop(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    value: u8,
+) {
+    let mut pixels = vec![value; (width.max(1) * height.max(1) * 4) as usize];
+    for alpha in pixels.iter_mut().skip(3).step_by(4) {
+        *alpha = 255;
+    }
+    upload_backdrop_pixels(queue, texture, width, height, &pixels);
+}
+
+fn upload_backdrop_pixels(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) {
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -1333,7 +1381,7 @@ fn upload_initial_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: 
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &pixels,
+        pixels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(width.max(1) * 4),

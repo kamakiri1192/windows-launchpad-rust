@@ -18,6 +18,7 @@ pub trait BackdropCapture {
     fn latest_frame_texture(
         &mut self,
         _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
         _width: u32,
         _height: u32,
     ) -> Option<GpuCaptureFrame> {

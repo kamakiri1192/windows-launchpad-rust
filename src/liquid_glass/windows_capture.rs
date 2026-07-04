@@ -162,6 +162,7 @@ struct WindowsGraphicsCapture {
     frame_arrived_token: i64,
     staging: Option<StagingTexture>,
     shared: Option<SharedTexture>,
+    sync_fence: Option<SharedFence>,
     last_frame: Option<Vec<u8>>,
     fallback_reason: Option<String>,
 }
@@ -177,6 +178,13 @@ struct SharedTexture {
     width: u32,
     height: u32,
     imported: bool,
+}
+
+struct SharedFence {
+    context11: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext4,
+    fence11: windows::Win32::Graphics::Direct3D11::ID3D11Fence,
+    fence12: windows::Win32::Graphics::Direct3D12::ID3D12Fence,
+    value: u64,
 }
 
 impl WindowsGraphicsCapture {
@@ -248,6 +256,7 @@ impl WindowsGraphicsCapture {
             frame_arrived_token,
             staging: None,
             shared: None,
+            sync_fence: None,
             last_frame: None,
             fallback_reason: None,
         })
@@ -275,6 +284,7 @@ impl WindowsGraphicsCapture {
     fn try_latest_frame_texture(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         width: u32,
         height: u32,
     ) -> Result<Option<GpuCaptureFrame>, String> {
@@ -304,16 +314,28 @@ impl WindowsGraphicsCapture {
         let height = height.max(1);
         self.ensure_shared(width, height)?;
 
+        {
+            let shared = self
+                .shared
+                .as_mut()
+                .ok_or("shared texture was not created")?;
+            copy_crop_to_shared(&self.context, &source, &shared.texture, crop, width, height);
+        }
+        self.signal_copy_and_wait_on_wgpu(device, queue)?;
+
+        if self
+            .shared
+            .as_ref()
+            .map(|shared| shared.imported)
+            .unwrap_or(false)
+        {
+            return Ok(Some(GpuCaptureFrame::Updated));
+        }
+
         let shared = self
             .shared
             .as_mut()
             .ok_or("shared texture was not created")?;
-        copy_crop_to_shared(&self.context, &source, &shared.texture, crop, width, height);
-
-        if shared.imported {
-            return Ok(Some(GpuCaptureFrame::Updated));
-        }
-
         let texture = import_shared_texture(device, &shared.texture, width, height)?;
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         shared.imported = true;
@@ -335,7 +357,7 @@ impl WindowsGraphicsCapture {
             D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
         };
         use windows::Win32::Graphics::Dxgi::Common::{
-            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_SAMPLE_DESC,
         };
 
         let desc = D3D11_TEXTURE2D_DESC {
@@ -343,7 +365,7 @@ impl WindowsGraphicsCapture {
             Height: height,
             MipLevels: 1,
             ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format: DXGI_FORMAT_B8G8R8A8_TYPELESS,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -367,6 +389,50 @@ impl WindowsGraphicsCapture {
             height,
             imported: false,
         });
+        Ok(())
+    }
+
+    fn ensure_shared_fence(&mut self, device: &wgpu::Device) -> Result<(), String> {
+        if self.sync_fence.is_some() {
+            return Ok(());
+        }
+
+        let fence = create_shared_d3d11_d3d12_fence(&self.device, &self.context, device)?;
+        eprintln!("liquid glass capture sync: D3D11/D3D12 shared fence enabled");
+        self.sync_fence = Some(fence);
+        Ok(())
+    }
+
+    fn signal_copy_and_wait_on_wgpu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(), String> {
+        use wgpu::hal::api::Dx12;
+
+        self.ensure_shared_fence(device)?;
+        let fence = self
+            .sync_fence
+            .as_mut()
+            .ok_or("shared fence was not created")?;
+        fence.value = fence.value.saturating_add(1);
+
+        unsafe {
+            fence
+                .context11
+                .Signal(&fence.fence11, fence.value)
+                .map_err(|e| e.to_string())?;
+            self.context.Flush();
+        }
+
+        let hal_queue =
+            unsafe { queue.as_hal::<Dx12>() }.ok_or("wgpu queue is not using the DX12 backend")?;
+        unsafe {
+            hal_queue
+                .as_raw()
+                .Wait(&fence.fence12, fence.value)
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -582,6 +648,50 @@ impl Drop for WindowsGraphicsCapture {
     }
 }
 
+fn create_shared_d3d11_d3d12_fence(
+    d3d11_device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    d3d11_context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    wgpu_device: &wgpu::Device,
+) -> Result<SharedFence, String> {
+    use wgpu::hal::api::Dx12;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL};
+    use windows::Win32::Graphics::Direct3D11::{ID3D11Device5, ID3D11DeviceContext4, ID3D11Fence};
+    use windows::Win32::Graphics::Direct3D12::{ID3D12Fence, D3D12_FENCE_FLAG_SHARED};
+
+    let context11: ID3D11DeviceContext4 = d3d11_context.cast().map_err(|e| e.to_string())?;
+    let device11: ID3D11Device5 = d3d11_device.cast().map_err(|e| e.to_string())?;
+    let hal_device = unsafe { wgpu_device.as_hal::<Dx12>() }
+        .ok_or("wgpu device is not using the DX12 backend")?;
+
+    let fence12: ID3D12Fence = unsafe {
+        hal_device
+            .raw_device()
+            .CreateFence(0, D3D12_FENCE_FLAG_SHARED)
+            .map_err(|e| e.to_string())?
+    };
+    let handle = unsafe {
+        hal_device
+            .raw_device()
+            .CreateSharedHandle(&fence12, None, GENERIC_ALL.0, PCWSTR::null())
+            .map_err(|e| e.to_string())?
+    };
+
+    let mut fence11: Option<ID3D11Fence> = None;
+    let open_result = unsafe { device11.OpenSharedFence(handle, &mut fence11) };
+    let close_result = unsafe { CloseHandle(handle) };
+
+    open_result.map_err(|e| e.to_string())?;
+    close_result.map_err(|e| e.to_string())?;
+
+    Ok(SharedFence {
+        context11,
+        fence11: fence11.ok_or("OpenSharedFence returned no D3D11 fence")?,
+        fence12,
+        value: 0,
+    })
+}
+
 fn copy_crop_to_shared(
     context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     source: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
@@ -610,7 +720,6 @@ fn copy_crop_to_shared(
     };
     unsafe {
         context.CopySubresourceRegion(&dst_resource, 0, 0, 0, 0, &src_resource, 0, Some(&src_box));
-        context.Flush();
     }
 }
 
@@ -651,14 +760,14 @@ fn import_shared_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8Unorm,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
         usage: wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     };
     let hal_texture = unsafe {
         <Dx12 as wgpu::hal::Api>::Device::texture_from_raw(
             resource,
-            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
             desc.dimension,
             desc.size,
             desc.mip_level_count,
@@ -693,10 +802,11 @@ impl BackdropCapture for WindowsGraphicsCapture {
     fn latest_frame_texture(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         width: u32,
         height: u32,
     ) -> Option<GpuCaptureFrame> {
-        match self.try_latest_frame_texture(device, width, height) {
+        match self.try_latest_frame_texture(device, queue, width, height) {
             Ok(frame) => {
                 self.fallback_reason = None;
                 frame
