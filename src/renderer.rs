@@ -1535,8 +1535,9 @@ fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
             continue;
         }
 
-        let radius = (tile.size * 0.16).clamp(9.0, 13.5);
-        let center = [tile.x + radius * 0.95, tile.y + radius * 0.95];
+        let radius = crate::grid::edit_badge_radius_for_tile_size(tile.size);
+        let inset = radius * 0.45;
+        let center = [tile.x + inset, tile.y + inset];
         sources.push(EditBadgeSource {
             base_center: center,
             tile_center: [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5],
@@ -1625,5 +1626,41 @@ fn create_backdrop_capture(
         Box::new(FallbackCapture::new(
             "Windows.Graphics.Capture is only available on Windows",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tile(size: f32) -> TileInstance {
+        TileInstance {
+            x: 100.0,
+            y: 50.0,
+            size,
+            radius: 19.0,
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            icon_index: -1.0,
+            extra: [0.25, 0.0, 1.0, crate::grid::TileAnim::FLAG_WIGGLE as f32],
+        }
+    }
+
+    #[test]
+    fn edit_badge_sources_use_scaled_radius() {
+        let normal = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE)]);
+        let scaled = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE * 1.5)]);
+
+        assert!((scaled[0].radius - normal[0].radius * 1.5).abs() < 1e-2);
+    }
+
+    #[test]
+    fn edit_badge_center_starts_on_tile_top_left() {
+        let source = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE)])[0];
+        let inset = source.radius * 0.45;
+
+        assert!((source.base_center[0] - (100.0 + inset)).abs() < 1e-4);
+        assert!((source.base_center[1] - (50.0 + inset)).abs() < 1e-4);
     }
 }

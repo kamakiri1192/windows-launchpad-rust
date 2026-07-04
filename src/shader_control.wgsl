@@ -204,9 +204,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p + b1, 2.0 * b1, w);
         let d2 = sd_segment(p + b2, 2.0 * b2, w);
         let close = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
+        let disk = (1.0 - smoothstep(-1.0, 1.0, sd_circle(p, r * 1.02))) * 0.34;
         let ring_d = abs(sd_circle(p, r * 0.82)) - max(w * 0.45, 0.7);
-        let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.28;
-        coverage = max(close, ring);
+        let ring = (1.0 - smoothstep(-1.0, 1.0, ring_d)) * 0.38;
+        coverage = max(close, max(ring, disk));
     } else if kind < 5.5 {
         // Settings gear: an annulus (ring) plus 8 short radial teeth. `size`
         // is the outer tooth-tip radius; the ring sits at 0.62*size.
