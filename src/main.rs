@@ -109,6 +109,10 @@ struct PendingPress {
     /// Stable id of the app under the pointer at press start. Quick release
     /// launches this id, not whatever happens to be under the release point.
     app_id: Option<AppId>,
+    /// True when the press started outside the page-frame Liquid Glass. A
+    /// stationary release there dismisses the launcher instead of interacting
+    /// with the grid.
+    outside_glass: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,10 +142,24 @@ struct SettingsPanelLayout {
 }
 
 fn pending_press_launch_id(press: &PendingPress, release_x: f32, release_y: f32) -> Option<&AppId> {
+    if !pending_press_is_click(press, release_x, release_y) {
+        return None;
+    }
+    press.app_id.as_ref()
+}
+
+fn pending_press_is_click(press: &PendingPress, release_x: f32, release_y: f32) -> bool {
     let dx = release_x - press.x;
     let dy = release_y - press.y;
-    let is_click = dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS;
-    is_click.then_some(press.app_id.as_ref()).flatten()
+    dx * dx + dy * dy <= CLICK_SLOP_PHYS * CLICK_SLOP_PHYS
+}
+
+fn pending_press_is_outside_glass_click(
+    press: &PendingPress,
+    release_x: f32,
+    release_y: f32,
+) -> bool {
+    press.outside_glass && pending_press_is_click(press, release_x, release_y)
 }
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
@@ -1567,15 +1585,24 @@ impl App {
         let y = self.pointer_phys_y;
         let app_index = self.app_index_at_pointer(x, y);
         let app_id = app_index.and_then(|idx| self.visible_app_ids().get(idx).cloned());
-        debug_log!("edit-press: pending x={x:.1} y={y:.1} app_index={app_index:?}");
+        let outside_glass = !self.pointer_over_page_glass(x, y);
+        debug_log!(
+            "edit-press: pending x={x:.1} y={y:.1} app_index={app_index:?} outside_glass={outside_glass}"
+        );
         self.pending_press = Some(PendingPress {
             start: now,
             x,
             y,
             app_index,
             app_id,
+            outside_glass,
         });
         self.request_redraw();
+    }
+
+    fn pointer_over_page_glass(&self, x: f32, y: f32) -> bool {
+        let (w, _h) = self.viewport_phys();
+        self.layout.frame_contains_point(w as f32, x, y)
     }
 
     /// Resolve the visible-grid index under the pointer (or `None` if it's over
@@ -1672,6 +1699,9 @@ impl App {
         let Some(p) = self.pending_press.as_ref() else {
             return false;
         };
+        if p.outside_glass {
+            return false;
+        }
         // Only a press that hasn't moved past slop can become a long-press.
         let dx = self.pointer_phys_x - p.x;
         let dy = self.pointer_phys_y - p.y;
@@ -2124,6 +2154,20 @@ impl App {
         self.last_page = 0;
         self.visible = false;
         self.request_redraw();
+    }
+
+    /// Hide the launcher after a transparent-area click and, on Windows, send
+    /// a best-effort replacement click to whatever is now under the cursor.
+    fn hide_with_click_passthrough(&mut self) {
+        self.hide();
+        #[cfg(windows)]
+        {
+            if platform_windows::replay_left_click_at_cursor() {
+                debug_log!("outside-click: replayed click to underlying window");
+            } else {
+                debug_log!("outside-click: failed to replay click to underlying window");
+            }
+        }
     }
 
     /// Show the launcher window and steal focus. Counterpart to [`hide`].
@@ -2768,6 +2812,14 @@ impl ApplicationHandler<UserEvent> for App {
                         // A pending press that released without dragging and
                         // without a long-press is a click → launch the app.
                         if let Some(press) = self.pending_press.take() {
+                            if pending_press_is_outside_glass_click(
+                                &press,
+                                self.pointer_phys_x,
+                                self.pointer_phys_y,
+                            ) {
+                                self.hide_with_click_passthrough();
+                                return;
+                            }
                             if let Some(app) = pending_press_launch_id(
                                 &press,
                                 self.pointer_phys_x,
@@ -3987,19 +4039,27 @@ fn spawn_bridge<T: Send + 'static>(
 mod pending_press_tests {
     use std::time::Instant;
 
-    use super::{pending_press_launch_id, PendingPress};
+    use super::{
+        pending_press_is_outside_glass_click, pending_press_launch_id, PendingPress,
+        CLICK_SLOP_PHYS,
+    };
     use crate::app_id::AppId;
+
+    fn press(app_index: Option<usize>, app_id: Option<AppId>, outside_glass: bool) -> PendingPress {
+        PendingPress {
+            start: Instant::now(),
+            x: 100.0,
+            y: 100.0,
+            app_index,
+            app_id,
+            outside_glass,
+        }
+    }
 
     #[test]
     fn launches_only_pressed_app_id() {
         let pressed = AppId::from_normalized("pressed-app");
-        let press = PendingPress {
-            start: Instant::now(),
-            x: 100.0,
-            y: 100.0,
-            app_index: Some(3),
-            app_id: Some(pressed.clone()),
-        };
+        let press = press(Some(3), Some(pressed.clone()), false);
 
         assert_eq!(
             pending_press_launch_id(&press, 103.0, 102.0),
@@ -4009,31 +4069,44 @@ mod pending_press_tests {
 
     #[test]
     fn press_without_app_never_launches_release_target() {
-        let press = PendingPress {
-            start: Instant::now(),
-            x: 100.0,
-            y: 100.0,
-            app_index: None,
-            app_id: None,
-        };
+        let press = press(None, None, false);
 
         assert_eq!(pending_press_launch_id(&press, 103.0, 102.0), None);
     }
 
     #[test]
     fn movement_past_click_slop_does_not_launch() {
-        let press = PendingPress {
-            start: Instant::now(),
-            x: 100.0,
-            y: 100.0,
-            app_index: Some(0),
-            app_id: Some(AppId::from_normalized("pressed-app")),
-        };
+        let press = press(Some(0), Some(AppId::from_normalized("pressed-app")), false);
 
         assert_eq!(
-            pending_press_launch_id(&press, 100.0 + super::CLICK_SLOP_PHYS + 1.0, 100.0),
+            pending_press_launch_id(&press, 100.0 + CLICK_SLOP_PHYS + 1.0, 100.0),
             None
         );
+    }
+
+    #[test]
+    fn outside_glass_stationary_click_dismisses() {
+        let press = press(None, None, true);
+
+        assert!(pending_press_is_outside_glass_click(&press, 102.0, 101.0));
+    }
+
+    #[test]
+    fn outside_glass_drag_does_not_dismiss() {
+        let press = press(None, None, true);
+
+        assert!(!pending_press_is_outside_glass_click(
+            &press,
+            100.0 + CLICK_SLOP_PHYS + 1.0,
+            100.0
+        ));
+    }
+
+    #[test]
+    fn inside_glass_empty_click_does_not_dismiss() {
+        let press = press(None, None, false);
+
+        assert!(!pending_press_is_outside_glass_click(&press, 102.0, 101.0));
     }
 }
 
