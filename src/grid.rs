@@ -387,7 +387,7 @@ impl GridLayout {
         None
     }
 
-    fn frame_contains_point(&self, viewport_w: f32, screen_x: f32, screen_y: f32) -> bool {
+    pub fn frame_contains_point(&self, viewport_w: f32, screen_x: f32, screen_y: f32) -> bool {
         let (cx, cy, w, h) = self.frame_panel_rect(viewport_w);
         let half_w = w * 0.5;
         let half_h = h * 0.5;
