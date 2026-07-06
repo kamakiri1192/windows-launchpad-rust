@@ -383,13 +383,13 @@ pub fn build_with_copy(
         z: Z_PANEL,
     });
 
-    hits.push(HitRegion::new(
+    hits.push(HitRegion::rect_inclusive(
         UiId::backdrop("settings-modal"),
         Rect::new(0.0, 0.0, input.viewport.0 as f32, input.viewport.1 as f32),
         HitTarget::modal_dismiss_backdrop(),
         Z_BACKDROP,
     ));
-    hits.push(HitRegion::new(
+    hits.push(HitRegion::rect_inclusive(
         UiId::settings_panel(),
         layout.rect(),
         HitTarget::Settings {
@@ -806,17 +806,17 @@ fn push_hit_regions(
     category: SettingsCategoryId,
 ) {
     let (close_x, close_y) = layout.close_center(scale);
-    let close_size = CLOSE_HALF * scale * 2.0;
-    hits.push(HitRegion::new(
+    hits.push(HitRegion::circle(
         UiId::settings_close(),
-        centered_rect(close_x, close_y, close_size, close_size),
+        Point::new(close_x, close_y),
+        CLOSE_HALF * scale,
         SettingsPanelHit::Close.target(),
-        Z_CONTROL + 2,
+        Z_CONTROL + 3,
     ));
 
     for (index, category) in SettingsCategoryId::ALL.iter().copied().enumerate() {
         let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
-        hits.push(HitRegion::new(
+        hits.push(HitRegion::rect_inclusive(
             UiId::settings_row(format!("category-{}", category.key())),
             Rect::new(
                 layout.left + 12.0 * scale,
@@ -840,14 +840,14 @@ fn push_hit_regions(
             let each_w = (row_w - gap * 3.0) / 4.0;
             for (index, order) in SortOrderId::ALL.iter().copied().enumerate() {
                 let left = content_left + index as f32 * (each_w + gap);
-                hits.push(HitRegion::new(
+                hits.push(HitRegion::rect_inclusive(
                     UiId::settings_row(format!("sort-{}", order.key())),
                     Rect::new(left, segment_top, each_w, SEGMENT_H * scale),
                     SettingsPanelHit::Sort(order).target(),
-                    Z_CONTROL + 1,
+                    Z_CONTROL + 2,
                 ));
             }
-            hits.push(HitRegion::new(
+            hits.push(HitRegion::rect_inclusive(
                 UiId::settings_row("toggle-frequent-apps"),
                 Rect::new(content_left, first_top + ROW_STEP * scale, row_w, row_h),
                 SettingsPanelHit::FrequentToggle.target(),
@@ -855,7 +855,7 @@ fn push_hit_regions(
             ));
         }
         SettingsCategoryId::Search => {
-            hits.push(HitRegion::new(
+            hits.push(HitRegion::rect_inclusive(
                 UiId::settings_row("toggle-search-hidden"),
                 Rect::new(content_left, first_top, row_w, row_h),
                 SettingsPanelHit::SearchHiddenToggle.target(),
@@ -863,13 +863,13 @@ fn push_hit_regions(
             ));
         }
         SettingsCategoryId::System => {
-            hits.push(HitRegion::new(
+            hits.push(HitRegion::rect_inclusive(
                 UiId::settings_row("reset-cache"),
                 Rect::new(content_left, first_top, row_w, row_h),
                 SettingsPanelHit::ResetCache.target(),
                 Z_CONTROL + 1,
             ));
-            hits.push(HitRegion::new(
+            hits.push(HitRegion::rect_inclusive(
                 UiId::settings_row("reset-settings"),
                 Rect::new(content_left, first_top + ROW_STEP * scale, row_w, row_h),
                 SettingsPanelHit::ResetSettings.target(),
@@ -946,6 +946,32 @@ mod tests {
             version_label: "Version",
             version_value: "0.1.0",
         }
+    }
+
+    fn input(category: SettingsCategoryId) -> SettingsPanelInput {
+        SettingsPanelInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            category,
+            sort_order: SortOrderId::Name,
+            frequent_apps_enabled: false,
+            search_includes_hidden: false,
+            hidden_count: 0,
+            progress: 1.0,
+        }
+    }
+
+    fn assert_hit_map_matches_hit_test(model: &SettingsPanelModel, point: Point) {
+        let expected = hit_test(&model.layout, 1.0, SettingsCategoryId::Apps, point).target();
+        let actual = model
+            .result
+            .hits
+            .hit_test(point)
+            .expect("modeled hit")
+            .target
+            .clone();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -1072,16 +1098,7 @@ mod tests {
 
     #[test]
     fn model_hit_map_prefers_panel_controls_over_backdrop() {
-        let model = build(SettingsPanelInput {
-            viewport: (1280, 800),
-            scale_factor: 1.0,
-            category: SettingsCategoryId::Apps,
-            sort_order: SortOrderId::Name,
-            frequent_apps_enabled: false,
-            search_includes_hidden: false,
-            hidden_count: 0,
-            progress: 1.0,
-        });
+        let model = build(input(SettingsCategoryId::Apps));
         let (close_x, close_y) = model.layout.close_center(1.0);
 
         let close_hit = model
@@ -1106,6 +1123,46 @@ mod tests {
             HitTarget::Backdrop {
                 kind: BackdropKind::ModalDismiss
             }
+        );
+    }
+
+    #[test]
+    fn model_hit_map_uses_circular_close_region() {
+        let model = build(input(SettingsCategoryId::Apps));
+        let (close_x, close_y) = model.layout.close_center(1.0);
+        let point = Point::new(close_x + 9.0, close_y + 9.0);
+
+        assert_eq!(
+            hit_test(&model.layout, 1.0, SettingsCategoryId::Apps, point),
+            SettingsPanelHit::Inside
+        );
+        assert_eq!(
+            model.result.hits.hit_test(point).expect("panel hit").target,
+            SettingsPanelHit::Inside.target()
+        );
+    }
+
+    #[test]
+    fn model_hit_map_matches_current_inclusive_edges() {
+        let model = build(input(SettingsCategoryId::Apps));
+        assert_hit_map_matches_hit_test(
+            &model,
+            Point::new(model.layout.panel_right(), model.layout.panel_bottom()),
+        );
+
+        let row_bottom = model.layout.top + SIDEBAR_TOP + SIDEBAR_ROW_H;
+        assert_hit_map_matches_hit_test(
+            &model,
+            Point::new(model.layout.right_left - 12.0, row_bottom),
+        );
+
+        let content_left = model.layout.content_left(1.0);
+        let row_w = model.layout.content_right(1.0) - content_left;
+        let each_w = (row_w - SEGMENT_GAP * 3.0) / 4.0;
+        let segment_top = model.layout.first_row_top(1.0) + 44.0;
+        assert_hit_map_matches_hit_test(
+            &model,
+            Point::new(content_left + each_w, segment_top + SEGMENT_H),
         );
     }
 

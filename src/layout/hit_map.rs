@@ -3,9 +3,56 @@ use crate::ui_model::hit::HitTarget;
 use crate::ui_model::ids::UiId;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum HitShape {
+    Rect { rect: Rect, inclusive: bool },
+    Circle { center: Point, radius: f32 },
+}
+
+impl HitShape {
+    pub const fn rect(rect: Rect) -> Self {
+        Self::Rect {
+            rect,
+            inclusive: false,
+        }
+    }
+
+    pub const fn rect_inclusive(rect: Rect) -> Self {
+        Self::Rect {
+            rect,
+            inclusive: true,
+        }
+    }
+
+    pub const fn circle(center: Point, radius: f32) -> Self {
+        Self::Circle { center, radius }
+    }
+
+    pub fn contains(&self, point: Point) -> bool {
+        match self {
+            Self::Rect { rect, inclusive } => {
+                if *inclusive {
+                    point.x >= rect.min_x()
+                        && point.x <= rect.max_x()
+                        && point.y >= rect.min_y()
+                        && point.y <= rect.max_y()
+                } else {
+                    rect.contains(point)
+                }
+            }
+            Self::Circle { center, radius } => {
+                let dx = point.x - center.x;
+                let dy = point.y - center.y;
+                dx * dx + dy * dy <= radius * radius
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct HitRegion {
     pub id: UiId,
     pub rect: Rect,
+    pub shape: HitShape,
     pub target: HitTarget,
     pub z: i16,
 }
@@ -15,13 +62,40 @@ impl HitRegion {
         Self {
             id,
             rect,
+            shape: HitShape::rect(rect),
+            target,
+            z,
+        }
+    }
+
+    pub fn rect_inclusive(id: UiId, rect: Rect, target: HitTarget, z: i16) -> Self {
+        Self {
+            id,
+            rect,
+            shape: HitShape::rect_inclusive(rect),
+            target,
+            z,
+        }
+    }
+
+    pub fn circle(id: UiId, center: Point, radius: f32, target: HitTarget, z: i16) -> Self {
+        let rect = Rect::new(
+            center.x - radius,
+            center.y - radius,
+            radius * 2.0,
+            radius * 2.0,
+        );
+        Self {
+            id,
+            rect,
+            shape: HitShape::circle(center, radius),
             target,
             z,
         }
     }
 
     pub fn contains(&self, point: Point) -> bool {
-        self.rect.contains(point)
+        self.shape.contains(point)
     }
 }
 
@@ -103,6 +177,40 @@ mod tests {
         );
         assert!(map.hit_test(Point::new(40.0, 20.0)).is_none());
         assert!(map.hit_test(Point::new(10.0, 60.0)).is_none());
+    }
+
+    #[test]
+    fn hit_test_can_use_inclusive_rect_containment() {
+        let map = HitMap::with_regions(vec![HitRegion::rect_inclusive(
+            UiId::launcher_item("calc"),
+            Rect::new(10.0, 20.0, 30.0, 40.0),
+            HitTarget::launcher_item("calc"),
+            0,
+        )]);
+
+        assert_eq!(
+            map.hit_test(Point::new(40.0, 60.0))
+                .map(|hit| hit.id.as_str()),
+            Some("launcher-item:calc")
+        );
+    }
+
+    #[test]
+    fn hit_test_can_use_circle_containment() {
+        let map = HitMap::with_regions(vec![HitRegion::circle(
+            UiId::launcher_item("calc"),
+            Point::new(20.0, 20.0),
+            10.0,
+            HitTarget::launcher_item("calc"),
+            0,
+        )]);
+
+        assert_eq!(
+            map.hit_test(Point::new(30.0, 20.0))
+                .map(|hit| hit.id.as_str()),
+            Some("launcher-item:calc")
+        );
+        assert!(map.hit_test(Point::new(29.0, 29.0)).is_none());
     }
 
     #[test]
