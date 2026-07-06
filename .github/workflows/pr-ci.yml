@@ -40,19 +40,6 @@ jobs:
           restore-keys: |
             windows-target-debug-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
 
-      - name: Enable R2 sccache
-        id: r2-sccache
-        uses: ./.github/actions/setup-r2-sccache
-        with:
-          cache-hit: ${{ steps.target-cache.outputs.cache-hit }}
-          profile: debug
-          rust-version: ${{ env.RUST_VERSION }}
-          target: ${{ env.TARGET }}
-          r2-account-id: ${{ vars.R2_ACCOUNT_ID }}
-          r2-bucket: ${{ vars.R2_SCCACHE_BUCKET }}
-          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-
       - name: Cache Cargo registry and git sources
         uses: Swatinem/rust-cache@v2
         with:
@@ -69,10 +56,6 @@ jobs:
 
       - name: Build
         run: cargo build --locked
-
-      - name: Show sccache stats
-        if: always() && steps.r2-sccache.outputs.enabled == 'true'
-        run: sccache --show-stats
 
       - name: Lookup GitHub target cache before save
         id: target-cache-before-save
