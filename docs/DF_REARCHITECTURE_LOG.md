@@ -484,6 +484,78 @@ Notes and discoveries:
   geometry.
 - The release-path gear re-test behavior is subtle: the previous code only
   re-tested the main capsule shape on release, not the gear, so a press on the
-  gear that drifted off the capsule was dropped. The new intent-based release
-  re-test preserves this by only treating `Capsule`/`CloseButton` intents as a
-  valid click trigger (not `EditGear`).
+  gear that drifted off the capsule was dropped. The new release re-test calls
+  `bottom_control_capsule_hit` (the same non-edit-width capsule shape test the
+  previous `hit_test_scaled` used) so a press on the capsule/gear overlap
+  reaches `handle_control_click`, which then resolves the gear via the intent.
+  A press that drifts off the capsule entirely is still dropped.
+
+### 2026-07-07: Phase 2 codex review and pointer-dispatch fixes
+
+Files changed:
+
+- `src/main.rs`
+- `src/layout/bottom_control.rs`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Ran `codex review --base main` against PR #80. Two P2 correctness findings:
+  1. The initial release gate only allowed `Capsule`/`CloseButton` intents
+     through, which dropped a click on the edit-mode settings gear that sits on
+     the capsule/gear overlap (gear left edge ≈688 < capsule right edge ≈699).
+     Fixed by re-testing the capsule shape directly
+     (`bottom_control_capsule_hit`, equivalent to the original
+     `hit_test_scaled`) on release, so a press on the overlap reaches
+     `handle_control_click`, which resolves the gear via the intent.
+  2. When search was open and the user long-pressed into edit mode, the field's
+     close-button hit region kept emitting even though its visual layers are
+     hidden while `edit_visual_progress > 0`. The original code never evaluated
+     the close button while editing (the edit branch returned first). Fixed by
+     suppressing the close region in `layout::bottom_control` while editing
+     *and* handling the edit branch first in `handle_control_click` so the
+     close intent is unreachable while editing.
+- Added `close_region_suppressed_in_edit_mode` unit test.
+- Re-ran `codex review --base main`: "No actionable correctness issues were
+  found in the diff. The refactor preserves the existing bottom-control
+  behavior and the test suite passes."
+
+Behavior preservation:
+
+- The release re-test now uses the exact same capsule-shape test
+  (`hit_test_scaled`, non-edit-width resolve) the original `main.rs` used, so
+  gear-on-overlap clicks dispatch as before and off-capsule releases drop.
+- Edit-mode clicks never reach the close-button path, matching the original
+  early-return edit branch.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 226 lib + 66 bin + 2 WGSL validation, all passed
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `codex review --base main`: no actionable correctness issues after fixes
+
+Screen verification (interactive):
+
+- Could not be completed in this sandbox. `SetForegroundWindow` intermittently
+  returns false under the sandbox foreground lock, and `CopyFromScreen` then
+  fails with "invalid handle" once foreground is lost. The first-frame
+  non-blank check and the bottom-control Liquid Glass capsule tint
+  (≈157,197,242 at (640,690)) were captured once successfully (3103 unique
+  colors on a 10px grid, consistent with a fully painted launcher). Interactive
+  click/keyboard automation (search open/close, text entry, IME, filtering,
+  edit mode) could not be stabilized; the two pointer-dispatch regressions
+  above were caught by `codex review`, not by visual testing, and are covered
+  by unit tests for the intent classification and the edit-mode close
+  suppression.
+
+Notes and discoveries:
+
+- `codex review --base main` is an effective correctness gate for
+  behavior-preserving refactors of pointer routing; it flagged the gear
+  overlap and the invisible close hotspot that pixel tests could not reach in
+  this sandbox.
+- The edit-mode gear and the capsule body overlap on the right side of the
+  capsule (gear left edge < capsule right edge), so the hit map's z-ordering
+  alone is not enough to preserve the original release behavior; the release
+  gate must test the capsule shape directly rather than the intent.
