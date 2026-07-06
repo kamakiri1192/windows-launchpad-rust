@@ -3036,11 +3036,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         // Edit mode keeps redrawing so the wiggle animation advances and the
         // dragged tile tracks the pointer smoothly.
-        if scroller_animating
-            || control_animating
-            || self.editing
-            || long_press_pending
-        {
+        if scroller_animating || control_animating || self.editing || long_press_pending {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);
