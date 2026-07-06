@@ -31,6 +31,7 @@ use crate::scroll::ScrollBounds;
 
 const LABEL_CLICK_EXTRA_X: f32 = 10.0;
 const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
+pub const BASE_TILE_SIZE: f32 = 84.0;
 
 // --- Fixed page-frame geometry --------------------------------------------
 // Single source of truth for the glass panel that surrounds the tiles. These
@@ -172,7 +173,7 @@ impl Default for GridLayout {
             rows: 5,
             page_count: 3,
             scale: 1.0,
-            tile_size: 84.0,
+            tile_size: BASE_TILE_SIZE,
             gap: 22.0,
             row_gap: 48.0,
             margin_top: 56.0,
@@ -530,6 +531,16 @@ impl GridLayout {
         value * self.scale
     }
 
+    #[inline]
+    pub fn edit_badge_radius(&self) -> f32 {
+        edit_badge_radius_for_tile_size(self.tile_size)
+    }
+
+    #[inline]
+    pub fn edit_badge_hit_slop(&self) -> f32 {
+        6.0 * self.scale
+    }
+
     /// The home-cell top-left position (content px) for the app at display
     /// index `idx`, mirroring what `build_instances` computes. Used to drive
     /// per-tile position springs for reorder animations.
@@ -552,6 +563,15 @@ fn sanitize_scale(scale_factor: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+pub fn edit_badge_radius_for_tile_size(tile_size: f32) -> f32 {
+    let scale = if tile_size.is_finite() && tile_size > 0.0 {
+        tile_size / BASE_TILE_SIZE
+    } else {
+        1.0
+    };
+    (tile_size * 0.16).clamp(9.0 * scale, 13.5 * scale)
 }
 
 /// Stable per-app accent color, derived from the app's grid index so the same
@@ -879,6 +899,16 @@ mod tests {
         let x = g.margin_left + g.tile_size * 0.5;
         let y = g.margin_top + g.tile_size + 41.0 * scale;
         assert_eq!(g.hit_test_app(vw, x, y, 0.0, apps.len()), Some(0));
+    }
+
+    #[test]
+    fn edit_badge_radius_scales_with_layout_scale_factor() {
+        let normal = GridLayout::default();
+        let scaled = GridLayout::default().with_scale_factor(1.5);
+
+        assert!((normal.edit_badge_radius() - 13.44).abs() < 1e-2);
+        assert!((scaled.edit_badge_radius() - normal.edit_badge_radius() * 1.5).abs() < 1e-2);
+        assert!((scaled.edit_badge_hit_slop() - 9.0).abs() < 1e-2);
     }
 
     #[test]

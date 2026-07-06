@@ -1634,12 +1634,14 @@ impl App {
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
         let (tx, ty) = self.layout.tile_position(w as f32, idx);
-        let badge_r = (self.layout.tile_size * 0.13).min(11.0) + 6.0; // +6px slop
-        let cx = tx + scroll_x + badge_r;
-        let cy = ty + badge_r;
+        let radius = self.layout.edit_badge_radius();
+        let hit_r = radius + self.layout.edit_badge_hit_slop();
+        let inset = radius * 0.45;
+        let cx = tx + scroll_x + inset;
+        let cy = ty + inset;
         let dx = x - cx;
         let dy = y - cy;
-        dx * dx + dy * dy <= badge_r * badge_r
+        dx * dx + dy * dy <= hit_r * hit_r
     }
 
     /// Hide an app from the launcher (the ✕ badge action): removes it from the

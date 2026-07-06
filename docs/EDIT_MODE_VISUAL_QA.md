@@ -94,6 +94,33 @@ $g.Dispose()
 $bmp.Dispose()
 ```
 
+On high-DPI or 4K monitors, do not assume `1280x800` is the whole window. That
+only captures the upper-left part of a 4K desktop. Query the moved window rect
+and capture that physical-pixel size:
+
+```powershell
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Win32RectQa {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+}
+'@
+
+$rect = New-Object Win32RectQa+RECT
+[Win32RectQa]::GetWindowRect($p.MainWindowHandle, [ref]$rect) | Out-Null
+$w = $rect.Right - $rect.Left
+$h = $rect.Bottom - $rect.Top
+$bmp = New-Object Drawing.Bitmap $w,$h
+$g = [Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($rect.Left,$rect.Top,0,0,$bmp.Size)
+$bmp.Save((Join-Path (Resolve-Path .\target).Path 'qa.png'), [Drawing.Imaging.ImageFormat]::Png)
+$g.Dispose()
+$bmp.Dispose()
+```
+
 ## Coordinate Notes
 
 The app uses physical pixels internally. Windows pointer APIs and screenshots

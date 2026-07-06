@@ -161,7 +161,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Clip to the fixed page frame so tiles never spill past its rounded edge.
     // A dragged (lifted) icon bypasses the clip so it can rise above the panel.
     let dragged = (u32(in.flags) & u32(FLAG_DRAG)) != 0u;
-    let wiggling = (u32(in.flags) & u32(FLAG_WIGGLE)) != 0u;
 
     var frame_a = 1.0;
     if !dragged {

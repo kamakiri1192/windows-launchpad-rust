@@ -100,7 +100,13 @@ pub struct LiquidGlassRenderer {
     debug: DebugOptions,
     capture: Box<dyn BackdropCapture>,
     capture_status: CaptureStatus,
+    // Base, badge, control, and settings passes are encoded into one frame.
+    // Keep their uniforms separate because queued buffer writes are not a
+    // per-render-pass state snapshot.
     uniform_buffer: wgpu::Buffer,
+    badge_uniform_buffer: wgpu::Buffer,
+    control_uniform_buffer: wgpu::Buffer,
+    settings_panel_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     shape_count: u32,
     badge_shape_buffer: wgpu::Buffer,
@@ -148,6 +154,9 @@ pub struct LiquidGlassRenderer {
     /// blur_levels[i] (or the full-res blur texture for i == 2).
     blur_up_bind_groups: [wgpu::BindGroup; 3],
     final_bind_group: wgpu::BindGroup,
+    badge_final_bind_group: wgpu::BindGroup,
+    control_final_bind_group: wgpu::BindGroup,
+    settings_panel_final_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
     control_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
@@ -183,11 +192,13 @@ impl LiquidGlassRenderer {
         log_capture_status(&capture_status);
 
         let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0);
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("liquid glass uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
+        let badge_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass badge uniforms", &uniforms);
+        let control_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass control uniforms", &uniforms);
+        let settings_panel_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass settings panel uniforms", &uniforms);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let shape_buffer = create_shape_buffer(device, &shapes);
@@ -267,25 +278,52 @@ impl LiquidGlassRenderer {
         let badge_geometry_bind_group = create_geometry_bind_group(
             device,
             &geometry_bind_group_layout,
-            &uniform_buffer,
+            &badge_uniform_buffer,
             &badge_shape_buffer,
         );
         let control_geometry_bind_group = create_geometry_bind_group(
             device,
             &geometry_bind_group_layout,
-            &uniform_buffer,
+            &control_uniform_buffer,
             &control_shape_buffer,
         );
         let settings_panel_geometry_bind_group = create_geometry_bind_group(
             device,
             &geometry_bind_group_layout,
-            &uniform_buffer,
+            &settings_panel_uniform_buffer,
             &settings_panel_shape_buffer,
         );
         let final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
             &uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &geometry_view,
+            &blur_view,
+        );
+        let badge_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &badge_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &geometry_view,
+            &blur_view,
+        );
+        let control_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &control_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &geometry_view,
+            &blur_view,
+        );
+        let settings_panel_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_panel_uniform_buffer,
             &backdrop_view,
             &sampler,
             &geometry_view,
@@ -433,6 +471,9 @@ impl LiquidGlassRenderer {
             capture,
             capture_status,
             uniform_buffer,
+            badge_uniform_buffer,
+            control_uniform_buffer,
+            settings_panel_uniform_buffer,
             shape_buffer,
             shape_count,
             badge_shape_buffer,
@@ -468,6 +509,9 @@ impl LiquidGlassRenderer {
             blur_down_bind_groups,
             blur_up_bind_groups,
             final_bind_group,
+            badge_final_bind_group,
+            control_final_bind_group,
+            settings_panel_final_bind_group,
             badge_geometry_bind_group,
             control_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
@@ -516,15 +560,8 @@ impl LiquidGlassRenderer {
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
-        self.final_bind_group = create_final_bind_group(
-            device,
-            &self.final_bind_group_layout,
-            &self.uniform_buffer,
-            &self.backdrop_view,
-            &self.sampler,
-            &self.geometry_view,
-            &self.blur_view,
-        );
+        let backdrop_view = self.backdrop_view.clone();
+        self.rebuild_final_bind_groups(device, &backdrop_view);
     }
 
     fn bind_backdrop_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
@@ -540,11 +577,46 @@ impl LiquidGlassRenderer {
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
+        self.rebuild_final_bind_groups(device, view);
+    }
+
+    fn rebuild_final_bind_groups(
+        &mut self,
+        device: &wgpu::Device,
+        backdrop_view: &wgpu::TextureView,
+    ) {
         self.final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
             &self.uniform_buffer,
-            view,
+            backdrop_view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+        self.badge_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.badge_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+        self.control_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.control_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+        self.settings_panel_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_panel_uniform_buffer,
+            backdrop_view,
             &self.sampler,
             &self.geometry_view,
             &self.blur_view,
@@ -602,7 +674,7 @@ impl LiquidGlassRenderer {
         self.settings_panel_geometry_bind_group = create_geometry_bind_group(
             device,
             &self.geometry_bind_group_layout,
-            &self.uniform_buffer,
+            &self.settings_panel_uniform_buffer,
             &self.settings_panel_shape_buffer,
         );
     }
@@ -622,7 +694,7 @@ impl LiquidGlassRenderer {
         self.badge_geometry_bind_group = create_geometry_bind_group(
             device,
             &self.geometry_bind_group_layout,
-            &self.uniform_buffer,
+            &self.badge_uniform_buffer,
             &self.badge_shape_buffer,
         );
     }
@@ -649,7 +721,7 @@ impl LiquidGlassRenderer {
         self.control_geometry_bind_group = create_geometry_bind_group(
             device,
             &self.geometry_bind_group_layout,
-            &self.uniform_buffer,
+            &self.control_uniform_buffer,
             &self.control_shape_buffer,
         );
     }
@@ -952,7 +1024,7 @@ impl LiquidGlassRenderer {
             scroll_x,
             self.badge_shape_count,
         );
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.badge_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -994,7 +1066,7 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.set_bind_group(0, &self.badge_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -1026,7 +1098,11 @@ impl LiquidGlassRenderer {
             0.0,
             self.control_shape_count,
         );
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(
+            &self.control_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1068,7 +1144,7 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.set_bind_group(0, &self.control_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -1092,7 +1168,11 @@ impl LiquidGlassRenderer {
 
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(
+            &self.settings_panel_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1134,7 +1214,7 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.final_bind_group, &[]);
+            pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -1236,6 +1316,18 @@ fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Bu
         label: Some("liquid glass shape buffer"),
         contents: bytemuck::cast_slice(slice),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+fn create_uniform_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    uniforms: &GlassUniforms,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::bytes_of(uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     })
 }
 
