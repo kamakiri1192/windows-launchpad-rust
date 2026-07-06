@@ -77,11 +77,17 @@ pub enum ControlKind {
     SearchPill,
     PageIndicator,
     SearchField,
+    Magnifier,
+    Dot,
+    Caret,
     CloseButton,
     SettingsGear,
+    EditBadge,
     RowBackground,
+    Toggle,
     Checkmark,
     Chevron,
+    Divider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

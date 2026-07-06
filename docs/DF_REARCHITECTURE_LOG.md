@@ -162,10 +162,17 @@ What changed:
 - Added `ui_model::hit::HitTarget` for semantic pointer targets, including
   backdrop targets that distinguish launcher click passthrough from modal
   dismiss behavior.
+- Audited current hit semantics in `main.rs` and added Phase 1 model coverage
+  for the existing launcher cells, edit badges, bottom control, search field,
+  edit settings gear, settings categories, settings sort options, settings
+  toggles, settings actions, modal dismiss backdrops, and launcher click
+  passthrough backdrops.
 - Added `ui_model::render_model::RenderModel` and initial primitive view
   structs for glass, tiles, icons, text, and controls.
 - Added `ui_model::text` with `TextView`, `TextStyle`, semantic `TextRole`,
   `TextMetrics`, and the `TextMeasurer` trait planned for layout tests.
+- Added UI identity constructors for the currently interactive affordances so
+  later layout builders do not have to invent ad hoc string IDs.
 - Added unit tests for hit ordering, rect containment behavior through the hit
   map, same-z tie-breaking, push order, and empty render models.
 
@@ -200,6 +207,10 @@ Notes and discoveries:
   names. Later runtime wiring should map roles such as app labels, controls,
   settings rows, and folder labels to the existing text renderer's concrete
   font/fallback choices without making layout depend on `cosmic-text` details.
+- Phase 1 should model the current behavior surface, not merely reserve empty
+  extension points. This slice now covers the current UI affordances that are
+  drawn or hit-tested by `main.rs`, `grid.rs`, and `bottom_control.rs` even
+  though runtime event routing is intentionally left untouched.
 - The existing transparent-area click behavior should map to
   `HitTarget::Backdrop { kind: LauncherPassthrough }` when runtime input is
   wired through `LayoutResult`. The eventual command side should preserve the

@@ -2,11 +2,13 @@
 pub enum HitTarget {
     LauncherItem { key: String },
     LauncherItemBadge { key: String },
+    LauncherCell { index: usize },
     BottomControl,
     BottomControlClose,
+    SearchField,
+    EditSettingsGear,
     SettingsPanel,
-    SettingsClose,
-    SettingsRow { key: String },
+    Settings { target: SettingsTarget },
     Backdrop { kind: BackdropKind },
 }
 
@@ -19,8 +21,32 @@ impl HitTarget {
         Self::LauncherItemBadge { key: key.into() }
     }
 
-    pub fn settings_row(key: impl Into<String>) -> Self {
-        Self::SettingsRow { key: key.into() }
+    pub const fn launcher_cell(index: usize) -> Self {
+        Self::LauncherCell { index }
+    }
+
+    pub fn settings_category(key: impl Into<String>) -> Self {
+        Self::Settings {
+            target: SettingsTarget::Category { key: key.into() },
+        }
+    }
+
+    pub fn settings_sort_option(key: impl Into<String>) -> Self {
+        Self::Settings {
+            target: SettingsTarget::SortOption { key: key.into() },
+        }
+    }
+
+    pub fn settings_toggle(key: impl Into<String>) -> Self {
+        Self::Settings {
+            target: SettingsTarget::Toggle { key: key.into() },
+        }
+    }
+
+    pub fn settings_action(key: impl Into<String>) -> Self {
+        Self::Settings {
+            target: SettingsTarget::Action { key: key.into() },
+        }
     }
 
     pub const fn launcher_passthrough_backdrop() -> Self {
@@ -36,6 +62,16 @@ impl HitTarget {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SettingsTarget {
+    Panel,
+    Close,
+    Category { key: String },
+    SortOption { key: String },
+    Toggle { key: String },
+    Action { key: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackdropKind {
     /// Transparent launcher area: a stationary left-click should hide the
@@ -48,7 +84,7 @@ pub enum BackdropKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackdropKind, HitTarget};
+    use super::{BackdropKind, HitTarget, SettingsTarget};
 
     #[test]
     fn backdrop_targets_distinguish_passthrough_from_modal_dismiss() {
@@ -61,6 +97,50 @@ mod tests {
         assert_ne!(
             HitTarget::launcher_passthrough_backdrop(),
             HitTarget::modal_dismiss_backdrop()
+        );
+    }
+
+    #[test]
+    fn settings_targets_preserve_current_click_intents() {
+        assert_eq!(
+            HitTarget::Settings {
+                target: SettingsTarget::Close
+            },
+            HitTarget::Settings {
+                target: SettingsTarget::Close
+            }
+        );
+        assert_eq!(
+            HitTarget::settings_category("apps"),
+            HitTarget::Settings {
+                target: SettingsTarget::Category {
+                    key: "apps".to_owned()
+                }
+            }
+        );
+        assert_eq!(
+            HitTarget::settings_sort_option("name"),
+            HitTarget::Settings {
+                target: SettingsTarget::SortOption {
+                    key: "name".to_owned()
+                }
+            }
+        );
+        assert_eq!(
+            HitTarget::settings_toggle("frequent-apps"),
+            HitTarget::Settings {
+                target: SettingsTarget::Toggle {
+                    key: "frequent-apps".to_owned()
+                }
+            }
+        );
+        assert_eq!(
+            HitTarget::settings_action("reset-cache"),
+            HitTarget::Settings {
+                target: SettingsTarget::Action {
+                    key: "reset-cache".to_owned()
+                }
+            }
         );
     }
 }

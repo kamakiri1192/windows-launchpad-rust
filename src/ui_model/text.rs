@@ -43,8 +43,13 @@ pub enum TextRole {
     AppLabel,
     ControlLabel,
     ControlPlaceholder,
+    SearchQuery,
+    SearchPreedit,
     SettingsTitle,
+    SettingsSidebar,
+    SettingsHeader,
     SettingsRow,
+    SettingsDetail,
     FolderTitle,
     FolderItemLabel,
 }
