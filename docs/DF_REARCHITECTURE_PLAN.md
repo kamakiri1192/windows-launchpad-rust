@@ -413,6 +413,52 @@ over a single large reorganization.
 - New dynamic UI should first define its domain state and render-model output;
   only then add renderer support if an existing primitive is insufficient.
 
+## Screen Verification Gate
+
+Rearchitecture work must preserve user-visible behavior. A migration slice is
+not complete until the app has been launched and the affected UI has been
+checked on screen.
+
+For every slice that touches event handling, layout, rendering, hit-testing,
+animation, window behavior, search, settings, edit mode, folders, icons, or
+Liquid Glass:
+
+- Run `cargo run --release`.
+- Verify that the launcher window appears and paints a non-blank first frame.
+- Verify resize behavior and DPI-sensitive layout when the slice can affect
+  geometry.
+- Verify horizontal scroll, drag, inertia, snap, and rubber-band behavior when
+  the slice can affect input or layout.
+- Verify search open/close, text entry, IME commit behavior, and filtering when
+  the slice can affect search or bottom-control code.
+- Verify edit mode entry/exit, icon drag, reorder, hide, Done, and settings gear
+  when the slice can affect edit-mode or pointer routing.
+- Verify settings overlay open/close, category switching, toggles, and reset
+  controls when the slice can affect settings.
+- Verify icon placeholders, cached icons, loaded icons, labels, and launch
+  click targets when the slice can affect app registry, icon sync, or layout.
+- Capture or inspect the screen using available desktop/screenshot tooling when
+  possible. If automated screen inspection is unavailable, explicitly record
+  the manual checks that were performed.
+- If the app cannot be launched or the screen cannot be inspected, leave the
+  slice unfinished and report the blocker instead of claiming verification.
+
+The expected review artifact for UI-affecting slices is a short checklist in
+the PR body or final agent report:
+
+```text
+Screen verification:
+- Launched with cargo run --release: yes/no
+- First frame non-blank: yes/no
+- Resize checked: yes/no/not affected
+- Scroll/snap checked: yes/no/not affected
+- Search checked: yes/no/not affected
+- Edit mode checked: yes/no/not affected
+- Settings checked: yes/no/not affected
+- Icons/labels/launch hit targets checked: yes/no/not affected
+- Notes:
+```
+
 ## Validation
 
 For each migration slice:
@@ -421,6 +467,4 @@ For each migration slice:
 - Run `cargo test`.
 - Run `cargo clippy --all-targets --all-features` when the change is more than
   a mechanical move.
-- For rendering or interaction changes, run `cargo run --release` and manually
-  verify window creation, resize, scroll, snap, search, edit mode, settings, and
-  text rendering.
+- Apply the Screen Verification Gate for any UI-affecting slice.
