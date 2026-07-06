@@ -159,7 +159,9 @@ What changed:
   - `HitMap`
   - deterministic `hit_test` ordering where the highest z wins and later
     same-z regions win.
-- Added `ui_model::hit::HitTarget` for semantic pointer targets.
+- Added `ui_model::hit::HitTarget` for semantic pointer targets, including
+  backdrop targets that distinguish launcher click passthrough from modal
+  dismiss behavior.
 - Added `ui_model::render_model::RenderModel` and initial primitive view
   structs for glass, tiles, icons, text, and controls.
 - Added `ui_model::text` with `TextView`, `TextStyle`, semantic `TextRole`,
@@ -198,3 +200,10 @@ Notes and discoveries:
   names. Later runtime wiring should map roles such as app labels, controls,
   settings rows, and folder labels to the existing text renderer's concrete
   font/fallback choices without making layout depend on `cosmic-text` details.
+- The existing transparent-area click behavior should map to
+  `HitTarget::Backdrop { kind: LauncherPassthrough }` when runtime input is
+  wired through `LayoutResult`. The eventual command side should preserve the
+  current `hide_with_click_passthrough` behavior by hiding the launcher before
+  replaying the left click through the Windows platform adapter. Modal
+  backdrops, such as settings overlay outside clicks, should use
+  `ModalDismiss` and must not replay the click to the underlying app.
