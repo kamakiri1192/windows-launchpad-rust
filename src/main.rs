@@ -539,6 +539,50 @@ impl App {
         ))
     }
 
+    /// Build the [`layout::bottom_control::BottomControlInput`] snapshot from
+    /// current `App` state. This is the single place that assembles the values
+    /// the layout layer needs to resolve bottom-control geometry and hit
+    /// regions for one frame.
+    fn bottom_control_input(&self) -> layout::bottom_control::BottomControlInput {
+        layout::bottom_control::BottomControlInput {
+            viewport: self.viewport_phys(),
+            frame_bottom: self.frame_bottom_y(),
+            scale_factor: self.scale_factor,
+            page: self.current_page(),
+            page_count: self.layout.page_count,
+            mode: self.control.mode,
+            expand: self.control.expand,
+            indicator: self.control.indicator,
+            editing: self.editing,
+            edit_visual_progress: self.edit_visual_progress(),
+            edit_control_progress: self.edit_control_progress,
+            cached_done_width: self.cached_done_width,
+            settings_open: self.settings_panel_active(),
+        }
+    }
+
+    /// Build the bottom-control layout model (geometry snapshot + hit map) for
+    /// the current frame. Pointer routing consumes [`hit_test`][lbcht] from
+    /// this model instead of duplicating capsule/gear/close geometry inline.
+    ///
+    /// [`hit_test`]: layout::bottom_control::hit_test
+    fn bottom_control_model(&self) -> layout::bottom_control::BottomControlModel {
+        self.bottom_control_input().build()
+    }
+
+    /// Classify a physical-pixel pointer against the bottom-control hit map.
+    /// Mirrors the previous inline hit-tests (`control.hit_test_scaled` +
+    /// `edit_gear_hit` + close-button square) but sourced from a single layout
+    /// pass.
+    fn bottom_control_intent(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> layout::bottom_control::BottomControlPointerIntent {
+        let model = self.bottom_control_model();
+        layout::bottom_control::hit_test(&model, ui_model::geometry::Point::new(x, y))
+    }
+
     /// Lay out and upload the bottom control's glass capsule + overlay shapes
     /// and text for the current frame. Call this once per redraw, after the
     /// control has been ticked.
@@ -2225,65 +2269,47 @@ impl App {
     }
 
     /// Handle a click (press + release inside the capsule with no drag) on the
-    /// bottom control. Decides whether it hit the close (×) button, and
-    /// otherwise toggles the search field open/closed.
+    /// bottom control. Decides whether it hit the close (×) button, the
+    /// edit-mode settings gear, the Done capsule, or the search pill/field,
+    /// using the layout layer's hit map so render geometry and pointer targets
+    /// share one calculation.
     fn handle_control_click(&mut self, x: f32, y: f32) {
-        // In edit mode the bottom control shows two capsules: [完了] on the
-        // left and a settings gear [⚙] on the right. Decide which was clicked.
-        if self.editing {
-            let viewport = self.viewport_phys();
-            let frame_bottom = self.frame_bottom_y();
-            let scale = self.scale_factor;
-            let done_hw = self
-                .cached_done_width
-                .map(|w| bottom_control::done_half_width(w, scale))
-                .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
-            if let Some((gear, _)) = bottom_control::edit_gear_geometry(
-                viewport,
-                frame_bottom,
-                scale,
-                done_hw,
-                self.edit_visual_progress(),
-            ) {
-                if bottom_control::edit_gear_hit(&gear, x, y) {
-                    self.open_settings();
-                    return;
+        let intent = self.bottom_control_intent(x, y);
+        match intent {
+            // In edit mode the bottom control shows two capsules: [完了] on the
+            // left and a settings gear [⚙] on the right.
+            layout::bottom_control::BottomControlPointerIntent::EditGear => {
+                self.open_settings();
+            }
+            layout::bottom_control::BottomControlPointerIntent::CloseButton => {
+                self.control.press_close();
+                self.search_input_changed();
+            }
+            layout::bottom_control::BottomControlPointerIntent::Capsule => {
+                if self.editing {
+                    // Done capsule: exit edit mode.
+                    self.exit_edit_mode();
+                } else {
+                    match self.control.mode {
+                        bottom_control::Mode::Pill
+                        | bottom_control::Mode::Indicator
+                        | bottom_control::Mode::Collapsing => {
+                            self.control.open_search();
+                        }
+                        bottom_control::Mode::Expanding | bottom_control::Mode::Field => {
+                            // Clicking inside an open field does nothing (keep
+                            // focus). A click outside the field's text area
+                            // could move the caret; the MVP leaves the caret at
+                            // the end.
+                        }
+                    }
+                    self.request_redraw();
                 }
             }
-            // Otherwise it's the Done capsule.
-            self.exit_edit_mode();
-            return;
-        }
-        let viewport = self.viewport_phys();
-        let frame_bottom = self.frame_bottom_y();
-        // Close-button hit region (only meaningful when the field is open).
-        let close_x = self
-            .control
-            .close_button_x_scaled(viewport, frame_bottom, self.scale_factor);
-        let hit_close = close_x
-            .map(|cx| {
-                let hit_radius = 12.0 * self.scale_factor.max(1.0);
-                (x - cx).abs() <= hit_radius && (y - self.frame_control_cy()).abs() <= hit_radius
-            })
-            .unwrap_or(false);
-
-        if hit_close {
-            self.control.press_close();
-            self.search_input_changed();
-        } else {
-            match self.control.mode {
-                bottom_control::Mode::Pill
-                | bottom_control::Mode::Indicator
-                | bottom_control::Mode::Collapsing => {
-                    self.control.open_search();
-                }
-                bottom_control::Mode::Expanding | bottom_control::Mode::Field => {
-                    // Clicking inside an open field does nothing (keep focus).
-                    // A click outside the field's text area could move the
-                    // caret; the MVP leaves the caret at the end.
-                }
+            layout::bottom_control::BottomControlPointerIntent::None => {
+                // Should not happen (caller only invokes us when the release
+                // stayed on the capsule), but guard anyway.
             }
-            self.request_redraw();
         }
     }
 
@@ -2714,37 +2740,15 @@ impl ApplicationHandler<UserEvent> for App {
                         // If the press starts on the control capsule (or, in
                         // edit mode, the adjacent settings gear capsule), mark
                         // it so the release is treated as a control click and
-                        // NOT as a scroll drag.
-                        let mut over_control = self.control.hit_test_scaled(
-                            self.viewport_phys(),
-                            self.frame_bottom_y(),
-                            self.pointer_phys_x,
-                            self.pointer_phys_y,
-                            self.scale_factor,
+                        // NOT as a scroll drag. The hit classification comes
+                        // from the layout layer's hit map so render geometry
+                        // and pointer targets share one calculation.
+                        let intent =
+                            self.bottom_control_intent(self.pointer_phys_x, self.pointer_phys_y);
+                        let over_control = !matches!(
+                            intent,
+                            layout::bottom_control::BottomControlPointerIntent::None
                         );
-                        // In edit mode the gear capsule sits beside the Done
-                        // capsule but is not part of the control shape, so hit
-                        // it explicitly.
-                        if !over_control && self.editing {
-                            let scale = self.scale_factor;
-                            let done_hw = self
-                                .cached_done_width
-                                .map(|w| bottom_control::done_half_width(w, scale))
-                                .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
-                            if let Some((gear, _)) = bottom_control::edit_gear_geometry(
-                                self.viewport_phys(),
-                                self.frame_bottom_y(),
-                                scale,
-                                done_hw,
-                                self.edit_visual_progress(),
-                            ) {
-                                over_control = bottom_control::edit_gear_hit(
-                                    &gear,
-                                    self.pointer_phys_x,
-                                    self.pointer_phys_y,
-                                );
-                            }
-                        }
                         self.pressed_on_control = over_control;
                         if over_control {
                             return;
@@ -2808,14 +2812,21 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                         if self.pressed_on_control {
                             self.pressed_on_control = false;
-                            // Only count as a click if it stayed on the capsule.
-                            if self.control.hit_test_scaled(
-                                self.viewport_phys(),
-                                self.frame_bottom_y(),
-                                self.pointer_phys_x,
-                                self.pointer_phys_y,
-                                self.scale_factor,
-                            ) {
+                            // Only count as a click if it stayed on the
+                            // capsule body. This mirrors the previous
+                            // behavior, which re-tested only the main capsule
+                            // shape (`hit_test_scaled`) on release — not the
+                            // gear — so a press that landed on the gear but
+                            // drifted off the capsule is dropped. The gear is
+                            // re-resolved inside `handle_control_click`.
+                            let intent = self
+                                .bottom_control_intent(self.pointer_phys_x, self.pointer_phys_y);
+                            let on_capsule = matches!(
+                                intent,
+                                layout::bottom_control::BottomControlPointerIntent::Capsule
+                                    | layout::bottom_control::BottomControlPointerIntent::CloseButton
+                            );
+                            if on_capsule {
                                 self.handle_control_click(self.pointer_phys_x, self.pointer_phys_y);
                             }
                             return;
