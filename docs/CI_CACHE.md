@@ -13,6 +13,33 @@ There are two cache layers:
 The goal is to keep repeated CI runs fast without maintaining external cache
 infrastructure.
 
+## Core idea
+
+`main-ci.yml` is the cache warmer.
+
+Every push to `main` runs both cache-producing families:
+
+- `debug-checks` warms `windows-target-debug-...`
+- `release-build` warms `windows-target-release-...`
+
+The PR and release workflows then use byte-identical cache keys so they can
+restore the cache already produced on `main`:
+
+- `pr-ci.yml` restores the debug cache warmed by `main-ci.yml`.
+- `pr-binary.yml` restores the release cache warmed by `main-ci.yml`.
+- `release-assets.yml` restores the release cache warmed by `main-ci.yml`.
+
+Because `main` is the default branch, its GitHub Actions cache entries are
+available to pull request workflows. That is the main performance trick: after a
+change lands on `main`, future PR checks and review-binary builds start from a
+warm debug or release `target/` cache instead of rebuilding the world from a
+cold checkout.
+
+When a PR changes Rust sources, shaders, or build inputs, the exact hash may be
+new. In that case the workflow still falls back to the nearest cache for the
+same Rust version, target, and profile family, so unchanged dependencies and
+older build artifacts can still be reused.
+
 ## Workflows
 
 These workflows share the same cache pattern:
@@ -34,8 +61,8 @@ Release binary builds use the `windows-target-release-...` cache family:
 - `release-assets.yml`
 
 The cache keys are intentionally byte-identical between matching workflow
-families so one workflow can reuse cache entries warmed by another workflow
-when GitHub's cache scoping allows it.
+families. The `main-ci.yml` jobs are the canonical warmers; PR and release jobs
+are the consumers.
 
 ## Target cache key
 
