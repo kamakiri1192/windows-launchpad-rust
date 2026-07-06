@@ -2965,7 +2965,6 @@ impl ApplicationHandler<UserEvent> for App {
                     || settings_animating
                     || springs_animating
                     || self.editing
-                    || self.settings_panel_active()
                 {
                     self.request_redraw();
                 }
@@ -3037,12 +3036,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         // Edit mode keeps redrawing so the wiggle animation advances and the
         // dragged tile tracks the pointer smoothly.
-        if scroller_animating
-            || control_animating
-            || self.editing
-            || long_press_pending
-            || self.settings_panel_active()
-        {
+        if scroller_animating || control_animating || self.editing || long_press_pending {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);

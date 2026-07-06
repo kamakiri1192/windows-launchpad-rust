@@ -1,0 +1,126 @@
+name: Main CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+  TARGET: x86_64-pc-windows-msvc
+  TARGET_CACHE_PATH: target
+
+jobs:
+  debug-checks:
+    name: Debug checks (fmt/clippy/test/build)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          rustup component add clippy rustfmt --toolchain $env:RUST_VERSION
+          rustup default $env:RUST_VERSION
+
+      # Cache key MUST be byte-identical to pr-ci.yml so PRs reuse what main warms up here.
+      - name: Restore GitHub target cache
+        id: target-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: windows-target-debug-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl') }}
+          restore-keys: |
+            windows-target-debug-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
+
+      - name: Cache Cargo registry and git sources
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Lookup GitHub target cache before save
+        id: target-cache-before-save
+        if: success() && steps.target-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+          lookup-only: true
+
+      - name: Save GitHub target cache
+        if: success() && steps.target-cache.outputs.cache-hit != 'true' && steps.target-cache-before-save.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+  release-build:
+    name: Release build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal --target $env:TARGET
+          rustup default $env:RUST_VERSION
+
+      # Cache key MUST be byte-identical to pr-binary.yml / release-assets.yml so they reuse what main warms up here.
+      - name: Restore GitHub target cache
+        id: target-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'build.rs', 'src/**/*.rs', 'src/**/*.wgsl', 'assets/shaders/**/*.wgsl') }}
+          restore-keys: |
+            windows-target-release-${{ env.TARGET }}-rust-${{ env.RUST_VERSION }}-
+
+      - name: Cache Cargo registry and git sources
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      - name: Build release binary
+        shell: pwsh
+        run: cargo build --release --locked --target $env:TARGET
+
+      - name: Lookup GitHub target cache before save
+        id: target-cache-before-save
+        if: success() && steps.target-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+          lookup-only: true
+
+      - name: Save GitHub target cache
+        if: success() && steps.target-cache.outputs.cache-hit != 'true' && steps.target-cache-before-save.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.TARGET_CACHE_PATH }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
