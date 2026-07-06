@@ -136,3 +136,205 @@ Notes and discoveries:
   launcher items rather than a generic `new`, because the current UI already
   has launcher item visuals and later HitMap/RenderModel call sites should read
   as specific UI identities instead of unstructured string labels.
+
+### 2026-07-06: Phase 1 Slice 3, `RenderModel` and `HitMap` foundations
+
+Files changed:
+
+- `src/lib.rs`
+- `src/layout/mod.rs`
+- `src/layout/hit_map.rs`
+- `src/ui_model/mod.rs`
+- `src/ui_model/hit.rs`
+- `src/ui_model/render_model.rs`
+- `src/ui_model/text.rs`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Added `layout::LayoutResult` as the future boundary that carries both
+  renderer-neutral drawing data and hit-test data from one layout pass.
+- Added `layout::hit_map` with:
+  - `HitRegion { id, rect, target, z }`
+  - `HitMap`
+  - deterministic `hit_test` ordering where the highest z wins and later
+    same-z regions win.
+- Added `ui_model::hit::HitTarget` for semantic pointer targets, including
+  backdrop targets that distinguish launcher click passthrough from modal
+  dismiss behavior.
+- Audited current hit semantics in `main.rs` and added Phase 1 model coverage
+  for the existing launcher cells, edit badges, bottom control, search field,
+  edit settings gear, settings categories, settings sort options, settings
+  toggles, settings actions, modal dismiss backdrops, and launcher click
+  passthrough backdrops.
+- Added `ui_model::render_model::RenderModel` and initial primitive view
+  structs for glass, tiles, icons, text, and controls.
+- Added `ui_model::text` with `TextView`, `TextStyle`, semantic `TextRole`,
+  `TextMetrics`, and the `TextMeasurer` trait planned for layout tests.
+- Added UI identity constructors for the currently interactive affordances so
+  later layout builders do not have to invent ad hoc string IDs.
+- Added unit tests for hit ordering, rect containment behavior through the hit
+  map, same-z tie-breaking, push order, and empty render models.
+
+Behavior preservation:
+
+- The new layout and UI model types are not connected to `main.rs`, renderer
+  uploads, current grid hit-testing, settings, bottom control, or input
+  routing.
+- No existing runtime code paths were changed.
+- Current rendering and interaction behavior is unchanged.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: passed
+- `cargo clippy --all-targets --all-features`: passed
+- Screen Verification Gate: not required because this slice only adds isolated
+  model/layout foundation types and tests. It does not touch UI behavior,
+  rendering, layout execution, input, app runtime wiring, shaders, or GPU
+  resources.
+
+Notes and discoveries:
+
+- This keeps Phase 1 independent from the larger `main.rs` extraction. Wiring
+  existing settings, bottom-control, or grid hit-testing into `LayoutResult`
+  should be handled as a later focused slice because those paths affect
+  pointer routing and visible UI behavior.
+- `HitMap` intentionally stores regions in insertion order and uses that order
+  as the same-z tie-breaker. This gives layout builders predictable layering
+  without requiring every small overlay affordance to invent a unique z value.
+- `TextStyle` carries a semantic `TextRole` instead of concrete font-family
+  names. Later runtime wiring should map roles such as app labels, controls,
+  settings rows, and folder labels to the existing text renderer's concrete
+  font/fallback choices without making layout depend on `cosmic-text` details.
+- Phase 1 should model the current behavior surface, not merely reserve empty
+  extension points. This slice now covers the current UI affordances that are
+  drawn or hit-tested by `main.rs`, `grid.rs`, and `bottom_control.rs` even
+  though runtime event routing is intentionally left untouched.
+- The existing transparent-area click behavior should map to
+  `HitTarget::Backdrop { kind: LauncherPassthrough }` when runtime input is
+  wired through `LayoutResult`. The eventual command side should preserve the
+  current `hide_with_click_passthrough` behavior by hiding the launcher before
+  replaying the left click through the Windows platform adapter. Modal
+  backdrops, such as settings overlay outside clicks, should use
+  `ModalDismiss` and must not replay the click to the underlying app.
+
+### 2026-07-06: Migration plan rebuilt around vertical slices
+
+Files changed:
+
+- `docs/DF_REARCHITECTURE_PLAN.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Replaced the old horizontal phase ordering with behavior-preserving vertical
+  slices.
+- Made current-behavior inventory an explicit prerequisite for each extraction
+  slice.
+- Moved the first real validation target to the settings overlay, because it
+  has contained rendering, hit-testing, modal backdrop behavior, persistence
+  commands, and screen-verifiable UI behavior.
+- Reframed `AppAction` / `AppCommand` as something introduced narrowly inside
+  vertical slices before being consolidated into a general app shell.
+- Deferred renderer facade splitting until multiple real UI slices have proven
+  the `RenderModel` shape.
+- Moved folders later, after grid, edit-mode, action/command, and renderer
+  boundaries have been validated against current behavior.
+
+Behavior preservation:
+
+- This entry changes planning documentation only.
+- No Rust code, runtime wiring, rendering, input handling, shaders, or GPU
+  resources were changed.
+
+Validation:
+
+- Cargo validation was not run for this documentation-only planning change.
+- Screen Verification Gate: not required because this entry only revises the
+  migration plan and does not affect runtime UI behavior.
+
+Notes and discoveries:
+
+- The previous plan put `ui_model` and `HitMap` ahead of a real UI slice, which
+  made the model easy to detach from current behavior.
+- Future slices should not treat unused model types as complete. A model is
+  considered validated only after a current feature uses it end to end and
+  passes the relevant screen checks.
+
+### 2026-07-06: Phase 0/1, settings overlay vertical slice
+
+Files changed:
+
+- `docs/DF_CURRENT_BEHAVIOR_INVENTORY.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+- `Cargo.toml`
+- `src/layout/mod.rs`
+- `src/layout/settings_panel.rs`
+- `src/main.rs`
+
+What changed:
+
+- Added a current-behavior inventory document and recorded the settings overlay
+  behavior that this slice must preserve.
+- Added `layout::settings_panel` as the first vertical-slice layout module.
+- Moved settings panel geometry, text placement, hit classification, modal
+  backdrop intent, animation alpha/pop helpers, and a settings `LayoutResult`
+  builder into the layout layer.
+- Connected `main.rs` settings hit-testing to `layout::settings_panel` instead
+  of duplicating panel and row geometry locally.
+- Connected `main.rs` settings render preparation to the settings layout model
+  for panel geometry, text views, and animation values, then adapted the result
+  back into the existing renderer upload path.
+- Added `default-run = "launchpad-windows"` so the documented
+  `cargo run --release` verification command runs the launcher binary in this
+  multi-bin crate.
+- Preserved the main-branch GPU fix for settings overlay redraws by keeping
+  `settings_panel_active()` out of the steady-state redraw gates.
+- Added deterministic tests for settings panel geometry, close/category/action
+  hit targets, text view placement, modal backdrop z-order, and animation
+  helper endpoints.
+
+Behavior preservation:
+
+- Existing settings state mutation and side effects remain in `main.rs`.
+- Existing renderer methods, GPU instance structs, text glyph generation, and
+  settings strings remain unchanged.
+- Outside settings clicks are still modal dismiss clicks and are explicitly
+  separate from launcher click passthrough.
+- This slice intentionally keeps `ControlInstance` and `GlyphQuad` generation as
+  adapter code in `main.rs` so visual rendering remains behavior-preserving
+  while layout/hit/text placement moves behind the new boundary.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: passed
+- `cargo clippy --all-targets --all-features`: passed
+- `cargo run --release`: passed with the documented screenshot environment
+  (`LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`, and temporary
+  `LOCALAPPDATA`).
+- Screen Verification Gate:
+  - first frame non-blank: verified in `target/qa-final-initial.png`;
+  - settings overlay open: verified through tray Settings command in
+    `target/qa-final-settings-open.png`;
+  - settings category switching: verified for Apps, Search, System, and About
+    with `WM_MOUSEMOVE` + click messages and captured screenshots;
+  - outside modal click closes settings: verified in
+    `target/qa-settings-closed-outside.png`;
+  - sort/toggle/reset rows: hit intents are covered by deterministic tests and
+    the rows are visible in screenshots, but automated coordinate injection was
+    not stable enough to claim full visual click verification for every row.
+
+Notes and discoveries:
+
+- A complete vertical slice does not require finishing the renderer facade.
+  It can adapt `LayoutResult` back into current renderer upload calls as long
+  as the source geometry and hit regions come from the new layout boundary.
+- Localized text strings remain provided by `main.rs`/`settings.rs`, while
+  settings text placement now comes from `layout::settings_panel::TextView`
+  output. A later text-focused slice can move string ownership if localization
+  or dynamic copy requires it.
+- The app is capture-excluded unless launched with
+  `LAUNCHPAD_ALLOW_SCREENSHOT=1`; this is now documented in `AGENTS.md` via
+  `docs/EDIT_MODE_VISUAL_QA.md`.

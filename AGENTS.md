@@ -39,3 +39,8 @@ The repository currently has only an `Initial commit`, so no strict convention i
 ## Security & Configuration Tips
 
 Do not commit generated binaries, logs, or local configuration. Review GPU API changes carefully because `wgpu`, `winit`, and shader layouts are tightly coupled.
+
+## テスト時のスクリーンショットについて
+liquid glass表現の理由によってキャプチャを無効にしています。
+起動時にパラメータを設定しないとスクリーンショットできません。下記ドキュメントを参照すること。
+docs\EDIT_MODE_VISUAL_QA.md
