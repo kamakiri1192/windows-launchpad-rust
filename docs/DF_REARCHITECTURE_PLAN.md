@@ -9,6 +9,10 @@ more feature logic into `src/main.rs` or `src/renderer.rs`.
 This is a planning document. The target architecture is
 [../ARCHITECTURE.md](../ARCHITECTURE.md).
 
+Implementation progress, completed slices, validation results, and discoveries
+from migration work are recorded in
+[DF_REARCHITECTURE_LOG.md](DF_REARCHITECTURE_LOG.md).
+
 ## Problem
 
 The app has grown around a central `App` in `src/main.rs`. That was a practical
