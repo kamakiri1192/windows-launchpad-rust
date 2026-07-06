@@ -2965,7 +2965,6 @@ impl ApplicationHandler<UserEvent> for App {
                     || settings_animating
                     || springs_animating
                     || self.editing
-                    || self.settings_panel_active()
                 {
                     self.request_redraw();
                 }
@@ -3041,7 +3040,6 @@ impl ApplicationHandler<UserEvent> for App {
             || control_animating
             || self.editing
             || long_press_pending
-            || self.settings_panel_active()
         {
             self.request_redraw();
         }
