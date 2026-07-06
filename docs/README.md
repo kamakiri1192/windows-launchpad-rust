@@ -1,5 +1,10 @@
 # launchpad-windows docs
 
+- [../ARCHITECTURE.md](../ARCHITECTURE.md) - target New Architecture,
+  boundaries, data flow, and extension rules.
+- [DF_REARCHITECTURE_PLAN.md](DF_REARCHITECTURE_PLAN.md) - proposed Dynamic
+  Feature-ready refactor plan and migration phases.
+
 - [KEYBINDINGS.md](KEYBINDINGS.md) — runtime debug / tuning keys, the
   `blur_radius` → pyramid depth mapping, and Windows transparency notes.
 - [BOTTOM_CONTROL.md](BOTTOM_CONTROL.md) — the morphing bottom-center control
