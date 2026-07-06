@@ -136,3 +136,61 @@ Notes and discoveries:
   launcher items rather than a generic `new`, because the current UI already
   has launcher item visuals and later HitMap/RenderModel call sites should read
   as specific UI identities instead of unstructured string labels.
+
+### 2026-07-06: Phase 1 Slice 3, `RenderModel` and `HitMap` foundations
+
+Files changed:
+
+- `src/lib.rs`
+- `src/layout/mod.rs`
+- `src/layout/hit_map.rs`
+- `src/ui_model/mod.rs`
+- `src/ui_model/hit.rs`
+- `src/ui_model/render_model.rs`
+- `src/ui_model/text.rs`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Added `layout::LayoutResult` as the future boundary that carries both
+  renderer-neutral drawing data and hit-test data from one layout pass.
+- Added `layout::hit_map` with:
+  - `HitRegion { id, rect, target, z }`
+  - `HitMap`
+  - deterministic `hit_test` ordering where the highest z wins and later
+    same-z regions win.
+- Added `ui_model::hit::HitTarget` for semantic pointer targets.
+- Added `ui_model::render_model::RenderModel` and initial primitive view
+  structs for glass, tiles, icons, text, and controls.
+- Added `ui_model::text` with `TextView`, `TextStyle`, `TextMetrics`, and the
+  `TextMeasurer` trait planned for layout tests.
+- Added unit tests for hit ordering, rect containment behavior through the hit
+  map, same-z tie-breaking, push order, and empty render models.
+
+Behavior preservation:
+
+- The new layout and UI model types are not connected to `main.rs`, renderer
+  uploads, current grid hit-testing, settings, bottom control, or input
+  routing.
+- No existing runtime code paths were changed.
+- Current rendering and interaction behavior is unchanged.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: passed
+- `cargo clippy --all-targets --all-features`: passed
+- Screen Verification Gate: not required because this slice only adds isolated
+  model/layout foundation types and tests. It does not touch UI behavior,
+  rendering, layout execution, input, app runtime wiring, shaders, or GPU
+  resources.
+
+Notes and discoveries:
+
+- This keeps Phase 1 independent from the larger `main.rs` extraction. Wiring
+  existing settings, bottom-control, or grid hit-testing into `LayoutResult`
+  should be handled as a later focused slice because those paths affect
+  pointer routing and visible UI behavior.
+- `HitMap` intentionally stores regions in insertion order and uses that order
+  as the same-z tie-breaker. This gives layout builders predictable layering
+  without requiring every small overlay affordance to invent a unique z value.
