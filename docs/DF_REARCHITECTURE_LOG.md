@@ -88,3 +88,51 @@ Notes and discoveries:
 - If DPI mistakes become common during later slices, consider adding explicit
   documentation or newtypes for logical versus physical pixels before wiring
   more UI model primitives through the app.
+
+### 2026-07-06: Phase 1 Slice 2, `ui_model::ids`
+
+Files changed:
+
+- `src/ui_model/mod.rs`
+- `src/ui_model/ids.rs`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Added `ui_model::ids` as the renderer-neutral identity module for later
+  HitMap and RenderModel slices.
+- Defined `UiId` as a lightweight string-backed type:
+  - `UiId(String)`
+  - derives `Debug`, `Clone`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, and
+    `Hash`
+  - exposes `UiId::launcher_item` and `UiId::as_str`
+- Kept raw string construction private so future production call sites can move
+  through explicit UI-element constructors instead of spreading arbitrary
+  string IDs.
+- Added unit tests for equality, `BTreeSet` use, `HashSet` use, `as_str`, and
+  the initial `launcher_item` constructor.
+
+Behavior preservation:
+
+- `UiId` is not connected to existing production code.
+- The type intentionally does not depend on current or future domain concepts
+  such as `AppId`, `LauncherItem`, or `FolderId`.
+- Current runtime behavior is unchanged.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: passed
+- Screen Verification Gate: not required because this slice only adds an
+  isolated UI model identity type and does not touch UI behavior, rendering,
+  layout, input, or app runtime wiring.
+
+Notes and discoveries:
+
+- A string-backed `UiId` keeps Phase 1 independent from future domain modeling
+  work. Later slices can add conversion helpers or typed constructors when the
+  domain types exist and the dependency direction is clear.
+- The first public constructor is intentionally concrete and limited to
+  launcher items rather than a generic `new`, because the current UI already
+  has launcher item visuals and later HitMap/RenderModel call sites should read
+  as specific UI identities instead of unstructured string labels.
