@@ -197,7 +197,16 @@ impl BottomControlInput {
     }
 
     /// Resolve the close-button X, or `None` when the close button is hidden.
+    /// The close button is suppressed in edit mode: while editing, the
+    /// rendered search-field layers are hidden whenever
+    /// `edit_visual_progress > 0`, so the × would be an invisible hotspot.
+    /// The previous pointer code never evaluated the close button while
+    /// editing (the edit-mode branch returned first), so suppressing the
+    /// region here keeps the hit map honest without changing dispatch.
     fn close_button_x(&self) -> Option<f32> {
+        if self.editing {
+            return None;
+        }
         close_button_x_scaled(
             self.state(),
             self.viewport,
@@ -451,6 +460,25 @@ mod tests {
             hit_test(&model, Point::new(cx + 20.0, cy + 20.0)),
             BottomControlPointerIntent::CloseButton
         );
+    }
+
+    #[test]
+    fn close_region_suppressed_in_edit_mode() {
+        // While editing, the rendered search-field layers are hidden, so the
+        // close button must not emit a hit region — otherwise it would be an
+        // invisible hotspot. This mirrors the previous code, which never
+        // evaluated the close button while editing.
+        let mut input = input(Mode::Field);
+        input.editing = true;
+        input.edit_visual_progress = 1.0;
+        let model = input.build();
+        assert!(model.layout.close_button_x.is_none());
+        assert!(model
+            .result
+            .hits
+            .regions()
+            .iter()
+            .all(|r| r.target != HitTarget::BottomControlClose));
     }
 
     #[test]
