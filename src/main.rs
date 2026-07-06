@@ -38,6 +38,7 @@ mod icon_pipeline;
 mod icon_worker;
 mod icons;
 mod launch;
+mod layout;
 mod liquid_glass;
 #[cfg(windows)]
 mod platform_windows;
@@ -47,6 +48,7 @@ mod scroll;
 mod settings;
 mod startup_timer;
 mod text;
+mod ui_model;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -128,18 +130,7 @@ enum SettingsPressTarget {
     Outside,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SettingsPanelLayout {
-    cx: f32,
-    cy: f32,
-    hw: f32,
-    hh: f32,
-    radius: f32,
-    left: f32,
-    top: f32,
-    sidebar_w: f32,
-    right_left: f32,
-}
+type SettingsPanelLayout = layout::settings_panel::SettingsPanelLayout;
 
 fn pending_press_launch_id(press: &PendingPress, release_x: f32, release_y: f32) -> Option<&AppId> {
     if !pending_press_is_click(press, release_x, release_y) {
@@ -160,6 +151,127 @@ fn pending_press_is_outside_glass_click(
     release_y: f32,
 ) -> bool {
     press.outside_glass && pending_press_is_click(press, release_x, release_y)
+}
+
+fn settings_category_id(category: SettingsCategory) -> layout::settings_panel::SettingsCategoryId {
+    match category {
+        SettingsCategory::Apps => layout::settings_panel::SettingsCategoryId::Apps,
+        SettingsCategory::Search => layout::settings_panel::SettingsCategoryId::Search,
+        SettingsCategory::System => layout::settings_panel::SettingsCategoryId::System,
+        SettingsCategory::About => layout::settings_panel::SettingsCategoryId::About,
+    }
+}
+
+fn settings_category_from_id(
+    category: layout::settings_panel::SettingsCategoryId,
+) -> SettingsCategory {
+    match category {
+        layout::settings_panel::SettingsCategoryId::Apps => SettingsCategory::Apps,
+        layout::settings_panel::SettingsCategoryId::Search => SettingsCategory::Search,
+        layout::settings_panel::SettingsCategoryId::System => SettingsCategory::System,
+        layout::settings_panel::SettingsCategoryId::About => SettingsCategory::About,
+    }
+}
+
+fn sort_order_id(order: SortOrder) -> layout::settings_panel::SortOrderId {
+    match order {
+        SortOrder::Name => layout::settings_panel::SortOrderId::Name,
+        SortOrder::Manual => layout::settings_panel::SortOrderId::Manual,
+        SortOrder::Recent => layout::settings_panel::SortOrderId::Recent,
+        SortOrder::Frequent => layout::settings_panel::SortOrderId::Frequent,
+    }
+}
+
+fn sort_order_from_id(order: layout::settings_panel::SortOrderId) -> SortOrder {
+    match order {
+        layout::settings_panel::SortOrderId::Name => SortOrder::Name,
+        layout::settings_panel::SortOrderId::Manual => SortOrder::Manual,
+        layout::settings_panel::SortOrderId::Recent => SortOrder::Recent,
+        layout::settings_panel::SortOrderId::Frequent => SortOrder::Frequent,
+    }
+}
+
+fn settings_panel_copy<'a>(
+    hidden_count_label: &'a str,
+) -> layout::settings_panel::SettingsPanelCopy<'a> {
+    layout::settings_panel::SettingsPanelCopy {
+        title: SETTINGS_TITLE,
+        categories: [
+            (
+                layout::settings_panel::SettingsCategoryId::Apps,
+                SettingsCategory::Apps.label(),
+            ),
+            (
+                layout::settings_panel::SettingsCategoryId::Search,
+                SettingsCategory::Search.label(),
+            ),
+            (
+                layout::settings_panel::SettingsCategoryId::System,
+                SettingsCategory::System.label(),
+            ),
+            (
+                layout::settings_panel::SettingsCategoryId::About,
+                SettingsCategory::About.label(),
+            ),
+        ],
+        sort_orders: [
+            (
+                layout::settings_panel::SortOrderId::Name,
+                SortOrder::Name.label(),
+            ),
+            (
+                layout::settings_panel::SortOrderId::Manual,
+                SortOrder::Manual.label(),
+            ),
+            (
+                layout::settings_panel::SortOrderId::Recent,
+                SortOrder::Recent.label(),
+            ),
+            (
+                layout::settings_panel::SortOrderId::Frequent,
+                SortOrder::Frequent.label(),
+            ),
+        ],
+        sort_label: "並び順",
+        frequent_apps_label: "よく使うアプリ",
+        frequent_apps_detail: "ホーム画面に表示するための準備設定",
+        hidden_apps_label: "非表示アプリ",
+        hidden_count_label,
+        search_hidden_label: "検索時に非表示アプリを含める",
+        search_hidden_detail: "検索中だけ、隠したアプリも結果に表示します",
+        reset_cache_label: "キャッシュをリセット",
+        reset_cache_detail: "アイコンを再抽出します",
+        reset_settings_label: "設定をリセット",
+        reset_settings_detail: "並び順、非表示、設定値を初期状態に戻します",
+        version_label: "バージョン",
+        version_value: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+fn settings_press_target_from_layout_hit(
+    hit: layout::settings_panel::SettingsPanelHit,
+) -> SettingsPressTarget {
+    match hit {
+        layout::settings_panel::SettingsPanelHit::Close => SettingsPressTarget::Close,
+        layout::settings_panel::SettingsPanelHit::Category(category) => {
+            SettingsPressTarget::Category(settings_category_from_id(category))
+        }
+        layout::settings_panel::SettingsPanelHit::Sort(order) => {
+            SettingsPressTarget::Sort(sort_order_from_id(order))
+        }
+        layout::settings_panel::SettingsPanelHit::FrequentToggle => {
+            SettingsPressTarget::FrequentToggle
+        }
+        layout::settings_panel::SettingsPanelHit::SearchHiddenToggle => {
+            SettingsPressTarget::SearchHiddenToggle
+        }
+        layout::settings_panel::SettingsPanelHit::ResetCache => SettingsPressTarget::ResetCache,
+        layout::settings_panel::SettingsPanelHit::ResetSettings => {
+            SettingsPressTarget::ResetSettings
+        }
+        layout::settings_panel::SettingsPanelHit::Inside => SettingsPressTarget::Inside,
+        layout::settings_panel::SettingsPanelHit::Outside => SettingsPressTarget::Outside,
+    }
 }
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
@@ -568,135 +680,35 @@ impl App {
         }
     }
 
-    /// Center of the placeholder settings panel in physical px.
-    fn settings_panel_center(&self) -> (f32, f32) {
-        let (w, h) = self.viewport_phys();
-        (w as f32 * 0.5, h as f32 * 0.5)
-    }
-
-    /// Half-extents + corner radius of the settings panel, in physical px.
-    fn settings_panel_half(&self) -> (f32, f32, f32) {
-        let s = self.scale_factor;
-        (
-            SETTINGS_PANEL_HALF_W * s,
-            SETTINGS_PANEL_HALF_H * s,
-            SETTINGS_PANEL_RADIUS * s,
-        )
-    }
-
     fn settings_panel_layout(&self) -> SettingsPanelLayout {
-        let (cx, cy) = self.settings_panel_center();
-        let (hw, hh, radius) = self.settings_panel_half();
-        let left = cx - hw;
-        let top = cy - hh;
-        let sidebar_w = SETTINGS_SIDEBAR_W * self.scale_factor;
-        SettingsPanelLayout {
-            cx,
-            cy,
-            hw,
-            hh,
-            radius,
-            left,
-            top,
-            sidebar_w,
-            right_left: left + sidebar_w,
-        }
+        layout::settings_panel::panel_layout(self.viewport_phys(), self.scale_factor)
     }
 
     /// True when physical-px point `(x, y)` is inside the settings panel rect.
     fn settings_panel_contains(&self, x: f32, y: f32) -> bool {
         let layout = self.settings_panel_layout();
-        x >= layout.left
-            && x <= layout.left + layout.hw * 2.0
-            && y >= layout.top
-            && y <= layout.top + layout.hh * 2.0
+        layout::settings_panel::contains(&layout, ui_model::geometry::Point::new(x, y))
     }
 
     /// True when `(x, y)` is over the panel's close (×) button.
     fn settings_panel_hit_close(&self, x: f32, y: f32) -> bool {
         let layout = self.settings_panel_layout();
-        let s = self.scale_factor;
-        let btn_r = SETTINGS_CLOSE_HALF * s;
-        let bx = layout.left + layout.hw * 2.0 - btn_r * 2.0;
-        let by = layout.top + btn_r * 2.0;
-        let dx = x - bx;
-        let dy = y - by;
-        dx * dx + dy * dy <= btn_r * btn_r
+        layout::settings_panel::hit_close(
+            &layout,
+            self.scale_factor,
+            ui_model::geometry::Point::new(x, y),
+        )
     }
 
     fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
-        if !self.settings_panel_contains(x, y) {
-            return SettingsPressTarget::Outside;
-        }
-        if self.settings_panel_hit_close(x, y) {
-            return SettingsPressTarget::Close;
-        }
-
         let layout = self.settings_panel_layout();
-        let s = self.scale_factor;
-        for (i, category) in SettingsCategory::ALL.iter().copied().enumerate() {
-            let row_top =
-                layout.top + SETTINGS_SIDEBAR_TOP * s + i as f32 * SETTINGS_SIDEBAR_STEP * s;
-            if x >= layout.left + 12.0 * s
-                && x <= layout.right_left - 12.0 * s
-                && y >= row_top
-                && y <= row_top + SETTINGS_SIDEBAR_ROW_H * s
-            {
-                return SettingsPressTarget::Category(category);
-            }
-        }
-
-        if x < layout.right_left {
-            return SettingsPressTarget::Inside;
-        }
-
-        let content_left = layout.right_left + SETTINGS_CONTENT_PAD * s;
-        let content_right = layout.left + layout.hw * 2.0 - SETTINGS_CONTENT_PAD * s;
-        let row_w = content_right - content_left;
-        let row_h = SETTINGS_ROW_H * s;
-        let first_row_top = layout.top + SETTINGS_CONTENT_TOP * s;
-
-        match self.settings_category {
-            SettingsCategory::Apps => {
-                let segment_top = first_row_top + 44.0 * s;
-                let segment_h = SETTINGS_SEGMENT_H * s;
-                if y >= segment_top && y <= segment_top + segment_h {
-                    let gap = SETTINGS_SEGMENT_GAP * s;
-                    let each_w = (row_w - gap * 3.0) / 4.0;
-                    for (i, order) in SortOrder::ALL.iter().copied().enumerate() {
-                        let left = content_left + i as f32 * (each_w + gap);
-                        if x >= left && x <= left + each_w {
-                            return SettingsPressTarget::Sort(order);
-                        }
-                    }
-                }
-                let frequent_top = first_row_top + SETTINGS_ROW_STEP * s;
-                if point_in_row(x, y, content_left, frequent_top, row_w, row_h) {
-                    return SettingsPressTarget::FrequentToggle;
-                }
-                let hidden_top = first_row_top + SETTINGS_ROW_STEP * 2.0 * s;
-                if point_in_row(x, y, content_left, hidden_top, row_w, row_h) {
-                    return SettingsPressTarget::Inside;
-                }
-            }
-            SettingsCategory::Search => {
-                if point_in_row(x, y, content_left, first_row_top, row_w, row_h) {
-                    return SettingsPressTarget::SearchHiddenToggle;
-                }
-            }
-            SettingsCategory::System => {
-                if point_in_row(x, y, content_left, first_row_top, row_w, row_h) {
-                    return SettingsPressTarget::ResetCache;
-                }
-                let reset_top = first_row_top + SETTINGS_ROW_STEP * s;
-                if point_in_row(x, y, content_left, reset_top, row_w, row_h) {
-                    return SettingsPressTarget::ResetSettings;
-                }
-            }
-            SettingsCategory::About => {}
-        }
-
-        SettingsPressTarget::Inside
+        let hit = layout::settings_panel::hit_test(
+            &layout,
+            self.scale_factor,
+            settings_category_id(self.settings_category),
+            ui_model::geometry::Point::new(x, y),
+        );
+        settings_press_target_from_layout_hit(hit)
     }
 
     fn handle_settings_click(&mut self, target: SettingsPressTarget) {
@@ -757,11 +769,25 @@ impl App {
         }
 
         let scale = self.scale_factor;
-        let layout = self.settings_panel_layout();
-        let raw_progress = self.settings_panel_progress.clamp(0.0, 1.0);
-        let pop = settings_panel_pop_progress(raw_progress);
-        let visual_scale = 0.935 + 0.065 * pop;
-        let visual_alpha = settings_panel_alpha(raw_progress);
+        let hidden_count = self.registry.hidden().len();
+        let hidden_count_label = format!("{hidden_count} 件");
+        let copy = settings_panel_copy(&hidden_count_label);
+        let model = layout::settings_panel::build_with_copy(
+            layout::settings_panel::SettingsPanelInput {
+                viewport: self.viewport_phys(),
+                scale_factor: scale,
+                category: settings_category_id(self.settings_category),
+                sort_order: sort_order_id(self.settings.sort_order),
+                frequent_apps_enabled: self.settings.frequent_apps_enabled,
+                search_includes_hidden: self.settings.search_includes_hidden,
+                hidden_count,
+                progress: self.settings_panel_progress,
+            },
+            &copy,
+        );
+        let layout = model.layout;
+        let visual_scale = model.visual_scale;
+        let visual_alpha = model.visual_alpha;
 
         let shape = crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
             [layout.cx, layout.cy],
@@ -773,18 +799,17 @@ impl App {
         );
 
         // Close × glyph at the top-right inset.
-        let btn_r = SETTINGS_CLOSE_HALF * scale;
+        let btn_r = layout::settings_panel::CLOSE_HALF * scale;
         let close = control_icon(
             layout.left + layout.hw * 2.0 - btn_r * 2.0,
             layout.top + btn_r * 2.0,
             btn_r,
             bottom_control::KIND_CLOSE,
-            SETTINGS_INK,
+            layout::settings_panel::INK,
         );
 
         let mut instances = Vec::new();
         let mut quads = Vec::new();
-        let hidden_count = self.registry.hidden().len();
         let current_settings = self.settings.clone();
         let current_category = self.settings_category;
 
@@ -799,15 +824,7 @@ impl App {
         instances.push(close);
 
         if let Some(t) = self.text.as_mut() {
-            build_settings_panel_text(
-                t,
-                &layout,
-                scale,
-                current_category,
-                &current_settings,
-                hidden_count,
-                &mut quads,
-            );
+            build_settings_panel_text_views(t, &model.result.render.text, scale, &mut quads);
         }
 
         transform_settings_instances(
@@ -882,9 +899,9 @@ impl App {
     fn step_settings_panel(&mut self, dt: f32) -> bool {
         let target = if self.settings_open { 1.0 } else { 0.0 };
         let duration = if self.settings_open {
-            SETTINGS_PANEL_OPEN_DURATION
+            layout::settings_panel::OPEN_DURATION
         } else {
-            SETTINGS_PANEL_CLOSE_DURATION
+            layout::settings_panel::CLOSE_DURATION
         };
         let before = self.settings_panel_progress;
         self.settings_panel_progress =
@@ -2965,7 +2982,6 @@ impl ApplicationHandler<UserEvent> for App {
                     || settings_animating
                     || springs_animating
                     || self.editing
-                    || self.settings_panel_active()
                 {
                     self.request_redraw();
                 }
@@ -3037,12 +3053,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         // Edit mode keeps redrawing so the wiggle animation advances and the
         // dragged tile tracks the pointer smoothly.
-        if scroller_animating
-            || control_animating
-            || self.editing
-            || long_press_pending
-            || self.settings_panel_active()
-        {
+        if scroller_animating || control_animating || self.editing || long_press_pending {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -3087,24 +3098,8 @@ const DONE_LABEL: &str = "完了";
 
 /// Title shown in the placeholder settings panel.
 const SETTINGS_TITLE: &str = "設定";
-/// Half-size of the placeholder settings panel (logical px), scaled by the
-/// DPI at draw time. Deliberately modest; the real Mac-style panel replaces
-/// this in a follow-up.
-const SETTINGS_PANEL_HALF_W: f32 = 380.0;
-const SETTINGS_PANEL_HALF_H: f32 = 255.0;
-const SETTINGS_PANEL_RADIUS: f32 = 28.0;
 /// Title font for the settings panel.
 const SETTINGS_TITLE_FONT: &str = "Yu Gothic UI";
-const SETTINGS_TITLE_SIZE: f32 = 22.0;
-const SETTINGS_TITLE_LINE: f32 = 26.0;
-/// Radius of the close (×) button glyph at the panel's top-right, in logical px.
-const SETTINGS_CLOSE_HALF: f32 = 10.0;
-const SETTINGS_HEADER_SIZE: f32 = 21.0;
-const SETTINGS_HEADER_LINE: f32 = 28.0;
-const SETTINGS_LABEL_SIZE: f32 = 14.0;
-const SETTINGS_LABEL_LINE: f32 = 20.0;
-const SETTINGS_DETAIL_SIZE: f32 = 12.0;
-const SETTINGS_DETAIL_LINE: f32 = 18.0;
 const SETTINGS_SIDEBAR_W: f32 = 210.0;
 const SETTINGS_SIDEBAR_TOP: f32 = 78.0;
 const SETTINGS_SIDEBAR_ROW_H: f32 = 38.0;
@@ -3115,34 +3110,11 @@ const SETTINGS_ROW_H: f32 = 46.0;
 const SETTINGS_ROW_STEP: f32 = 62.0;
 const SETTINGS_SEGMENT_H: f32 = 32.0;
 const SETTINGS_SEGMENT_GAP: f32 = 8.0;
-const SETTINGS_PANEL_OPEN_DURATION: f32 = 0.28;
-const SETTINGS_PANEL_CLOSE_DURATION: f32 = 0.18;
 const SETTINGS_INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
 const SETTINGS_MUTED: [f32; 4] = [1.0, 1.0, 1.0, 0.58];
 const SETTINGS_DIM: [f32; 4] = [1.0, 1.0, 1.0, 0.34];
 const SETTINGS_ACCENT: [f32; 4] = [0.35, 0.68, 1.0, 0.42];
 const SETTINGS_GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
-
-fn point_in_row(x: f32, y: f32, left: f32, top: f32, width: f32, height: f32) -> bool {
-    x >= left && x <= left + width && y >= top && y <= top + height
-}
-
-fn settings_panel_alpha(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-fn settings_panel_pop_progress(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    if t <= 0.0 {
-        return 0.0;
-    }
-    if t >= 1.0 {
-        return 1.0;
-    }
-    let inv = t - 1.0;
-    1.0 + inv * inv * ((1.45 + 1.0) * inv + 1.45)
-}
 
 fn transform_settings_instances(
     instances: &mut [bottom_control::ControlInstance],
@@ -3399,247 +3371,60 @@ fn settings_row_backgrounds(
     }
 }
 
-fn build_settings_panel_text(
+fn build_settings_panel_text_views(
     t: &mut text::TextRenderer,
-    layout: &SettingsPanelLayout,
+    views: &[ui_model::text::TextView],
     scale: f32,
-    category: SettingsCategory,
-    settings: &Settings,
-    hidden_count: usize,
     quads: &mut Vec<text::GlyphQuad>,
 ) {
-    let panel_right = layout.left + layout.hw * 2.0;
-    let content_left = layout.right_left + SETTINGS_CONTENT_PAD * scale;
-    let content_right = panel_right - SETTINGS_CONTENT_PAD * scale;
-    let first_top = layout.top + SETTINGS_CONTENT_TOP * scale;
-    let row_h = SETTINGS_ROW_H * scale;
-
-    push_text_left(
-        t,
-        quads,
-        SETTINGS_TITLE,
-        layout.left + 24.0 * scale,
-        layout.top + 36.0 * scale,
-        SETTINGS_TITLE_SIZE,
-        SETTINGS_TITLE_LINE,
-        SETTINGS_INK,
-        scale,
-    );
-
-    for (i, item) in SettingsCategory::ALL.iter().copied().enumerate() {
-        let y = layout.top
-            + SETTINGS_SIDEBAR_TOP * scale
-            + i as f32 * SETTINGS_SIDEBAR_STEP * scale
-            + SETTINGS_SIDEBAR_ROW_H * scale * 0.5;
-        push_text_left(
-            t,
-            quads,
-            item.label(),
-            layout.left + 28.0 * scale,
-            y,
-            SETTINGS_LABEL_SIZE,
-            SETTINGS_LABEL_LINE,
-            if item == category {
-                SETTINGS_INK
-            } else {
-                SETTINGS_MUTED
-            },
-            scale,
-        );
-    }
-
-    push_text_left(
-        t,
-        quads,
-        category.label(),
-        content_left,
-        layout.top + 46.0 * scale,
-        SETTINGS_HEADER_SIZE,
-        SETTINGS_HEADER_LINE,
-        SETTINGS_INK,
-        scale,
-    );
-
-    match category {
-        SettingsCategory::Apps => {
-            push_text_left(
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    for view in views {
+        let color = [
+            view.style.color.r,
+            view.style.color.g,
+            view.style.color.b,
+            view.style.color.a,
+        ];
+        let center_y = view.rect.center().y;
+        let line_height = view.rect.height / scale;
+        match view.style.align {
+            ui_model::text::TextAlign::Start => push_text_left(
                 t,
                 quads,
-                "並び順",
-                content_left,
-                first_top + 12.0 * scale,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
+                &view.text,
+                view.rect.x,
+                center_y,
+                view.style.size,
+                line_height,
+                color,
                 scale,
-            );
-            let gap = SETTINGS_SEGMENT_GAP * scale;
-            let row_w = content_right - content_left;
-            let each_w = (row_w - gap * 3.0) / 4.0;
-            let segment_top = first_top + 44.0 * scale;
-            for (i, order) in SortOrder::ALL.iter().copied().enumerate() {
-                let left = content_left + i as f32 * (each_w + gap);
-                let x = if settings.sort_order == order {
-                    left + 30.0 * scale
-                } else {
-                    left + 14.0 * scale
-                };
-                push_text_left(
-                    t,
-                    quads,
-                    order.label(),
-                    x,
-                    segment_top + SETTINGS_SEGMENT_H * scale * 0.5,
-                    SETTINGS_DETAIL_SIZE,
-                    SETTINGS_DETAIL_LINE,
-                    SETTINGS_INK,
-                    scale,
-                );
+            ),
+            ui_model::text::TextAlign::End => push_text_right(
+                t,
+                quads,
+                &view.text,
+                view.rect.x,
+                center_y,
+                view.style.size,
+                line_height,
+                color,
+                scale,
+            ),
+            ui_model::text::TextAlign::Center => {
+                quads.append(&mut t.layout_centered_line(&text::CenteredLineSpec {
+                    text: &view.text,
+                    font_size: view.style.size,
+                    line_height,
+                    family: SETTINGS_TITLE_FONT,
+                    color,
+                    center: (view.rect.center().x, center_y),
+                    scale_factor: scale,
+                }));
             }
-            let frequent_y = first_top + SETTINGS_ROW_STEP * scale + row_h * 0.5;
-            push_text_left(
-                t,
-                quads,
-                "よく使うアプリ",
-                content_left + 16.0 * scale,
-                frequent_y,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
-                scale,
-            );
-            push_text_left(
-                t,
-                quads,
-                "ホーム画面に表示するための準備設定",
-                content_left + 16.0 * scale,
-                frequent_y + 16.0 * scale,
-                SETTINGS_DETAIL_SIZE,
-                SETTINGS_DETAIL_LINE,
-                SETTINGS_MUTED,
-                scale,
-            );
-            let hidden_y = first_top + SETTINGS_ROW_STEP * 2.0 * scale + row_h * 0.5;
-            push_text_left(
-                t,
-                quads,
-                "非表示アプリ",
-                content_left + 16.0 * scale,
-                hidden_y,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
-                scale,
-            );
-            push_text_right(
-                t,
-                quads,
-                &format!("{hidden_count} 件"),
-                content_right - 32.0 * scale,
-                hidden_y,
-                SETTINGS_DETAIL_SIZE,
-                SETTINGS_DETAIL_LINE,
-                SETTINGS_MUTED,
-                scale,
-            );
-        }
-        SettingsCategory::Search => {
-            let y = first_top + row_h * 0.5;
-            push_text_left(
-                t,
-                quads,
-                "検索時に非表示アプリを含める",
-                content_left + 16.0 * scale,
-                y,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
-                scale,
-            );
-            push_text_left(
-                t,
-                quads,
-                "検索中だけ、隠したアプリも結果に表示します",
-                content_left + 16.0 * scale,
-                y + 16.0 * scale,
-                SETTINGS_DETAIL_SIZE,
-                SETTINGS_DETAIL_LINE,
-                SETTINGS_MUTED,
-                scale,
-            );
-        }
-        SettingsCategory::System => {
-            let y0 = first_top + row_h * 0.5;
-            push_text_left(
-                t,
-                quads,
-                "キャッシュをリセット",
-                content_left + 16.0 * scale,
-                y0,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
-                scale,
-            );
-            push_text_left(
-                t,
-                quads,
-                "アイコンを再抽出します",
-                content_left + 16.0 * scale,
-                y0 + 16.0 * scale,
-                SETTINGS_DETAIL_SIZE,
-                SETTINGS_DETAIL_LINE,
-                SETTINGS_MUTED,
-                scale,
-            );
-            let y1 = first_top + SETTINGS_ROW_STEP * scale + row_h * 0.5;
-            push_text_left(
-                t,
-                quads,
-                "設定をリセット",
-                content_left + 16.0 * scale,
-                y1,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
-                scale,
-            );
-            push_text_left(
-                t,
-                quads,
-                "並び順、非表示、設定値を初期状態に戻します",
-                content_left + 16.0 * scale,
-                y1 + 16.0 * scale,
-                SETTINGS_DETAIL_SIZE,
-                SETTINGS_DETAIL_LINE,
-                SETTINGS_MUTED,
-                scale,
-            );
-        }
-        SettingsCategory::About => {
-            let y = first_top + row_h * 0.5;
-            push_text_left(
-                t,
-                quads,
-                "バージョン",
-                content_left + 16.0 * scale,
-                y,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_INK,
-                scale,
-            );
-            push_text_right(
-                t,
-                quads,
-                env!("CARGO_PKG_VERSION"),
-                content_right - 16.0 * scale,
-                y,
-                SETTINGS_LABEL_SIZE,
-                SETTINGS_LABEL_LINE,
-                SETTINGS_MUTED,
-                scale,
-            );
         }
     }
 }

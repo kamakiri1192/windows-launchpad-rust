@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 description = "A GPU-accelerated, macOS Launchpad-style app launcher for Windows."
+default-run = "launchpad-windows"
 
 [dependencies]
 wgpu = "29"

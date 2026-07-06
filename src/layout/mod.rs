@@ -1,4 +1,5 @@
 pub mod hit_map;
+pub mod settings_panel;
 
 use crate::layout::hit_map::HitMap;
 use crate::ui_model::render_model::RenderModel;

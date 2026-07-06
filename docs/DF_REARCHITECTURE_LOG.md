@@ -261,3 +261,80 @@ Notes and discoveries:
 - Future slices should not treat unused model types as complete. A model is
   considered validated only after a current feature uses it end to end and
   passes the relevant screen checks.
+
+### 2026-07-06: Phase 0/1, settings overlay vertical slice
+
+Files changed:
+
+- `docs/DF_CURRENT_BEHAVIOR_INVENTORY.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+- `Cargo.toml`
+- `src/layout/mod.rs`
+- `src/layout/settings_panel.rs`
+- `src/main.rs`
+
+What changed:
+
+- Added a current-behavior inventory document and recorded the settings overlay
+  behavior that this slice must preserve.
+- Added `layout::settings_panel` as the first vertical-slice layout module.
+- Moved settings panel geometry, text placement, hit classification, modal
+  backdrop intent, animation alpha/pop helpers, and a settings `LayoutResult`
+  builder into the layout layer.
+- Connected `main.rs` settings hit-testing to `layout::settings_panel` instead
+  of duplicating panel and row geometry locally.
+- Connected `main.rs` settings render preparation to the settings layout model
+  for panel geometry, text views, and animation values, then adapted the result
+  back into the existing renderer upload path.
+- Added `default-run = "launchpad-windows"` so the documented
+  `cargo run --release` verification command runs the launcher binary in this
+  multi-bin crate.
+- Preserved the main-branch GPU fix for settings overlay redraws by keeping
+  `settings_panel_active()` out of the steady-state redraw gates.
+- Added deterministic tests for settings panel geometry, close/category/action
+  hit targets, text view placement, modal backdrop z-order, and animation
+  helper endpoints.
+
+Behavior preservation:
+
+- Existing settings state mutation and side effects remain in `main.rs`.
+- Existing renderer methods, GPU instance structs, text glyph generation, and
+  settings strings remain unchanged.
+- Outside settings clicks are still modal dismiss clicks and are explicitly
+  separate from launcher click passthrough.
+- This slice intentionally keeps `ControlInstance` and `GlyphQuad` generation as
+  adapter code in `main.rs` so visual rendering remains behavior-preserving
+  while layout/hit/text placement moves behind the new boundary.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: passed
+- `cargo clippy --all-targets --all-features`: passed
+- `cargo run --release`: passed with the documented screenshot environment
+  (`LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`, and temporary
+  `LOCALAPPDATA`).
+- Screen Verification Gate:
+  - first frame non-blank: verified in `target/qa-settings-initial.png`;
+  - settings overlay open: verified through tray Settings command in
+    `target/qa-settings-open.png`;
+  - settings category switching: verified for Apps, Search, System, and About
+    with `WM_MOUSEMOVE` + click messages and captured screenshots;
+  - outside modal click closes settings: verified in
+    `target/qa-settings-closed-outside.png`;
+  - sort/toggle/reset rows: hit intents are covered by deterministic tests and
+    the rows are visible in screenshots, but automated coordinate injection was
+    not stable enough to claim full visual click verification for every row.
+
+Notes and discoveries:
+
+- A complete vertical slice does not require finishing the renderer facade.
+  It can adapt `LayoutResult` back into current renderer upload calls as long
+  as the source geometry and hit regions come from the new layout boundary.
+- Localized text strings remain provided by `main.rs`/`settings.rs`, while
+  settings text placement now comes from `layout::settings_panel::TextView`
+  output. A later text-focused slice can move string ownership if localization
+  or dynamic copy requires it.
+- The app is capture-excluded unless launched with
+  `LAUNCHPAD_ALLOW_SCREENSHOT=1`; this is now documented in `AGENTS.md` via
+  `docs/EDIT_MODE_VISUAL_QA.md`.
