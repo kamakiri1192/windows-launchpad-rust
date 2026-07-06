@@ -1,7 +1,6 @@
 # CI cache strategy
 
-The current CI cache strategy uses GitHub Actions cache only. R2-backed
-`sccache` is not configured in the workflows.
+The current CI cache strategy uses GitHub Actions cache.
 
 There are two cache layers:
 
@@ -151,26 +150,6 @@ cargo build --release --locked --target $env:TARGET
 
 The cache path is the whole `target/` directory, but the key family keeps debug
 and release cache entries separate.
-
-## R2 and sccache
-
-R2-backed `sccache` is intentionally not part of the current workflow state.
-
-The workflows do not set:
-
-- `RUSTC_WRAPPER`
-- `SCCACHE_BUCKET`
-- `SCCACHE_REGION`
-- `SCCACHE_ENDPOINT`
-- `SCCACHE_S3_KEY_PREFIX`
-- `CARGO_INCREMENTAL=0` for sccache
-
-There are also no required `R2_*` repository variables or secrets for CI.
-
-If R2 `sccache` is reintroduced later, this document should be updated together
-with the workflow changes. The important design question then is whether the
-extra shared compiler-output layer is worth the operational cost and cache
-maintenance complexity.
 
 ## When to change the key
 
