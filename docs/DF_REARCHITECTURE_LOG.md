@@ -315,9 +315,9 @@ Validation:
   (`LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`, and temporary
   `LOCALAPPDATA`).
 - Screen Verification Gate:
-  - first frame non-blank: verified in `target/qa-settings-initial.png`;
+  - first frame non-blank: verified in `target/qa-final-initial.png`;
   - settings overlay open: verified through tray Settings command in
-    `target/qa-settings-open.png`;
+    `target/qa-final-settings-open.png`;
   - settings category switching: verified for Apps, Search, System, and About
     with `WM_MOUSEMOVE` + click messages and captured screenshots;
   - outside modal click closes settings: verified in
