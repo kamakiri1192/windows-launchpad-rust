@@ -218,3 +218,46 @@ Notes and discoveries:
   replaying the left click through the Windows platform adapter. Modal
   backdrops, such as settings overlay outside clicks, should use
   `ModalDismiss` and must not replay the click to the underlying app.
+
+### 2026-07-06: Migration plan rebuilt around vertical slices
+
+Files changed:
+
+- `docs/DF_REARCHITECTURE_PLAN.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Replaced the old horizontal phase ordering with behavior-preserving vertical
+  slices.
+- Made current-behavior inventory an explicit prerequisite for each extraction
+  slice.
+- Moved the first real validation target to the settings overlay, because it
+  has contained rendering, hit-testing, modal backdrop behavior, persistence
+  commands, and screen-verifiable UI behavior.
+- Reframed `AppAction` / `AppCommand` as something introduced narrowly inside
+  vertical slices before being consolidated into a general app shell.
+- Deferred renderer facade splitting until multiple real UI slices have proven
+  the `RenderModel` shape.
+- Moved folders later, after grid, edit-mode, action/command, and renderer
+  boundaries have been validated against current behavior.
+
+Behavior preservation:
+
+- This entry changes planning documentation only.
+- No Rust code, runtime wiring, rendering, input handling, shaders, or GPU
+  resources were changed.
+
+Validation:
+
+- Cargo validation was not run for this documentation-only planning change.
+- Screen Verification Gate: not required because this entry only revises the
+  migration plan and does not affect runtime UI behavior.
+
+Notes and discoveries:
+
+- The previous plan put `ui_model` and `HitMap` ahead of a real UI slice, which
+  made the model easy to detach from current behavior.
+- Future slices should not treat unused model types as complete. A model is
+  considered validated only after a current feature uses it end to end and
+  passes the relevant screen checks.

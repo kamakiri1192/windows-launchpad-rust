@@ -1,6 +1,6 @@
 # DF Rearchitecture Plan
 
-Status: proposed migration plan.
+Status: revised migration plan.
 
 DF means Dynamic Feature-ready. The goal is to support folders, dynamically
 resized Liquid Glass surfaces, labels, overlays, and animation without pushing
@@ -336,72 +336,181 @@ render branches.
 
 ## Migration Plan
 
-Each phase should compile and preserve behavior. Prefer small moves with tests
-over a single large reorganization.
+The migration should proceed as behavior-preserving vertical slices, not as
+large horizontal "add types first, wire later" phases. A model that has not
+been checked against current behavior is provisional. Each phase below must
+start from the current implementation, describe the exact behavior it preserves,
+then move one user-visible slice behind the new boundary.
 
-### Phase 0: Architecture Guardrails
+Each phase should compile, preserve behavior, and leave the app in a usable
+state. Prefer one completed vertical slice over broad unused abstractions.
+
+### Phase 0: Guardrails and Behavior Inventory
 
 - Keep [../ARCHITECTURE.md](../ARCHITECTURE.md) focused on the target
   architecture.
-- Keep this document focused on migration.
+- Keep this document focused on migration order and slice rules.
+- Build and maintain a current-behavior inventory before extracting a feature:
+  visible primitives, hit regions, press/release rules, drag rules, side
+  effects, persistence, and platform behavior.
+- Treat any renderer-neutral model as incomplete until at least one current
+  UI slice uses it end to end.
 - When touching a bloated area, extract toward a planned boundary instead of
   adding unrelated code to `main.rs`.
 
-### Phase 1: Add UI Model and Hit-Map Types
+### Phase 1: Settings Overlay Vertical Slice
 
-- Introduce `src/ui_model/` with geometry, ids, render primitives, and hit
-  targets.
-- Introduce `src/layout/hit_map.rs`.
-- Keep current rendering behavior, but start building selected UI pieces
-  through `LayoutResult`.
-- Add unit tests for hit ordering and rect containment.
+Use the settings overlay as the first real validation case because it is
+contained, modal, currently rendered from `main.rs`, and has meaningful hit
+behavior.
 
-### Phase 2: Extract Settings Panel
+- Inventory current settings behavior:
+  - open from gear/tray and close by close button or outside modal click;
+  - outside modal click must not replay input to the underlying app;
+  - category switching;
+  - sort segment behavior, including name sort resetting manual order;
+  - frequent-apps and search-hidden toggles;
+  - reset icon cache and reset settings actions;
+  - panel animation alpha/scale and close behavior.
+- Introduce or refine typed settings intents as needed. Avoid untyped string
+  targets when a current setting action has a durable meaning.
+- Move settings panel geometry, text placement, control instances, glass
+  surface, and hit regions into `layout/settings_panel.rs`.
+- Emit one `LayoutResult` for the settings overlay: `RenderModel` primitives
+  and `HitMap` regions must come from the same rect calculations.
+- Add a narrow settings-only `AppAction` / `AppCommand` path if needed to
+  preserve behavior clearly. Do not wait for a global app-shell extraction.
+- Keep renderer changes adapter-like: it is acceptable for this phase to
+  translate settings `RenderModel` primitives back into existing renderer
+  upload calls rather than completing the full renderer facade.
+- Add tests for settings geometry, hit ordering, click intents, and settings
+  side-effect commands.
+- Run the Screen Verification Gate for settings.
 
-- Move settings panel layout constants, hit-testing, text generation, and
-  control instances out of `main.rs`.
-- Target files: `features/settings/`, `layout/settings_panel.rs`.
-- Keep `settings.rs` as the persisted settings domain model.
-- Add tests for settings hit targets and animation alpha/geometry.
+### Phase 2: Bottom Control and Search Vertical Slice
 
-### Phase 3: Introduce AppAction/AppCommand
+Move the bottom control and search field behind the same boundaries validated
+by settings.
 
-- Add `app/event.rs`, `app/input.rs`, `app/update.rs`, and `app/command.rs`.
-- Convert a narrow slice first, such as settings open/close or search input.
-- Keep winit `ApplicationHandler` in the app shell, but shrink the match arms.
-- Side effects should leave feature code as `AppCommand`.
+- Inventory current bottom-control behavior:
+  - search pill, page indicator, search field, close button, caret, preedit;
+  - page-change indicator timing;
+  - IME enable/disable and cursor area;
+  - search text entry, backspace, left/right, Esc, IME commit/preedit;
+  - search filtering and empty-query behavior;
+  - edit-mode Done and settings gear visual/hit behavior.
+- Move bottom-control geometry and hit regions into `layout/bottom_control.rs`.
+- Move search query behavior into `features/search/` only as far as the slice
+  needs; preserve existing filtering.
+- Ensure text roles and measurement cover query, placeholder, preedit, caret,
+  and control labels.
+- Emit `LayoutResult` for bottom control/search and route pointer/text intents
+  through the narrow action/command path.
+- Add tests for control state transitions, hit targets, text intents, IME
+  state decisions where deterministic, and search matching.
+- Run the Screen Verification Gate for search and bottom control.
 
-### Phase 4: Extract Edit Mode and Search Flow
+### Phase 3: Launcher Grid and Click Passthrough Vertical Slice
 
-- Move long-press, drag, reorder, hide-app, spring animation, and autoscroll
-  behavior into `features/edit_mode/`.
-- Move search query state and filtering into `features/search/`.
-- Ensure both features emit layout-independent actions and commands.
-- Add tests for reorder targets, hidden-app behavior, and search matching.
+Move the main launcher grid layout and click targets behind the model while
+preserving scroll and transparent-area behavior.
 
-### Phase 5: Split Renderer Facade
+- Inventory current grid behavior:
+  - page frame geometry and clipping;
+  - tile, icon, label, placeholder, and app launch hit regions;
+  - transparent-area stationary click hides the launcher and replays a left
+    click to the underlying window;
+  - drag beyond slop becomes scroll instead of launch;
+  - horizontal drag, inertia, snap, rubber-band, resize, and DPI scaling.
+- Move grid visual rects and hit regions into `layout/grid.rs` or an adapter
+  around the current `grid.rs`.
+- Keep stable app launch resolution through `AppId`; release should launch the
+  pressed app id, not whatever moved under the cursor.
+- Represent transparent launcher backdrop separately from modal backdrops so
+  click replay remains explicit.
+- Add focused action/command coverage for app launch, hide, and
+  hide-with-click-passthrough.
+- Add tests for app hit regions, label hit area, empty misses, passthrough
+  intent, scroll-vs-click classification, and DPI-sensitive geometry.
+- Run the Screen Verification Gate for launcher display, resize, scroll/snap,
+  icons/labels, launch hit targets, and click passthrough.
 
-- Keep the public `Renderer` type, but move internals to `renderer/` modules.
+### Phase 4: Edit Mode Vertical Slice
+
+Extract edit-mode behavior after the grid and bottom-control models can express
+the relevant hit regions.
+
+- Inventory current edit-mode behavior:
+  - long press entry;
+  - icon wiggle/lift/drag/reorder;
+  - edit badge hide;
+  - empty-cell drop targets;
+  - edge autoscroll;
+  - Done exit;
+  - settings gear;
+  - persistence of order and hidden apps.
+- Move edit-mode state transitions into `features/edit_mode/`.
+- Ensure layout emits edit badges, dragged icon visual state, edit settings
+  gear, and empty drop-cell hit regions from the same geometry as rendering.
+- Add commands for persistence and redraw requests instead of performing those
+  side effects inside feature logic.
+- Add tests for long-press classification, reorder targets, hidden-app
+  behavior, empty-cell drops, and edge-scroll trigger decisions.
+- Run the Screen Verification Gate for edit mode.
+
+### Phase 5: App Shell Consolidation
+
+Only after several vertical slices have proven the action/command shape, pull
+the common shell out of `main.rs`.
+
+- Add `app/event.rs`, `app/input.rs`, `app/update.rs`, `app/command.rs`, and
+  `app/frame.rs`.
+- Move the already-proven settings/search/grid/edit action and command paths
+  into the app shell modules.
+- Keep `main.rs` as process startup plus event-loop wiring.
+- Keep platform, worker, and renderer side effects at the app boundary.
+- Add tests for action dispatch and command production where deterministic.
+
+### Phase 6: Renderer Facade Split
+
+Split renderer internals after the `RenderModel` has been exercised by real
+settings, bottom-control, grid, and edit-mode slices.
+
+- Keep the public `Renderer` type while moving internals to `renderer/`
+  modules.
 - Replace feature-specific setter growth with `prepare(&RenderModel)` where
-  practical.
+  the model has proven stable.
 - Generalize Liquid Glass shape submission from fixed overlay slots toward a
   list of `GlassSurface` primitives.
-- Preserve shader layouts and add WGSL validation coverage where useful.
+- Keep shader layouts and Rust `#[repr(C)]` structs synchronized.
+- Preserve WGSL validation coverage.
 
-### Phase 6: Introduce Item-Based Launcher Domain
+### Phase 7: Item-Based Launcher Domain
+
+Introduce folders only after the grid and interaction boundaries are stable.
 
 - Add `LauncherItem`, `FolderId`, and `Folder`.
-- Change grid layout from app-only to item-based.
-- Keep app launch resolution through stable `AppId`.
+- Change grid layout from app-only to item-based without changing app launch
+  resolution through stable `AppId`.
 - Persist item order and folders separately from discovered app registry data.
+- Ensure refresh/removal behavior does not corrupt user-owned order or folder
+  membership.
+- Add tests for item ordering, app removal, app launch resolution, and
+  persistence boundaries.
 
-### Phase 7: Build Folders on the New Boundary
+### Phase 8: Folder Feature Vertical Slice
 
-- Implement folder open/close as a feature state change.
-- Implement folder panel layout using dynamic `GlassSurface` and `TextView`
-  primitives.
-- Implement drag-to-create and drag-into-folder using `HitMap` targets.
+Build folders as the feature that validates the full target architecture.
+
+- Implement folder open/close as feature state.
+- Implement folder panel layout using dynamic `GlassSurface`, `TextView`,
+  child icon/label primitives, and hit regions.
+- Implement folder rename and child ordering.
+- Implement drag-to-create and drag-into-folder using `HitMap` regions and
+  edit-mode intents.
 - Validate that the renderer receives no folder-specific concepts.
+- Run the Screen Verification Gate for folder open/close, rename, dragging,
+  labels, and animation.
 
 ## Context Budget Rules
 
