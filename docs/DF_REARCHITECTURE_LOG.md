@@ -162,8 +162,8 @@ What changed:
 - Added `ui_model::hit::HitTarget` for semantic pointer targets.
 - Added `ui_model::render_model::RenderModel` and initial primitive view
   structs for glass, tiles, icons, text, and controls.
-- Added `ui_model::text` with `TextView`, `TextStyle`, `TextMetrics`, and the
-  `TextMeasurer` trait planned for layout tests.
+- Added `ui_model::text` with `TextView`, `TextStyle`, semantic `TextRole`,
+  `TextMetrics`, and the `TextMeasurer` trait planned for layout tests.
 - Added unit tests for hit ordering, rect containment behavior through the hit
   map, same-z tie-breaking, push order, and empty render models.
 
@@ -194,3 +194,7 @@ Notes and discoveries:
 - `HitMap` intentionally stores regions in insertion order and uses that order
   as the same-z tie-breaker. This gives layout builders predictable layering
   without requiring every small overlay affordance to invent a unique z value.
+- `TextStyle` carries a semantic `TextRole` instead of concrete font-family
+  names. Later runtime wiring should map roles such as app labels, controls,
+  settings rows, and folder labels to the existing text renderer's concrete
+  font/fallback choices without making layout depend on `cosmic-text` details.
