@@ -1,98 +1,165 @@
 # CI cache strategy
 
-The CI workflows use two cache layers:
+The current CI cache strategy uses GitHub Actions cache only. R2-backed
+`sccache` is not configured in the workflows.
 
-1. GitHub Actions cache stores each workflow's Rust `target/` directory for an exact source snapshot.
-2. Cloudflare R2-backed `sccache` is enabled whenever R2 is configured.
+There are two cache layers:
 
-This keeps normal reruns fast with GitHub cache while still letting R2 collect compiler outputs from any compile work that remains. R2 is the shared layer that crosses PR checks, PR review binaries, and release builds.
+1. `actions/cache` stores the Rust `target/` directory for debug and release
+   jobs.
+2. `Swatinem/rust-cache` stores Cargo registry and git source caches, with
+   `cache-targets: false` so it does not also cache `target/`.
 
-## Why this exists
+The goal is to keep repeated CI runs fast without maintaining external cache
+infrastructure.
 
-GitHub Actions cache is useful for Cargo registry and git source caches, but it is scoped by branch and pull request refs. That makes it hard for one pull request to warm the build cache for another pull request.
+## Workflows
 
-`sccache` keys compiler outputs by the actual compiler inputs instead of the pull request number, so the same dependency crate can be reused across PRs when the Rust version, target, and compiler flags match.
+These workflows share the same cache pattern:
+
+- `.github/workflows/pr-ci.yml`
+- `.github/workflows/main-ci.yml`
+- `.github/workflows/pr-binary.yml`
+- `.github/workflows/release-assets.yml`
+
+Debug checks use the `windows-target-debug-...` cache family:
+
+- `pr-ci.yml`
+- `main-ci.yml` job `debug-checks`
+
+Release binary builds use the `windows-target-release-...` cache family:
+
+- `main-ci.yml` job `release-build`
+- `pr-binary.yml`
+- `release-assets.yml`
+
+The cache keys are intentionally byte-identical between matching workflow
+families so one workflow can reuse cache entries warmed by another workflow
+when GitHub's cache scoping allows it.
+
+## Target cache key
+
+The `target/` cache key includes:
+
+- profile family: `debug` or `release`
+- target triple: `x86_64-pc-windows-msvc`
+- Rust version: `1.89.0`
+- hash of build inputs:
+  - `Cargo.toml`
+  - `Cargo.lock`
+  - `build.rs`
+  - `src/**/*.rs`
+  - `src/**/*.wgsl`
+  - `assets/shaders/**/*.wgsl`
+
+Example key shape:
+
+```text
+windows-target-debug-x86_64-pc-windows-msvc-rust-1.89.0-${hashFiles(...)}
+windows-target-release-x86_64-pc-windows-msvc-rust-1.89.0-${hashFiles(...)}
+```
+
+The restore key omits only the input hash:
+
+```text
+windows-target-debug-x86_64-pc-windows-msvc-rust-1.89.0-
+windows-target-release-x86_64-pc-windows-msvc-rust-1.89.0-
+```
+
+That lets GitHub restore the nearest older cache for the same Rust version,
+target, and profile family when the exact source hash has not been cached yet.
 
 ## Cache flow
 
-1. Restore `target/` from GitHub Actions cache using a key derived from the Rust version, target triple, source files, and shaders.
-2. Enable R2 `sccache` when the repository variables and secrets are configured.
-3. If the GitHub key is an exact hit, Cargo should have little compiler work left, so R2 operations stay small.
-4. Run formatting, Clippy, tests, and build.
-5. On success, save the current `target/` directory back to GitHub Actions cache under the exact source key.
+Each job follows the same order:
 
-R2 uploads happen during Cargo commands, not in a separate upload step. When `RUSTC_WRAPPER=sccache` is active, `sccache` reads and writes compiler outputs while `cargo clippy`, `cargo test`, or `cargo build` invokes `rustc`.
+1. Check out the repository.
+2. Install Rust `1.89.0`.
+3. Restore the GitHub `target/` cache.
+4. Restore Cargo registry and git source caches through `Swatinem/rust-cache`.
+5. Run the job's Cargo commands.
+6. If the job succeeded and the initial `target/` restore was not an exact hit,
+   do a lookup-only restore for the primary key.
+7. Save `target/` under the primary key only when that key still does not exist.
 
-The second run of the same source snapshot should hit the workflow's GitHub target cache. R2 still stays enabled, but it only reads or writes for compiler work that Cargo actually performs.
+The lookup-only step avoids most duplicate-save failures caused by another job
+or workflow already creating the immutable GitHub cache entry.
 
-## R2 cache layout
+## Cargo source cache
 
-The R2 `sccache` prefixes intentionally do not include a PR number, branch name, tag, or workflow name:
+`Swatinem/rust-cache@v2` is configured with:
 
-- `windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug`
-- `windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release`
-
-This is what allows cache hits across PR checks, review binary builds, and release builds when the compiler inputs match. Debug and release builds use separate prefixes because their compiler flags differ.
-
-## Required repository settings
-
-Set these repository variables:
-
-- `R2_ACCOUNT_ID`: Cloudflare account ID.
-- `R2_SCCACHE_BUCKET`: R2 bucket name used by sccache.
-
-Set these repository secrets:
-
-- `R2_ACCESS_KEY_ID`: R2 API token access key ID.
-- `R2_SECRET_ACCESS_KEY`: R2 API token secret access key.
-
-The R2 API token needs object read/write access to the bucket.
-
-## R2 sccache behavior
-
-When enabled, the workflow configures `sccache` for Cloudflare R2:
-
-- `SCCACHE_BUCKET=${R2_SCCACHE_BUCKET}`
-- `SCCACHE_REGION=auto`
-- `SCCACHE_ENDPOINT=https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
-- `SCCACHE_S3_KEY_PREFIX=windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/<profile>/`
-- `SCCACHE_S3_USE_SSL=true`
-- `SCCACHE_IGNORE_SERVER_IO_ERROR=1`
-
-`SCCACHE_IGNORE_SERVER_IO_ERROR=1` keeps CI builds working if R2 is temporarily unavailable.
-
-`CARGO_INCREMENTAL=0` is set when R2 sccache is enabled so CI compiler calls are more cacheable.
-
-The shared setup action smoke-tests R2 with `sccache rustc -vV` before enabling `RUSTC_WRAPPER` for the Cargo steps. If R2 credentials or bucket settings are wrong, the workflow logs a warning and continues without R2.
-
-## R2 cost controls
-
-Cloudflare R2's Standard storage free tier includes 10 GB-month of storage, 1 million Class A operations, 10 million Class B operations, and free egress. The target budget for this repository is lower: keep the combined `debug` and `release` `sccache` prefixes around 4 GiB.
-
-The `.github/workflows/r2-sccache-maintenance.yml` workflow runs daily and can also be run manually. It lists both R2 cache prefixes and deletes the oldest objects until their combined size is below 4 GiB.
-
-Also configure an R2 object lifecycle rule for the same prefix:
-
-- Prefix: `windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/`
-- Prefix: `windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release/`
-- Action: expire objects after 7 days
-
-That lifecycle rule is intentionally short because GitHub Actions cache should handle repeated runs of the same PR commit. R2 is the shared compiler-output layer for cold, changed, or cross-workflow builds.
-
-You can set the rule from the Cloudflare dashboard under the bucket's Object Lifecycle Rules, or with Wrangler:
-
-```powershell
-npx wrangler r2 bucket lifecycle add <bucket-name> launchpad-sccache-7d windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/debug/ --expire-days 7
-npx wrangler r2 bucket lifecycle add <bucket-name> launchpad-sccache-release-7d windows-launchpad-rust/x86_64-pc-windows-msvc/rust-1.89.0/release/ --expire-days 7
+```yaml
+cache-targets: false
 ```
 
-## Checking the cache
+This keeps ownership clear:
 
-After a run, check the `sccache --show-stats` output. Useful numbers are:
+- `actions/cache` owns `target/`.
+- `Swatinem/rust-cache` owns Cargo registry and git source caches.
 
-- cache hits
-- cache misses
-- compile requests
-- non-cacheable calls
+Keeping `target/` out of `Swatinem/rust-cache` prevents overlapping cache
+archives and makes the debug/release target cache keys explicit in the workflow
+files.
 
-If the hit rate is low, check whether the Rust version, target, profile, or feature flags differ between the workflows.
+## Debug and release separation
+
+Debug and release builds use separate cache families because their compiler
+outputs are not interchangeable.
+
+Debug jobs run:
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --locked
+cargo build --locked
+```
+
+Release jobs run:
+
+```powershell
+cargo build --release --locked --target $env:TARGET
+```
+
+The cache path is the whole `target/` directory, but the key family keeps debug
+and release cache entries separate.
+
+## R2 and sccache
+
+R2-backed `sccache` is intentionally not part of the current workflow state.
+
+The workflows do not set:
+
+- `RUSTC_WRAPPER`
+- `SCCACHE_BUCKET`
+- `SCCACHE_REGION`
+- `SCCACHE_ENDPOINT`
+- `SCCACHE_S3_KEY_PREFIX`
+- `CARGO_INCREMENTAL=0` for sccache
+
+There are also no required `R2_*` repository variables or secrets for CI.
+
+If R2 `sccache` is reintroduced later, this document should be updated together
+with the workflow changes. The important design question then is whether the
+extra shared compiler-output layer is worth the operational cost and cache
+maintenance complexity.
+
+## When to change the key
+
+Update the `hashFiles(...)` inputs when a file outside the current set affects
+compiled output. Common examples:
+
+- new shader directories
+- generated Rust sources
+- build-script inputs
+- native resource files consumed by `build.rs`
+
+Update the fixed key parts when changing:
+
+- Rust version
+- target triple
+- debug/release build profile assumptions
+
+Do not add branch names, PR numbers, workflow names, or tags to the cache key
+unless the intent is to stop sharing cache entries across those runs.
