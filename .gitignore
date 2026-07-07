@@ -15,3 +15,10 @@ Desktop.ini
 
 # Local agent/tool settings
 .codex/
+.zcode/
+
+# Local QA helpers / artifacts (see docs/EDIT_MODE_VISUAL_QA.md)
+/run_screenshot_qa.cmd
+/target/qa-*.png
+/target/qa-*.txt
+/target/qa-trigger.txt
