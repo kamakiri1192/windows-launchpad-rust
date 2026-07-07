@@ -338,3 +338,246 @@ Notes and discoveries:
 - The app is capture-excluded unless launched with
   `LAUNCHPAD_ALLOW_SCREENSHOT=1`; this is now documented in `AGENTS.md` via
   `docs/EDIT_MODE_VISUAL_QA.md`.
+
+### 2026-07-07: Phase 2, bottom control and search vertical slice
+
+Files changed:
+
+- `docs/DF_CURRENT_BEHAVIOR_INVENTORY.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+- `src/layout/mod.rs`
+- `src/layout/control_geometry.rs` (new)
+- `src/layout/bottom_control.rs` (new)
+- `src/bottom_control.rs`
+- `src/main.rs`
+
+What changed:
+
+- Added a current-behavior inventory section for the bottom control and search
+  field covering the search pill, page indicator, search field, close button,
+  caret, IME preedit/commit, page-change indicator timing, search text entry,
+  backspace/left/right/Esc, search filtering/empty-query, and edit-mode
+  Done/settings gear.
+- Added `layout::control_geometry` as the pure geometry layer for the morphing
+  bottom-center control. It owns the renderer-neutral types (`Mode`, `Visual`,
+  `ControlLayer`, `ControlGeometry`, `EditWidth`, `EditGearGeometry`,
+  `ControlState`), the tunable constants, and the pure resolve/hit-test/gear
+  helpers. This module compiles as part of the library target so the Phase 2
+  layout layer can be unit-tested without the binary.
+- Added `layout::bottom_control` as the Phase 2 layout boundary. It builds a
+  `BottomControlInput` snapshot into a `BottomControlModel` that carries the
+  capsule/gear/close geometry snapshot plus a `LayoutResult` (`HitMap`). A
+  narrow `BottomControlPointerIntent` enum (`None`/`Capsule`/`CloseButton`/
+  `EditGear`) classifies a pointer point through the hit map so `main.rs`
+  dispatches clicks via intent instead of duplicating capsule/gear/close
+  geometry inline.
+- Reworked `src/bottom_control.rs` so the pure types/constants/functions are
+  re-exported from `layout::control_geometry` while the state machine
+  (`BottomControl`), the GPU-facing overlay builder
+  (`ControlInstance`/`build_overlay_instances`), and the renderer-specific
+  glass-shape helpers (`glass_shape`/`edit_gear_glass_shape`) remain in the
+  binary module. Existing `bottom_control::*` call sites in `main.rs` keep
+  working without path changes.
+- Connected `main.rs` pointer routing to the new layout boundary:
+  - press/release classification now goes through
+    `bottom_control_intent`/`layout::bottom_control::hit_test` instead of the
+    previous inline `control.hit_test_scaled` + `edit_gear_hit` + close-button
+    square test;
+  - `handle_control_click` dispatches by intent (`EditGear` → open settings,
+    `CloseButton` → press_close, `Capsule` → open/close search or exit edit
+    mode);
+  - the release re-test keeps the previous behavior of only counting a click
+    when the release stayed on the capsule body (not the gear), so a press that
+    landed on the gear but drifted off the capsule is still dropped.
+
+Adapters left in place (intentionally not migrated this slice):
+
+- `render_bottom_control`, `render_gear`, `self_layout_control_text`,
+  `update_ime_state`, `control_caret_screen_x`, `frame_control_cy`, and
+  `resolve_control` remain in `main.rs` unchanged. They still call the existing
+  `BottomControl` resolve/hit methods, which now delegate to the pure
+  `layout::control_geometry` functions.
+- The caret/preedit X positions depend on per-frame cosmic-text measurement of
+  `query + preedit`, so the render model is not promoted to `RenderModel`
+  primitives this slice. Layout produces the hit map and the geometry snapshot;
+  `main.rs` adapts the geometry into the existing renderer upload path.
+- `ControlInstance`, KIND constants, and `build_overlay_instances` stay in the
+  binary `bottom_control` module because they are GPU-facing and also used by
+  the settings overlay.
+
+Behavior preservation:
+
+- The `BottomControl` state machine, IME handling, caret blink, page indicator
+  timing, search query/preedit handling, and search filtering are unchanged.
+- `render_bottom_control`/`render_gear` still feed the exact same geometry into
+  the renderer; the capsule, gear, and close-button X positions come from the
+  same resolve/edit-gear/close-button calculations (now shared with the hit
+  map).
+- The hit capsule keeps the non-edit-width `resolve_scaled` shape (the previous
+  `hit_test_scaled` behavior), so the hit region is the full pill width even in
+  edit mode while the rendered Done capsule is narrower.
+- The close-button hit region keeps the square shape
+  (`12.0 * scale.max(1.0)` half-size) and the gear keeps its circle test.
+- The release-path gear re-test behavior is preserved: a press on the gear
+  whose release drifts off the capsule shape is dropped, matching the previous
+  `hit_test_scaled`-only release re-test.
+- Esc/Backspace/Left/Right/preedit/commit routing and the
+  `search_input_changed` choke point are untouched.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 225 lib + 65 bin + 2 WGSL validation, all passed
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `cargo run --release` with `LAUNCHPAD_ALLOW_SCREENSHOT=1`,
+  `LAUNCHPAD_DEBUG=1`, and a temporary `LOCALAPPDATA`:
+  - first frame non-blank: verified — center pixel (640,400) reads dark
+    background, the bottom-control capsule reads the Liquid Glass tint
+    (≈157,197,242 at the pill center), and a 10px-grid sample reports 3103
+    unique colors, consistent with a fully painted launcher (tiles, icons,
+    capsule);
+  - search pill / bottom control drawn at bottom-center: verified in the same
+    screenshot row scan.
+
+Screen verification:
+
+- Launched with `cargo run --release` (via release exe with the documented
+  screenshot environment): yes
+- First frame non-blank: yes (pixel-sampled; 3103 unique colors, Liquid Glass
+  capsule tint present at the bottom-center)
+- Search open/close (interactive click): not verified — the sandbox foreground
+  lock refused `SetForegroundWindow` for the click automation, so an
+  interactive click-then-capture cycle could not be completed
+- Search text entry / IME commit / preedit: not verified — same foreground
+  lock blocker; these paths are unchanged code, covered by deterministic
+  tests
+- Filtering: not verified on screen (unchanged code; covered by existing
+  `matches_search` tests)
+- Page indicator: not verified on screen (unchanged code)
+- Edit mode Done / settings gear hit behavior: not verified on screen;
+  deterministic tests cover the gear/close/Done intent classification and the
+  edit-mode capsule-width preservation
+- Resize / DPI-sensitive layout: not verified on screen; geometry scaling is
+  covered by unit tests (`geometry_scales_with_dpi`,
+  `close_region_scales_with_dpi`)
+
+Notes and discoveries:
+
+- The crate ships both a library and a binary target that share `src/layout/`.
+  `layout::settings_panel` compiled standalone in Phase 1 because it had no
+  binary-only dependencies; the bottom-control geometry originally lived in
+  `src/bottom_control.rs` alongside `ControlInstance` (which references
+  `wgpu`), so it could not be referenced from the library target as-is.
+  Extracting the pure types/constants/functions into
+  `layout::control_geometry` was necessary to let `layout::bottom_control`
+  compile as part of the library and to keep `cargo test --lib` green.
+- The caret X depends on a per-frame cosmic-text measurement of
+  `query + preedit`, so it cannot move into the render model without either
+  threading a `TextMeasurer` through layout or duplicating the measurement.
+  This slice keeps the measurement in `main.rs` and only owns the hit map +
+  geometry snapshot in layout, matching the Phase 1 "adapt `LayoutResult` back
+  into the existing renderer" guidance.
+- `edit_gear_glass_shape` and `glass_shape` build a renderer-specific
+  `GlassShape` (binary `liquid_glass` module) and therefore stay in the binary
+  `bottom_control` module. `layout::control_geometry` only owns numeric
+  geometry.
+- The release-path gear re-test behavior is subtle: the previous code only
+  re-tested the main capsule shape on release, not the gear, so a press on the
+  gear that drifted off the capsule was dropped. The new release re-test calls
+  `bottom_control_capsule_hit` (the same non-edit-width capsule shape test the
+  previous `hit_test_scaled` used) so a press on the capsule/gear overlap
+  reaches `handle_control_click`, which then resolves the gear via the intent.
+  A press that drifts off the capsule entirely is still dropped.
+
+### 2026-07-07: Phase 2 codex review and pointer-dispatch fixes
+
+Files changed:
+
+- `src/main.rs`
+- `src/layout/bottom_control.rs`
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+What changed:
+
+- Ran `codex review --base main` against PR #80. Two P2 correctness findings:
+  1. The initial release gate only allowed `Capsule`/`CloseButton` intents
+     through, which dropped a click on the edit-mode settings gear that sits on
+     the capsule/gear overlap (gear left edge ≈688 < capsule right edge ≈699).
+     Fixed by re-testing the capsule shape directly
+     (`bottom_control_capsule_hit`, equivalent to the original
+     `hit_test_scaled`) on release, so a press on the overlap reaches
+     `handle_control_click`, which resolves the gear via the intent.
+  2. When search was open and the user long-pressed into edit mode, the field's
+     close-button hit region kept emitting even though its visual layers are
+     hidden while `edit_visual_progress > 0`. The original code never evaluated
+     the close button while editing (the edit branch returned first). Fixed by
+     suppressing the close region in `layout::bottom_control` while editing
+     *and* handling the edit branch first in `handle_control_click` so the
+     close intent is unreachable while editing.
+- Added `close_region_suppressed_in_edit_mode` unit test.
+- Re-ran `codex review --base main`: "No actionable correctness issues were
+  found in the diff. The refactor preserves the existing bottom-control
+  behavior and the test suite passes."
+
+Behavior preservation:
+
+- The release re-test now uses the exact same capsule-shape test
+  (`hit_test_scaled`, non-edit-width resolve) the original `main.rs` used, so
+  gear-on-overlap clicks dispatch as before and off-capsule releases drop.
+- Edit-mode clicks never reach the close-button path, matching the original
+  early-return edit branch.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 226 lib + 66 bin + 2 WGSL validation, all passed
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `codex review --base main`: no actionable correctness issues after fixes
+
+Screen verification (interactive):
+
+- Could not be completed in this sandbox via foreground-based screen capture.
+  `SetForegroundWindow` intermittently returns false under the sandbox
+  foreground lock, and `CopyFromScreen` then fails with "invalid handle" once
+  foreground is lost. A GPU-side self-capture path was added temporarily
+  (`Renderer.qa_shot` + a `step_qa_auto` timeline driven by
+  `LAUNCHPAD_QA_AUTO`) to capture rendered frames directly from the surface
+  texture without foreground access; it was removed before the final commit so
+  the Phase 2 slice stays clean. The temporary harness produced five
+  screenshots that confirm the UI responds correctly across the bottom-control
+  state machine:
+  - first frame non-blank: confirmed (3103 unique colors on a 10px grid;
+    Liquid Glass capsule tint ≈157,197,242 at the bottom-center);
+  - search open (pill click → `open_search`): the capsule widens to the field
+    shape and the placeholder "検索" glyphs render (white ink pattern in the
+    field text region);
+  - text entry ("calc" via `handle_char` + `search_input_changed`): the grid
+    re-filters (tile-region bright-pixel count changes from 704 to 861 as the
+    layout recomposes for the filtered set);
+  - search closed (`press_close`): the capsule returns to the compact pill;
+  - edit mode (`enter_edit_mode`): the Done capsule "完了" label and the
+    settings-gear glyph both render on the right side of the capsule, and no
+    close-button hotspot is visible (matching the edit-mode close-region
+    suppression).
+  All five captures were 1920×1200 (the DPI-scaled physical window size).
+- IME preedit/commit and resize/DPI were not exercised interactively; the IME
+  path is unchanged code and the DPI-sensitive geometry is covered by unit
+  tests (`geometry_scales_with_dpi`, `close_region_scales_with_dpi`).
+
+Final validation after removing the temporary QA harness:
+
+- `cargo fmt`: passed
+- `cargo test`: 226 lib + 66 bin + 2 WGSL validation, all passed
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+
+Notes and discoveries:
+
+- `codex review --base main` is an effective correctness gate for
+  behavior-preserving refactors of pointer routing; it flagged the gear
+  overlap and the invisible close hotspot that pixel tests could not reach in
+  this sandbox.
+- The edit-mode gear and the capsule body overlap on the right side of the
+  capsule (gear left edge < capsule right edge), so the hit map's z-ordering
+  alone is not enough to preserve the original release behavior; the release
+  gate must test the capsule shape directly rather than the intent.
