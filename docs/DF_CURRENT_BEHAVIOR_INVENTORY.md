@@ -178,3 +178,129 @@ Screen verification required for this slice:
 - Page indicator appears transiently after a page change and retires to the pill.
 - Edit-mode Done capsule and settings gear hit behavior is unchanged.
 - Resize / DPI-sensitive layout keeps the capsule geometry correct.
+
+## Launcher Grid and Click Passthrough
+
+Source before extraction:
+
+- `src/main.rs` (`relayout`, `begin_grid_press`, `pending_press_*` helpers,
+  `pointer_over_page_glass`, `app_index_at_pointer`, `edit_drop_index_at_pointer`,
+  `badge_hit`, `maybe_promote_press_to_drag`, `maybe_long_press_into_edit`,
+  `resolve_clicked_app`, `handle_pointer_release`, `hide_with_click_passthrough`,
+  `grid_apps_owned`, `visible_app_ids`, `matches_search`, the `MouseInput`
+  press/release routing, edge autoscroll zone math)
+- `src/grid.rs` (`GridLayout`, `GridApp`, `TileAnim`, `TileInstance`, the
+  `FRAME_*` / `BASE_TILE_SIZE` / `LABEL_CLICK_EXTRA_*` constants,
+  `frame_panel_rect`, `frame_contains_point`, `hit_test_app`,
+  `hit_test_tile_cell`, `tile_position`, `build_instances`,
+  `build_icon_instances`, `build_labels`, `edit_badge_radius_for_tile_size`)
+- `src/renderer.rs` (`rebuild_instances`, `frame_clip`,
+  `edit_badge_sources`/`animated_badge_center`)
+- `src/liquid_glass/geometry.rs` + `src/liquid_glass/renderer.rs` (page-frame
+  glass shape build from `GridLayout` + `GridApp`)
+- `src/scroll.rs` (`ScrollBounds` — page extent + snap/paging/rubber-band
+  physics)
+
+Current behavior to preserve:
+
+- **Page frame geometry and clipping.** The fixed Liquid Glass page-frame panel
+  is the single source of truth for the rounded-rect clip applied to tiles,
+  icons, and labels. `frame_panel_rect` returns `(center_x, center_y, panel_w,
+  panel_h)` where `panel_w == page_width(viewport_w)` and `panel_h = grid_h() +
+  scaled(FRAME_PADDING_HEIGHT)`. The corner radius is `scaled(FRAME_CORNER_RADIUS)`
+  clamped to `min(half_w, half_h)`.
+- **Page width, scroll bounds, resize, DPI scaling.** `page_width(viewport_w)`
+  is `grid_w() + scaled(FRAME_PADDING_WIDTH)` clamped to
+  `[grid_w(), viewport_w - scaled(FRAME_VIEWPORT_GUTTER)]`, so the page can be
+  narrower than the viewport (pages slide adjacent with a gutter) but never
+  narrower than the grid. `GridLayout::bounds(viewport_w)` produces
+  `ScrollBounds { page_extent: page_width(viewport_w), page_count }`.
+  `with_scale_factor` scales tile_size/gap/row_gap/margin_top/margin_left
+  proportionally (ratio-based, not accumulating).
+- **Tile / icon / label / placeholder visual geometry.** Each cell sits at
+  `x = page * page_w + margin_left + col * (tile_size + gap)`,
+  `y = margin_top + row * (tile_size + row_gap)`. Labels sit below their tile,
+  centered, with `max_width = tile_size + scaled(20.0)` and
+  `y = tile_y + tile_size + scaled(8.0)`. Tiles without an icon UV get a stable
+  per-index HSL color and `icon_index = -1.0` (the shader renders the color
+  fallback). The icon instance list only carries tiles whose app has a UV.
+- **App launch hit regions.** `hit_test_app` returns the visible-stream index
+  under a screen-space pointer. The clickable region **includes the label area**
+  (`LABEL_CLICK_EXTRA_X` / `LABEL_CLICK_EXTRA_Y` slop) because this is an app
+  launcher. The frame rounded-rect clip is applied first: a point outside
+  `frame_contains_point` returns `None` even if it is geometrically over a tile.
+- **Label area click behavior.** A click in the label slop band below a tile
+  resolves to that tile's app (the slop widens the cell rectangle, not a
+  separate target).
+- **Gaps and empty slots.** Points between cells (gaps, inter-page gutters)
+  return `None`. Empty slots past the last visible app return `None` for
+  `hit_test_app` (app-count-bounded) but `Some` for `hit_test_tile_cell`
+  (cell-count-bounded, used by edit-mode drop).
+- **Press-time stable `AppId` launch.** On press, `PendingPress` records the
+  app id under the press (`app_index_at_pointer` → `visible_app_ids()[idx]`).
+  On a stationary release, `pending_press_launch_id` returns that press-time id,
+  not whatever moved under the release point. Launch resolves through
+  `registry.launch_info(id)` which clones `AppLaunchInfo` before dismiss, so a
+  concurrent rescan cannot launch the wrong app. The launcher hides first, then
+  opens the shortcut.
+- **Press target drift does not launch a different app.** Because launch uses
+  the press-time `app_id`, releasing over a different app (or empty space, as
+  long as the gesture stayed within slop) still launches the originally pressed
+  app.
+- **Drag beyond slop becomes scroll, not launch.** A pending press that moves
+  past `CLICK_SLOP_PHYS` is promoted to a scroll drag
+  (`maybe_promote_press_to_drag` → `handle_drag_start`). The scroller owns
+  drag/inertia/snap/rubber-band from there. A press that turned into a drag
+  cannot launch on release.
+- **Transparent-area stationary click → hide + click passthrough.** A press that
+  starts outside the page-frame glass (`outside_glass = !frame_contains_point`)
+  and releases within slop calls `hide_with_click_passthrough`, which hides the
+  launcher and then `platform_windows::replay_left_click_at_cursor()` so the
+  click reaches the underlying window.
+- **Page-frame empty click does NOT passthrough.** A press that starts *inside*
+  the frame but over empty space (gap, past the last app, page gutter) has
+  `outside_glass = false`. A stationary release there neither launches an app
+  nor triggers passthrough — it is swallowed by the launcher.
+- **Pointer precedence: settings > bottom control > grid.** `MouseInput`
+  press/release routing checks the settings overlay first, then the bottom
+  control (`pressed_on_control`), then the grid (`begin_grid_press` /
+  `pending_press`). A press on the bottom control never becomes a scroll drag.
+- **Hidden apps / search results / icon placeholder effect on grid hit.**
+  `visible_app_ids()` filters `registry.apps()` by
+  `(search_includes_hidden && query non-empty) || !is_hidden(id)` and then by
+  `matches_search(name, query)` (case-insensitive AND of whitespace-split
+  substrings; empty query matches all). The hit-test `app_count` is
+  `visible_ids.len()`, so hidden apps and filtered-out apps are unreachable, and
+  pages shrink to the filtered count. Apps whose icon is still loading stay
+  launchable (the color placeholder is shown and the hit region is unchanged).
+
+Current Phase 3 boundary (target):
+
+- `layout/grid.rs` owns the pure grid geometry and hit classification:
+  `GridLayout`, the `FRAME_*` / `BASE_TILE_SIZE` constants, `frame_panel_rect`,
+  `frame_contains_point`, `hit_test_app`, `hit_test_tile_cell`, `tile_position`,
+  `page_extent`, and a `GridHit` classifier that distinguishes app / empty-in-frame
+  / outside-frame in one calculation.
+- `src/grid.rs` stays as a binary adapter: it re-exports `GridLayout`, provides
+  the `ScrollBounds`-returning `bounds()` adapter, and keeps the GPU-facing
+  `TileInstance` / `GridApp` / `TileAnim` and the `build_instances` /
+  `build_icon_instances` / `build_labels` instance builders.
+- `main.rs` routes press/release through the `layout::grid` classifier for
+  `outside_glass` / `app_index` (used to build `PendingPress`), while preserving
+  the press-time `AppId`, slop, launch, and passthrough behavior exactly.
+- The scroller physics (`scroll.rs`), search filtering, bottom control, and
+  settings overlay remain unchanged.
+
+Screen verification required for this slice:
+
+- Launcher opens and first frame is non-blank.
+- Page frame / tiles / icons / labels / placeholders render correctly.
+- An app launch hit target launches the expected app (for a safe target).
+- Transparent-area stationary click hides the launcher and passes the click
+  through to the underlying window.
+- A click inside the page frame but on empty space does NOT passthrough.
+- Horizontal drag / inertia / snap / rubber-band behave as before.
+- A drag beyond slop does not launch.
+- Resize / DPI-sensitive layout keeps grid geometry correct.
+- Search filtering keeps grid hit targets aligned with the filtered set.
+- Settings overlay and bottom control pointer precedence is unchanged.

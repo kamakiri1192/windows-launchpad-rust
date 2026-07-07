@@ -581,3 +581,182 @@ Notes and discoveries:
   capsule (gear left edge < capsule right edge), so the hit map's z-ordering
   alone is not enough to preserve the original release behavior; the release
   gate must test the capsule shape directly rather than the intent.
+
+### 2026-07-07: Phase 3, launcher grid and click passthrough vertical slice
+
+Files changed:
+
+- `docs/DF_CURRENT_BEHAVIOR_INVENTORY.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+- `src/layout/mod.rs`
+- `src/layout/grid.rs` (new)
+- `src/grid.rs`
+- `src/main.rs`
+
+What changed:
+
+- Added a current-behavior inventory section for the launcher grid and click
+  passthrough covering page-frame geometry/clipping, page width/scroll
+  bounds/resize/DPI, tile/icon/label/placeholder visual geometry, app launch
+  hit regions (including the label area slop), gaps and empty slots, the
+  press-time stable `AppId` launch rule, drag-beyond-slop → scroll, the
+  transparent-area stationary click → hide + left-click replay, the
+  page-frame-empty click that must NOT passthrough, the settings > bottom
+  control > grid pointer precedence, and the hidden-app / search-filter effect
+  on grid hit targets.
+- Added `layout::grid` as the Phase 3 pure-geometry library module. It owns
+  `GridLayout` (all `pub` fields), the `FRAME_*` / `BASE_TILE_SIZE` constants,
+  `frame_panel_rect`, `frame_contains_point`, `hit_test_app`,
+  `hit_test_tile_cell`, `tile_position`, `page_width`, `page_extent`,
+  `grid_w`, `grid_h`, `for_app_count`, `with_scale_factor`, `centered`,
+  `total_tiles`, `scaled`, `edit_badge_radius` / `edit_badge_hit_slop`,
+  `edit_badge_radius_for_tile_size`, `app_color`, and `label_rect`. It also
+  adds a unified `GridHit` classifier
+  (`App(usize)` / `EmptyInFrame` / `OutsideFrame`) so press-time routing gets
+  the app / empty-in-frame / outside-frame decision from one calculation.
+  This module compiles as part of the library target and depends only on
+  itself — no `ScrollBounds`, `UvRect`, `TileInstance`, `IconInstance`, or
+  `text::Label`.
+- Shrank `src/grid.rs` into a binary adapter:
+  - re-exports `GridLayout`, `edit_badge_radius_for_tile_size`,
+    `BASE_TILE_SIZE`, and `FRAME_CORNER_RADIUS` from `layout::grid`;
+  - adds the `ScrollBounds`-returning `bounds()` adapter
+    (`page_extent` equals `page_width`, so the produced `ScrollBounds` is
+    identical to the previous in-place construction);
+  - keeps the GPU-facing `TileInstance` (`#[repr(C)]` Pod, wgpu `LAYOUT`),
+    `GridApp<'a>`, and `TileAnim`, and the `build_instances` /
+    `build_icon_instances` / `build_labels` instance builders as `impl
+    GridLayout` extensions that delegate tile placement to the pure
+    `tile_position` / `page_width` helpers.
+- Wired `main.rs` press routing through the layout classifier:
+  `begin_grid_press` now calls `grid_hit_at_pointer` →
+  `GridLayout::classify`, deriving both `app_index` and `outside_glass` from
+  one `GridHit` instead of separate `hit_test_app` + `frame_contains_point`
+  calls. `PendingPress`, the `pending_press_*` helpers, launch resolution,
+  click passthrough, and the settings/bottom-control precedence are unchanged.
+
+Adapters left in place (intentionally not migrated this slice):
+
+- `TileInstance` / `GridApp` / `TileAnim` and the GPU instance builders stay in
+  `src/grid.rs` because they reference `wgpu` (`TileInstance::LAYOUT`) and
+  binary-only types (`UvRect`, `IconInstance`, `text::Label`). This mirrors the
+  Phase 2 split where `layout::control_geometry` owns pure geometry and
+  `src/bottom_control.rs` keeps `ControlInstance` / the `wgpu` glass-shape
+  helpers.
+- `GridLayout::bounds()` stays in the binary adapter because `ScrollBounds`
+  lives in `scroll.rs`, which is a binary-only module. The pure
+  `GridLayout::page_extent` exposes the same value for the library layer.
+- `app_index_at_pointer`, `edit_drop_index_at_pointer`, `pointer_over_page_glass`,
+  `resolve_clicked_app`, `badge_hit`, and the `MouseInput` release branches
+  still call `GridLayout` methods directly. They are behavior-preserving call
+  sites that now resolve to the pure `layout::grid` implementations; promoting
+  every one through the `GridHit` classifier is deferred to keep the slice
+  focused on press-time classification (the path that decided launch vs
+  passthrough vs long-press).
+- `scroll.rs` physics, search filtering, settings overlay, bottom control, and
+  the liquid-glass shape build (`liquid_glass/geometry.rs`,
+  `liquid_glass/renderer.rs`) are untouched; they still consume
+  `GridLayout` + `GridApp` through the `grid::` re-exports.
+
+Behavior preservation:
+
+- Every pure calculation moved to `layout::grid` is the same function body the
+  historical `src/grid.rs` had; only the module path changed.
+- The GPU builders in `src/grid.rs` use the same tile-placement math
+  (`page * page_w + margin_left + col * (tile_size + gap)`,
+  `margin_top + row * (tile_size + row_gap)`) via the pure `tile_position` /
+  `page_width` helpers, so `build_instances` / `build_icon_instances` /
+  `build_labels` produce identical instance buffers.
+- `bounds()` produces `ScrollBounds { page_extent: page_width(viewport_w),
+  page_count }`, exactly matching the previous `ScrollBounds { page_extent:
+  self.page_width(viewport_w), page_count }`.
+- `begin_grid_press` classification is exactly equivalent to the old
+  `app_index_at_pointer` + `!pointer_over_page_glass`: `GridHit::App(i)`
+  ↔ `Some(i)` + `outside_glass=false`; `GridHit::EmptyInFrame` ↔ `None` +
+  `outside_glass=false`; `GridHit::OutsideFrame` ↔ `None` + `outside_glass=true`.
+- Press-time `AppId`, `CLICK_SLOP_PHYS` click classification, the long-press
+  into edit mode, drag promotion, launch-through-stable-`AppId`, and the
+  hide-with-click-passthrough path are unchanged (verified by the existing
+  `pending_press_tests` binary tests and the new `layout::grid` classify
+  tests).
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 236 lib + 66 bin + 2 WGSL validation, all passed (25 new
+  `layout::grid` lib tests covering frame geometry, tile/label rects, app hit
+  regions, label area clicks, gaps/empty misses, rounded-frame clipping,
+  rightmost columns, scroll position, DPI scaling, page extent, and the
+  `GridHit` app / empty-in-frame / outside-frame / search-filter classification)
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `codex review --base main`: "The patch appears to preserve the existing grid
+  behavior while extracting pure layout logic, and the added classifier matches
+  the previous app-hit plus frame-hit routing. Tests and clippy pass without
+  revealing correctness issues." No actionable findings.
+- `cargo run --release` with `LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`,
+  a temporary `LOCALAPPDATA`, and the `LAUNCHPAD_QA_SHOT_FILE` GPU self-capture
+  path: first frame captured to `target/qa-phase3-initial.png` (1920×1200,
+  ≈1 MB). Visual inspection confirms:
+  - non-blank first frame: the launcher renders a centered, semi-transparent
+    Liquid Glass page-frame panel;
+  - a 7×5 grid of app tiles is laid out inside the panel, with app icons drawn
+    inside the tiles and text labels below them;
+  - the bottom-center search/control capsule is present;
+  - page-frame geometry, tile/icon/label placement, and the bottom control all
+    match the pre-refactor appearance.
+
+Screen verification:
+
+- Launched with `cargo run --release` (release exe + documented screenshot
+  environment): yes
+- First frame non-blank: yes (GPU self-capture; centered glass panel, tile grid,
+  icons, labels, and bottom capsule all rendered)
+- Resize / DPI-sensitive layout: not verified on screen this slice; DPI geometry
+  scaling is covered by unit tests (`scaled_layout_keeps_label_hit_area`,
+  `scale_factor_replaces_previous_scale_instead_of_accumulating`,
+  `page_width_clamps_to_grid_width_when_window_is_narrow`). The render path was
+  not changed.
+- Scroll / snap / rubber-band: not verified on screen; `scroll.rs` physics and
+  the scroller wiring are unchanged. `bounds()` adapter equivalence is covered
+  by `bounds_page_extent_equals_page_width` and `page_extent_equals_page_width`.
+- Search / filtering: not verified on screen; search filtering, IME, and the
+  bottom-control state machine are unchanged code. The search-filter effect on
+  hit targets is covered by `classify_respects_app_count_for_search_filtering`.
+- Edit mode: not verified on screen; edit-mode state transitions, badge hit
+  math, and reorder are unchanged code. Edit-badge geometry is covered by
+  `edit_badge_radius_scales_with_layout_scale_factor`.
+- Settings overlay: not verified on screen; settings code paths are unchanged.
+- Icons / labels / launch hit targets: icons and labels verified in the first
+  frame capture; launch hit targets are unchanged code covered by the
+  `layout::grid` app-hit tests and the existing `pending_press_tests`.
+- Click passthrough (transparent area) vs frame-empty (no passthrough): not
+  verified on screen (requires foreground/interactive input); the distinction
+  is covered by `classify_outside_frame_for_passthrough`,
+  `classify_empty_in_frame_for_gap_inside_panel`, and
+  `classify_empty_in_frame_for_empty_slot_inside_panel`.
+
+Notes and discoveries:
+
+- The crate ships both a library (`src/lib.rs`) and a binary (`src/main.rs`)
+  that both compile `src/layout/`. To keep `layout::grid` unit-testable from
+  the library target, it must not depend on binary-only types
+  (`TileInstance`/`IconInstance`/`text::Label`/`ScrollBounds`/`UvRect`). The
+  Phase 2 `control_geometry` / `bottom_control.rs` split established exactly
+  this pattern; Phase 3 reuses it.
+- `GridLayout::bounds()` could not move to the library because
+  `scroll::ScrollBounds` is a binary-only module. The pure
+  `GridLayout::page_extent(viewport_w)` exposes the same value (`page_width`)
+  so the library layer can reason about the scroll stride without the
+  `ScrollBounds` type, and the binary adapter wraps it.
+- The unified `GridHit` classifier is the clean place to fold
+  `frame_contains_point` and `hit_test_app` together: `hit_test_app` already
+  applied the frame clip internally, so `classify` is a behavior-identical
+  re-expression of the existing app/empty/outside decision rather than a new
+  rule. This keeps the launcher-passthrough intent explicit at the press site
+  (`is_outside_frame()`) instead of reconstructing it from two booleans.
+- `app_index_at_pointer`, `edit_drop_index_at_pointer`, `pointer_over_page_glass`,
+  `resolve_clicked_app`, and `badge_hit` still call `GridLayout` methods
+  directly. They now resolve to the pure `layout::grid` implementations through
+  the re-export, so no call-site edits were required for behavior preservation;
+  routing every one through `GridHit` is a later, optional cleanup.
