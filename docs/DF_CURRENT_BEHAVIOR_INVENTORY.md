@@ -304,3 +304,208 @@ Screen verification required for this slice:
 - Resize / DPI-sensitive layout keeps grid geometry correct.
 - Search filtering keeps grid hit targets aligned with the filtered set.
 - Settings overlay and bottom control pointer precedence is unchanged.
+
+## Edit Mode (iOS-style long-press / drag-to-reorder / hide)
+
+Source before extraction:
+
+- `src/main.rs` (`begin_grid_press`, `maybe_long_press_into_edit`,
+  `maybe_promote_press_to_drag`, `enter_edit_mode`, `exit_edit_mode`,
+  `handle_edit_drag_move`, `live_reorder`, `maybe_autoscroll_edit_drag`,
+  `commit_reorder`, `reorder_by_index`, `hide_app`, `edit_drop_index_at_pointer`,
+  `badge_hit`, `edit_anim`, `lift_dragged_instances`, `update_tile_springs`,
+  `apply_spring_positions`, `step_tile_springs`, `refresh_spring_instances`,
+  `step_edit_control_width`, `edit_visual_progress`, the `MouseInput` /
+  `CursorMoved` / `CursorLeft` / `Focused` edit-mode branches, the `LONG_PRESS_THRESHOLD`
+  / `CLICK_SLOP_PHYS` / `EDIT_EDGE_SCROLL_ZONE` constants, the `PendingPress` type)
+- `src/grid.rs` / `src/layout/grid.rs` (`GridLayout::hit_test_tile_cell`,
+  `GridLayout::tile_position`, `GridLayout::edit_badge_radius`,
+  `GridLayout::edit_badge_hit_slop`, `edit_badge_radius_for_tile_size`,
+  `TileAnim` with `FLAG_WIGGLE` / `FLAG_DRAG`)
+- `src/renderer.rs` (badge source geometry, `edit_badge_sources` /
+  `animated_badge_center`, `DrawArgs.drag_active` / `drag_pos` /
+  `time` used by the shader for wiggle)
+- `src/bottom_control.rs` / `src/layout/bottom_control.rs` (edit-mode Done
+  capsule + settings gear, `BottomControlPointerIntent::EditGear`)
+- `src/app_registry.rs` (`set_order`, `hide`, `is_hidden`, `hidden()`, `order()`)
+- `src/settings.rs` (`SortOrder::Manual`)
+
+Current behavior to preserve:
+
+- **Long-press entry.** A grid press that starts *inside* the page-frame Liquid
+  Glass (`outside_glass = false`) and is held for `LONG_PRESS_THRESHOLD`
+  (`Duration::from_millis(500)`) without moving past `CLICK_SLOP_PHYS` (`8.0` px)
+  enters edit mode. A press that starts outside the page glass never long-
+  presses into edit mode (it is the click-passthrough path instead).
+- **Pending press and gesture resolution.** While a press is pending
+  (`PendingPress = Some`), the scroller stays `Idle` — we do not start a scroll
+  drag until the gesture reveals its intent. Resolution order:
+  1. pointer moves past `CLICK_SLOP_PHYS` → promote to a scroll drag
+     (`maybe_promote_press_to_drag` → `handle_drag_start`); the press is dropped
+     and can no longer long-press or launch;
+  2. quick release within slop over a visible app → click → launch the
+     press-time `AppId` (`pending_press_launch_id`);
+  3. quick release within slop over `outside_glass` → hide + click passthrough
+     (`pending_press_is_outside_glass_click` → `hide_with_click_passthrough`);
+  4. held for `LONG_PRESS_THRESHOLD` without moving past slop → enter edit mode.
+- **Edit entry side effects.** On `enter_edit_mode`:
+  - `editing = true` (idempotent — re-entry while already editing only logs on
+    the first transition);
+  - `pending_press = None` (the long-press press is consumed);
+  - `wiggle_phase = 0.0`;
+  - any in-flight scroll is cancelled (`phase = Idle`, `velocity = 0.0`) so the
+    page sits still while editing;
+  - the long-pressed app (if the press was over one) is lifted straight into a
+    drag: `drag_app = visible_ids[app_index]`, `drag_x`/`drag_y` = current
+    pointer;
+  - relayout + redraw requested.
+- **Icon wiggle / dragged icon visuals.** While `editing`, every visible app
+  gets a `TileAnim` with `FLAG_WIGGLE` and a per-app phase offset
+  (`wiggle_phase + i * 0.37`) so icons wobble out of sync. The dragged app (if
+  any) additionally gets `FLAG_DRAG`, `lift = 24.0 * scale.max(1.0)`,
+  `scale = 1.15`. The shader uses `FLAG_DRAG` to bypass the page-frame clip and
+  to follow `drag_pos` instead of the tile's home cell. The dragged tile/icon
+  instance is moved to the end of the GPU instance lists so it draws on top.
+- **Edit badge hide (✕).** Each tile shows a delete badge at its top-left
+  corner (rendered by the shader at radius `edit_badge_radius_for_tile_size`,
+  ~13% of tile size clamped to `[9*scale, 13.5*scale]`). The hit region is a
+  circle of radius `edit_badge_radius + edit_badge_hit_slop` (`6.0 * scale`),
+  centered at `(tile_x + scroll_x + radius*0.45, tile_y + radius*0.45)`. The
+  badge hit takes **precedence over a drag** at edit-mode press time: if the
+  pointer is over a tile's badge, `hide_app` runs and the press never becomes a
+  drag.
+- **`hide_app` (✕ action).** Hides the app from the visible stream:
+  `registry.hide(id)`; moves the id to the tail of the user order (so it does
+  not linger invisibly mid-grid); `set_order` (relayout) ; `persist_hidden`;
+  `persist_user_order`; drop any in-flight drag of that id; relayout + redraw.
+  No-op if already hidden.
+- **Edit-mode press behavior.** When `editing` and a left press lands on the
+  grid (settings/capsule precedence already passed):
+  - over a visible app and its ✕ badge → `hide_app`;
+  - over a visible app but not its badge → start a drag (`drag_app = id`,
+    `drag_x`/`drag_y` = pointer; relayout + redraw);
+  - over empty space inside the frame → `exit_edit_mode` (empty-click exit).
+  No pending press is recorded while editing (the press does not turn into a
+  scroll drag or a launch).
+- **Edit-mode release behavior.** When `editing` and `drag_app.is_some()` on
+  release: `commit_reorder` (drop at the current cell + persist), then
+  `drag_app = None`, relayout + redraw.
+- **CursorLeft while editing.** If a drag is in flight when the pointer leaves
+  the window, it is finalized in place (`commit_reorder`, `drag_app = None`,
+  relayout). A pending long-press is cancelled (`pending_press = None`). A
+  scroller drag is ended (`handle_drag_end`).
+- **Exit paths.** Edit mode is exited (committing any in-flight drag first)
+  via: Esc key (takes precedence over the search field's Esc), the Done capsule
+  click (`handle_control_click` edit branch → `exit_edit_mode`), an empty-space
+  click inside the frame, opening settings, or `hide()`. While `editing`, a
+  `Focused(false)` event does **not** auto-hide the launcher (so clicking
+  outside to dismiss edit mode does not race a focus-loss vanish); the settings
+  overlay gets the same treatment.
+- **Settings gear in edit mode.** Clicking the edit settings gear (intent
+  `EditGear`, from `layout::bottom_control`) opens settings, which first calls
+  `exit_edit_mode` and closes the search field. The Done capsule body (any
+  non-gear capsule hit) exits edit mode.
+- **Live reorder.** While a drag is in flight, each pointer move calls
+  `live_reorder`: resolve the tile cell under `drag_x`/`drag_y` via
+  `edit_drop_index_at_pointer` (`hit_test_tile_cell` with `total_tiles`, label
+  area **excluded**), compute `insert_idx = target_idx.min(visible.len())`, and
+  if it differs from the dragged app's current visible position, `reorder_by_index`
+  moves the app there. Reorder is keyed by stable `AppId`, not positional index.
+- **Empty-cell drop.** `edit_drop_index_at_pointer` uses `hit_test_tile_cell`
+  (cell-count-bounded by `total_tiles`), so the empty slot immediately after
+  the last visible app on the current page is a valid drop target. App-hit
+  resolution (`hit_test_app`) is app-count-bounded and would return `None`
+  there, which is why drop uses the cell variant.
+- **Rightmost columns.** Pages are spaced by the (narrower) content page width
+  while the grid is centered in the viewport. The drop hit-test mirrors the
+  exact tile-placement formula (`page * page_w + margin_left + col * step_x`),
+  so the rightmost one or two columns are reachable and are not misclassified
+  as the next page. (Regression: see `tile_cell_hit_test_allows_rightmost_columns`.)
+- **Label area is NOT a drop target.** `hit_test_tile_cell` is called with
+  `include_label = false`, so a drop in the label band below a tile does not
+  reorder. App *launch* uses `include_label = true` (label slop widens the
+  clickable cell); edit drop does not.
+- **Edge autoscroll.** While dragging, holding the lifted icon near a page-frame
+  edge starts a one-page settle toward that edge
+  (`maybe_autoscroll_edit_drag`):
+  - only when `editing && drag_app.is_some()`;
+  - only when `drag_y` is within the page panel's vertical span (otherwise the
+    icon is above/below the grid and autoscroll is suppressed);
+  - the configured zone is `scaled(EDIT_EDGE_SCROLL_ZONE = 72.0)`, clamped to
+    `panel_w * 0.25` and floored at `24.0`;
+  - the *actual* left/right zones are further clamped to the gutter between the
+    panel edge and the grid edge
+    (`left_zone = zone.min((grid_left - panel_left).max(0))`,
+    `right_zone = zone.min((panel_right - grid_right).max(0))`), so the
+    rightmost tile columns stay reachable as drop targets while the icon is
+    held in the gutter;
+  - only fires when the scroller is `Idle` (it does not interrupt an existing
+    drag/settle);
+  - target = `current_page - 1` (left, if `current > 0`) or
+    `current_page + 1` (right, if `current + 1 < page_count`); resolved by
+    `scroller.settle_to_page`.
+- **Hidden apps and order.** Hidden apps are kept in the registry (a rescan
+  does not resurrect them) but excluded from the visible stream
+  (`visible_app_ids`). On reorder, hidden apps are appended after the visible
+  stream in the persisted order so they are preserved but never repositioned
+  visibly. `commit_reorder` sets `settings.sort_order = SortOrder::Manual` and
+  persists both settings and user order.
+- **Persistence across restart.** `persist_user_order` writes the registry's
+  `order()` (binary `count:u32` + repeated `len:u32 + utf-8 id`); `persist_hidden`
+  writes the hidden id list in the same format. On startup `load_customization`
+  loads these into the registry before the first scan so apps appear in the
+  user's arrangement from the first frame. Pending persisted ids that have not
+  yet been inserted by the scan are kept pending and applied as matching apps
+  arrive (`set_order_preserves_ids_not_yet_inserted`).
+- **Tile springs / slide animation.** Per-visible-app position springs keyed by
+  `AppId` (`tile_springs: Vec<(AppId, Spring2)>`) follow an app across reorder
+  operations: the spring keeps its previous cell as the current value and glides
+  to the new home cell, producing the slide-in animation. `relayout`
+  rebuilds/pushes tile+icon instances with spring positions applied;
+  `step_tile_springs` advances them each frame and keeps redrawing while any are
+  animating. This is independent of the wiggle animation (which advances
+  `wiggle_phase`).
+
+Current Phase 4 boundary (target):
+
+- `layout/edit_mode.rs` owns edit-mode pure geometry and hit regions produced
+  from the same calculations as rendering: the edit badge center/radius/slop,
+  the badge hit test, the empty-cell drop hit (`hit_test_tile_cell` wrapper
+  excluding labels), the edge-autoscroll zone with its gutter clamp, and the
+  edge-autoscroll target decision. It reuses Phase 2's
+  `layout::bottom_control` boundary for the edit-mode Done capsule + settings
+  gear (no duplicate geometry). It compiles as part of the library target so it
+  can be unit-tested without `wgpu`/`winit`/`ScrollBounds`.
+- `features/edit_mode/` owns edit-mode state transitions, intent classification
+  (long-press entry, edit-press classify, edit-release outcome), the reorder
+  order computation, and a narrow `EditModeCommand` set for side effects. It
+  does not execute side effects directly — the app boundary (`main.rs`) runs
+  registry mutation, persistence, scroller mutation, and redraw.
+- `main.rs` stays as an adapter: it still owns `editing` / `drag_app` /
+  `drag_x` / `drag_y` / `wiggle_phase` (read directly by the renderer/scroller),
+  `PendingPress` (also drives launch/passthrough/scroll-drag, migrated to the
+  app shell in Phase 5), and the GPU-facing animation/instance work.
+- GPU-facing adapters left in place intentionally (Phase 6+): `TileAnim`,
+  `TileInstance`, `IconInstance`, `edit_anim`, `lift_dragged_instances`,
+  `tile_springs`, `step_tile_springs`, `refresh_spring_instances`,
+  `step_edit_control_width`, `edit_visual_progress`, and the renderer badge
+  source geometry.
+
+Screen verification required for this slice:
+
+- Launcher opens and first frame is non-blank.
+- Long-press an icon → edit mode entered; icons wiggle and badges appear.
+- Dragged icon lifts, scales, and follows the pointer; draws on top.
+- Drag reorder on the current page works live.
+- Drag to an empty cell on the current page works.
+- Drag/drop on the rightmost two columns works.
+- Edge autoscroll (holding the dragged icon near a page edge) scrolls a page.
+- Done capsule exits edit mode.
+- Esc exits edit mode.
+- Empty-space click inside the frame exits edit mode.
+- Settings gear opens settings and exits edit mode.
+- Delete badge hides the app (and later apps close the gap).
+- Reorder persists across a process restart.
+- Hidden app persists across a process restart.
+- Search / bottom control / settings / click passthrough smoke check (pointer
+  routing precedence unchanged).
