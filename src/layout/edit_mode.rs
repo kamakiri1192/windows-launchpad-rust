@@ -168,6 +168,24 @@ pub fn edge_autoscroll_zones(
     (left_zone, right_zone)
 }
 
+/// Inputs to the edge-autoscroll target decision. Grouped so the decision
+/// function does not carry a long parameter list and so callers build the
+/// snapshot once per frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeAutoscrollInput {
+    /// The lifted icon's current pointer position (physical px).
+    pub drag: (f32, f32),
+    /// Page-frame panel left / right / top / bottom edges (physical px).
+    pub panel: (f32, f32, f32, f32),
+    /// Clamped left / right gutter zone widths (physical px), from
+    /// [`edge_autoscroll_zones`].
+    pub zones: (f32, f32),
+    /// Current page index the scroller is settled on.
+    pub current_page: usize,
+    /// Total page count.
+    pub page_count: usize,
+}
+
 /// Decide whether an edit-mode drag should trigger a one-page autoscroll, and
 /// in which direction. Returns the target page index (one less or one more than
 /// `current_page`), or `None` when no autoscroll should fire.
@@ -184,26 +202,21 @@ pub fn edge_autoscroll_zones(
 /// Whether the scroller is in a state that allows a new settle (`Idle`) and the
 /// actual `settle_to_page` call are the app boundary's responsibility — this
 /// function only decides the target.
-pub fn edge_autoscroll_target(
-    drag_x: f32,
-    drag_y: f32,
-    panel_left: f32,
-    panel_right: f32,
-    panel_top: f32,
-    panel_bottom: f32,
-    left_zone: f32,
-    right_zone: f32,
-    current_page: usize,
-    page_count: usize,
-) -> Option<usize> {
+pub fn edge_autoscroll_target(input: &EdgeAutoscrollInput) -> Option<usize> {
+    let (drag_x, drag_y) = input.drag;
+    let (panel_left, panel_right, panel_top, panel_bottom) = input.panel;
+    let (left_zone, right_zone) = input.zones;
     if drag_y < panel_top || drag_y > panel_bottom {
         return None;
     }
-    if left_zone > 0.0 && drag_x <= panel_left + left_zone && current_page > 0 {
-        return Some(current_page - 1);
+    if left_zone > 0.0 && drag_x <= panel_left + left_zone && input.current_page > 0 {
+        return Some(input.current_page - 1);
     }
-    if right_zone > 0.0 && drag_x >= panel_right - right_zone && current_page + 1 < page_count {
-        return Some(current_page + 1);
+    if right_zone > 0.0
+        && drag_x >= panel_right - right_zone
+        && input.current_page + 1 < input.page_count
+    {
+        return Some(input.current_page + 1);
     }
     None
 }
@@ -382,45 +395,55 @@ mod tests {
 
     // ---- edge autoscroll target decision ------------------------------------
 
+    /// Build an input with a panel [100, 900] x [100, 700] and 80px zones on
+    /// both sides, varying only the drag position and current page.
+    fn autoscroll_input(
+        drag: (f32, f32),
+        current_page: usize,
+        page_count: usize,
+    ) -> EdgeAutoscrollInput {
+        EdgeAutoscrollInput {
+            drag,
+            panel: (100.0, 900.0, 100.0, 700.0),
+            zones: (80.0, 80.0),
+            current_page,
+            page_count,
+        }
+    }
+
     #[test]
     fn autoscroll_left_when_icon_in_left_gutter_and_not_first_page() {
-        let target = edge_autoscroll_target(
-            /* drag_x */ 110.0, /* drag_y */ 400.0, /* panel_left */ 100.0,
-            /* panel_right */ 900.0, /* panel_top */ 100.0,
-            /* panel_bottom */ 700.0, /* left_zone */ 80.0, /* right_zone */ 80.0,
-            /* current_page */ 2, /* page_count */ 4,
-        );
+        let input = autoscroll_input((110.0, 400.0), 2, 4);
+        let target = edge_autoscroll_target(&input);
         assert_eq!(target, Some(1));
+        // Sanity check the input survived the borrow.
+        assert_eq!(input.current_page, 2);
     }
 
     #[test]
     fn autoscroll_right_when_icon_in_right_gutter_and_not_last_page() {
-        let target =
-            edge_autoscroll_target(890.0, 400.0, 100.0, 900.0, 100.0, 700.0, 80.0, 80.0, 1, 4);
+        let target = edge_autoscroll_target(&autoscroll_input((890.0, 400.0), 1, 4));
         assert_eq!(target, Some(2));
     }
 
     #[test]
     fn autoscroll_does_not_fire_on_first_page_left() {
         // current_page = 0: the left zone is unreachable (no previous page).
-        let target =
-            edge_autoscroll_target(110.0, 400.0, 100.0, 900.0, 100.0, 700.0, 80.0, 80.0, 0, 4);
+        let target = edge_autoscroll_target(&autoscroll_input((110.0, 400.0), 0, 4));
         assert_eq!(target, None);
     }
 
     #[test]
     fn autoscroll_does_not_fire_on_last_page_right() {
         // current_page = 3, page_count = 4: the right zone is unreachable.
-        let target =
-            edge_autoscroll_target(890.0, 400.0, 100.0, 900.0, 100.0, 700.0, 80.0, 80.0, 3, 4);
+        let target = edge_autoscroll_target(&autoscroll_input((890.0, 400.0), 3, 4));
         assert_eq!(target, None);
     }
 
     #[test]
     fn autoscroll_does_not_fire_when_icon_off_panel_vertically() {
         // drag_y above the panel top → no autoscroll even in the gutter.
-        let target =
-            edge_autoscroll_target(110.0, 50.0, 100.0, 900.0, 100.0, 700.0, 80.0, 80.0, 2, 4);
+        let target = edge_autoscroll_target(&autoscroll_input((110.0, 50.0), 2, 4));
         assert_eq!(target, None);
     }
 
@@ -428,16 +451,21 @@ mod tests {
     fn autoscroll_does_not_fire_when_zone_is_zero() {
         // No gutter → zone is zero → no autoscroll, the rightmost column stays a
         // drop target.
-        let target =
-            edge_autoscroll_target(110.0, 400.0, 100.0, 900.0, 100.0, 700.0, 0.0, 0.0, 2, 4);
+        let input = EdgeAutoscrollInput {
+            drag: (110.0, 400.0),
+            panel: (100.0, 900.0, 100.0, 700.0),
+            zones: (0.0, 0.0),
+            current_page: 2,
+            page_count: 4,
+        };
+        let target = edge_autoscroll_target(&input);
         assert_eq!(target, None);
     }
 
     #[test]
     fn autoscroll_does_not_fire_over_tile_columns() {
         // drag_x is over the grid (not in either gutter) → no autoscroll.
-        let target =
-            edge_autoscroll_target(500.0, 400.0, 100.0, 900.0, 100.0, 700.0, 80.0, 80.0, 1, 4);
+        let target = edge_autoscroll_target(&autoscroll_input((500.0, 400.0), 1, 4));
         assert_eq!(target, None);
     }
 

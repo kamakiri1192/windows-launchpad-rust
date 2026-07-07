@@ -93,8 +93,10 @@ const SUMMON_FOCUS_GRACE: Duration = Duration::from_millis(500);
 /// avoid accidental triggers during a slow scroll.
 const LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(500);
 /// While dragging an icon in edit mode, holding it this close to the page-frame
-/// edge starts a one-page autoscroll.
-const EDIT_EDGE_SCROLL_ZONE: f32 = 72.0;
+/// edge starts a one-page autoscroll. Re-declared in
+/// [`layout::edit_mode::EDIT_EDGE_SCROLL_ZONE`] as the source of truth for the
+/// pure zone computation; kept here for the historical doc cross-reference.
+const EDIT_EDGE_SCROLL_ZONE: f32 = layout::edit_mode::EDIT_EDGE_SCROLL_ZONE;
 
 /// A grid press that hasn't yet been classified as a scroll drag, a click, or a
 /// long-press into edit mode. While present, the scroller is *not* in
@@ -1704,62 +1706,49 @@ impl App {
         self.layout.frame_contains_point(w as f32, x, y)
     }
 
-    /// Resolve the visible-grid index under the pointer (or `None` if it's over
-    /// empty space / the label gap that isn't a real cell). Used both for
-    /// long-press target and drop-target detection.
-    fn app_index_at_pointer(&self, x: f32, y: f32) -> Option<usize> {
-        let (w, _h) = self.viewport_phys();
-        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
-        let visible_ids = self.visible_app_ids();
-        self.layout
-            .hit_test_app(w as f32, x, y, scroll_x, visible_ids.len())
-    }
-
     /// Resolve a tile-cell index for edit-mode drag/drop. Unlike app click
     /// hit-testing this excludes labels and allows the empty slot immediately
     /// after the last visible app, so dropping at the final page tail works.
+    ///
+    /// The hit decision comes from [`layout::edit_mode::drop_cell_at`], a thin
+    /// explicit wrapper over [`GridLayout::hit_test_tile_cell`] with
+    /// `total_tiles` as the cell bound, so the rule that the label area is not a
+    /// drop target lives in one place.
     fn edit_drop_index_at_pointer(&self, x: f32, y: f32) -> Option<usize> {
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
-        self.layout
-            .hit_test_tile_cell(w as f32, x, y, scroll_x, self.layout.total_tiles())
+        layout::edit_mode::drop_cell_at(&self.layout, w as f32, x, y, scroll_x)
     }
 
     /// True if the pointer (physical px) is over the ✕ badge of the app at
     /// `idx`. The badge sits at the tile's top-left corner, with a radius
     /// matching the shader's badge radius (≈13% of the tile size, max 11px). A
     /// little slop is added so the hit area is forgiving on a touch screen.
+    ///
+    /// The geometry is resolved by [`layout::edit_mode::badge_hit`] so the hit
+    /// circle (radius + slop, centered at `tile + inset`) shares one calculation
+    /// with the renderer's badge source geometry.
     fn badge_hit(&self, idx: usize, x: f32, y: f32) -> bool {
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
-        let (tx, ty) = self.layout.tile_position(w as f32, idx);
-        let radius = self.layout.edit_badge_radius();
-        let hit_r = radius + self.layout.edit_badge_hit_slop();
-        let inset = radius * 0.45;
-        let cx = tx + scroll_x + inset;
-        let cy = ty + inset;
-        let dx = x - cx;
-        let dy = y - cy;
-        dx * dx + dy * dy <= hit_r * hit_r
+        layout::edit_mode::badge_hit(&self.layout, w as f32, x, y, scroll_x, idx)
     }
 
     /// Hide an app from the launcher (the ✕ badge action): removes it from the
     /// visible stream, persists the hidden list, and relayouts. Reversible by
     /// clearing the hidden list later. Stays a no-op if already hidden.
+    ///
+    /// The new order (hidden id moved to the tail so it does not linger
+    /// invisibly mid-grid) is computed by
+    /// [`features::edit_mode::hidden_order_after_hide`]; this function runs the
+    /// registry mutation + persist side effects.
     fn hide_app(&mut self, id: &AppId) {
         if self.registry.is_hidden(id) {
             return;
         }
         self.registry.hide(id);
         // Drop the app from the user order too so it doesn't linger invisibly.
-        let mut order: Vec<AppId> = self
-            .registry
-            .order()
-            .iter()
-            .filter(|x| *x != id)
-            .cloned()
-            .collect();
-        order.push(id.clone());
+        let order = features::edit_mode::hidden_order_after_hide(self.registry.order(), id);
         self.registry.set_order(order);
         self.persist_hidden();
         self.persist_user_order();
@@ -1796,20 +1785,27 @@ impl App {
 
     /// Check whether the pending press has been held long enough to enter edit
     /// mode. Called from `about_to_wait`. Returns true if edit mode was entered.
+    ///
+    /// The long-press decision (outside-glass rejects, slop rejects, threshold)
+    /// comes from [`features::edit_mode::should_enter_from_long_press`], keeping
+    /// the pure intent in the feature module while `PendingPress` stays in
+    /// `main.rs` (it also drives launch/passthrough/scroll-drag; Phase 5 moves
+    /// it to the app shell).
     fn maybe_long_press_into_edit(&mut self, now: Instant) -> bool {
         let Some(p) = self.pending_press.as_ref() else {
             return false;
         };
-        if p.outside_glass {
-            return false;
-        }
-        // Only a press that hasn't moved past slop can become a long-press.
-        let dx = self.pointer_phys_x - p.x;
-        let dy = self.pointer_phys_y - p.y;
-        if dx * dx + dy * dy > CLICK_SLOP_PHYS * CLICK_SLOP_PHYS {
-            return false;
-        }
-        if now.duration_since(p.start) < LONG_PRESS_THRESHOLD {
+        let snapshot = features::edit_mode::PressSnapshot {
+            start: p.start,
+            x: p.x,
+            y: p.y,
+            outside_glass: p.outside_glass,
+            pointer: features::edit_mode::PointerSnapshot::new(
+                self.pointer_phys_x,
+                self.pointer_phys_y,
+            ),
+        };
+        if !features::edit_mode::should_enter_from_long_press(&snapshot, now) {
             return false;
         }
         // Enter edit mode and immediately lift the pressed app into a drag.
@@ -1918,6 +1914,12 @@ impl App {
 
     /// Move `drag_app` to the visible cell currently under the pointer (if it's
     /// a different cell). No-op when the pointer is off the grid.
+    ///
+    /// The insert-index decision comes from
+    /// [`layout::edit_mode::reorder_insert_index`] and the new order is computed
+    /// by [`features::edit_mode::apply_reorder`]; this function runs the
+    /// `registry.set_order` + relayout side effect. Reorder is keyed by stable
+    /// `AppId`, not positional index.
     fn live_reorder(&mut self) {
         let Some(drag_id) = self.drag_app.clone() else {
             return;
@@ -1929,10 +1931,11 @@ impl App {
         let Some(drag_pos) = visible.iter().position(|id| id == &drag_id) else {
             return;
         };
-        let insert_idx = target_idx.min(visible.len());
-        if insert_idx == drag_pos {
+        let Some(insert_idx) =
+            layout::edit_mode::reorder_insert_index(visible.len(), drag_pos, target_idx)
+        else {
             return;
-        }
+        };
         debug_log!(
             "edit-reorder: moving drag_pos={drag_pos} target_idx={target_idx} insert_idx={insert_idx}"
         );
@@ -1941,6 +1944,14 @@ impl App {
 
     /// Start a one-page autoscroll if the lifted edit-mode icon is held near a
     /// page-frame edge. Returns true when a new page glide was started.
+    ///
+    /// The zone width and the gutter clamp come from
+    /// [`layout::edit_mode::configured_edge_zone`] /
+    /// [`layout::edit_mode::edge_autoscroll_zones`], and the target page
+    /// decision comes from [`layout::edit_mode::edge_autoscroll_target`]. This
+    /// function only runs the side effect: it checks the scroller is `Idle` and
+    /// calls `settle_to_page`. The gutter clamp keeps the rightmost tile
+    /// columns reachable as drop targets while the icon is held in the gutter.
     fn maybe_autoscroll_edit_drag(&mut self) -> bool {
         if !self.editing || self.drag_app.is_none() {
             return false;
@@ -1948,38 +1959,34 @@ impl App {
 
         let (w, _h) = self.viewport_phys();
         let (cx, cy, panel_w, panel_h) = self.layout.frame_panel_rect(w.max(1) as f32);
-        let top = cy - panel_h * 0.5;
-        let bottom = cy + panel_h * 0.5;
-        if self.drag_y < top || self.drag_y > bottom {
-            return false;
-        }
-
-        let zone = self
-            .layout
-            .scaled(EDIT_EDGE_SCROLL_ZONE)
-            .min(panel_w * 0.25)
-            .max(24.0);
-        let left = cx - panel_w * 0.5;
-        let right = cx + panel_w * 0.5;
+        let panel_left = cx - panel_w * 0.5;
+        let panel_right = cx + panel_w * 0.5;
+        let panel_top = cy - panel_h * 0.5;
+        let panel_bottom = cy + panel_h * 0.5;
         let grid_left = self.layout.margin_left;
         let grid_right = self.layout.margin_left + self.layout.grid_w();
-        let left_zone = zone.min((grid_left - left).max(0.0));
-        let right_zone = zone.min((right - grid_right).max(0.0));
-        let current = self.current_page();
-        let target = if left_zone > 0.0 && self.drag_x <= left + left_zone && current > 0 {
-            Some(current - 1)
-        } else if right_zone > 0.0
-            && self.drag_x >= right - right_zone
-            && current + 1 < self.layout.page_count
-        {
-            Some(current + 1)
-        } else {
-            None
-        };
 
-        let Some(target) = target else {
+        let zone = layout::edit_mode::configured_edge_zone(&self.layout, panel_w);
+        let (left_zone, right_zone) = layout::edit_mode::edge_autoscroll_zones(
+            zone,
+            panel_left,
+            panel_right,
+            grid_left,
+            grid_right,
+        );
+        let current = self.current_page();
+        let Some(target) =
+            layout::edit_mode::edge_autoscroll_target(&layout::edit_mode::EdgeAutoscrollInput {
+                drag: (self.drag_x, self.drag_y),
+                panel: (panel_left, panel_right, panel_top, panel_bottom),
+                zones: (left_zone, right_zone),
+                current_page: current,
+                page_count: self.layout.page_count,
+            })
+        else {
             return false;
         };
+
         let Some(scroller) = self.scroller.as_mut() else {
             return false;
         };
@@ -1995,7 +2002,9 @@ impl App {
     }
 
     /// Finalize the in-flight drag: drop the dragged app onto the current cell
-    /// and persist the new order.
+    /// and persist the new order. The sort order is set to `Manual` and the
+    /// settings + user order are persisted; the persist-intent comes from
+    /// [`features::edit_mode::commit_drag`] (kept in sync here).
     fn commit_reorder(&mut self) {
         self.live_reorder();
         self.settings.sort_order = SortOrder::Manual;
@@ -2006,21 +2015,18 @@ impl App {
     /// Reorder the registry so that `drag_id` moves to `insert_idx` in the
     /// visible order, shifting the apps between them. Hidden apps are preserved
     /// after the visible stream.
+    ///
+    /// The new order is computed by [`features::edit_mode::apply_reorder`]
+    /// (pure); this function runs the `registry.set_order` + relayout side
+    /// effect.
     fn reorder_by_index(&mut self, drag_id: &AppId, insert_idx: usize) {
-        // Build the current visible order from the registry's display order,
-        // then move drag_id to the requested visible insertion index.
-        let mut order: Vec<AppId> = self
-            .visible_app_ids()
-            .into_iter()
-            // Append hidden apps at the end so they're preserved but never
-            // repositioned visibly.
-            .chain(self.registry.hidden().iter().cloned())
-            .collect();
-        let Some(drag_pos) = order.iter().position(|i| i == drag_id) else {
+        let visible = self.visible_app_ids();
+        let hidden: Vec<AppId> = self.registry.hidden().iter().cloned().collect();
+        let Some(order) =
+            features::edit_mode::apply_reorder(&visible, &hidden, drag_id, insert_idx)
+        else {
             return;
         };
-        let id = order.remove(drag_pos);
-        order.insert(insert_idx.min(order.len()), id);
         self.registry.set_order(order);
         self.relayout();
     }
@@ -2802,30 +2808,47 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                         // Edit mode: clicking an icon lifts it into a drag;
                         // clicking its ✕ badge hides it; clicking empty space
-                        // exits edit mode (outside click).
+                        // (inside or outside the frame) exits edit mode. The
+                        // classification (badge > drag > exit) comes from
+                        // [`features::edit_mode::edit_press_classify`]; this
+                        // branch runs the side effects (hide / drag start /
+                        // exit).
+                        //
+                        // Note: the historical code used `app_index_at_pointer`
+                        // (which returns `None` for both empty-in-frame *and*
+                        // outside-frame, because `hit_test_app` clips to the
+                        // frame) and exited edit mode in both cases. The
+                        // classifier preserves that: `EmptyExit` covers
+                        // empty-in-frame, `Noop` covers outside-frame, and both
+                        // exit here.
                         if self.editing {
                             let px = self.pointer_phys_x;
                             let py = self.pointer_phys_y;
-                            let idx = self.app_index_at_pointer(px, py);
-                            if let Some(idx) = idx {
-                                let visible = self.visible_app_ids();
-                                if let Some(id) = visible.get(idx).cloned() {
-                                    debug_log!("edit-drag: press idx={idx}");
-                                    // ✕ badge hit takes precedence over a drag.
-                                    if self.badge_hit(idx, px, py) {
-                                        self.hide_app(&id);
-                                        return;
-                                    }
+                            let hit = self.grid_hit_at_pointer(px, py);
+                            let badge_hit = matches!(hit, layout::grid::GridHit::App(idx) if self.badge_hit(idx, px, py));
+                            let intent = features::edit_mode::edit_press_classify(hit, badge_hit);
+                            match intent {
+                                features::edit_mode::EditPressIntent::HideApp { visible_index } => {
+                                    let id = self.visible_app_ids()[visible_index].clone();
+                                    debug_log!("edit-drag: badge press idx={visible_index}");
+                                    self.hide_app(&id);
+                                }
+                                features::edit_mode::EditPressIntent::DragApp { visible_index } => {
+                                    debug_log!("edit-drag: press idx={visible_index}");
+                                    let id = self.visible_app_ids()[visible_index].clone();
                                     self.drag_app = Some(id);
                                     self.drag_x = px;
                                     self.drag_y = py;
                                     self.relayout();
                                     self.request_redraw();
-                                    return;
+                                }
+                                features::edit_mode::EditPressIntent::EmptyExit
+                                | features::edit_mode::EditPressIntent::Noop => {
+                                    // Empty space (inside or outside the frame)
+                                    // → exit edit mode (and persist).
+                                    self.exit_edit_mode();
                                 }
                             }
-                            // Empty space → exit edit mode (and persist).
-                            self.exit_edit_mode();
                             return;
                         }
                         // Normal mode: defer the scroll drag until the gesture
