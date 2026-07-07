@@ -446,10 +446,14 @@ Current behavior to preserve:
     `scroller.settle_to_page`.
 - **Hidden apps and order.** Hidden apps are kept in the registry (a rescan
   does not resurrect them) but excluded from the visible stream
-  (`visible_app_ids`). On reorder, hidden apps are appended after the visible
-  stream in the persisted order so they are preserved but never repositioned
-  visibly. `commit_reorder` sets `settings.sort_order = SortOrder::Manual` and
-  persists both settings and user order.
+  (`visible_app_ids`). On reorder, the registry order is recomputed over the
+  concatenated visible-stream-then-hidden list and `drag_id` is moved to
+  `insert_idx` (clamped to `visible.len()` by `live_reorder`), so a drop at the
+  tail of the visible stream lands the dragged app at the join with the hidden
+  block. The *visible* result is always the user-intended arrangement because the
+  registry filters hidden apps out of the visible stream; the hidden apps keep
+  their relative order. `commit_reorder` sets `settings.sort_order =
+  SortOrder::Manual` and persists both settings and user order.
 - **Persistence across restart.** `persist_user_order` writes the registry's
   `order()` (binary `count:u32` + repeated `len:u32 + utf-8 id`); `persist_hidden`
   writes the hidden id list in the same format. On startup `load_customization`

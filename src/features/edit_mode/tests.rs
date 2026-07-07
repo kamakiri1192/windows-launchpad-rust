@@ -321,3 +321,114 @@ fn hidden_order_after_hide_noop_for_missing_id() {
     // The id is appended at the tail (matches the historical behavior).
     assert_eq!(new_order, vec![app("a"), app("b"), app("zzz")]);
 }
+
+// ---- commit reorder → SortOrder::Manual + persistence --------------------
+
+#[test]
+fn commit_drag_emits_set_sort_manual_before_persist() {
+    // The historical commit_reorder sets SortOrder::Manual and then persists
+    // both settings and user order. The feature ordering keeps SetSortManual
+    // first so the app boundary can apply it before persisting settings.
+    let state = EditModeState {
+        drag_app: Some(app("a")),
+        ..EditModeState::default()
+    };
+    let cmds = commit_drag(&state);
+    let sort_idx = cmds
+        .iter()
+        .position(|c| matches!(c, EditModeCommand::SetSortManual))
+        .unwrap();
+    let persist_settings_idx = cmds
+        .iter()
+        .position(|c| matches!(c, EditModeCommand::PersistSettings))
+        .unwrap();
+    let persist_order_idx = cmds
+        .iter()
+        .position(|c| matches!(c, EditModeCommand::PersistUserOrder))
+        .unwrap();
+    assert!(sort_idx < persist_settings_idx);
+    assert!(sort_idx < persist_order_idx);
+}
+
+#[test]
+fn commit_drag_emits_both_persist_commands() {
+    let state = EditModeState {
+        drag_app: Some(app("a")),
+        ..EditModeState::default()
+    };
+    let cmds = commit_drag(&state);
+    assert!(cmds.contains(&EditModeCommand::PersistSettings));
+    assert!(cmds.contains(&EditModeCommand::PersistUserOrder));
+}
+
+// ---- press classification edge cases -------------------------------------
+
+#[test]
+fn edit_press_drag_and_hide_share_visible_index() {
+    // The same `GridHit::App(2)` produces HideApp with a badge hit and DragApp
+    // without; the visible_index is preserved in both, so the app boundary can
+    // resolve the same app either way.
+    let drag = edit_press_classify(GridHit::App(2), false);
+    let hide = edit_press_classify(GridHit::App(2), true);
+    match (drag, hide) {
+        (
+            EditPressIntent::DragApp { visible_index: d },
+            EditPressIntent::HideApp { visible_index: h },
+        ) => {
+            assert_eq!(d, 2);
+            assert_eq!(h, 2);
+        }
+        _ => panic!("expected DragApp then HideApp"),
+    }
+}
+
+#[test]
+fn edit_press_outside_frame_badge_does_not_classify_as_hide() {
+    // A badge hit test only runs when the grid classifier says App; an
+    // outside-frame hit never reaches HideApp even if the caller passed
+    // badge_hit=true (which it would not, but the classifier must be robust).
+    assert_eq!(
+        edit_press_classify(GridHit::OutsideFrame, true),
+        EditPressIntent::Noop
+    );
+}
+
+// ---- reorder order preservation of hidden apps ---------------------------
+
+#[test]
+fn apply_reorder_preserves_historical_concatenated_insert_behavior() {
+    // The historical `reorder_by_index` operated on the visible-stream-then-
+    // hidden concatenated list, with insert_idx clamped to visible.len() by the
+    // caller (`live_reorder`). This test pins that exact behavior so the
+    // behavior-preserving refactor does not silently change where the dragged
+    // id lands in the persisted order relative to hidden apps.
+    let visible = vec![app("a"), app("b")];
+    let hidden = vec![app("h1"), app("h2"), app("h3")];
+    // Drag 'a' to insert_idx = visible.len() (== 2). Concatenated list is
+    // [a,b,h1,h2,h3]; removing 'a' (pos 0) yields [b,h1,h2,h3]; inserting at
+    // index 2 yields [b,h1,a,h2,h3]. The *visible* result (after the registry
+    // filters hidden) is still [b,a] — the drag visibly landed at the tail.
+    let order = apply_reorder(&visible, &hidden, &app("a"), 2).unwrap();
+    assert_eq!(
+        order,
+        vec![app("b"), app("h1"), app("a"), app("h2"), app("h3")]
+    );
+    // Dragging 'b' to the first cell (insert_idx = 0) moves it before 'a';
+    // hidden apps stay in their original relative order.
+    let order = apply_reorder(&visible, &hidden, &app("b"), 0).unwrap();
+    assert_eq!(
+        order,
+        vec![app("b"), app("a"), app("h1"), app("h2"), app("h3")]
+    );
+}
+
+#[test]
+fn apply_reorder_dragging_forward_then_backward_is_invertible() {
+    let visible = vec![app("a"), app("b"), app("c"), app("d")];
+    // Move 'a' forward to index 3.
+    let forward = apply_reorder(&visible, &[], &app("a"), 3).unwrap();
+    assert_eq!(forward, vec![app("b"), app("c"), app("d"), app("a")]);
+    // Move 'a' back to index 0.
+    let back = apply_reorder(&forward, &[], &app("a"), 0).unwrap();
+    assert_eq!(back, vec![app("a"), app("b"), app("c"), app("d")]);
+}
