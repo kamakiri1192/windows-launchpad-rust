@@ -31,6 +31,7 @@ mod app_registry;
 mod app_scan;
 mod bottom_control;
 mod debug_logger;
+mod features;
 mod grid;
 mod icon_atlas;
 mod icon_cache;
