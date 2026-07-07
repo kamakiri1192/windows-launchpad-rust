@@ -12,6 +12,11 @@ pub const TITLE_FONT: &str = "Yu Gothic UI";
 pub const TITLE_SIZE: f32 = 22.0;
 pub const TITLE_LINE: f32 = 26.0;
 pub const CLOSE_HALF: f32 = 10.0;
+/// Half-size of the invisible close-button hit circle. The visible × glyph is
+/// only `CLOSE_HALF` (radius 10 logical px), which is too tight to tap/click
+/// reliably. We keep the visible size small but enlarge the hit target to the
+/// Windows-recommended minimum touch size (diameter 32 px).
+pub const CLOSE_HIT_HALF: f32 = 16.0;
 pub const HEADER_SIZE: f32 = 21.0;
 pub const HEADER_LINE: f32 = 28.0;
 pub const LABEL_SIZE: f32 = 14.0;
@@ -246,11 +251,11 @@ pub fn contains(layout: &SettingsPanelLayout, point: Point) -> bool {
 
 pub fn hit_close(layout: &SettingsPanelLayout, scale_factor: f32, point: Point) -> bool {
     let scale = sanitize_scale(scale_factor);
-    let button_radius = CLOSE_HALF * scale;
+    let hit_radius = CLOSE_HIT_HALF * scale;
     let (button_x, button_y) = layout.close_center(scale);
     let dx = point.x - button_x;
     let dy = point.y - button_y;
-    dx * dx + dy * dy <= button_radius * button_radius
+    dx * dx + dy * dy <= hit_radius * hit_radius
 }
 
 pub fn hit_test(
@@ -809,7 +814,7 @@ fn push_hit_regions(
     hits.push(HitRegion::circle(
         UiId::settings_close(),
         Point::new(close_x, close_y),
-        CLOSE_HALF * scale,
+        CLOSE_HIT_HALF * scale,
         SettingsPanelHit::Close.target(),
         Z_CONTROL + 3,
     ));
@@ -1033,6 +1038,56 @@ mod tests {
     }
 
     #[test]
+    fn hit_close_enlarges_target_beyond_visible_glyph() {
+        let layout = layout();
+        let (cx, cy) = layout.close_center(1.0);
+
+        // CLOSE_HIT_HALF > CLOSE_HALF by design (invisible slop around the
+        // smaller visible glyph). The visible × glyph spans ±CLOSE_HALF.
+        // Verify every cardinal point on the glyph boundary is still a hit,
+        // then that the slop ring just outside the glyph but inside the hit
+        // radius registers as Close.
+        let dirs = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
+        for (dx, dy) in dirs {
+            let on_glyph = Point::new(cx + dx * CLOSE_HALF, cy + dy * CLOSE_HALF);
+            assert!(
+                hit_close(&layout, 1.0, on_glyph),
+                "glyph boundary should hit: ({dx}, {dy})"
+            );
+
+            let in_slop = Point::new(
+                cx + dx * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
+                cy + dy * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
+            );
+            assert!(
+                hit_close(&layout, 1.0, in_slop),
+                "slop ring should hit: ({dx}, {dy})"
+            );
+
+            let beyond = Point::new(
+                cx + dx * (CLOSE_HIT_HALF + 0.5),
+                cy + dy * (CLOSE_HIT_HALF + 0.5),
+            );
+            assert!(
+                !hit_close(&layout, 1.0, beyond),
+                "point beyond hit radius should miss: ({dx}, {dy})"
+            );
+        }
+    }
+
+    #[test]
+    fn hit_close_scales_hit_radius_with_dpi() {
+        let layout = layout();
+        let (cx, cy) = layout.close_center(1.5);
+
+        // At 150% DPI the hit radius grows to CLOSE_HIT_HALF * 1.5 = 24 px.
+        // A point 20 px from the center is inside the 24 px hit radius but
+        // would be outside a non-scaled glyph (radius 10 * 1.5 = 15 px).
+        let point = Point::new(cx + 20.0, cy);
+        assert!(hit_close(&layout, 1.5, point));
+    }
+
+    #[test]
     fn hit_test_finds_category_rows() {
         let layout = layout();
         let y = layout.top + SIDEBAR_TOP + SIDEBAR_ROW_H * 0.5;
@@ -1130,15 +1185,27 @@ mod tests {
     fn model_hit_map_uses_circular_close_region() {
         let model = build(input(SettingsCategoryId::Apps));
         let (close_x, close_y) = model.layout.close_center(1.0);
-        let point = Point::new(close_x + 9.0, close_y + 9.0);
+
+        // Point sits just outside the visible glyph (radius = CLOSE_HALF = 10)
+        // but inside the enlarged hit circle (radius = CLOSE_HIT_HALF = 16),
+        // so the close target should win thanks to the hit slop.
+        let dist = (CLOSE_HALF + 3.0).min(CLOSE_HIT_HALF - 1.0);
+        let point = Point::new(close_x + dist, close_y);
 
         assert_eq!(
             hit_test(&model.layout, 1.0, SettingsCategoryId::Apps, point),
-            SettingsPanelHit::Inside
+            SettingsPanelHit::Close
         );
         assert_eq!(
-            model.result.hits.hit_test(point).expect("panel hit").target,
-            SettingsPanelHit::Inside.target()
+            model.result.hits.hit_test(point).expect("close hit").target,
+            SettingsPanelHit::Close.target()
+        );
+
+        // A point beyond the hit radius falls through to the panel interior.
+        let outside_point = Point::new(close_x + CLOSE_HIT_HALF + 1.0, close_y);
+        assert_eq!(
+            hit_test(&model.layout, 1.0, SettingsCategoryId::Apps, outside_point),
+            SettingsPanelHit::Inside
         );
     }
 
