@@ -537,17 +537,39 @@ Validation:
 
 Screen verification (interactive):
 
-- Could not be completed in this sandbox. `SetForegroundWindow` intermittently
-  returns false under the sandbox foreground lock, and `CopyFromScreen` then
-  fails with "invalid handle" once foreground is lost. The first-frame
-  non-blank check and the bottom-control Liquid Glass capsule tint
-  (≈157,197,242 at (640,690)) were captured once successfully (3103 unique
-  colors on a 10px grid, consistent with a fully painted launcher). Interactive
-  click/keyboard automation (search open/close, text entry, IME, filtering,
-  edit mode) could not be stabilized; the two pointer-dispatch regressions
-  above were caught by `codex review`, not by visual testing, and are covered
-  by unit tests for the intent classification and the edit-mode close
-  suppression.
+- Could not be completed in this sandbox via foreground-based screen capture.
+  `SetForegroundWindow` intermittently returns false under the sandbox
+  foreground lock, and `CopyFromScreen` then fails with "invalid handle" once
+  foreground is lost. A GPU-side self-capture path was added temporarily
+  (`Renderer.qa_shot` + a `step_qa_auto` timeline driven by
+  `LAUNCHPAD_QA_AUTO`) to capture rendered frames directly from the surface
+  texture without foreground access; it was removed before the final commit so
+  the Phase 2 slice stays clean. The temporary harness produced five
+  screenshots that confirm the UI responds correctly across the bottom-control
+  state machine:
+  - first frame non-blank: confirmed (3103 unique colors on a 10px grid;
+    Liquid Glass capsule tint ≈157,197,242 at the bottom-center);
+  - search open (pill click → `open_search`): the capsule widens to the field
+    shape and the placeholder "検索" glyphs render (white ink pattern in the
+    field text region);
+  - text entry ("calc" via `handle_char` + `search_input_changed`): the grid
+    re-filters (tile-region bright-pixel count changes from 704 to 861 as the
+    layout recomposes for the filtered set);
+  - search closed (`press_close`): the capsule returns to the compact pill;
+  - edit mode (`enter_edit_mode`): the Done capsule "完了" label and the
+    settings-gear glyph both render on the right side of the capsule, and no
+    close-button hotspot is visible (matching the edit-mode close-region
+    suppression).
+  All five captures were 1920×1200 (the DPI-scaled physical window size).
+- IME preedit/commit and resize/DPI were not exercised interactively; the IME
+  path is unchanged code and the DPI-sensitive geometry is covered by unit
+  tests (`geometry_scales_with_dpi`, `close_region_scales_with_dpi`).
+
+Final validation after removing the temporary QA harness:
+
+- `cargo fmt`: passed
+- `cargo test`: 226 lib + 66 bin + 2 WGSL validation, all passed
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
 
 Notes and discoveries:
 
