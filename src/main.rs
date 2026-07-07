@@ -1659,12 +1659,19 @@ impl App {
     /// old behavior), we record the press and wait to see whether it becomes a
     /// drag (→ scroll), a quick release (→ click/launch), or a long-press
     /// (→ enter edit mode). The scroller stays `Idle` until intent is clear.
+    ///
+    /// Press classification goes through the layout layer's `GridHit` so the
+    /// app / empty-in-frame / outside-frame decision comes from one calculation
+    /// instead of separate `hit_test_app` + `frame_contains_point` calls. This
+    /// preserves the previous behavior exactly: the visible-stream app index
+    /// and the `outside_glass` flag are derived from the same geometry.
     fn begin_grid_press(&mut self, now: Instant) {
         let x = self.pointer_phys_x;
         let y = self.pointer_phys_y;
-        let app_index = self.app_index_at_pointer(x, y);
+        let hit = self.grid_hit_at_pointer(x, y);
+        let app_index = hit.app_index();
         let app_id = app_index.and_then(|idx| self.visible_app_ids().get(idx).cloned());
-        let outside_glass = !self.pointer_over_page_glass(x, y);
+        let outside_glass = hit.is_outside_frame();
         debug_log!(
             "edit-press: pending x={x:.1} y={y:.1} app_index={app_index:?} outside_glass={outside_glass}"
         );
@@ -1677,6 +1684,18 @@ impl App {
             outside_glass,
         });
         self.request_redraw();
+    }
+
+    /// Classify a screen-space pointer against the launcher grid using the
+    /// layout layer's unified hit classifier. Returns whether the pointer is
+    /// over a visible app cell (and which one), empty space inside the page
+    /// frame, or the transparent launcher area outside the frame.
+    fn grid_hit_at_pointer(&self, x: f32, y: f32) -> layout::grid::GridHit {
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let visible_count = self.visible_app_ids().len();
+        self.layout
+            .classify(w as f32, x, y, scroll_x, visible_count)
     }
 
     fn pointer_over_page_glass(&self, x: f32, y: f32) -> bool {

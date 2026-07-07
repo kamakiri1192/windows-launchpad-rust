@@ -1,5 +1,6 @@
 pub mod bottom_control;
 pub mod control_geometry;
+pub mod grid;
 pub mod hit_map;
 pub mod settings_panel;
 
