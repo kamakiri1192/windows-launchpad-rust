@@ -121,6 +121,37 @@ $g.Dispose()
 $bmp.Dispose()
 ```
 
+## GPU Self-Capture (no foreground access needed)
+
+`CopyFromScreen` requires the launcher window to be in the foreground, which
+CI / sandbox environments often block. When that fails (`SetForegroundWindow`
+returns false, or `CopyFromScreen` raises "invalid handle"), use the built-in
+GPU self-capture path instead: it copies the rendered surface texture directly
+to a host buffer and writes a PNG, with no foreground dependency.
+
+Set `LAUNCHPAD_QA_SHOT_FILE` to a trigger file path, then write the desired
+output PNG path into that file. The app polls the trigger once per frame and,
+when it finds a non-empty path, saves the next rendered frame there and clears
+the trigger (so each write captures exactly one frame).
+
+```powershell
+$trigger = Join-Path (Resolve-Path .\target).Path 'qa-trigger.txt'
+$env:LAUNCHPAD_QA_SHOT_FILE = $trigger
+# ... launch the app with LAUNCHPAD_ALLOW_SCREENSHOT=1 ...
+
+# Capture the current frame to target/qa-frame.png:
+Set-Content -Path $trigger -Value (Join-Path (Resolve-Path .\target).Path 'qa-frame.png')
+Start-Sleep -Milliseconds 500  # wait one frame
+```
+
+This is how the Phase 2 bottom-control slice was screen-verified inside a
+sandbox that refused foreground access: a driver script performs pointer /
+keyboard automation (or drives the app's own state for deterministic checks),
+writes the trigger before each milestone, and reads back the PNG.
+
+The capture is the physical-pixel surface size (e.g. 1920×1200 at 150% DPI),
+so divide by the scale factor when comparing to logical coordinates.
+
 ## Coordinate Notes
 
 The app uses physical pixels internally. Windows pointer APIs and screenshots

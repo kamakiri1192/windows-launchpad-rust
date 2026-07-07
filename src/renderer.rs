@@ -132,6 +132,12 @@ pub struct Renderer {
     settings_instance_count: u32,
     settings_text_instance_buffer: Option<Buffer>,
     settings_text_instance_count: u32,
+    /// When set, the next rendered frame is also copied to a host-readable
+    /// buffer and saved as a PNG at this path. Driven by the
+    /// `LAUNCHPAD_QA_SHOT_FILE` trigger (see `docs/EDIT_MODE_VISUAL_QA.md`) so
+    /// CI / sandboxes without foreground access can capture rendered frames.
+    /// Cleared after one frame.
+    pub qa_shot: Option<std::path::PathBuf>,
 }
 
 pub struct DrawArgs {
@@ -222,7 +228,10 @@ impl Renderer {
         let size = window.inner_size();
         let max_dim = device.limits().max_texture_dimension_2d;
         let config = SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // COPY_SRC is only needed when `qa_shot` captures the frame, but
+            // wgpu requires the usage to be set at config time, so we always
+            // include it. The cost is negligible.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             format: surface_format,
             width: size.width.max(1).min(max_dim),
             height: size.height.max(1).min(max_dim),
@@ -742,6 +751,7 @@ impl Renderer {
             settings_instance_count: 0,
             settings_text_instance_buffer: None,
             settings_text_instance_count: 0,
+            qa_shot: None,
         })
     }
 
@@ -1442,7 +1452,81 @@ impl Renderer {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Optional QA self-capture: copy the surface texture to a host-readable
+        // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.
+        if let Some(path) = self.qa_shot.take() {
+            self.save_frame_png(&frame.texture, path);
+        }
+
         frame.present();
+    }
+
+    /// Copy `src` (the current surface texture) into a host buffer and write it
+    /// to `path` as a PNG. Used only by the `qa_shot` QA harness; lets CI /
+    /// sandboxes capture rendered frames without foreground access. See
+    /// `docs/EDIT_MODE_VISUAL_QA.md` for the trigger protocol.
+    fn save_frame_png(&self, src: &wgpu::Texture, path: std::path::PathBuf) {
+        let w = src.width();
+        let h = src.height();
+        if w == 0 || h == 0 {
+            return;
+        }
+        let bytes_per_row = w * 4;
+        let padded = (bytes_per_row + 255) & !255; // wgpu requires 256-byte align
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("qa capture buffer"),
+            size: (padded as u64) * (h as u64),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("qa capture encoder"),
+            });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: src,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        {
+            let data = slice.get_mapped_range();
+            // De-pad rows into a tight RGBA buffer, then save.
+            let mut pixels: Vec<u8> = Vec::with_capacity((bytes_per_row as usize) * (h as usize));
+            for row in 0..h {
+                let start = (row as usize) * (padded as usize);
+                pixels.extend_from_slice(&data[start..start + bytes_per_row as usize]);
+            }
+            // Reuse the `image` crate already in the dependency tree.
+            if let Some(img) = image::RgbaImage::from_raw(w, h, pixels) {
+                let _ = img.save(&path);
+            }
+        }
     }
 }
 

@@ -3002,6 +3002,24 @@ impl ApplicationHandler<UserEvent> for App {
 
                 // Render the frame (consumes the uploaded buffers).
                 if let Some(r) = self.renderer.as_mut() {
+                    // QA self-capture trigger: if LAUNCHPAD_QA_SHOT_FILE points
+                    // to a file whose contents name a path, the next rendered
+                    // frame is saved there as a PNG (see docs/EDIT_MODE_VISUAL_QA.md).
+                    // The harness writes the path, waits one frame, then reads
+                    // the PNG — letting CI / sandboxes capture arbitrary states
+                    // without foreground access.
+                    if r.qa_shot.is_none() {
+                        if let Some(trigger) = std::env::var_os("LAUNCHPAD_QA_SHOT_FILE") {
+                            if let Ok(path_str) = std::fs::read_to_string(&trigger) {
+                                let path_str = path_str.trim();
+                                if !path_str.is_empty() {
+                                    r.qa_shot = Some(std::path::PathBuf::from(path_str));
+                                    // Clear the trigger so we only capture once per write.
+                                    let _ = std::fs::write(&trigger, "");
+                                }
+                            }
+                        }
+                    }
                     r.render(&DrawArgs {
                         scroll_x,
                         viewport: vp,
