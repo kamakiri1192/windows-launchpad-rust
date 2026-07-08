@@ -1,0 +1,143 @@
+//! Per-frame tick and redraw orchestration.
+//!
+//! [`App::tick_frame`] is the body of the historical
+//! `WindowEvent::RedrawRequested` handler: it advances the scroller, edit-mode
+//! wiggle, tile springs, page indicator, bottom-control and settings-panel
+//! animations, uploads the control/gear/settings geometry, syncs the OS IME,
+//! and submits the render. It is extracted verbatim so the handler module can
+//! stay a thin dispatcher.
+//!
+//! Behavior preservation: the ordering of every step (scroller tick →
+//! autoscroll → live reorder → wiggle → springs → page indicator → control
+//! tick → control/gear/settings upload → IME sync → render → animation-gated
+//! redraw) is unchanged.
+
+use std::time::Instant;
+
+use crate::renderer::DrawArgs;
+use crate::scroll::Phase;
+use crate::startup_timer::prefix;
+
+use super::state::App;
+
+impl App {
+    /// Advance one frame and submit the render. Returns early if the scroller
+    /// is not yet initialized (mirrors the historical early `return`).
+    pub(crate) fn tick_frame(&mut self) {
+        let now = Instant::now();
+        let vp = self.viewport_phys();
+        let scroll_x;
+        let dragging;
+        if let Some(s) = self.scroller.as_mut() {
+            dragging = s.phase == Phase::Dragging;
+            s.tick(now);
+            scroll_x = s.position;
+        } else {
+            return;
+        }
+        let scroller_animating = self
+            .scroller
+            .as_ref()
+            .map(|s| s.is_animating())
+            .unwrap_or(false);
+        let auto_scroll_started = self.maybe_autoscroll_edit_drag();
+        if self.editing && self.drag_app.is_some() {
+            self.live_reorder();
+        }
+
+        // Advance the wiggle animation phase while editing. dt is taken
+        // from the redraw cadence (clamped like the control's).
+        let anim_dt = match self.last_redraw {
+            Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
+            None => 1.0 / 60.0,
+        };
+        if self.editing {
+            self.wiggle_phase += anim_dt;
+        }
+
+        // Advance the per-tile position springs and re-push the
+        // instance buffers if any are still sliding (reorder animation).
+        let springs_animating = self.step_tile_springs(anim_dt);
+        if springs_animating {
+            self.refresh_spring_instances();
+        }
+
+        // Detect a page change (settled page differs from the last
+        // tracked one) and arm the transient page indicator.
+        let page = self.current_page() as i32;
+        if page != self.last_page && !scroller_animating {
+            self.last_page = page;
+            self.control.on_page_change(now);
+        }
+
+        // Advance the bottom-control's animations + timers. Use the
+        // real elapsed dt (not a fixed 1/60) so the caret blink and
+        // morph speeds are correct even when redraws fire faster than
+        // 60 Hz (e.g. on backdrop-frame arrivals).
+        let control_dt = match self.last_redraw {
+            Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
+            None => 1.0 / 60.0,
+        };
+        self.last_redraw = Some(now);
+        let control_animating = self.control.tick(now, control_dt);
+        let edit_control_animating = self.step_edit_control_width(control_dt);
+        let settings_animating = self.step_settings_panel(control_dt);
+
+        // Upload the control's capsule + overlays before the render.
+        // This also measures query + preedit width for the IME cursor.
+        self.render_bottom_control();
+        // Upload the corner gear capsule + glyph (if shown).
+        self.render_gear();
+        // Upload the settings overlay panel (if open).
+        self.render_settings_panel();
+
+        // Sync the OS IME with the search field (on while focused,
+        // parked at the caret) so Japanese / other IME input works.
+        self.update_ime_state();
+
+        // Render the frame (consumes the uploaded buffers).
+        if let Some(r) = self.renderer.as_mut() {
+            // QA self-capture trigger: if LAUNCHPAD_QA_SHOT_FILE points
+            // to a file whose contents name a path, the next rendered
+            // frame is saved there as a PNG (see docs/EDIT_MODE_VISUAL_QA.md).
+            // The harness writes the path, waits one frame, then reads
+            // the PNG — letting CI / sandboxes capture arbitrary states
+            // without foreground access.
+            if r.qa_shot.is_none() {
+                if let Some(trigger) = std::env::var_os("LAUNCHPAD_QA_SHOT_FILE") {
+                    if let Ok(path_str) = std::fs::read_to_string(&trigger) {
+                        let path_str = path_str.trim();
+                        if !path_str.is_empty() {
+                            r.qa_shot = Some(std::path::PathBuf::from(path_str));
+                            // Clear the trigger so we only capture once per write.
+                            let _ = std::fs::write(&trigger, "");
+                        }
+                    }
+                }
+            }
+            r.render(&DrawArgs {
+                scroll_x,
+                viewport: vp,
+                defer_backdrop_capture: dragging,
+                time: self.wiggle_phase,
+                drag_active: if self.drag_app.is_some() { 1.0 } else { 0.0 },
+                drag_pos: (self.drag_x, self.drag_y),
+            });
+        }
+
+        if !self.first_frame_rendered {
+            self.first_frame_rendered = true;
+            self.timer.mark(prefix::STARTUP, "first frame rendered");
+        }
+        if scroller_animating
+            || auto_scroll_started
+            || control_animating
+            || edit_control_animating
+            || settings_animating
+            || springs_animating
+            || self.editing
+        {
+            self.request_redraw();
+        }
+    }
+}
