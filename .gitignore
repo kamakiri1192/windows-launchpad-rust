@@ -22,3 +22,7 @@ Desktop.ini
 /target/qa-*.png
 /target/qa-*.txt
 /target/qa-trigger.txt
+
+# codex review intermediate artifacts (never commit)
+/diff.patch
+/old_main*.rs
