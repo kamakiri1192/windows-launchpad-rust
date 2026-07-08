@@ -994,3 +994,224 @@ Notes and discoveries:
 - `EDIT_EDGE_SCROLL_ZONE` is now sourced from `layout::edit_mode` (the pure
   geometry layer) and aliased in `main.rs` for the historical doc
   cross-reference, so the configured zone is defined in one place.
+
+### 2026-07-08: Phase 5, app shell consolidation
+
+Files changed:
+
+- `src/app/mod.rs` (new)
+- `src/app/state.rs` (new)
+- `src/app/event.rs` (new)
+- `src/app/input.rs` (new)
+- `src/app/update.rs` (new)
+- `src/app/command.rs` (new)
+- `src/app/frame.rs` (new)
+- `src/app/render.rs` (new)
+- `src/app/handler.rs` (new)
+- `src/main.rs`
+- `docs/DF_REARCHITECTURE_LOG.md`
+- `.gitignore`
+
+What changed:
+
+- Added the Phase 5 app shell under `src/app/`. `main.rs` shrank from ~4020
+  lines to ~270 lines of process startup + event-loop wiring; the `App`
+  struct, `ApplicationHandler` impl, state transitions, command execution,
+  per-frame orchestration, renderer/text adapters, and pure input routing now
+  live behind `app/` sub-modules:
+  - `app::state` — `App` struct + `new` + value types (`PendingPress`,
+    `SettingsPressTarget`, `WorkerMessage`, `Inbox`) + pure `&self` accessors
+    (`viewport_phys`, `current_page`, `visible_app_ids`, `matches_search`,
+    `grid_apps_owned`, `resolve_control`, `bottom_control_*`, `grid_hit_at_pointer`,
+    `badge_hit`, `resolve_clicked_app`, …) + the `PendingPress`
+    `is_click`/`launch_id`/`is_outside_glass_click` helpers (moved verbatim from
+    `main.rs` free functions) + their tests.
+  - `app::event` — `UserEvent` (moved from `main.rs`), `AppAction`-style route
+    enums (`KeyboardRoute`, `PressRoute`, `ReleaseRoute`), and the app-level
+    `AppCommand` set that consolidates the Phase-4 `EditModeCommand`.
+  - `app::input` — pure functions `keyboard_route` and `pointer_press_route`
+    that re-express the historical keyboard/pointer precedence rules (settings
+    Esc > edit Esc > search Esc > launcher hide; settings > control > edit/grid)
+    so they are unit-testable without a window/renderer. These are a parallel
+    pure surface; the handler still owns the real side effects.
+  - `app::update` — `&mut self` state transitions: settings click handling,
+    open/close/toggle settings, control click, edit-mode entry/exit/reorder/
+    hide, drag promotion, long-press, scroll drag, inbox drain, and the
+    EditModeCommand integration (see below).
+  - `app::command` — side-effect execution at the app boundary: `hide`,
+    `hide_with_click_passthrough`, `summon`, `persist_*`, `load_customization`,
+    `execute_command(AppCommand)`, and `execute_edit_mode_commands(Vec<EditModeCommand>)`
+    (the Phase-5 consolidation point).
+  - `app::frame` — `tick_frame(&mut self)`: the historical
+    `WindowEvent::RedrawRequested` body (scroller tick → autoscroll → live
+    reorder → wiggle → springs → page indicator → control/settings morph →
+    control/gear/settings upload → IME sync → render → animation-gated redraw).
+  - `app::render` — renderer/text/GPU-facing adapter methods (`relayout`,
+    `render_bottom_control`/`gear`/`settings_panel`, `apply_icon`,
+    `apply_diff`, `reset_icons`, `ingest_snapshot`, `edit_anim`, tile springs,
+    IME/caret helpers) plus the free helper functions/constants/trait they
+    depended on (`build_settings_panel_instances`, `self_layout_control_text`,
+    `transform_*`, `control_icon`, `toggle_instances`, `caret_visibility`,
+    `advance_unit_toward`, `SpringPos`, `QUERY_*`/`SETTINGS_*` constants, and
+    the settings-panel copy/category/sort mapping helpers).
+  - `app::handler` — the `ApplicationHandler<UserEvent> for App` impl, kept as a
+    thin dispatcher that routes raw events to `update`/`command`/`frame`. The
+    `RedrawRequested` arm now calls `self.tick_frame()`.
+- **EditModeCommand → AppCommand consolidation.** The Phase-4
+  `features::edit_mode::EditModeCommand` was unwired (the inline
+  `enter_edit_mode`/`exit_edit_mode`/`commit_reorder` duplicated it). Phase 5
+  wires it: `enter_edit_mode`, `exit_edit_mode`, and `commit_reorder` now build
+  an `EditModeState` mirror, call `features::edit_mode::enter`/`exit`/
+  `commit_drag`, sync the mirror back, and run the returned commands through
+  `execute_edit_mode_commands`, which projects each `EditModeCommand` onto an
+  `AppCommand` and executes it via the shared `execute_command` boundary. The
+  mapping is total and order-preserving (`commit_drag` emits `SetSortManual` →
+  `PersistSettings` → `PersistUserOrder`, matching the historical
+  `commit_reorder` sequence; `exit` runs the commit commands before the
+  clear-editing commands). The app shell is intentionally **not** a pure
+  reducer: `update`/`command`/`frame`/`render` keep `&mut self` access to the
+  renderer/scroller/text renderer. Only `input` and `event` are pure-data /
+  pure-function surfaces.
+
+`main.rs` after Phase 5 (startup wiring / adapter only):
+
+- `main()`: single-instance guard, `StartupTimer`, debug logger, `env_logger`,
+  `--reset-cache`, `IconCache::open_or_rebuild`, shared inbox, `EventLoop`,
+  proxy, icon-worker + refresh-watcher spawn + `spawn_bridge`, `forward_inbox`,
+  OS integration handle spawn, `App::new`, `load_customization`, `run_app`.
+- `spawn_bridge` + `forward_inbox`: the merged-channel → shared-inbox bridge.
+- `initial_window_position` + `load_window_icon`: window-creation helpers
+  consumed by `app::handler::resumed`.
+- `dump_atlas_png`: diagnostic helper consumed by `app::render::apply_icon`.
+- `CELL` constant and `mod app;` declaration.
+- The `search_matching_*` binary tests (unchanged).
+
+Behavior preservation (rationale):
+
+- Every move is mechanical: method bodies, free-function bodies, constants,
+  and the `ApplicationHandler` impl are copied verbatim; only module paths
+  (`crate::` prefixes) and visibility (`pub(crate)`) changed. `cargo build`,
+  `cargo clippy --all-targets --all-features`, and `cargo test` are clean.
+- The `tick_frame` extraction is the historical `RedrawRequested` body verbatim
+  (same step order, same animation-gated redraw condition).
+- The `input` routing functions are a **parallel** pure re-expression of the
+  precedence rules; the handler keeps its own inline logic, so no real
+  event-routing path changed. They exist to make the precedence rules
+  deterministic and unit-testable.
+- Side-effect ordering is preserved and pinned by new tests: hide-before-launch
+  (`AppCommand::LaunchApp` documents the ordering; the handler's inline launch
+  paths still do `hide()` then `open_shortcut`), modal-dismiss-without-
+  passthrough (`HideWindow` vs `HideWithClickPassthrough` are distinct
+  commands), search-Esc-clears-query (`SearchEscClose` vs `HideLauncher` are
+  distinct routes), and edit-mode commit order (`commit_drag` emits
+  `SetSortManual` before the persist commands; `exit` runs commit before
+  clear).
+- `bottom_control` state machine / IME / caret / page indicator / search
+  matching, `scroll` physics, the renderer, shaders, GPU instance layouts, and
+  all user-facing strings are untouched.
+- A code review of the diff found one regression: `sync_edit_mode_state` was
+  writing `self.editing` back before `execute_edit_mode_commands` ran the
+  `SetEditing` command, which pre-mutated the field and silenced the
+  `debug_log!("edit-mode: entered/exited")` first-transition logs. Fixed by
+  dropping `editing` from the sync (it is owned by the `SetEditing` command,
+  which carries the log-on-transition). Verified by re-running `cargo test`.
+
+Adapters left in place (intentionally, Phase 6+ follow-up):
+
+- `app::render` is the renderer upload adapter: it adapts the layout-layer
+  `LayoutResult` back into the existing renderer upload path
+  (`set_control_*`, `set_settings_*`, `rebuild_instances`, …). The renderer
+  facade split is Phase 6.
+- GPU-facing types (`TileInstance`, `IconInstance`, `ControlInstance`,
+  `TileAnim`) and their builders stay in `grid.rs`/`bottom_control.rs`/
+  `renderer.rs`. `app::render` calls them through the existing re-exports.
+- `EditModeState` remains a feature-side mirror; the app boundary owns the
+  source-of-truth fields the renderer/scroller read directly (`editing`,
+  `drag_app`, `drag_x`, `drag_y`, `wiggle_phase`). A later slice can collapse
+  the mirror once the app shell fully owns the state.
+- `AppCommand` is introduced but the handler still performs launches inline
+  (`hide()` + `open_shortcut`); `AppCommand::LaunchApp` is wired through
+  `execute_command` and documented by tests, but the handler has not been
+  switched to emit it yet (the inline path is behavior-identical). Routing
+  launches through the command boundary is a later cleanup.
+- `AppId` still lives in the binary tree (`app_id.rs`); moving it to `domain/`
+  is Phase 7.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 114 lib + 315 bin + 2 WGSL validation, all passed (Phase 5
+  added 25 new tests: 18 `app::input` precedence tests, 4 `app::command`
+  edit-mode-consolidation/ordering tests, 3 `app::event` command-ordering
+  tests; the 6 historical `pending_press_tests` moved verbatim into
+  `app::state`).
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `codex review --base main`: the review did not reach a conclusion within the
+  sandbox's 5-minute timeout (the diff is ~4820 insertions / ~3752 deletions,
+  and the model's analysis exceeded the window). A focused read-only manual
+  review of the diff was performed instead, covering the EditModeCommand
+  integration, side-effect ordering, pointer/keyboard precedence, and
+  spot-checks of the mechanical moves. It found the edit-mode transition-log
+  regression described above, which was fixed; all other focus areas verified
+  clean.
+- `cargo run --release` with `LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`,
+  a temporary `LOCALAPPDATA`, and the `LAUNCHPAD_QA_SHOT_FILE` GPU self-capture
+  path: first frame captured to `target/qa-phase5-initial.png` (~870 KB,
+  1920×1200). Visual inspection (image analysis) confirms:
+  - non-blank first frame: the launcher renders a centered, semi-transparent
+    Liquid Glass page-frame panel with a grid of app tiles, app icons inside
+    the tiles, text labels below them, and the bottom-center search/control
+    capsule (with the "検索" placeholder) — matching the pre-refactor
+    appearance (identical to the Phase 3/4 first-frame captures).
+  - the process started cleanly (`debug.log` shows `window_event: Focused(true)`).
+
+Screen verification:
+
+- Launched with `cargo run --release` (release exe + documented screenshot
+  environment): yes
+- First frame non-blank: yes (GPU self-capture; centered glass panel, tile grid,
+  icons, labels, bottom capsule all rendered — confirmed via image analysis)
+- Resize / DPI-sensitive layout: not verified on screen this slice; DPI geometry
+  scaling and the render path are unchanged code, covered by existing unit
+  tests.
+- Scroll / snap / rubber-band: not verified on screen; `scroll.rs` physics and
+  the scroller wiring are unchanged code.
+- Search / filtering / IME: not verified on screen; the bottom-control state
+  machine, IME, caret, and search matching are unchanged code. Keyboard
+  precedence is covered by the new `app::input` tests.
+- Edit mode (long-press / drag / reorder / Done / settings gear / hide badge):
+  not verified on screen — the sandbox's foreground lock and window-detection
+  limitations prevented interactive simulation from landing on the launcher
+  window. The edit-mode entry/exit/commit paths are now routed through
+  `features::edit_mode` + the shared command boundary; the
+  `enter`/`exit`/`commit_drag` command order and the `EditModeCommand → AppCommand`
+  mapping are covered by the new `app::command` tests and the existing
+  `features::edit_mode` tests.
+- Settings overlay (open/close/category/toggle): not verified on screen;
+  settings code paths are unchanged code (moved, not modified).
+- Icons / labels / launch hit targets: icons and labels verified in the first
+  frame capture; launch hit targets are unchanged code covered by the
+  `pending_press_tests` (now in `app::state`).
+- Click passthrough (transparent area) vs frame-empty (no passthrough): not
+  verified on screen (requires foreground/interactive input); the distinction
+  is unchanged code.
+
+Notes and discoveries:
+
+- The crate is a single binary; `app` is a child module of `main.rs`. Module
+  paths inside `app/` use `crate::` for sibling modules (`crate::grid`,
+  `crate::renderer`, …) and `super::`/`crate::app::` for shell types.
+- Rust allows `impl App` blocks in any module of the same crate, so the method
+  moves are purely organizational: call sites (`self.method()`) do not change.
+  Only moved free functions needed `use` adjustments at their call sites.
+- The `debug_log!` macro is `#[macro_export]` and reachable as
+  `crate::debug_log!` (or `use crate::debug_log;`) from `app/`.
+- `input.rs`'s `keyboard_route`/`pointer_press_route` are deliberately
+  test-only for now: switching the handler to dispatch through them is a
+  larger change than Phase 5 intends, and the historical handler arms are the
+  proven path. They document and pin the precedence rules so a future slice
+  can move the handler onto them with confidence.
+- A `codex review` run accidentally staged large intermediate files
+  (`diff.patch`, `old_main.rs`, `old_main_utf8.rs`); these were removed and
+  gitignored.
