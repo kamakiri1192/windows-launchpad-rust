@@ -760,3 +760,237 @@ Notes and discoveries:
   directly. They now resolve to the pure `layout::grid` implementations through
   the re-export, so no call-site edits were required for behavior preservation;
   routing every one through `GridHit` is a later, optional cleanup.
+
+### 2026-07-08: Phase 4, edit-mode vertical slice
+
+Files changed:
+
+- `docs/DF_CURRENT_BEHAVIOR_INVENTORY.md`
+- `docs/DF_REARCHITECTURE_LOG.md`
+- `src/layout/mod.rs`
+- `src/layout/edit_mode.rs` (new)
+- `src/features/mod.rs` (new)
+- `src/features/edit_mode/mod.rs` (new)
+- `src/features/edit_mode/state.rs` (new)
+- `src/features/edit_mode/tests.rs` (new)
+- `src/main.rs`
+- `.gitignore`
+
+What changed:
+
+- Added a current-behavior inventory section for edit mode covering long-press
+  entry (threshold / slop / `outside_glass` rejects), the pending-press →
+  scroll-drag / launch-click / passthrough / long-press resolution order, edit
+  entry side effects (scroll cancel / wiggle reset / long-pressed app lift),
+  icon wiggle / dragged-icon lift+scale / pointer-follow / draw-on-top /
+  frame-clip bypass, edit badge hide visuals + hit precedence, edit-press /
+  edit-release behavior, CursorLeft finalize + pending-press cancel, all exit
+  paths (Esc / Done / settings gear / empty click / focus loss while editing),
+  live reorder, empty-cell drop, rightmost columns, label area not being a drop
+  target, edge autoscroll (zone / gutter clamp / floor / cap), hidden-app order
+  behavior, persistence, tile springs/slide animation, and the adapters left in
+  place. The hidden-app ordering paragraph was refined after a test pinned the
+  historical concatenated-list insert behavior.
+- Added `layout::edit_mode` as the Phase 4 pure-geometry library module. It
+  owns:
+  - `EditBadgeGeometry::for_tile` — the badge center/radius/hit-radius derived
+    from the same `BADGE_CENTER_INSET_FRAC` (0.45) and `edit_badge_radius` /
+    `edit_badge_hit_slop` the renderer's badge source and the historical
+    `badge_hit` used, so a visible badge always clicks where it renders.
+  - `badge_hit` — the pure badge hit-test (the historical `main.rs::badge_hit`
+    body).
+  - `drop_cell_at` — a thin explicit wrapper over `GridLayout::hit_test_tile_cell`
+    with `total_tiles`, documenting that app *launch* includes the label slop
+    while edit *drop* excludes it.
+  - `configured_edge_zone` / `edge_autoscroll_zones` — the configured zone
+    (scaled `EDIT_EDGE_SCROLL_ZONE` clamped to `panel_w * 0.25` and floored at
+    `24.0`) and the gutter clamp (`zone.min((grid_left - panel_left).max(0))`
+    and symmetric), so the rightmost tile columns stay reachable as drop targets.
+  - `EdgeAutoscrollInput` + `edge_autoscroll_target` — the pure target-page
+    decision (left/right/none) given the drag position, panel rect, zones,
+    current page, and page count. The `Idle`-only gate and the `settle_to_page`
+    call stay in `main.rs`.
+  - `reorder_insert_index` — the pure insert-index decision
+    (`target_idx.min(visible_len)`, `None` when equal to `drag_pos`).
+- Added `src/features/` and `features::edit_mode` as the Phase 4 feature module
+  (Phase 5 will add the app shell and other features). It owns:
+  - `EditModeState` (a feature-side mirror of the edit-mode fields the boundary
+    owns) and `PointerSnapshot` / `PressSnapshot` value types so the pure
+    decisions do not depend on `main.rs::PendingPress` (which also drives
+    launch/passthrough/scroll-drag and moves to the app shell in Phase 5).
+  - `should_enter_from_long_press` — the pure long-press decision
+    (outside-glass rejects, slop rejects, threshold) replacing the historical
+    `maybe_long_press_into_edit` inline check.
+  - `edit_press_classify` / `EditPressIntent` — the edit-press classifier
+    (badge > drag > empty-exit / noop) replacing the `MouseInput::Pressed`
+    edit branch's inline `app_index_at_pointer` + `badge_hit` decision.
+  - `EditModeCommand` — a narrow edit-mode-only command set
+    (`SetEditing`, `SetDragApp`, `SetDragPos`, `ResetWigglePhase`,
+    `CancelScroll`, `ClearPendingPress`, `Relayout`, `RequestRedraw`,
+    `PersistUserOrder`, `PersistHidden`, `PersistSettings`, `SetSortManual`,
+    `HideApp`, `SettleToPage`). Phase 5 will consolidate this into the global
+    `AppCommand`; Phase 4 keeps it edit-mode-local.
+  - `enter` / `exit` / `start_drag` / `drag_move` / `commit_drag` — state
+    transitions that return the command list the boundary executes.
+  - `apply_reorder` / `hidden_order_after_hide` — the pure order computations
+    (`reorder_by_index` / `hide_app` bodies).
+- Connected `main.rs` to the new boundaries:
+  - `badge_hit`, `edit_drop_index_at_pointer`, `maybe_autoscroll_edit_drag`,
+    and `live_reorder` now delegate the geometry/intent to
+    `layout::edit_mode`; the scroller/registry/redraw side effects stay in
+    `main.rs`.
+  - `maybe_long_press_into_edit` builds a `PressSnapshot` and calls
+    `features::edit_mode::should_enter_from_long_press`; `PendingPress` stays
+    in `main.rs`.
+  - `reorder_by_index` / `hide_app` compute the new order via
+    `features::edit_mode::apply_reorder` / `hidden_order_after_hide`; the
+    `registry.set_order` / `persist_*` calls stay in `main.rs`.
+  - The `MouseInput::Pressed` edit branch classifies via
+    `features::edit_mode::edit_press_classify` (built from `grid_hit_at_pointer`
+    + `badge_hit`), preserving the historical behavior that a click on empty
+    space (inside *or* outside the frame, since `hit_test_app` clips to the
+    frame and returns `None` for both) exits edit mode.
+  - `EDIT_EDGE_SCROLL_ZONE` is now re-declared in `main.rs` as an alias for
+    `layout::edit_mode::EDIT_EDGE_SCROLL_ZONE` (the source of truth); the
+    now-unused `app_index_at_pointer` helper was removed (the edit branch no
+    longer calls it; `resolve_clicked_app` and `begin_grid_press` use
+    `hit_test_app` / `grid_hit_at_pointer` directly).
+
+Adapters left in place (intentionally not migrated this slice):
+
+- GPU-facing `TileAnim` / `TileInstance` / `IconInstance` and the GPU instance
+  builders stay in `src/grid.rs`; the renderer badge source
+  (`edit_badge_sources` / `animated_badge_center`) stays in `src/renderer.rs`.
+  They are referenced by the renderer-facing `edit_anim` / `lift_dragged_instances`
+  / `update_tile_springs` / `step_tile_springs` / `refresh_spring_instances`
+  helpers in `main.rs`, which remain adapter code. The renderer facade split is
+  Phase 6.
+- `edit_anim`, `lift_dragged_instances`, the per-`AppId` `tile_springs`, the
+  `step_edit_control_width` / `edit_visual_progress` edit-Done-width morph
+  helpers, and the `App.editing` / `drag_app` / `drag_x` / `drag_y` /
+  `wiggle_phase` fields stay in `main.rs` because the renderer and scroller
+  read them directly. The `EditModeState` in `features::edit_mode` is a
+  feature-side mirror the decision functions operate on; the boundary keeps
+  them in sync.
+- `PendingPress` stays in `main.rs`. It also drives launch / click-passthrough
+  / scroll-drag promotion, which is not edit-mode-specific, so migrating it
+  wholesale is Phase 5 (app shell consolidation). The pure long-press decision
+  was still extracted via `PressSnapshot`.
+- The edit-mode Done capsule and settings gear are **not** re-implemented in
+  `layout::edit_mode`. They already live in `layout::bottom_control` (Phase 2)
+  and are reached through `BottomControlPointerIntent::EditGear`; edit mode
+  reuses that boundary so no duplicate gear geometry is created.
+
+Behavior preservation:
+
+- Every pure calculation in `layout::edit_mode` is the exact body the
+  historical `main.rs` helpers performed (`badge_hit`, the
+  `hit_test_tile_cell`-based `edit_drop_index_at_pointer`, the zone/zone/target
+  math in `maybe_autoscroll_edit_drag`, and the insert-index decision in
+  `live_reorder`).
+- `apply_reorder` / `hidden_order_after_hide` reproduce the historical
+  `reorder_by_index` / `hide_app` order computation over the
+  visible-stream-then-hidden concatenated list with `insert_idx.min(len)`
+  clamping. A test (`apply_reorder_preserves_historical_concatenated_insert_behavior`)
+  pins this so the behavior-preserving refactor cannot silently change where
+  the dragged id lands in the persisted order relative to hidden apps.
+- `edit_press_classify` is the exact decision the historical `MouseInput::Pressed`
+  edit branch made (`app_index_at_pointer` Some → badge/drag, None → exit),
+  including the subtlety that a click outside the page frame also exits edit
+  mode (because `hit_test_app` clips to the frame and returns `None` for both
+  empty-in-frame and outside-frame). The classifier exposes `EmptyExit` and
+  `Noop` and the boundary exits in both cases, preserving the behavior.
+- The long-press decision (`should_enter_from_long_press`) reproduces the
+  historical `outside_glass` rejection, the `CLICK_SLOP_PHYS` movement
+  rejection, and the `LONG_PRESS_THRESHOLD` timing.
+- `commit_reorder`'s persist sequence (`SortOrder::Manual` → persist settings →
+  persist user order) is preserved; the order in `commit_drag` keeps
+  `SetSortManual` before the persist commands so the boundary applies it first.
+- Edit-mode entry/exit side effects (scroll cancel, wiggle reset, app lift,
+  relayout, redraw) are preserved by the `enter`/`exit` command lists.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 114 lib + 291 bin + 2 WGSL validation, all passed (47 new tests:
+  21 `layout::edit_mode` lib tests for badge geometry/hit, drop-cell
+  empty/rightmost/label, edge autoscroll zones/targets, and reorder insert
+  index; 26 `features::edit_mode` bin tests for long-press entry/no-entry,
+  slop, edit entry with/without app lift, drag lifecycle, commit → SortOrder,
+  press classification, badge precedence, reorder order computation, and
+  hidden-app order preservation).
+- `cargo clippy --all-targets --all-features`: passed (no warnings; the
+  `edge_autoscroll_target` parameter list was grouped into `EdgeAutoscrollInput`
+  to avoid `clippy::too_many_arguments`).
+- `cargo build --release`: passed
+- `codex review --base main`: "No actionable regressions were found in the
+  diff. The refactor preserves the existing edit-mode behavior and the
+  test/clippy checks pass."
+- `cargo run --release` with `LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`,
+  a temporary `LOCALAPPDATA`, and the `LAUNCHPAD_QA_SHOT_FILE` GPU self-capture
+  path: first frame captured to `target/qa-phase4-initial.png` (1920×1200,
+  ~700 KB). Visual inspection confirms:
+  - non-blank first frame: the launcher renders a centered, semi-transparent
+    Liquid Glass page-frame panel with a 7×5 grid of app tiles, app icons
+    inside the tiles, text labels below them, and the bottom-center control
+    capsule — matching the pre-refactor appearance.
+
+Screen verification:
+
+- Launched with `cargo run --release` (release exe + documented screenshot
+  environment): yes
+- First frame non-blank: yes (GPU self-capture; centered glass panel, tile
+  grid, icons, labels, and bottom capsule all rendered)
+- Long-press → edit mode / wiggle / badges: not verified on screen — the
+  sandbox's foreground lock and window-detection limitations prevented the
+  interactive long-press simulation from landing on the launcher window
+  (PowerShell `EnumWindows` could not locate the background-launched window for
+  the mouse simulation). The long-press entry/exit decision, badge hit, and
+  wiggle/lift/scale animation code paths are unchanged and covered by the new
+  deterministic tests; `edit_press_classify` badge-vs-drag precedence and the
+  long-press threshold/slop/outside-glass rules are unit-tested.
+- Drag lift/scale/follow / reorder / empty-cell drop / rightmost columns / edge
+  autoscroll: not verified on screen (same interactive blocker). The reorder
+  order computation (`apply_reorder`), the drop-cell hit (empty/rightmost/
+  label-excluded), the edge-autoscroll zone clamp + target decision, and the
+  rightmost-column reachability are all covered by deterministic tests.
+- Done / Esc / empty-click / settings-gear exit: not verified on screen (same
+  interactive blocker). The Done/gear routing is unchanged code (Phase 2
+  `BottomControlPointerIntent::EditGear`); the Esc path is unchanged code; the
+  empty-click exit is covered by `edit_press_classify` tests.
+- Delete badge hide / reorder persistence across restart / hidden-app
+  persistence across restart: not verified on screen (same interactive
+  blocker). The hide path, the order/hidden persistence calls, and the
+  order-after-hide computation are unchanged and covered by tests.
+- Search / bottom control / settings / click passthrough: not verified on
+  screen; the pointer-routing precedence is unchanged code and the edit branch
+  now goes through the same `grid_hit_at_pointer` / `bottom_control_intent`
+  / `badge_hit` calls the Phase 2/3 boundaries already provided.
+
+Notes and discoveries:
+
+- The crate's `src/lib.rs` only exposes `layout` and `ui_model`; `features`
+  depends on `app_id::AppId`, which lives in the binary tree, so
+  `features::edit_mode` is a binary module (`mod features;` in `main.rs`) for
+  Phase 4. Moving `AppId` to `domain/` is Phase 7; once it is in the library,
+  `features` can move there too.
+- `EditModeCommand` is intentionally edit-mode-local (not the global
+  `AppCommand`). Phase 5 consolidates these into the app shell's command
+  executor. The `SetDragPos(f32, f32)` variant carries `f32`, so the enum
+  derives `PartialEq` (not `Eq`).
+- `EditModeState` is a feature-side mirror; the boundary owns the source of
+  truth for the fields the renderer/scroller read directly (`editing`,
+  `drag_app`, `drag_x`, `drag_y`, `wiggle_phase`). This keeps the feature
+  module testable without a real window/scroller while the boundary stays the
+  single owner of the runtime state. A later slice can collapse the mirror
+  once the app shell owns the state.
+- The hidden-app ordering paragraph in the inventory was corrected after a
+  test pinned the historical behavior: the reorder operates on the
+  visible-stream-then-hidden concatenated list with `insert_idx` clamped to
+  `visible.len()`, so a drop at the tail lands the dragged app at the join
+  with the hidden block. The *visible* result is always the user-intended
+  arrangement because the registry filters hidden apps out of the visible
+  stream.
+- `EDIT_EDGE_SCROLL_ZONE` is now sourced from `layout::edit_mode` (the pure
+  geometry layer) and aliased in `main.rs` for the historical doc
+  cross-reference, so the configured zone is defined in one place.
