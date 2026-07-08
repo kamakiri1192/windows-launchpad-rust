@@ -487,18 +487,20 @@ impl App {
     }
 
     /// Write the feature-side [`EditModeState`] mirror back to the app
-    /// boundary's source-of-truth fields. Only the fields the feature module
-    /// mutates in-place during `enter`/`exit` are copied back (`editing`,
-    /// `drag_app`, `wiggle_phase`, `pending_press`); the command list carries
-    /// the rest of the side effects. `drag_x`/`drag_y` are owned by the
-    /// pointer-follow path and are not mutated by `enter`/`exit`.
+    /// boundary's source-of-truth fields.
+    ///
+    /// Only the fields the feature module mutates in-place during `enter`/`exit`
+    /// that are NOT also carried as commands are copied back (`drag_app`,
+    /// `wiggle_phase`). `editing` is intentionally NOT synced here: it is owned
+    /// by the `SetEditing` command, which logs the first-transition via
+    /// [`App::set_editing`]. Syncing it here would pre-mutate the field before
+    /// the command runs and silence that log. `pending_press` is likewise
+    /// command-owned (`ClearPendingPress`), and `drag_x`/`drag_y` are owned by
+    /// the pointer-follow path (`SetDragPos`) and are not mutated by
+    /// `enter`/`exit`.
     fn sync_edit_mode_state(&mut self, state: &crate::features::edit_mode::EditModeState) {
-        self.editing = state.editing;
         self.drag_app = state.drag_app.clone();
         self.wiggle_phase = state.wiggle_phase;
-        // `pending_press` mirror is write-only from the feature's perspective
-        // (ClearPendingPress is emitted as a command), so we do not read it
-        // back here; the command clears the real field.
     }
 
     /// Handle a click (press + release inside the capsule with no drag) on the
