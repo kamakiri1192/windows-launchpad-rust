@@ -1,30 +1,41 @@
-//! Liquid Glass shape submission for the fixed overlay surfaces.
+//! Liquid Glass shape submission, grouped by render lane.
 //!
-//! These are thin delegates into [`LiquidGlassRenderer`] that push a single
-//! feature-owned glass shape (bottom control, corner gear, settings panel).
-//! The base glass shapes (fixed page frame + scrolling tile halos) are rebuilt
-//! via [`Renderer::rebuild_instances`].
+//! The renderer does not know whether a glass surface came from the bottom
+//! control, the edit-mode gear, the settings panel, or a future folder. It
+//! only knows the *rendering characteristics* a surface needs:
+//!
+//! - [`overlay_glass`][Renderer::set_overlay_glass]: fixed glass surfaces that
+//!   share one Liquid Glass SDF field so they merge and separate smoothly
+//!   (today: the bottom-control capsule + the edit-mode settings gear). Both
+//!   shapes are submitted in one call so the field is computed once.
+//! - the modal lane (settings panel) is submitted through
+//!   [`prepare`][Renderer::prepare], which routes a renderer-neutral
+//!   `GlassSurface` list.
+//!
+//! The base glass shapes (fixed page frame + scrolling tile halos) are still
+//! rebuilt via [`Renderer::rebuild_instances`], which is the base/scrolling
+//! lane.
 
 use crate::liquid_glass::geometry::GlassShape;
 
 use super::Renderer;
 
 impl Renderer {
-    /// Push the bottom-control's glass capsule shape into the Liquid Glass
-    /// geometry buffer. `None` hides the control. Called every frame from the
-    /// app (the geometry is tiny and rebuilt cheaply).
-    pub fn set_control_glass_shape(&mut self, shape: Option<GlassShape>) {
-        self.liquid_glass.set_control_shape(&self.device, shape);
-    }
-
-    /// Push the corner gear's glass capsule shape. `None` hides it.
-    pub fn set_gear_glass_shape(&mut self, shape: Option<GlassShape>) {
-        self.liquid_glass.set_gear_shape(&self.device, shape);
-    }
-
-    /// Push the settings overlay panel shape. `None` hides it.
-    pub fn set_settings_panel_glass_shape(&mut self, shape: Option<GlassShape>) {
-        self.liquid_glass
-            .set_settings_panel_shape(&self.device, shape);
+    /// Submit the fixed overlay glass surfaces for this frame. The bottom
+    /// control and the edit-mode gear are submitted together because the
+    /// Liquid Glass shader composites them in one SDF field (this is what
+    /// makes the gear merge into / separate from the capsule smoothly).
+    ///
+    /// Pass `None` for either slot to hide that surface. Replaces the former
+    /// `set_control_glass_shape` / `set_gear_glass_shape` pair so that adding
+    /// a future overlay surface does not grow a new feature-named method — it
+    /// just contributes another shape to this lane.
+    ///
+    /// Behavior preservation: this is exactly the pair of
+    /// `LiquidGlassRenderer::set_control_shape` + `set_gear_shape` calls the
+    /// old setters made, issued together.
+    pub fn set_overlay_glass(&mut self, control: Option<GlassShape>, gear: Option<GlassShape>) {
+        self.liquid_glass.set_control_shape(&self.device, control);
+        self.liquid_glass.set_gear_shape(&self.device, gear);
     }
 }

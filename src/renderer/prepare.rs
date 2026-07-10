@@ -105,9 +105,12 @@ impl Renderer {
 
         // Submit the modal lane. The Liquid Glass settings-panel pass expects
         // at most one shape today; submit the first and rely on the empty-list
-        // semantics to hide the surface when settings closes.
+        // semantics to hide the surface when settings closes. The modal lane
+        // is distinct from the overlay lane (control + gear) — it has its own
+        // SDF pass so it composites above the grid, control, and gear.
         let modal_shape = modal.first().copied();
-        self.set_settings_panel_glass_shape(modal_shape);
+        self.liquid_glass
+            .set_settings_panel_shape(&self.device, modal_shape);
         if modal_shape.is_some() {
             self.counters.record_creation(Category::Settings);
         }
