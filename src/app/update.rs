@@ -118,7 +118,10 @@ impl App {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_pointer_release(&mut self) -> Option<AppLaunchInfo> {
+    /// Resolve the scroller-drag release into an optional app launch, then end
+    /// the drag. Returns the launch info if the release was a stationary click
+    /// over a visible app.
+    pub(crate) fn handle_pointer_release_launch(&mut self) -> Option<AppLaunchInfo> {
         let x = self.pointer_phys_x;
         let y = self.pointer_phys_y;
         let dx = x - self.drag_start_x;
