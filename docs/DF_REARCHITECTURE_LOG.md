@@ -1215,3 +1215,427 @@ Notes and discoveries:
 - A `codex review` run accidentally staged large intermediate files
   (`diff.patch`, `old_main.rs`, `old_main_utf8.rs`); these were removed and
   gitignored.
+
+### 2026-07-11: Phase 6, renderer facade split
+
+Files changed:
+
+- `src/renderer.rs` (deleted)
+- `src/renderer/mod.rs` (new) — `Renderer` struct + `DrawArgs` + `frame_clip`.
+- `src/renderer/init.rs` (new) — `Renderer::new`, `resize`, decorations,
+  window-moved, and the surface-format/capture free helpers.
+- `src/renderer/tiles.rs` (new) — `Uniforms` + `rebuild_instances` /
+  `set_tile_instances`.
+- `src/renderer/icons.rs` (new) — icon atlas upload / cell write / rebind +
+  `set_icon_instances`.
+- `src/renderer/text.rs` (new) — glyph atlas upload + `set_text_instances`.
+- `src/renderer/controls.rs` (new) — `ControlUniforms` + control/gear/settings
+  instance setters.
+- `src/renderer/glass.rs` (new) — `set_overlay_glass` (overlay lane).
+- `src/renderer/badges.rs` (new) — `EditBadgeSource`,
+  `update_edit_badges`, `edit_badge_sources`, `animated_badge_center`.
+- `src/renderer/frame.rs` (new) — `render` draw-pass orchestration +
+  `save_frame_png` QA capture.
+- `src/renderer/resources.rs` (new) — `InstanceBuffer<T>` persistent
+  capacity-managed vertex buffer.
+- `src/renderer/counters.rs` (new) — debug-only `BufferCounters` /
+  `Category`.
+- `src/renderer/prepare.rs` (new) — `Renderer::prepare(&RenderModel)` +
+  `GlassSignature` dirty tracking + `GlassLane` classification.
+- `src/app/render.rs` — settings glass routed through `prepare`; control+gear
+  routed through `set_overlay_glass`; gear geometry resolved once.
+- `src/app/state.rs` — `pending_control_shape` field.
+- `docs/DF_REARCHITECTURE_LOG.md`
+
+The split was delivered as four buildable/reviewable sub-phases (6A→6B→6C→6D),
+each a separate commit on this branch.
+
+Inventory of the old renderer flow (recorded before the split):
+
+- `Renderer::new` owned window/instance/adapter/device/queue/surface init,
+  surface format / present mode / alpha mode selection, all five pipelines
+  (tile/text/icon/control/control_text) + their bgl/bg, the uniform + instance
+  buffers, glyph + icon atlas textures, the Liquid Glass renderer, and the
+  backdrop capture. ~750 lines.
+- `render()` orchestrated 9 draw passes (surface clear → Liquid Glass base →
+  tile pass → edit-badge glass+foreground → drag overlay → Liquid Glass
+  control → control overlay → Liquid Glass settings panel → settings overlay)
+  with a fixed, load-bearing order.
+- Per-frame CPU work: the `Uniforms` write (tiny), the `ControlUniforms`
+  write, `update_edit_badges` (rebuilds badge glass shapes + foreground marks
+  from `badge_sources` each frame — the only time-based CPU geometry path),
+  and the surface acquire.
+- Per-frame `create_buffer_init`: the old setters (`set_control_instances`,
+  `set_control_text_instances`, `set_gear_instances`, `set_settings_instances`,
+  `set_settings_text_instances`, `set_tile_instances`, `set_icon_instances`,
+  `set_text_instances`, and the badge foreground buffer inside
+  `update_edit_badges`) each allocated a fresh `wgpu::Buffer` on every
+  non-empty call and dropped it to `None` on empty. A surface that disappeared
+  and reappeared (settings open/close, control morph) churned allocations.
+- Static scene rebuild conditions: `rebuild_instances` (relayout, resize,
+  reorder, icon load, app-list diff) reallocated the tile instance buffer and
+  rebuilt the Liquid Glass base shapes. Tile/icon/text-label buffers were
+  otherwise persistent (scroll/wiggle/drag are uniform/shader-driven).
+- Settings was the only production path that built a full `RenderModel`
+  (`layout::settings_panel` emits glass + controls + text views), but
+  `app/render.rs` adapted it back into the existing setters rather than
+  submitting it as data.
+
+CPU vs GPU responsibility split after Phase 6:
+
+- GPU-driven (unchanged): scroll offset, edit-mode wiggle, drag-follow, tile
+  springs (via instance positions written on relayout/spring-step only),
+  Liquid Glass SDF/blur/refraction/composition, icon/text sampling, clip,
+  alpha, blend.
+- CPU per-frame (unchanged): time/viewport/scroll/drag uniform writes,
+  `update_edit_badges` (small — one source per visible wiggling tile),
+  control/settings ink+text adapter construction (in `app/render.rs`).
+- CPU per-frame (removed): per-call `create_buffer_init` on the overlay
+  instance buffers — now capacity-managed `InstanceBuffer` reuses the buffer.
+
+What 6A did (mechanical module split):
+
+- Moved the monolithic `src/renderer.rs` (1750 lines) into `src/renderer/`
+  with one module per responsibility. `impl Renderer` blocks are distributed
+  across the modules (Rust permits multiple impl blocks per type within a
+  crate). The `Renderer` struct, `DrawArgs`, draw pass order, resource
+  lifetime, per-frame upload semantics, and the `Window`/`Surface<'static>`
+  ownership are unchanged. Only module paths and field visibility changed.
+
+What 6B did (persistent buffers + debug counters):
+
+- `InstanceBuffer<T: Pod>` (`resources.rs`): one buffer with a logical length
+  (draw count) and a capacity. `set()` reuses the buffer via
+  `queue.write_buffer` when items fit; only capacity overflow grows it
+  (doubling, floored at 16). An empty list sets `logical=0` (draw skipped)
+  but keeps the buffer, so a disappearing/reappearing surface no longer
+  churns allocations. `buffer()`/`as_ref()` expose the raw buffer for the
+  drag-overlay vertex slice and the draw pass.
+- `BufferCounters` / `Category` (`counters.rs`): debug-only counters tracking
+  per-category buffer creations/growths, prepare calls, full-scene rebuilds,
+  atlas rebinds, and non-QA readbacks. Zero-sized in release
+  (`#[cfg(debug_assertions)]`); all `record_*` methods are no-ops in release,
+  so they cannot add allocation/lock contention to the production hot path.
+- All tile/icon/text/control/gear/settings/control-text/badge buffers now
+  flow through `InstanceBuffer`. Draw counts read via `.len()`; draw-skip on
+  empty preserved.
+
+What 6C did (`prepare(&RenderModel)` for the settings production path):
+
+- `Renderer::prepare(&RenderModel)` (`prepare.rs`): reflects a
+  renderer-neutral model into persistent GPU resources. Iterates the model's
+  glass surfaces, classifies each into a renderer-neutral `GlassLane` (Modal
+  for the settings panel today), and submits the modal lane to the Liquid
+  Glass settings-panel pass. `GlassSignature` summarizes the glass section
+  (count + per-surface id/rect/radius/material/z, quantized to 0.25px) so an
+  unchanged model short-circuits re-submission — a settled settings panel
+  emits an identical surface every frame and `prepare` uploads nothing. An
+  empty model (settings closed) submits `None`, clearing the modal lane.
+- `app/render.rs::render_settings_panel`: dropped the duplicate `GlassShape`
+  recomputation (it was re-deriving shape from layout + visual_scale, which
+  `layout::settings_panel` already baked into `model.result.render.glass`) and
+  calls `r.prepare(&model.result.render)` instead. The closed path calls
+  `prepare` with an empty model.
+- `prepare` is exercised by the real production frame path, not just tests.
+
+What 6D did (Liquid Glass shape submission generalization):
+
+- Replaced the three feature-named setters
+  (`set_control_glass_shape`/`set_gear_glass_shape`/
+  `set_settings_panel_glass_shape`) with two render-lane submission paths:
+  - `set_overlay_glass(control, gear)` — the fixed overlay lane. The bottom
+    control and the edit-mode gear share one Liquid Glass SDF field (this is
+    what makes the gear merge into / separate from the capsule smoothly), so
+    they are submitted together. This also fixed a latent double-rebuild of
+    the overlay geometry buffer (the old setters each rebuilt it).
+  - `prepare` — the modal lane (settings panel), from a renderer-neutral
+    `RenderModel`.
+- Base/scrolling glass (page frame + tile halos) still flows through
+  `rebuild_instances`.
+- `app/render.rs::render_gear` now resolves the gear geometry once (was
+  twice) and submits both shapes via `set_overlay_glass`.
+- Feature names and raw `shape_type` integers never leak to layout/features.
+  The lane classifier is renderer-side and keys on stable `UiId`s.
+
+Public `Renderer` facade API after Phase 6:
+
+- `new`, `resize`, `surface_size`, `toggle_decorations`,
+  `notify_window_moved`, `handle_liquid_glass_key` (window/lifecycle).
+- `rebuild_instances`, `set_tile_instances`, `set_icon_instances`,
+  `set_text_instances`, `upload_atlas`, `upload_icon_atlas`, `write_icon_cell`,
+  `icon_atlas_size` (static scene + atlases).
+- `set_control_instances`, `set_gear_instances`, `set_settings_instances`,
+  `set_settings_text_instances`, `set_control_text_instances` (overlay ink —
+  still public because `app/render.rs` builds the GPU-facing
+  `ControlInstance`/`GlyphQuad` bytes).
+- `set_overlay_glass` (overlay glass lane).
+- `prepare(&RenderModel)` (modal glass lane, from renderer-neutral data).
+- `render(&DrawArgs)` (frame submission).
+- `qa_shot` (QA capture trigger).
+
+Private/internal after Phase 6: the feature-named glass setters are gone.
+`Uniforms`/`ControlUniforms`/`InstanceBuffer`/`BufferCounters`/`GlassSignature`
+are `pub(in crate::renderer)`.
+
+Production path moved to `prepare`: the settings overlay glass surface
+(submitted as a renderer-neutral `GlassSurface` by `layout::settings_panel`).
+
+Production paths NOT yet on `prepare` (deliberate adapters, with reasons):
+
+- Settings ink (`ControlInstance` list) + title text (`GlyphQuad` list):
+  these are shader-specific bytes produced by `build_settings_panel_instances`
+  / `build_settings_panel_text_views`, which depend on the GPU-facing overlay
+  builder and `cosmic-text` shaping. The current `RenderModel` text/controls
+  carry renderer-neutral geometry, not the shader-specific instance bytes, so
+  routing them through `prepare` would require adding `ControlInstance`/
+  `GlyphQuad` construction (or those types) to the renderer — bringing feature
+  semantics in. Left as an `app/render.rs` adapter.
+- Bottom control / gear glass: submitted via `set_overlay_glass` with
+  renderer-specific `GlassShape`s built by `bottom_control::glass_shape` /
+  `edit_gear_glass_shape`. These could become `GlassSurface`s in a future
+  layout pass, but the bottom-control geometry is resolved per-frame from the
+  morph state machine and measured text widths, which the current
+  `RenderModel` doesn't carry. Phase 7+ follow-up.
+- Grid (tile/icon/text-label instances): rebuilt only on relayout/spring-step
+  (already GPU-driven for scroll/wiggle/drag). Spring positions and icon UVs
+  are app-side state not in the model. Phase 7+ follow-up.
+- Edit badges: `update_edit_badges` rebuilds glass shapes + foreground marks
+  each frame from `badge_sources` because the badge center is time-animated.
+  This is the only remaining per-frame CPU geometry path; it is small (one
+  source per visible wiggling tile) and grows linearly with the visible app
+  count, not the whole scene. Moving the wobble fully to the GPU is a shader
+  change deferred to a later slice.
+
+Persistent buffer / dirty update design:
+
+- `InstanceBuffer` capacity grows by doubling (floored at 16); capacity-internal
+  updates reuse the buffer via `queue.write_buffer`; empty lists keep the
+  buffer for reuse. No per-frame `create_buffer_init` on the steady path.
+- `prepare` dirty-tracks the glass section via `GlassSignature` (quantized
+  geometry + id + material + z); unchanged signature ⇒ no re-submission.
+- The Liquid Glass renderer already dirty-tracks its shape buffers
+  (`set_control_shape`/`set_gear_shape`/`set_badge_shapes` short-circuit on
+  unchanged input); Phase 6 preserves that.
+
+GPU-driven frame hot path (unchanged or improved):
+
+- Scroll/wiggle/drag/caret-blink/page-indicator are uniform/shader-driven
+  (no static-scene rebuild on animation-only frames).
+- 6B removed per-frame `create_buffer_init` on overlay instance buffers.
+- 6D removed a per-frame double-rebuild of the overlay Liquid Glass SDF buffer.
+
+CPU work that remains per-frame and why it is not on the hot path in the
+prohibited sense:
+
+- `update_edit_badges`: small, linear in visible wiggling-tile count.
+- Control/settings ink+text adapter construction: depends on per-frame
+  `cosmic-text` shaping (caret/preedit) and the morph state machine; runs
+  only while those features are active.
+- `Uniforms`/`ControlUniforms` writes: tiny (48 / 48 bytes).
+
+Draw pass / clip / blend / upload / clear semantics preserved:
+
+- The 9-pass order in `frame.rs` is byte-for-byte the historical order.
+- Empty-list draw-skip semantics preserved (`InstanceBuffer::as_ref()` returns
+  `None` when `logical==0`, matching the old `Option<Buffer>` behavior).
+- `defer_backdrop_capture`, Liquid Glass backdrop capture/exclusion/fallback,
+  and the QA self-capture path are unchanged.
+
+Shader / uniform / instance layout changes: **none**. No WGSL, `#[repr(C)]`
+struct, vertex attribute, or bind group layout was modified in Phase 6. The
+existing WGSL validation tests (`tests/wgsl_validation.rs`) pass unchanged.
+
+Validation:
+
+- `cargo fmt`: passed (each sub-phase)
+- `cargo test`: 114 lib + 330 bin + 2 WGSL validation, all passed (Phase 6
+  added 18 new tests: 3 `InstanceBuffer` capacity-policy, 3 `BufferCounters`
+  accumulation, 9 `prepare` signature/lane/shape-mapping, plus the existing
+  renderer/badge tests moved into the new modules).
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `codex review --base main`: **could not be run** — the configured default
+  model (`gpt-5.6-sol`) requires a newer Codex CLI than v0.142.5, and all
+  alternate models (`gpt-5`, `gpt-5-codex`, `o4-mini`, `codex-mini-latest`)
+  are rejected by this ChatGPT account with "model is not supported when
+  using Codex with a ChatGPT account". This is an environment blocker, not a
+  code issue. A focused read-only manual review was performed instead,
+  covering: module ownership/lifetime, production use of `prepare`,
+  per-frame buffer creation (removed), persistent buffer capacity/growth/clear
+  semantics, stale-buffer/stale-overlay risks, draw-pass ordering, glass lane
+  mapping, and shader/`#[repr(C)]` layout sync (no changes). No actionable
+  findings.
+
+Performance verification (release build, GPU self-capture):
+
+- idle / first frame: static scene rebuilt once on relayout; no per-frame
+  `create_buffer_init` on overlay buffers (capacity-managed). Confirmed via
+  the `BufferCounters` design (debug-only) and the code path review.
+- scroll: tile/icon/text scene not rebuilt (uniform-driven). Confirmed
+  unchanged from Phase 5.
+- settings animation: `prepare` short-circuits when the glass signature is
+  unchanged (settled panel).
+- overlay (control+gear): one Liquid Glass SDF rebuild per frame (was two).
+- Non-QA GPU readback: none (the only readback is `save_frame_png`, gated on
+  `qa_shot`).
+- Could not directly measure debug-counter before/after numerically in this
+  sandbox (the counters are debug-build-only and the release binary is what
+  ships); the design guarantees (capacity reuse, signature short-circuit,
+  no per-frame `create_buffer_init`) are verified by code review and the new
+  unit tests.
+
+Screen verification (GPU self-capture, `LAUNCHPAD_ALLOW_SCREENSHOT=1` +
+`LAUNCHPAD_QA_SHOT_FILE`):
+
+- Launched with `cargo run --release`: yes
+- First frame non-blank: yes — captured at 1920×1200, 57% non-transparent
+  pixels, 657 unique colors on a 10px grid, Liquid Glass page-frame panel
+  tint at center (≈184,170,164), tile-grid + icon + label content present,
+  bottom-control capsule band present at y≈1020. Pixel stats identical across
+  6A/6C/6D captures, confirming the split is visually behavior-preserving.
+- Resize / DPI-sensitive layout: not verified on screen this slice; DPI
+  geometry scaling and the render path are unchanged code, covered by existing
+  unit tests.
+- Scroll / snap / rubber-band: not verified on screen; `scroll.rs` physics and
+  the scroller wiring are unchanged code.
+- Search / filtering / IME: not verified on screen; the bottom-control state
+  machine, IME, caret, and search matching are unchanged code (the control
+  glass now flows through `set_overlay_glass`, but the ink/text/caret paths
+  are unchanged).
+- Edit mode (long-press / drag / wiggle / badges / gear): not verified on
+  screen — the sandbox's foreground lock and window-detection limitations
+  prevented interactive simulation. The edit-badge glass path
+  (`update_edit_badges`) and the gear overlay path (`set_overlay_glass`) are
+  unchanged in geometry; the gear is now submitted together with the control
+  in one overlay-lane call (behavior-identical SDF field). The 6D first-frame
+  capture confirms the bottom-control capsule renders; the gear only appears
+  in edit mode, which could not be entered interactively.
+- Settings overlay (open/close/category/toggle): not verified on screen;
+  settings glass now flows through `prepare` (signature dirty-tracked), and
+  the ink/text adapters are unchanged. The 6C capture confirms the base scene
+  renders; settings could not be opened interactively.
+- Icons / labels / launch hit targets: icons and labels verified in the
+  first-frame captures; launch hit targets are unchanged code.
+- Click passthrough / transparent-area vs frame-empty: not verified on screen
+  (requires interactive input); unchanged code.
+- `defer_backdrop_capture` during drag: not verified on screen; unchanged
+  code.
+
+Notes and discoveries:
+
+- The crate is a single binary; `renderer` is a child module of `main.rs`.
+  `src/renderer.rs` was replaced by `src/renderer/mod.rs` + submodules; Rust
+  resolves the directory form automatically once both exist (the file was
+  deleted).
+- `InstanceBuffer` intentionally keeps the buffer on empty (`logical=0`) rather
+  than dropping it to `None`, which is the key allocation savings vs the old
+  `Option<Buffer>` setters. The draw-skip behavior is preserved because
+  `as_ref()` returns `None` when `logical==0`.
+- `GlassSignature` quantizes geometry to 0.25px so sub-pixel float noise
+  doesn't cause spurious dirty re-submissions, while visible motion (≥0.25px)
+  still registers. The quantization is renderer-internal; the model carries
+  full-precision floats.
+- The settings glass surface was being computed twice (once in
+  `layout::settings_panel` as a `GlassSurface`, once in `app/render.rs` as a
+  `GlassShape`); 6C eliminated the duplicate by routing through `prepare`.
+- The control + gear Liquid Glass overlay buffer was being rebuilt twice per
+  frame (once per setter); 6D eliminated the double-rebuild by submitting
+  both shapes in one `set_overlay_glass` call.
+- `codex review` is currently unusable in this environment (model/CLI version
+  mismatch). Future phases should re-check CLI compatibility before relying
+  on it.
+
+Follow-up review and corrections (same Phase 6 PR):
+
+- A second focused review found that the first 6D implementation only combined
+  the app-facing call. `set_overlay_glass` still called the Liquid Glass
+  control and gear setters sequentially, and each setter rebuilt the shared
+  shape buffer. This contradicted the original one-rebuild claim.
+- `LiquidGlassRenderer::set_overlay_shapes` now compares the control/gear pair
+  atomically and writes the persistent two-shape storage buffer once. The
+  control and gear therefore still share one SDF field without two buffer or
+  bind-group rebuilds.
+- The settings modal shape now uses a persistent one-shape storage buffer.
+  Settings open/close animation updates use `queue.write_buffer`; closing sets
+  the logical modal state to `None` without recreating the buffer/bind group.
+- The edit-badge glass buffer is capacity-managed. It grows and rebuilds its
+  bind group only when the badge count exceeds capacity; ordinary wiggle
+  frames reuse it. Renderer-owned scratch vectors also remove steady-state
+  shape/mark vector allocation after capacity has warmed up.
+- The original `GlassSignature` was removed. Its 0.25px quantization could
+  suppress legitimate subpixel settings-panel animation, and constructing the
+  signature allocated a `Vec` on each active settings frame. Exact shape
+  equality now lives with the persistent Liquid Glass resource owner.
+- The original renderer-side `UiId::settings_panel()` classifier violated the
+  renderer-neutral contract. `ui_model::render_model::GlassLayer` now carries
+  `Base` / `Overlay` / `Modal` compositing intent, and
+  `layout::settings_panel` emits `GlassLayer::Modal`. The renderer selects by
+  layer and z-order without knowing which feature produced the surface.
+- The transient control shape is returned directly from
+  `render_bottom_control` to `render_gear`; the GPU-facing
+  `pending_control_shape` field was removed from persistent app state.
+- Additional files changed by the follow-up are
+  `src/ui_model/render_model.rs`, `src/layout/settings_panel.rs`, and
+  `src/liquid_glass/renderer.rs`.
+
+Follow-up validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 114 library tests + 328 passed / 2 ignored binary tests + 2
+  WGSL validation tests, all required tests passed
+- `cargo clippy --all-targets --all-features`: passed with no warnings
+- `cargo build --release`: passed
+- `codex review --base main -c 'model="gpt-5.5"'`: completed successfully on
+  Codex CLI 0.142.5. It reported no actionable regressions. The manual GPU hot
+  path review nevertheless found the double-rebuild, quantization, allocation,
+  and renderer-semantic findings above; all were fixed and revalidated.
+
+Follow-up interactive screen verification used Windows.Graphics.Capture with
+`LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`, and isolated
+`LOCALAPPDATA`:
+
+- first frame: verified non-blank at 1280x800 with Liquid Glass page frame,
+  7x5 tile grid, icons, labels, and search pill;
+- search: verified pill open, per-key text entry (`Blender`), filtering to the
+  Blender tile, and Esc clearing/closing the field;
+- scroll: verified horizontal pointer drag to the next page, inertia/snap, and
+  the transient page indicator;
+- app launch: verified a tile click launches the target and hides Launchpad;
+- passthrough: verified a transparent-area click logs
+  `outside_glass=true`, hides Launchpad, and replays the click to the
+  underlying window;
+- inside-frame swallow: verified an empty click in a search-filtered frame
+  logs `outside_glass=false` and leaves Launchpad visible;
+- resize/DPI-sensitive redraw: verified decorated resize to 760x869 and
+  maximize to 2560x1392; the renderer stayed non-blank and relaid out the
+  panel/grid/control;
+- settings open/close/category/toggle: not re-verified interactively. The
+  available window automation cannot access the message-only tray menu, and
+  edit-mode gear requires long press;
+- edit mode long-press/drag/reorder/Done/gear/hide badge: not re-verified
+  interactively. The automation API exposes click and drag but no separate
+  pointer-down/hold/up, so attempted gestures became normal click/scroll paths;
+- IME preedit/commit: not verified; direct ASCII key routing was verified, but
+  the automation API did not expose an observable Windows IME composition;
+- `defer_backdrop_capture` and rubber-band endpoints: not isolated on screen;
+  drag rendering and snap were verified, and their code paths are unchanged.
+
+The follow-up checks supersede the earlier statements that `codex review`,
+interactive search/scroll/resize/app-launch/passthrough, and inside-frame
+swallow could not be verified. Settings/edit-mode/IME remain explicitly
+unverified rather than being claimed complete.
+
+Phase 7/8 follow-ups:
+
+- Move `AppId` to `domain/` (Phase 7).
+- Route bottom-control / gear glass through `prepare` once their geometry is
+  expressible as renderer-neutral `GlassSurface`s in a layout pass (the morph
+  state machine + measured text widths currently live app-side).
+- Route grid tile/icon/text-label instance construction through `prepare`
+  once spring positions and icon UVs are model-carried.
+- Move edit-badge wobble fully into the shader (eliminate the per-frame
+  `update_edit_badges` CPU geometry path).
+- Route settings ink/text through `prepare` once the renderer can build
+  `ControlInstance`/`GlyphQuad` bytes from renderer-neutral primitives
+  without importing feature semantics.
+

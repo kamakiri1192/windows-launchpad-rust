@@ -85,9 +85,9 @@ impl App {
 
         // Upload the control's capsule + overlays before the render.
         // This also measures query + preedit width for the IME cursor.
-        self.render_bottom_control();
+        let control_shape = self.render_bottom_control();
         // Upload the corner gear capsule + glyph (if shown).
-        self.render_gear();
+        self.render_gear(control_shape);
         // Upload the settings overlay panel (if open).
         self.render_settings_panel();
 

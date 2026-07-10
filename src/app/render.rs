@@ -28,7 +28,9 @@ impl App {
     /// Lay out and upload the bottom control's glass capsule + overlay shapes
     /// and text for the current frame. Call this once per redraw, after the
     /// control has been ticked.
-    pub(crate) fn render_bottom_control(&mut self) {
+    pub(crate) fn render_bottom_control(
+        &mut self,
+    ) -> Option<crate::liquid_glass::geometry::GlassShape> {
         // Gather all the immutable data first (avoid overlapping borrows with
         // the mutable renderer/text borrows below).
         let scale = self.scale_factor;
@@ -70,10 +72,7 @@ impl App {
             };
             self.cached_done_width = Some(m.measure_text(&spec));
         }
-        let (geom, layers) = match self.resolve_control() {
-            Some(v) => v,
-            None => return,
-        };
+        let (geom, layers) = self.resolve_control()?;
         let query_width = self.measure_query_width();
         let caret_blink = caret_visibility(&self.control);
         let edit_visual_progress = self.edit_visual_progress();
@@ -109,60 +108,80 @@ impl App {
             }
         }
 
-        // 3) Push everything to the GPU.
+        // 3) Upload the control ink/text and return its glass shape to the
+        // caller. `tick_frame` immediately passes it to `render_gear`, keeping
+        // the transient GPU-facing value out of persistent app state.
+        let control_shape = bottom_control::glass_shape(&geom);
+        self.upload_control_overlay(atlas_dirty, &instances, &quads);
+        control_shape
+    }
+
+    /// Upload the control ink/text. Glass submission waits until
+    /// [`render_gear`] has resolved both members of the overlay lane.
+    fn upload_control_overlay(
+        &mut self,
+        atlas_dirty: bool,
+        instances: &[bottom_control::ControlInstance],
+        quads: &[text::GlyphQuad],
+    ) {
         let Some(r) = self.renderer.as_mut() else {
             return;
         };
-        let shape = bottom_control::glass_shape(&geom);
-        r.set_control_glass_shape(shape);
         if atlas_dirty {
             if let Some(t) = self.text.as_ref() {
                 r.upload_atlas(t.atlas_rgba());
             }
         }
-        r.set_control_instances(&instances);
-        r.set_control_text_instances(&quads);
+        r.set_control_instances(instances);
+        r.set_control_text_instances(quads);
     }
 
     /// Lay out and upload the edit-mode settings gear capsule (the second
     /// capsule shown beside the Done button in edit mode). Hidden at all other
-    /// times. See `bottom_control::edit_gear_geometry`.
-    pub(crate) fn render_gear(&mut self) {
+    /// times. See `bottom_control::edit_gear_geometry`. Submits the gear glass
+    /// together with the control shape via `set_overlay_glass` (the
+    /// Liquid Glass overlay lane), so the control + gear SDF field rebuilds
+    /// once per frame.
+    pub(crate) fn render_gear(
+        &mut self,
+        control_shape: Option<crate::liquid_glass::geometry::GlassShape>,
+    ) {
         // The gear only appears in edit mode, alongside the Done capsule.
         let edit_progress = self.edit_visual_progress();
         let show = self.visible && edit_progress > 0.0 && !self.settings_panel_active();
-        if !show {
-            if let Some(r) = self.renderer.as_mut() {
-                r.set_gear_glass_shape(None);
-                r.set_gear_instances(&[]);
-            }
-            return;
-        }
-        let viewport = self.viewport_phys();
-        let frame_bottom = self.frame_bottom_y();
-        let scale = self.scale_factor;
-        let done_hw = self
-            .cached_done_width
-            .map(|w| bottom_control::done_half_width(w, scale))
-            .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
-        let Some((geom, alpha)) = bottom_control::edit_gear_geometry(
-            viewport,
-            frame_bottom,
-            scale,
-            done_hw,
-            edit_progress,
-        ) else {
-            if let Some(r) = self.renderer.as_mut() {
-                r.set_gear_glass_shape(None);
-                r.set_gear_instances(&[]);
-            }
-            return;
+        // Resolve the gear geometry once (it yields both the glass shape and
+        // the ink instance).
+        let gear_geom = if show {
+            let viewport = self.viewport_phys();
+            let frame_bottom = self.frame_bottom_y();
+            let scale = self.scale_factor;
+            let done_hw = self
+                .cached_done_width
+                .map(|w| bottom_control::done_half_width(w, scale))
+                .unwrap_or_else(|| bottom_control::done_half_width(0.0, scale));
+            bottom_control::edit_gear_geometry(
+                viewport,
+                frame_bottom,
+                scale,
+                done_hw,
+                edit_progress,
+            )
+        } else {
+            None
         };
-        let instance = bottom_control::edit_gear_instance(&geom, alpha);
-        let shape = bottom_control::edit_gear_glass_shape(&geom);
+        let gear_shape = gear_geom.map(|(geom, _)| bottom_control::edit_gear_glass_shape(&geom));
+        let gear_instance =
+            gear_geom.map(|(geom, alpha)| bottom_control::edit_gear_instance(&geom, alpha));
         if let Some(r) = self.renderer.as_mut() {
-            r.set_gear_glass_shape(Some(shape));
-            r.set_gear_instances(&[instance]);
+            // Submit the overlay lane in one call: the control capsule and the
+            // gear share a Liquid Glass SDF field, so they must be submitted
+            // together to composite correctly (merge / separate).
+            r.set_overlay_glass(control_shape, gear_shape);
+            if let Some(inst) = gear_instance {
+                r.set_gear_instances(&[inst]);
+            } else {
+                r.set_gear_instances(&[]);
+            }
         }
     }
 
@@ -171,7 +190,12 @@ impl App {
     pub(crate) fn render_settings_panel(&mut self) {
         if !self.settings_panel_active() {
             if let Some(r) = self.renderer.as_mut() {
-                r.set_settings_panel_glass_shape(None);
+                // An empty model clears the modal glass lane (prepare detects
+                // the signature went non-empty -> empty and submits None), and
+                // the ink/text lists are cleared directly. This is the
+                // "settings closed → modal glass/controls/text don't linger"
+                // path.
+                r.prepare(&ui_model::render_model::RenderModel::new());
                 r.set_settings_instances(&[]);
                 r.set_settings_text_instances(&[]);
             }
@@ -198,15 +222,6 @@ impl App {
         let layout = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
-
-        let shape = crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
-            [layout.cx, layout.cy],
-            [
-                layout.hw * 2.0 * visual_scale,
-                layout.hh * 2.0 * visual_scale,
-            ],
-            layout.radius * visual_scale,
-        );
 
         // Close × glyph at the top-right inset.
         let btn_r = layout::settings_panel::CLOSE_HALF * scale;
@@ -251,7 +266,13 @@ impl App {
         );
 
         if let Some(r) = self.renderer.as_mut() {
-            r.set_settings_panel_glass_shape(Some(shape));
+            // The panel glass surface is produced by the layout layer as a
+            // renderer-neutral `GlassSurface` (visual_scale already applied).
+            // Route it through the facade's `prepare` instead of recomputing
+            // the shader shape here; `prepare` dirty-tracks it so a frame
+            // whose glass didn't move (settled settings panel) re-submits
+            // nothing.
+            r.prepare(&model.result.render);
             r.set_settings_instances(&instances);
             // Upload the atlas if the title added any glyphs this frame.
             if let Some(t) = self.text.as_ref() {
