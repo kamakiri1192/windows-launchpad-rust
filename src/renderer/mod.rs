@@ -99,6 +99,8 @@ pub struct Renderer {
     /// overlay pass alongside the bottom-control ink.
     gear_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
     badge_sources: Vec<EditBadgeSource>,
+    badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
+    badge_mark_scratch: Vec<crate::bottom_control::ControlInstance>,
     badge_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
@@ -109,9 +111,6 @@ pub struct Renderer {
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.
     counters: BufferCounters,
-    /// Last glass signature submitted via `prepare`. Used to short-circuit
-    /// re-submission when the model's glass section is unchanged.
-    last_glass_signature: prepare::GlassSignature,
     /// When set, the next rendered frame is also copied to a host-readable
     /// buffer and saved as a PNG at this path. Driven by the
     /// `LAUNCHPAD_QA_SHOT_FILE` trigger (see `docs/EDIT_MODE_VISUAL_QA.md`) so

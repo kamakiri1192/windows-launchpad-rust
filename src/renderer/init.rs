@@ -601,6 +601,8 @@ impl Renderer {
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
             badge_sources: Vec::new(),
+            badge_shape_scratch: Vec::new(),
+            badge_mark_scratch: Vec::new(),
             badge_instance_buffer: InstanceBuffer::new("badge foreground instance buffer"),
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
@@ -608,7 +610,6 @@ impl Renderer {
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
             counters: BufferCounters::default(),
-            last_glass_signature: super::prepare::GlassSignature::default(),
             qa_shot: None,
         })
     }

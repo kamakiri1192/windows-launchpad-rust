@@ -31,8 +31,12 @@ impl Renderer {
     pub(super) fn update_edit_badges(&mut self, time: f32) {
         const KIND_BADGE_CLOSE: f32 = 4.0;
 
-        let mut shapes = Vec::with_capacity(self.badge_sources.len() + 1);
-        let mut marks = Vec::with_capacity(self.badge_sources.len());
+        let mut shapes = std::mem::take(&mut self.badge_shape_scratch);
+        let mut marks = std::mem::take(&mut self.badge_mark_scratch);
+        shapes.clear();
+        marks.clear();
+        shapes.reserve(self.badge_sources.len() + 1);
+        marks.reserve(self.badge_sources.len());
         let frame = self.frame_clip;
         let clip_shape = GlassShape::clip_rounded_rect(
             [frame.0, frame.1],
@@ -58,13 +62,16 @@ impl Renderer {
             shapes.insert(0, clip_shape);
         }
 
-        self.liquid_glass.set_badge_shapes(&self.device, &shapes);
+        self.liquid_glass
+            .set_badge_shapes(&self.device, &self.queue, &shapes);
         let outcome = self
             .badge_instance_buffer
             .set(&self.device, &self.queue, &marks);
         if outcome.allocated {
             self.counters.record_growth(Category::BadgeForeground);
         }
+        self.badge_shape_scratch = shapes;
+        self.badge_mark_scratch = marks;
     }
 }
 

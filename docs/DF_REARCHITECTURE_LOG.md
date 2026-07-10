@@ -1545,6 +1545,86 @@ Notes and discoveries:
   mismatch). Future phases should re-check CLI compatibility before relying
   on it.
 
+Follow-up review and corrections (same Phase 6 PR):
+
+- A second focused review found that the first 6D implementation only combined
+  the app-facing call. `set_overlay_glass` still called the Liquid Glass
+  control and gear setters sequentially, and each setter rebuilt the shared
+  shape buffer. This contradicted the original one-rebuild claim.
+- `LiquidGlassRenderer::set_overlay_shapes` now compares the control/gear pair
+  atomically and writes the persistent two-shape storage buffer once. The
+  control and gear therefore still share one SDF field without two buffer or
+  bind-group rebuilds.
+- The settings modal shape now uses a persistent one-shape storage buffer.
+  Settings open/close animation updates use `queue.write_buffer`; closing sets
+  the logical modal state to `None` without recreating the buffer/bind group.
+- The edit-badge glass buffer is capacity-managed. It grows and rebuilds its
+  bind group only when the badge count exceeds capacity; ordinary wiggle
+  frames reuse it. Renderer-owned scratch vectors also remove steady-state
+  shape/mark vector allocation after capacity has warmed up.
+- The original `GlassSignature` was removed. Its 0.25px quantization could
+  suppress legitimate subpixel settings-panel animation, and constructing the
+  signature allocated a `Vec` on each active settings frame. Exact shape
+  equality now lives with the persistent Liquid Glass resource owner.
+- The original renderer-side `UiId::settings_panel()` classifier violated the
+  renderer-neutral contract. `ui_model::render_model::GlassLayer` now carries
+  `Base` / `Overlay` / `Modal` compositing intent, and
+  `layout::settings_panel` emits `GlassLayer::Modal`. The renderer selects by
+  layer and z-order without knowing which feature produced the surface.
+- The transient control shape is returned directly from
+  `render_bottom_control` to `render_gear`; the GPU-facing
+  `pending_control_shape` field was removed from persistent app state.
+- Additional files changed by the follow-up are
+  `src/ui_model/render_model.rs`, `src/layout/settings_panel.rs`, and
+  `src/liquid_glass/renderer.rs`.
+
+Follow-up validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 114 library tests + 328 passed / 2 ignored binary tests + 2
+  WGSL validation tests, all required tests passed
+- `cargo clippy --all-targets --all-features`: passed with no warnings
+- `cargo build --release`: passed
+- `codex review --base main -c 'model="gpt-5.5"'`: completed successfully on
+  Codex CLI 0.142.5. It reported no actionable regressions. The manual GPU hot
+  path review nevertheless found the double-rebuild, quantization, allocation,
+  and renderer-semantic findings above; all were fixed and revalidated.
+
+Follow-up interactive screen verification used Windows.Graphics.Capture with
+`LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`, and isolated
+`LOCALAPPDATA`:
+
+- first frame: verified non-blank at 1280x800 with Liquid Glass page frame,
+  7x5 tile grid, icons, labels, and search pill;
+- search: verified pill open, per-key text entry (`Blender`), filtering to the
+  Blender tile, and Esc clearing/closing the field;
+- scroll: verified horizontal pointer drag to the next page, inertia/snap, and
+  the transient page indicator;
+- app launch: verified a tile click launches the target and hides Launchpad;
+- passthrough: verified a transparent-area click logs
+  `outside_glass=true`, hides Launchpad, and replays the click to the
+  underlying window;
+- inside-frame swallow: verified an empty click in a search-filtered frame
+  logs `outside_glass=false` and leaves Launchpad visible;
+- resize/DPI-sensitive redraw: verified decorated resize to 760x869 and
+  maximize to 2560x1392; the renderer stayed non-blank and relaid out the
+  panel/grid/control;
+- settings open/close/category/toggle: not re-verified interactively. The
+  available window automation cannot access the message-only tray menu, and
+  edit-mode gear requires long press;
+- edit mode long-press/drag/reorder/Done/gear/hide badge: not re-verified
+  interactively. The automation API exposes click and drag but no separate
+  pointer-down/hold/up, so attempted gestures became normal click/scroll paths;
+- IME preedit/commit: not verified; direct ASCII key routing was verified, but
+  the automation API did not expose an observable Windows IME composition;
+- `defer_backdrop_capture` and rubber-band endpoints: not isolated on screen;
+  drag rendering and snap were verified, and their code paths are unchanged.
+
+The follow-up checks supersede the earlier statements that `codex review`,
+interactive search/scroll/resize/app-launch/passthrough, and inside-frame
+swallow could not be verified. Settings/edit-mode/IME remain explicitly
+unverified rather than being claimed complete.
+
 Phase 7/8 follow-ups:
 
 - Move `AppId` to `domain/` (Phase 7).

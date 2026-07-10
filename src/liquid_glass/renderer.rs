@@ -111,6 +111,7 @@ pub struct LiquidGlassRenderer {
     shape_count: u32,
     badge_shape_buffer: wgpu::Buffer,
     badge_shape_count: u32,
+    badge_shape_capacity: usize,
     badge_shapes: Vec<GlassShape>,
     control_shape_buffer: wgpu::Buffer,
     control_shape_count: u32,
@@ -203,9 +204,16 @@ impl LiquidGlassRenderer {
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
-        let badge_shape_buffer = create_shape_buffer(device, &[]);
-        let control_shape_buffer = create_shape_buffer(device, &[]);
-        let settings_panel_shape_buffer = create_shape_buffer(device, &[]);
+        let badge_shape_capacity = 1;
+        let badge_shape_buffer = create_shape_buffer_with_capacity(
+            device,
+            badge_shape_capacity,
+            "liquid glass badge shape buffer",
+        );
+        let control_shape_buffer =
+            create_shape_buffer_with_capacity(device, 2, "liquid glass control shape buffer");
+        let settings_panel_shape_buffer =
+            create_shape_buffer_with_capacity(device, 1, "liquid glass settings shape buffer");
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
@@ -478,6 +486,7 @@ impl LiquidGlassRenderer {
             shape_count,
             badge_shape_buffer,
             badge_shape_count,
+            badge_shape_capacity,
             badge_shapes: Vec::new(),
             control_shape_buffer,
             control_shape_count: 0,
@@ -640,63 +649,86 @@ impl LiquidGlassRenderer {
         self.rebuild_shape_buffer(device);
     }
 
-    /// Replace just the bottom-control capsule shape. Pass `None` to hide the
-    /// control entirely.
-    pub fn set_control_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
-        if self.control_shape == shape {
+    /// Replace the fixed overlay lane atomically. The bottom control and gear
+    /// share one SDF field, so updating them together avoids rebuilding or
+    /// uploading the lane twice when both shapes change in the same frame.
+    pub fn set_overlay_shapes(
+        &mut self,
+        queue: &wgpu::Queue,
+        control: Option<GlassShape>,
+        gear: Option<GlassShape>,
+    ) {
+        if self.control_shape == control && self.gear_shape == gear {
             return;
         }
-        self.control_shape = shape;
-        self.rebuild_control_shape_buffer(device);
-    }
-
-    /// Replace the corner gear/settings capsule shape. Pass `None` to hide it.
-    /// The gear is combined with the bottom control in one SDF pass so their
-    /// edges join with the same smooth-union field.
-    pub fn set_gear_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
-        if self.gear_shape == shape {
-            return;
+        self.control_shape = control;
+        self.gear_shape = gear;
+        self.control_shapes.clear();
+        self.control_shapes.extend(control);
+        self.control_shapes.extend(gear);
+        self.control_shape_count = self.control_shapes.len() as u32;
+        if !self.control_shapes.is_empty() {
+            queue.write_buffer(
+                &self.control_shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.control_shapes),
+            );
         }
-        self.gear_shape = shape;
-        self.rebuild_control_shape_buffer(device);
     }
 
     /// Replace the settings overlay panel shape. Pass `None` to hide it.
-    pub fn set_settings_panel_shape(&mut self, device: &wgpu::Device, shape: Option<GlassShape>) {
+    pub fn set_settings_panel_shape(&mut self, queue: &wgpu::Queue, shape: Option<GlassShape>) {
         if self.settings_panel_shape == shape {
             return;
         }
         self.settings_panel_shape = shape;
-
-        let shapes = shape.map(|shape| [shape]);
-        let shape_slice = shapes.as_ref().map_or(&[][..], |shapes| shapes.as_slice());
-        self.settings_panel_shape_buffer = create_shape_buffer(device, shape_slice);
-        self.settings_panel_geometry_bind_group = create_geometry_bind_group(
-            device,
-            &self.geometry_bind_group_layout,
-            &self.settings_panel_uniform_buffer,
-            &self.settings_panel_shape_buffer,
-        );
+        if let Some(shape) = shape {
+            queue.write_buffer(
+                &self.settings_panel_shape_buffer,
+                0,
+                bytemuck::bytes_of(&shape),
+            );
+        }
     }
 
     /// Replace the edit-mode delete-badge glass shapes. These are rendered as
     /// a separate Liquid Glass overlay after the app tiles/icons, so the badge
     /// actually refracts through the Liquid Glass shader instead of being a
     /// plain painted circle in the tile shader.
-    pub fn set_badge_shapes(&mut self, device: &wgpu::Device, shapes: &[GlassShape]) {
+    pub fn set_badge_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
         if self.badge_shapes.as_slice() == shapes {
             return;
         }
         self.badge_shapes.clear();
         self.badge_shapes.extend_from_slice(shapes);
-        self.badge_shape_buffer = create_shape_buffer(device, &self.badge_shapes);
         self.badge_shape_count = self.badge_shapes.len() as u32;
-        self.badge_geometry_bind_group = create_geometry_bind_group(
-            device,
-            &self.geometry_bind_group_layout,
-            &self.badge_uniform_buffer,
-            &self.badge_shape_buffer,
-        );
+        if self.badge_shapes.len() > self.badge_shape_capacity {
+            self.badge_shape_capacity =
+                next_shape_capacity(self.badge_shape_capacity, self.badge_shapes.len());
+            self.badge_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.badge_shape_capacity,
+                "liquid glass badge shape buffer",
+            );
+            self.badge_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.badge_uniform_buffer,
+                &self.badge_shape_buffer,
+            );
+        }
+        if !self.badge_shapes.is_empty() {
+            queue.write_buffer(
+                &self.badge_shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.badge_shapes),
+            );
+        }
     }
 
     /// Rebuild the GPU shape buffer from the base frame + tile halo shapes.
@@ -710,20 +742,6 @@ impl LiquidGlassRenderer {
             &self.shape_buffer,
         );
         self.last_geometry_key = None;
-    }
-
-    fn rebuild_control_shape_buffer(&mut self, device: &wgpu::Device) {
-        self.control_shapes.clear();
-        self.control_shapes.extend(self.control_shape);
-        self.control_shapes.extend(self.gear_shape);
-        self.control_shape_buffer = create_shape_buffer(device, &self.control_shapes);
-        self.control_shape_count = self.control_shapes.len() as u32;
-        self.control_geometry_bind_group = create_geometry_bind_group(
-            device,
-            &self.geometry_bind_group_layout,
-            &self.control_uniform_buffer,
-            &self.control_shape_buffer,
-        );
     }
 
     pub fn notify_window_moved(&mut self) {
@@ -1319,6 +1337,23 @@ fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Bu
     })
 }
 
+fn create_shape_buffer_with_capacity(
+    device: &wgpu::Device,
+    capacity: usize,
+    label: &'static str,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (std::mem::size_of::<GlassShape>() * capacity.max(1)) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn next_shape_capacity(current: usize, needed: usize) -> usize {
+    needed.max(current.saturating_mul(2)).max(1)
+}
+
 fn create_uniform_buffer(
     device: &wgpu::Device,
     label: &'static str,
@@ -1616,5 +1651,17 @@ fn premultiplied_blend() -> wgpu::BlendState {
             dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
             operation: wgpu::BlendOperation::Add,
         },
+    }
+}
+
+#[cfg(test)]
+mod shape_capacity_tests {
+    use super::next_shape_capacity;
+
+    #[test]
+    fn shape_capacity_grows_only_past_current_capacity() {
+        assert_eq!(next_shape_capacity(1, 2), 2);
+        assert_eq!(next_shape_capacity(8, 9), 16);
+        assert_eq!(next_shape_capacity(8, 20), 20);
     }
 }

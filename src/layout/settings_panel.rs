@@ -4,7 +4,7 @@ use crate::ui_model::geometry::{Point, Rect};
 use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, ControlKind, ControlView, GlassMaterial, GlassSurface, RenderModel,
+    Color, ControlKind, ControlView, GlassLayer, GlassMaterial, GlassSurface, RenderModel,
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
 
@@ -385,6 +385,7 @@ pub fn build_with_copy(
         rect: scaled_rect_around_center(&layout, visual_scale),
         radius: layout.radius * visual_scale,
         material: GlassMaterial::Regular,
+        layer: GlassLayer::Modal,
         z: Z_PANEL,
     });
 

@@ -31,11 +31,10 @@ impl Renderer {
     /// a future overlay surface does not grow a new feature-named method — it
     /// just contributes another shape to this lane.
     ///
-    /// Behavior preservation: this is exactly the pair of
-    /// `LiquidGlassRenderer::set_control_shape` + `set_gear_shape` calls the
-    /// old setters made, issued together.
+    /// The Liquid Glass owner compares the pair atomically and writes its
+    /// persistent two-shape storage buffer at most once per frame.
     pub fn set_overlay_glass(&mut self, control: Option<GlassShape>, gear: Option<GlassShape>) {
-        self.liquid_glass.set_control_shape(&self.device, control);
-        self.liquid_glass.set_gear_shape(&self.device, gear);
+        self.liquid_glass
+            .set_overlay_shapes(&self.queue, control, gear);
     }
 }

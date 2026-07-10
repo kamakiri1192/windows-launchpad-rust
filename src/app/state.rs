@@ -196,11 +196,6 @@ pub struct App {
     pub cached_query_width: Option<f32>,
     /// Measured laid-out width (physical px) of the edit-mode Done label.
     pub cached_done_width: Option<f32>,
-    /// Control-capsule glass shape computed by `render_bottom_control` and
-    /// consumed by `render_gear`, so the two can be submitted together as one
-    /// Liquid Glass overlay lane (`set_overlay_glass`) instead of through two
-    /// feature-named setters that each rebuild the overlay SDF.
-    pub pending_control_shape: Option<crate::liquid_glass::geometry::GlassShape>,
     /// 0 = normal bottom control width, 1 = edit-mode Done width.
     pub edit_control_progress: f32,
     /// Last settled page index, used to detect page changes for the indicator.
@@ -286,7 +281,6 @@ impl App {
             control: crate::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,
-            pending_control_shape: None,
             edit_control_progress: 0.0,
             last_page: 0,
             pointer_over_control: false,

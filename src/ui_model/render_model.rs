@@ -31,6 +31,7 @@ pub struct GlassSurface {
     pub rect: Rect,
     pub radius: f32,
     pub material: GlassMaterial,
+    pub layer: GlassLayer,
     pub z: i16,
 }
 
@@ -38,6 +39,18 @@ pub struct GlassSurface {
 pub enum GlassMaterial {
     Regular,
     Prominent,
+}
+
+/// Renderer-neutral compositing lane for a glass surface.
+///
+/// This describes how a surface participates in the frame, not which feature
+/// produced it. The renderer must not infer settings/search/folder semantics
+/// from [`UiId`] values in order to choose a GPU pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GlassLayer {
+    Base,
+    Overlay,
+    Modal,
 }
 
 #[derive(Debug, Clone, PartialEq)]

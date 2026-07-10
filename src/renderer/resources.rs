@@ -144,9 +144,7 @@ impl<T: Pod> InstanceBuffer<T> {
     }
 
     fn grow(&mut self, device: &Device, needed: u32) {
-        let new_cap = needed
-            .max(self.capacity.saturating_mul(2))
-            .max(MIN_CAPACITY);
+        let new_cap = next_capacity(self.capacity, needed);
         let stride = std::mem::size_of::<T>() as BufferAddress;
         let size = stride * new_cap as BufferAddress;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -158,6 +156,10 @@ impl<T: Pod> InstanceBuffer<T> {
         self.buffer = Some(buffer);
         self.capacity = new_cap;
     }
+}
+
+fn next_capacity(current: u32, needed: u32) -> u32 {
+    needed.max(current.saturating_mul(2)).max(MIN_CAPACITY)
 }
 
 impl<T: Pod> Default for InstanceBuffer<T> {
@@ -227,7 +229,7 @@ mod tests {
         // The grow formula floors at MIN_CAPACITY (16). A request for 1 item
         // when capacity is 0 still allocates exactly once and lands at 16,
         // so subsequent small lists (1..16) reuse the buffer.
-        let new_cap = (1u32).max(0u32.saturating_mul(2)).max(MIN_CAPACITY);
+        let new_cap = next_capacity(0, 1);
         assert_eq!(new_cap, MIN_CAPACITY);
         // Items 1..=16 all fit without another growth.
         for needed in 1..=MIN_CAPACITY {
@@ -237,9 +239,7 @@ mod tests {
             );
         }
         // 17 forces a second growth to 32.
-        let new_cap = (17u32)
-            .max(MIN_CAPACITY.saturating_mul(2))
-            .max(MIN_CAPACITY);
+        let new_cap = next_capacity(MIN_CAPACITY, 17);
         assert_eq!(new_cap, 32);
     }
 }

@@ -28,7 +28,9 @@ impl App {
     /// Lay out and upload the bottom control's glass capsule + overlay shapes
     /// and text for the current frame. Call this once per redraw, after the
     /// control has been ticked.
-    pub(crate) fn render_bottom_control(&mut self) {
+    pub(crate) fn render_bottom_control(
+        &mut self,
+    ) -> Option<crate::liquid_glass::geometry::GlassShape> {
         // Gather all the immutable data first (avoid overlapping borrows with
         // the mutable renderer/text borrows below).
         let scale = self.scale_factor;
@@ -70,10 +72,7 @@ impl App {
             };
             self.cached_done_width = Some(m.measure_text(&spec));
         }
-        let (geom, layers) = match self.resolve_control() {
-            Some(v) => v,
-            None => return,
-        };
+        let (geom, layers) = self.resolve_control()?;
         let query_width = self.measure_query_width();
         let caret_blink = caret_visibility(&self.control);
         let edit_visual_progress = self.edit_visual_progress();
@@ -109,22 +108,18 @@ impl App {
             }
         }
 
-        // 3) Stash the resolved control shape; the gear is resolved next and
-        // both are submitted together through `set_overlay_glass` (the Liquid
-        // Glass overlay lane) so the control + gear SDF field is rebuilt once.
+        // 3) Upload the control ink/text and return its glass shape to the
+        // caller. `tick_frame` immediately passes it to `render_gear`, keeping
+        // the transient GPU-facing value out of persistent app state.
         let control_shape = bottom_control::glass_shape(&geom);
-        self.render_overlay(control_shape, atlas_dirty, &instances, &quads);
+        self.upload_control_overlay(atlas_dirty, &instances, &quads);
+        control_shape
     }
 
-    /// Submit the control + gear overlay glass as one Liquid Glass lane and
-    /// upload the control ink/text. The gear shape is computed by
-    /// [`render_gear`], which calls back into this method with both shapes
-    /// ready. Splitting the glass submission from the ink/text upload keeps the
-    /// overlay SDF rebuild to one per frame (previously the control and gear
-    /// setters each rebuilt it).
-    fn render_overlay(
+    /// Upload the control ink/text. Glass submission waits until
+    /// [`render_gear`] has resolved both members of the overlay lane.
+    fn upload_control_overlay(
         &mut self,
-        control_shape: Option<crate::liquid_glass::geometry::GlassShape>,
         atlas_dirty: bool,
         instances: &[bottom_control::ControlInstance],
         quads: &[text::GlyphQuad],
@@ -132,10 +127,6 @@ impl App {
         let Some(r) = self.renderer.as_mut() else {
             return;
         };
-        // Defer the overlay-glass submission until the gear shape is known.
-        // Stash the control shape and ink/text so render_gear can complete the
-        // pair. We keep this simple: submit control ink/text now (they don't
-        // depend on the gear), and store the control shape for the gear pass.
         if atlas_dirty {
             if let Some(t) = self.text.as_ref() {
                 r.upload_atlas(t.atlas_rgba());
@@ -143,17 +134,18 @@ impl App {
         }
         r.set_control_instances(instances);
         r.set_control_text_instances(quads);
-        // Remember the control shape so render_gear can pair it with the gear.
-        self.pending_control_shape = control_shape;
     }
 
     /// Lay out and upload the edit-mode settings gear capsule (the second
     /// capsule shown beside the Done button in edit mode). Hidden at all other
     /// times. See `bottom_control::edit_gear_geometry`. Submits the gear glass
-    /// together with the stashed control shape via `set_overlay_glass` (the
+    /// together with the control shape via `set_overlay_glass` (the
     /// Liquid Glass overlay lane), so the control + gear SDF field rebuilds
     /// once per frame.
-    pub(crate) fn render_gear(&mut self) {
+    pub(crate) fn render_gear(
+        &mut self,
+        control_shape: Option<crate::liquid_glass::geometry::GlassShape>,
+    ) {
         // The gear only appears in edit mode, alongside the Done capsule.
         let edit_progress = self.edit_visual_progress();
         let show = self.visible && edit_progress > 0.0 && !self.settings_panel_active();
@@ -184,7 +176,7 @@ impl App {
             // Submit the overlay lane in one call: the control capsule and the
             // gear share a Liquid Glass SDF field, so they must be submitted
             // together to composite correctly (merge / separate).
-            r.set_overlay_glass(self.pending_control_shape.take(), gear_shape);
+            r.set_overlay_glass(control_shape, gear_shape);
             if let Some(inst) = gear_instance {
                 r.set_gear_instances(&[inst]);
             } else {
