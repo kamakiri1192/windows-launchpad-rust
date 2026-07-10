@@ -10,17 +10,17 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
-use crate::bottom_control;
 use crate::debug_log;
 use crate::features;
+use crate::features::bottom_control;
 use crate::grid;
 use crate::layout;
 use crate::liquid_glass;
 use crate::platform::launch;
+use crate::renderer::text_engine as text;
 use crate::renderer::Renderer;
 use crate::scroll::{Phase, Scroller};
 use crate::startup_timer::prefix;
-use crate::text;
 
 use super::event::UserEvent;
 use super::state::{

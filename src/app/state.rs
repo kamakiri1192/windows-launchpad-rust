@@ -22,8 +22,8 @@ use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppRegistry;
 use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
-use crate::icon_atlas::IconAtlas;
 use crate::icon_cache::IconCache;
+use crate::renderer::icon_atlas::IconAtlas;
 use crate::renderer::Renderer;
 use crate::scroll::Scroller;
 use crate::startup_timer::StartupTimer;
@@ -136,7 +136,7 @@ pub struct App {
     pub event_proxy: EventLoopProxy<UserEvent>,
     pub renderer: Option<Renderer>,
     pub scroller: Option<Scroller>,
-    pub text: Option<crate::text::TextRenderer>,
+    pub text: Option<crate::renderer::text_engine::TextRenderer>,
     pub layout: crate::grid::GridLayout,
     pub timer: StartupTimer,
 
@@ -188,7 +188,7 @@ pub struct App {
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
-    pub control: crate::bottom_control::BottomControl,
+    pub control: crate::features::bottom_control::BottomControl,
     /// Measured laid-out width (physical px) of the current search query, set
     /// once per frame in `render_bottom_control` (where we hold `&mut text`)
     /// and read back by `measure_query_width`. `None` = not measured this
@@ -278,7 +278,7 @@ impl App {
             drag_y: 0.0,
             wiggle_phase: 0.0,
             tile_springs: Vec::new(),
-            control: crate::bottom_control::BottomControl::new(),
+            control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,
             edit_control_progress: 0.0,
@@ -343,19 +343,22 @@ impl App {
     pub(crate) fn resolve_control(
         &self,
     ) -> Option<(
-        crate::bottom_control::ControlGeometry,
-        Vec<crate::bottom_control::ControlLayer>,
+        crate::features::bottom_control::ControlGeometry,
+        Vec<crate::features::bottom_control::ControlLayer>,
     )> {
         let viewport = self.viewport_phys();
         let frame_bottom = self.frame_bottom_y();
         let page = self.current_page();
         let page_count = self.layout.page_count;
-        let edit_width = self
-            .cached_done_width
-            .map(|w| crate::bottom_control::EditWidth {
-                half_width: crate::bottom_control::done_half_width(w, self.scale_factor),
-                progress: self.edit_control_progress,
-            });
+        let edit_width =
+            self.cached_done_width
+                .map(|w| crate::features::bottom_control::EditWidth {
+                    half_width: crate::features::bottom_control::done_half_width(
+                        w,
+                        self.scale_factor,
+                    ),
+                    progress: self.edit_control_progress,
+                });
         Some(self.control.resolve_scaled_with_edit_width(
             viewport,
             frame_bottom,

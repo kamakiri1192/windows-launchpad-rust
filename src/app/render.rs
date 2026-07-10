@@ -6,19 +6,19 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::bottom_control;
 use crate::domain::app_diff::{AppDiff, SnapshotEntry};
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::{AppRecord, IconState};
 use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
+use crate::features::bottom_control;
 use crate::grid;
 use crate::icon_cache::{CacheProbe, CachedIcon};
-use crate::icon_pipeline;
 use crate::icons::normalize::DecodedIcon;
 use crate::layout;
+use crate::renderer::icon_pipeline;
+use crate::renderer::text_engine as text;
 use crate::scroll::{self, Phase};
 use crate::startup_timer::prefix;
-use crate::text;
 use crate::ui_model;
 use crate::workers::icon_worker::{IconReason, IconRequest};
 
@@ -970,7 +970,7 @@ impl App {
     pub(crate) fn lift_dragged_instances(
         &self,
         tile_instances: &mut Vec<grid::TileInstance>,
-        icon_instances: &mut Vec<crate::icon_pipeline::IconInstance>,
+        icon_instances: &mut Vec<crate::renderer::icon_pipeline::IconInstance>,
         _visible_ids: &[AppId],
     ) {
         let is_drag = |flags: f32| (flags as u32 & grid::TileAnim::FLAG_DRAG) != 0;

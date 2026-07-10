@@ -241,7 +241,7 @@ impl Renderer {
             }
             if drag_icon_active {
                 if let Some(buf) = self.icon_instance_buffer.as_ref() {
-                    let stride = std::mem::size_of::<crate::icon_pipeline::IconInstance>()
+                    let stride = std::mem::size_of::<crate::renderer::icon_pipeline::IconInstance>()
                         as wgpu::BufferAddress;
                     let offset = stride * normal_icon_count as wgpu::BufferAddress;
                     pass.set_pipeline(&self.icon_pipeline);

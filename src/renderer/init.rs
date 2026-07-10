@@ -8,12 +8,12 @@ use wgpu::{
     SurfaceConfiguration, TextureViewDescriptor,
 };
 
-use crate::bottom_control::ControlInstance;
+use crate::features::bottom_control::ControlInstance;
 use crate::grid::{GridLayout, TileInstance};
-use crate::icon_pipeline::IconInstance;
 use crate::liquid_glass::capture::FallbackCapture;
 use crate::liquid_glass::LiquidGlassRenderer;
-use crate::text::GlyphQuad;
+use crate::renderer::icon_pipeline::IconInstance;
+use crate::renderer::text_engine::GlyphQuad;
 use crate::UserEvent;
 
 use super::controls::ControlUniforms;
@@ -208,7 +208,7 @@ impl Renderer {
         );
 
         // ---- Text pipeline + glyph atlas --------------------------------
-        let (aw, ah) = crate::text::TextRenderer::atlas_dimensions();
+        let (aw, ah) = crate::renderer::text_engine::TextRenderer::atlas_dimensions();
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
             size: wgpu::Extent3d {

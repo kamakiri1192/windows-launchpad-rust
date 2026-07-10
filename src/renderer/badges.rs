@@ -9,7 +9,7 @@
 //! wiggling tile) and grows linearly with the visible app count, not the whole
 //! scene.
 
-use crate::bottom_control::ControlInstance;
+use crate::features::bottom_control::ControlInstance;
 use crate::grid::TileInstance;
 use crate::liquid_glass::geometry::GlassShape;
 

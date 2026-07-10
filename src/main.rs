@@ -26,14 +26,11 @@
 
 mod app;
 mod app_icon;
-mod bottom_control;
 mod debug_logger;
 mod domain;
 mod features;
 mod grid;
-mod icon_atlas;
 mod icon_cache;
-mod icon_pipeline;
 mod icons;
 mod layout;
 mod liquid_glass;
@@ -41,15 +38,14 @@ mod platform;
 mod renderer;
 mod scroll;
 mod startup_timer;
-mod text;
 mod ui_model;
 mod workers;
 
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use icon_atlas::IconAtlas;
 use icon_cache::IconCache;
+use renderer::icon_atlas::IconAtlas;
 use startup_timer::{prefix, StartupTimer};
 use winit::dpi::PhysicalPosition;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -58,7 +54,7 @@ use workers::icon_worker::IconResult;
 use workers::refresh_watcher::{RefreshConfig, RefreshMessage};
 
 /// Cell edge (icon + padding) imported from the atlas module for readability.
-const CELL: u32 = icon_atlas::CELL;
+const CELL: u32 = renderer::icon_atlas::CELL;
 
 // ---- app shell re-exports ------------------------------------------------
 // The `App` struct, its constructor, runtime value types (`PendingPress`,

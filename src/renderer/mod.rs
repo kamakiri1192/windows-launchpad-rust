@@ -25,11 +25,14 @@ mod controls;
 mod counters;
 mod frame;
 mod glass;
+pub(crate) mod icon_atlas;
+pub(crate) mod icon_pipeline;
 mod icons;
 mod init;
 mod prepare;
 mod resources;
 mod text;
+pub(crate) mod text_engine;
 mod tiles;
 
 use std::sync::Arc;
@@ -38,7 +41,7 @@ use wgpu::{Buffer, Device, Queue, RenderPipeline, Surface, SurfaceConfiguration,
 
 use crate::grid::GridLayout;
 use crate::liquid_glass::LiquidGlassRenderer;
-use crate::text::GlyphQuad;
+use crate::renderer::text_engine::GlyphQuad;
 
 use counters::BufferCounters;
 use resources::InstanceBuffer;
@@ -76,7 +79,7 @@ pub struct Renderer {
 
     // -- Icon rendering -------------------------------------------------
     icon_pipeline: RenderPipeline,
-    icon_instance_buffer: InstanceBuffer<crate::icon_pipeline::IconInstance>,
+    icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
@@ -94,20 +97,20 @@ pub struct Renderer {
     control_pipeline: RenderPipeline,
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
-    control_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    control_instance_buffer: InstanceBuffer<crate::features::bottom_control::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
     /// overlay pass alongside the bottom-control ink.
-    gear_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    gear_instance_buffer: InstanceBuffer<crate::features::bottom_control::ControlInstance>,
     badge_sources: Vec<EditBadgeSource>,
     badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
-    badge_mark_scratch: Vec<crate::bottom_control::ControlInstance>,
-    badge_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    badge_mark_scratch: Vec<crate::features::bottom_control::ControlInstance>,
+    badge_instance_buffer: InstanceBuffer<crate::features::bottom_control::ControlInstance>,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Settings overlay ink (close ×) + title text instances, drawn in a final
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
-    settings_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    settings_instance_buffer: InstanceBuffer<crate::features::bottom_control::ControlInstance>,
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.
     counters: BufferCounters,

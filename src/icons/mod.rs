@@ -10,7 +10,7 @@
 //!   4. [`loader`] orchestrates the above and returns the app list + atlas.
 //!
 //! The **live** launcher no longer uses [`IconAtlas`] / [`loader`]; it uses the
-//! async, fixed-slot [`crate::icon_atlas::IconAtlas`] plus the icon worker,
+//! async, fixed-slot [`crate::renderer::icon_atlas::IconAtlas`] plus the icon worker,
 //! SQLite cache, and app registry. Those older pieces are kept here with
 //! `#[allow(dead_code)]` so the extraction logic and its tests stay available.
 

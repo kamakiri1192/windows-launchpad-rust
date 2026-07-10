@@ -7,8 +7,8 @@
 //! churn allocations. The `ControlUniforms` struct is the small
 //! viewport/scroll/frame uniform shared by the control shape and text shaders.
 
-use crate::bottom_control::ControlInstance;
-use crate::text::GlyphQuad;
+use crate::features::bottom_control::ControlInstance;
+use crate::renderer::text_engine::GlyphQuad;
 
 use super::counters::Category;
 use super::Renderer;

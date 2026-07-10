@@ -207,7 +207,7 @@ impl GridLayout {
         viewport_w: f32,
         apps: &[GridApp<'_>],
         anim: &[TileAnim],
-    ) -> Vec<crate::icon_pipeline::IconInstance> {
+    ) -> Vec<crate::renderer::icon_pipeline::IconInstance> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
@@ -224,7 +224,7 @@ impl GridLayout {
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
-            out.push(crate::icon_pipeline::IconInstance {
+            out.push(crate::renderer::icon_pipeline::IconInstance {
                 x,
                 y,
                 size: self.tile_size,
@@ -244,7 +244,11 @@ impl GridLayout {
     /// Each label sits below its tile, horizontally centered, with a max
     /// width slightly wider than the tile so two lines can fit. The label
     /// text comes from `apps[i].name`; empty slots after the last app are skipped.
-    pub fn build_labels(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<crate::text::Label> {
+    pub fn build_labels(
+        &self,
+        viewport_w: f32,
+        apps: &[GridApp<'_>],
+    ) -> Vec<crate::renderer::text_engine::Label> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
@@ -260,7 +264,7 @@ impl GridLayout {
             let label_w = self.tile_size + self.scaled(20.0); // a little wider than the tile
             let label_x = tile_x + (self.tile_size - label_w) * 0.5;
             let label_y = tile_y + self.tile_size + self.scaled(8.0);
-            out.push(crate::text::Label {
+            out.push(crate::renderer::text_engine::Label {
                 text: app.name.to_string(),
                 x: label_x,
                 y: label_y,

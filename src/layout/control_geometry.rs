@@ -6,7 +6,7 @@
 //! panel geometry and lives in the `layout` layer so it compiles as part of
 //! the library target and can be shared by [`crate::layout::bottom_control`].
 //!
-//! The state machine ([`crate::bottom_control::BottomControl`]) and the GPU
+//! The state machine ([`crate::features::bottom_control::BottomControl`]) and the GPU
 //! instance builder (`ControlInstance` / `build_overlay_instances`) remain in
 //! the binary-side `bottom_control` module. Those call into the pure helpers
 //! here through thin wrappers so the existing public API is unchanged.
@@ -142,7 +142,7 @@ pub struct EditWidth {
 
 /// Read-only snapshot of the control's animated state, used by the pure
 /// resolve/hit-test helpers. The state machine
-/// ([`crate::bottom_control::BottomControl`]) builds this from its fields so
+/// ([`crate::features::bottom_control::BottomControl`]) builds this from its fields so
 /// the geometry math stays free of `&self` borrows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlState {

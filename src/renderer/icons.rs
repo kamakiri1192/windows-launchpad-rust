@@ -8,7 +8,7 @@
 use wgpu::TextureViewDescriptor;
 
 use super::counters::Category;
-use crate::icon_pipeline::IconInstance;
+use crate::renderer::icon_pipeline::IconInstance;
 
 use super::Renderer;
 
