@@ -100,17 +100,19 @@ impl Renderer {
             args.defer_backdrop_capture,
         );
 
-        let drag_active = args.drag_active > 0.5 && self.instance_count > 0;
+        let instance_count = self.instance_buffer.len();
+        let icon_instance_count = self.icon_instance_buffer.len();
+        let drag_active = args.drag_active > 0.5 && instance_count > 0;
         let normal_tile_count = if drag_active {
-            self.instance_count - 1
+            instance_count - 1
         } else {
-            self.instance_count
+            instance_count
         };
-        let drag_icon_active = self.dragged_icon_instance && self.icon_instance_count > 0;
+        let drag_icon_active = self.dragged_icon_instance && icon_instance_count > 0;
         let normal_icon_count = if drag_icon_active {
-            self.icon_instance_count - 1
+            icon_instance_count - 1
         } else {
-            self.icon_instance_count
+            icon_instance_count
         };
 
         {
@@ -137,7 +139,7 @@ impl Renderer {
             if normal_tile_count > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+                pass.set_vertex_buffer(0, self.instance_buffer.buffer().slice(..));
                 // 6 verts per quad (two tris), instance_count quads.
                 pass.draw(0..6, 0..normal_tile_count);
             }
@@ -155,12 +157,12 @@ impl Renderer {
 
             // Text labels: same pass, third draw call. Uses the same
             // uniform (scroll/viewport) plus the atlas texture.
-            if self.text_instance_count > 0 {
+            if self.text_instance_buffer.len() > 0 {
                 if let Some(buf) = self.text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.text_pipeline);
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.text_instance_count);
+                    pass.draw(0..6, 0..self.text_instance_buffer.len());
                 }
             }
         }
@@ -201,12 +203,12 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if self.badge_instance_count > 0 {
+            if self.badge_instance_buffer.len() > 0 {
                 if let Some(buf) = self.badge_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);
                     pass.set_bind_group(0, &self.control_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.badge_instance_count);
+                    pass.draw(0..6, 0..self.badge_instance_buffer.len());
                 }
             }
         }
@@ -234,7 +236,7 @@ impl Renderer {
                 let offset = stride * normal_tile_count as wgpu::BufferAddress;
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..));
+                pass.set_vertex_buffer(0, self.instance_buffer.buffer().slice(offset..));
                 pass.draw(0..6, 0..1);
             }
             if drag_icon_active {
@@ -270,29 +272,29 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if self.control_instance_count > 0 {
+            if self.control_instance_buffer.len() > 0 {
                 if let Some(buf) = self.control_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);
                     pass.set_bind_group(0, &self.control_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.control_instance_count);
+                    pass.draw(0..6, 0..self.control_instance_buffer.len());
                 }
             }
             // Corner gear ink shares the control ink pipeline.
-            if self.gear_instance_count > 0 {
+            if self.gear_instance_buffer.len() > 0 {
                 if let Some(buf) = self.gear_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);
                     pass.set_bind_group(0, &self.control_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.gear_instance_count);
+                    pass.draw(0..6, 0..self.gear_instance_buffer.len());
                 }
             }
-            if self.control_text_instance_count > 0 {
+            if self.control_text_instance_buffer.len() > 0 {
                 if let Some(buf) = self.control_text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_text_pipeline);
                     pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.control_text_instance_count);
+                    pass.draw(0..6, 0..self.control_text_instance_buffer.len());
                 }
             }
         }
@@ -303,7 +305,7 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
 
         // Settings panel ink (close ×) + title text, on top of the panel glass.
-        if self.settings_instance_count > 0 || self.settings_text_instance_count > 0 {
+        if self.settings_instance_buffer.len() > 0 || self.settings_text_instance_buffer.len() > 0 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("settings overlay pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -320,20 +322,20 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if self.settings_instance_count > 0 {
+            if self.settings_instance_buffer.len() > 0 {
                 if let Some(buf) = self.settings_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);
                     pass.set_bind_group(0, &self.control_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.settings_instance_count);
+                    pass.draw(0..6, 0..self.settings_instance_buffer.len());
                 }
             }
-            if self.settings_text_instance_count > 0 {
+            if self.settings_text_instance_buffer.len() > 0 {
                 if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_text_pipeline);
                     pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.settings_text_instance_count);
+                    pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
                 }
             }
         }

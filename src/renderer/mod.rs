@@ -22,10 +22,12 @@
 
 mod badges;
 mod controls;
+mod counters;
 mod frame;
 mod glass;
 mod icons;
 mod init;
+mod resources;
 mod text;
 mod tiles;
 
@@ -35,6 +37,10 @@ use wgpu::{Buffer, Device, Queue, RenderPipeline, Surface, SurfaceConfiguration,
 
 use crate::grid::GridLayout;
 use crate::liquid_glass::LiquidGlassRenderer;
+use crate::text::GlyphQuad;
+
+use counters::BufferCounters;
+use resources::InstanceBuffer;
 
 pub(crate) use badges::EditBadgeSource;
 
@@ -48,12 +54,11 @@ pub struct Renderer {
     pipeline: RenderPipeline,
     /// Current decorations state (borderless by default, toggle with M).
     decorated: bool,
-    /// Static per-tile instance data.
-    instance_buffer: Buffer,
+    /// Static per-tile instance data (capacity-managed; see `resources`).
+    instance_buffer: InstanceBuffer<crate::grid::TileInstance>,
     /// Per-frame uniform data (viewport + scroll).
     uniform_buffer: Buffer,
     uniform_bind_group: wgpu::BindGroup,
-    instance_count: u32,
     /// Current sRGB surface format (saved for future MSAA / gamma work).
     #[allow(dead_code)]
     surface_format: TextureFormat,
@@ -61,8 +66,7 @@ pub struct Renderer {
 
     // -- Text rendering -------------------------------------------------
     text_pipeline: RenderPipeline,
-    text_instance_buffer: Option<Buffer>,
-    text_instance_count: u32,
+    text_instance_buffer: InstanceBuffer<GlyphQuad>,
     atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
     /// Copy of the bind group layout (for texture/sampler + uniform).
@@ -71,8 +75,7 @@ pub struct Renderer {
 
     // -- Icon rendering -------------------------------------------------
     icon_pipeline: RenderPipeline,
-    icon_instance_buffer: Option<Buffer>,
-    icon_instance_count: u32,
+    icon_instance_buffer: InstanceBuffer<crate::icon_pipeline::IconInstance>,
     dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
@@ -90,25 +93,21 @@ pub struct Renderer {
     control_pipeline: RenderPipeline,
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
-    control_instance_buffer: Option<Buffer>,
-    control_instance_count: u32,
+    control_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
     /// overlay pass alongside the bottom-control ink.
-    gear_instance_buffer: Option<Buffer>,
-    gear_instance_count: u32,
+    gear_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
     badge_sources: Vec<EditBadgeSource>,
-    badge_instance_buffer: Option<Buffer>,
-    badge_instance_count: u32,
+    badge_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
-    control_text_instance_buffer: Option<Buffer>,
-    control_text_instance_count: u32,
+    control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Settings overlay ink (close ×) + title text instances, drawn in a final
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
-    settings_instance_buffer: Option<Buffer>,
-    settings_instance_count: u32,
-    settings_text_instance_buffer: Option<Buffer>,
-    settings_text_instance_count: u32,
+    settings_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
+    /// Debug-only allocation/upload counters. Zero-sized in release builds.
+    counters: BufferCounters,
     /// When set, the next rendered frame is also copied to a host-readable
     /// buffer and saved as a PNG at this path. Driven by the
     /// `LAUNCHPAD_QA_SHOT_FILE` trigger (see `docs/EDIT_MODE_VISUAL_QA.md`) so

@@ -4,10 +4,9 @@
 //! when the CPU-side atlas becomes dirty (new glyphs added). The per-label
 //! glyph quad buffer is rebuilt on a relayout, not on every frame.
 
-use wgpu::util::DeviceExt;
-
 use crate::text::GlyphQuad;
 
+use super::counters::Category;
 use super::Renderer;
 
 impl Renderer {
@@ -37,17 +36,11 @@ impl Renderer {
 
     /// Replace the per-glyph text instance buffer.
     pub fn set_text_instances(&mut self, quads: &[GlyphQuad]) {
-        self.text_instance_count = quads.len() as u32;
-        if quads.is_empty() {
-            self.text_instance_buffer = None;
-            return;
+        let outcome = self
+            .text_instance_buffer
+            .set(&self.device, &self.queue, quads);
+        if outcome.allocated {
+            self.counters.record_creation(Category::TextLabel);
         }
-        self.text_instance_buffer = Some(self.device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("text instance buffer"),
-                contents: bytemuck::cast_slice(quads),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            },
-        ));
     }
 }

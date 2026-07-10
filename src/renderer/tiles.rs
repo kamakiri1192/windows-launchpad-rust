@@ -5,9 +5,8 @@
 //! relayout or a tile-data change (reorder / icon load / spring animation), and
 //! never on an animation-only frame.
 
-use wgpu::util::DeviceExt;
-
 use super::badges::edit_badge_sources;
+use super::counters::Category;
 use crate::grid::{GridLayout, TileInstance};
 
 use super::Renderer;
@@ -38,7 +37,9 @@ impl Renderer {
     /// Rebuild the static instance buffer from a fresh layout.
     ///
     /// Call after a resize (or any change to tile data) so the GPU sees the
-    /// new tile positions. The buffer is reallocated to fit.
+    /// new tile positions. The buffer grows only if the new list exceeds the
+    /// current capacity; otherwise the existing buffer is reused via
+    /// `queue.write_buffer`.
     pub fn rebuild_instances(
         &mut self,
         layout: &GridLayout,
@@ -46,31 +47,29 @@ impl Renderer {
         anim: &[crate::grid::TileAnim],
     ) {
         let instances = layout.build_instances(self.config.width as f32, apps, anim);
-        self.instance_count = instances.len() as u32;
-        self.instance_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("instance buffer"),
-                contents: bytemuck::cast_slice(&instances),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            });
+        let outcome = self
+            .instance_buffer
+            .set(&self.device, &self.queue, &instances);
+        if outcome.allocated {
+            self.counters.record_creation(Category::Tile);
+        }
+        self.counters.record_full_scene_rebuild();
         self.liquid_glass
             .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
         self.frame_clip = super::frame_clip(layout, self.config.width);
     }
 
     /// Push a caller-built tile instance list to the GPU, reallocating the
-    /// buffer to fit. Used by the reorder animation, which overrides the tile
-    /// positions with per-tile spring offsets before uploading.
+    /// buffer only on capacity overflow. Used by the reorder animation, which
+    /// overrides the tile positions with per-tile spring offsets before
+    /// uploading.
     pub fn set_tile_instances(&mut self, instances: &[TileInstance]) {
-        self.instance_count = instances.len() as u32;
-        self.instance_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("instance buffer"),
-                contents: bytemuck::cast_slice(instances),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            });
+        let outcome = self
+            .instance_buffer
+            .set(&self.device, &self.queue, instances);
+        if outcome.allocated {
+            self.counters.record_growth(Category::Tile);
+        }
         self.badge_sources = edit_badge_sources(instances);
         self.update_edit_badges(0.0);
     }

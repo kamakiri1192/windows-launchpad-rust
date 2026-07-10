@@ -3,7 +3,6 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use wgpu::util::DeviceExt;
 use wgpu::{
     Backends, BufferAddress, CompositeAlphaMode, Instance, Limits, PresentMode,
     SurfaceConfiguration, TextureViewDescriptor,
@@ -18,7 +17,9 @@ use crate::text::GlyphQuad;
 use crate::UserEvent;
 
 use super::controls::ControlUniforms;
+use super::counters::BufferCounters;
 use super::frame_clip;
+use super::resources::InstanceBuffer;
 use super::tiles::Uniforms;
 use super::Renderer;
 
@@ -184,15 +185,10 @@ impl Renderer {
             cache: None,
         });
 
-        // Instance buffer: written once. Empty app list here — `rebuild_instances`
-        // (called from App::relayout after icons load) supplies the real one.
-        let instances = layout.build_instances(config.width as f32, &[], &[]);
-        let instance_count = instances.len() as u32;
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance buffer"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
+        // Instance buffer starts empty; `rebuild_instances` (called from
+        // App::relayout after icons load) supplies the real tiles via the
+        // capacity-managed `InstanceBuffer`.
+        let _ = layout.build_instances(config.width as f32, &[], &[]);
 
         // Initial uniform upload.
         let frame = frame_clip(layout, size.width);
@@ -583,21 +579,18 @@ impl Renderer {
             config,
             pipeline,
             decorated: false,
-            instance_buffer,
+            instance_buffer: InstanceBuffer::new("instance buffer"),
             uniform_buffer,
             uniform_bind_group,
-            instance_count,
             surface_format,
             liquid_glass,
             text_pipeline,
-            text_instance_buffer: None,
-            text_instance_count: 0,
+            text_instance_buffer: InstanceBuffer::new("text instance buffer"),
             atlas_texture,
             atlas_bind_group,
             text_bgl,
             icon_pipeline,
-            icon_instance_buffer: None,
-            icon_instance_count: 0,
+            icon_instance_buffer: InstanceBuffer::new("icon instance buffer"),
             dragged_icon_instance: false,
             icon_atlas_texture,
             icon_atlas_bind_group,
@@ -605,21 +598,16 @@ impl Renderer {
             control_pipeline,
             control_uniform_buffer,
             control_bind_group: control_bind_group.clone(),
-            control_instance_buffer: None,
-            control_instance_count: 0,
-            gear_instance_buffer: None,
-            gear_instance_count: 0,
+            control_instance_buffer: InstanceBuffer::new("control instance buffer"),
+            gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
             badge_sources: Vec::new(),
-            badge_instance_buffer: None,
-            badge_instance_count: 0,
+            badge_instance_buffer: InstanceBuffer::new("badge foreground instance buffer"),
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
-            control_text_instance_buffer: None,
-            control_text_instance_count: 0,
-            settings_instance_buffer: None,
-            settings_instance_count: 0,
-            settings_text_instance_buffer: None,
-            settings_text_instance_count: 0,
+            control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
+            settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
+            settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
+            counters: BufferCounters::default(),
             qa_shot: None,
         })
     }

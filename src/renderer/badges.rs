@@ -9,12 +9,11 @@
 //! wiggling tile) and grows linearly with the visible app count, not the whole
 //! scene.
 
-use wgpu::util::DeviceExt;
-
 use crate::bottom_control::ControlInstance;
 use crate::grid::TileInstance;
 use crate::liquid_glass::geometry::GlassShape;
 
+use super::counters::Category;
 use super::Renderer;
 
 #[derive(Debug, Clone, Copy)]
@@ -60,19 +59,12 @@ impl Renderer {
         }
 
         self.liquid_glass.set_badge_shapes(&self.device, &shapes);
-        self.badge_instance_count = marks.len() as u32;
-        self.badge_instance_buffer = if marks.is_empty() {
-            None
-        } else {
-            Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("badge foreground instance buffer"),
-                        contents: bytemuck::cast_slice(&marks),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    }),
-            )
-        };
+        let outcome = self
+            .badge_instance_buffer
+            .set(&self.device, &self.queue, &marks);
+        if outcome.allocated {
+            self.counters.record_growth(Category::BadgeForeground);
+        }
     }
 }
 
