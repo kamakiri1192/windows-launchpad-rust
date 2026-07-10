@@ -14,8 +14,8 @@
 
 use std::time::Instant;
 
-use crate::app_id::AppId;
 use crate::debug_log;
+use crate::domain::app_id::AppId;
 use crate::features::edit_mode::EditModeCommand;
 use crate::scroll::Phase;
 
@@ -105,7 +105,7 @@ impl App {
         self.hide();
         #[cfg(windows)]
         {
-            if crate::platform_windows::replay_left_click_at_cursor() {
+            if crate::platform::windows::replay_left_click_at_cursor() {
                 debug_log!("outside-click: replayed click to underlying window");
             } else {
                 debug_log!("outside-click: failed to replay click to underlying window");
@@ -161,7 +161,7 @@ impl App {
                 let link_path = info.link_path.clone();
                 let name = info.name.clone();
                 self.hide();
-                match crate::launch::open_shortcut(&link_path) {
+                match crate::platform::launch::open_shortcut(&link_path) {
                     Ok(()) => eprintln!("launched {}", name),
                     Err(err) => eprintln!(
                         "failed to launch {} ({}): {}",
@@ -194,7 +194,7 @@ impl App {
             }
             AppCommand::ClearPendingPress => self.pending_press = None,
             AppCommand::SetSortManual => {
-                self.settings.sort_order = crate::settings::SortOrder::Manual;
+                self.settings.sort_order = crate::domain::settings::SortOrder::Manual;
             }
             AppCommand::HideApp(app_id) => self.hide_app(&app_id),
             AppCommand::SettleToPage(page) => {
@@ -259,7 +259,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_id::AppId;
+    use crate::domain::app_id::AppId;
     use crate::features::edit_mode::EditModeCommand;
 
     /// The pure projection from `EditModeCommand` to `AppCommand` is total:

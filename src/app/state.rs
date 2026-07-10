@@ -18,17 +18,17 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::app_diff::SnapshotEntry;
-use crate::app_id::AppId;
-use crate::app_registry::AppRegistry;
+use crate::domain::app_diff::SnapshotEntry;
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::AppRegistry;
+use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
 use crate::icon_atlas::IconAtlas;
 use crate::icon_cache::IconCache;
-use crate::icon_worker::WorkerHandle;
-use crate::refresh_watcher::RefreshMessage;
 use crate::renderer::Renderer;
 use crate::scroll::Scroller;
-use crate::settings::{Settings, SettingsCategory, SortOrder};
 use crate::startup_timer::StartupTimer;
+use crate::workers::icon_worker::WorkerHandle;
+use crate::workers::refresh_watcher::RefreshMessage;
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::event::UserEvent;
@@ -127,7 +127,7 @@ pub type Inbox = Mutex<Vec<WorkerMessage>>;
 
 #[derive(Debug)]
 pub enum WorkerMessage {
-    Icon(crate::icon_worker::IconResult),
+    Icon(crate::workers::icon_worker::IconResult),
     Refresh(RefreshMessage),
 }
 
@@ -238,10 +238,10 @@ pub struct App {
     /// Anchor keeping the OS-integration thread (hot key + tray) alive for
     /// the whole process. Underscore-prefixed because we never read it.
     #[cfg(windows)]
-    pub _os: Option<crate::platform_windows::OsIntegrationHandle>,
+    pub _os: Option<crate::platform::windows::OsIntegrationHandle>,
 }
 
-use crate::app_registry::AppLaunchInfo;
+use crate::domain::app_registry::AppLaunchInfo;
 
 impl App {
     pub fn new(
@@ -601,7 +601,7 @@ mod pending_press_tests {
     use std::time::Instant;
 
     use super::{PendingPress, CLICK_SLOP_PHYS};
-    use crate::app_id::AppId;
+    use crate::domain::app_id::AppId;
 
     fn press(app_index: Option<usize>, app_id: Option<AppId>, outside_glass: bool) -> PendingPress {
         PendingPress {

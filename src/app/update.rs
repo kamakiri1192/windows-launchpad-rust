@@ -3,13 +3,13 @@
 
 use std::time::Instant;
 
-use crate::app_id::AppId;
-use crate::app_registry::AppLaunchInfo;
 use crate::debug_log;
-use crate::icon_worker::IconResult;
-use crate::refresh_watcher::RefreshMessage;
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::AppLaunchInfo;
+use crate::domain::settings::{Settings, SortOrder};
 use crate::scroll::Phase;
-use crate::settings::{Settings, SortOrder};
+use crate::workers::icon_worker::IconResult;
+use crate::workers::refresh_watcher::RefreshMessage;
 
 use crate::app::render::{settings_category_id, settings_press_target_from_layout_hit};
 use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};

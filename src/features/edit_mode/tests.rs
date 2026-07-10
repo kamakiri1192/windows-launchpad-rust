@@ -1,7 +1,7 @@
 //! Tests for the edit-mode feature module.
 
 use super::*;
-use crate::app_id::AppId;
+use crate::domain::app_id::AppId;
 use crate::layout::grid::GridHit;
 use std::time::{Duration, Instant};
 

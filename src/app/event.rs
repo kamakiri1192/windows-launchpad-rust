@@ -11,11 +11,11 @@
 //! [`crate::features::edit_mode::EditModeCommand`]) at the app boundary, so
 //! side effects are requested as data and executed in one place.
 
-use crate::app_diff::AppDiff;
-use crate::app_id::AppId;
-use crate::app_registry::AppLaunchInfo;
+use crate::domain::app_diff::AppDiff;
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::AppLaunchInfo;
 
-use crate::settings::SettingsCategory;
+use crate::domain::settings::SettingsCategory;
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
 /// event, this carries icon-worker results and refresh-watcher diffs.
@@ -51,7 +51,7 @@ pub enum UserEvent {
 pub enum SettingsTarget {
     Close,
     Category(SettingsCategory),
-    Sort(crate::settings::SortOrder),
+    Sort(crate::domain::settings::SortOrder),
     FrequentToggle,
     SearchHiddenToggle,
     ResetCache,
@@ -228,7 +228,7 @@ mod tests {
         // first. We assert the variant exists and is distinct from HideWindow
         // so the two-step ordering cannot be collapsed into one.
         let hide = AppCommand::HideWindow;
-        let launch = AppCommand::LaunchApp(crate::app_registry::AppLaunchInfo {
+        let launch = AppCommand::LaunchApp(crate::domain::app_registry::AppLaunchInfo {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
         });

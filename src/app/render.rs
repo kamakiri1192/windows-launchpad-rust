@@ -6,21 +6,21 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::app_diff::{AppDiff, SnapshotEntry};
-use crate::app_id::AppId;
-use crate::app_registry::{AppRecord, IconState};
 use crate::bottom_control;
+use crate::domain::app_diff::{AppDiff, SnapshotEntry};
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::{AppRecord, IconState};
+use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
 use crate::grid;
 use crate::icon_cache::{CacheProbe, CachedIcon};
 use crate::icon_pipeline;
-use crate::icon_worker::{IconReason, IconRequest};
 use crate::icons::normalize::DecodedIcon;
 use crate::layout;
 use crate::scroll::{self, Phase};
-use crate::settings::{Settings, SettingsCategory, SortOrder};
 use crate::startup_timer::prefix;
 use crate::text;
 use crate::ui_model;
+use crate::workers::icon_worker::{IconReason, IconRequest};
 
 use super::state::App;
 

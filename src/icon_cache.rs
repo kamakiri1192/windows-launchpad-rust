@@ -23,9 +23,9 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::app_id::AppId;
+use crate::domain::app_id::AppId;
+use crate::domain::settings::Settings;
 use crate::icons::normalize::DecodedIcon;
-use crate::settings::Settings;
 use crate::startup_timer::{self, prefix};
 
 /// Bumped on any breaking change to the on-disk layout. A mismatch invalidates

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::app_id::AppId;
+use crate::domain::app_id::AppId;
 
 /// One shortcut's salient fields at scan time. The fields are exactly the ones
 /// that, if changed, should trigger an icon re-extraction (see
