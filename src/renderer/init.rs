@@ -608,6 +608,7 @@ impl Renderer {
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
             counters: BufferCounters::default(),
+            last_glass_signature: super::prepare::GlassSignature::default(),
             qa_shot: None,
         })
     }

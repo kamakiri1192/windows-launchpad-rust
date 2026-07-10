@@ -171,7 +171,12 @@ impl App {
     pub(crate) fn render_settings_panel(&mut self) {
         if !self.settings_panel_active() {
             if let Some(r) = self.renderer.as_mut() {
-                r.set_settings_panel_glass_shape(None);
+                // An empty model clears the modal glass lane (prepare detects
+                // the signature went non-empty -> empty and submits None), and
+                // the ink/text lists are cleared directly. This is the
+                // "settings closed → modal glass/controls/text don't linger"
+                // path.
+                r.prepare(&ui_model::render_model::RenderModel::new());
                 r.set_settings_instances(&[]);
                 r.set_settings_text_instances(&[]);
             }
@@ -198,15 +203,6 @@ impl App {
         let layout = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
-
-        let shape = crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
-            [layout.cx, layout.cy],
-            [
-                layout.hw * 2.0 * visual_scale,
-                layout.hh * 2.0 * visual_scale,
-            ],
-            layout.radius * visual_scale,
-        );
 
         // Close × glyph at the top-right inset.
         let btn_r = layout::settings_panel::CLOSE_HALF * scale;
@@ -251,7 +247,13 @@ impl App {
         );
 
         if let Some(r) = self.renderer.as_mut() {
-            r.set_settings_panel_glass_shape(Some(shape));
+            // The panel glass surface is produced by the layout layer as a
+            // renderer-neutral `GlassSurface` (visual_scale already applied).
+            // Route it through the facade's `prepare` instead of recomputing
+            // the shader shape here; `prepare` dirty-tracks it so a frame
+            // whose glass didn't move (settled settings panel) re-submits
+            // nothing.
+            r.prepare(&model.result.render);
             r.set_settings_instances(&instances);
             // Upload the atlas if the title added any glyphs this frame.
             if let Some(t) = self.text.as_ref() {
