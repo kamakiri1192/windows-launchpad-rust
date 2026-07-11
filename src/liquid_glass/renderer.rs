@@ -7,7 +7,6 @@ use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::layout::grid::GridLayout;
-use crate::ui_model::grid::GridApp;
 
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -117,20 +116,16 @@ pub struct LiquidGlassRenderer {
     badge_shapes: Vec<GlassShape>,
     control_shape_buffer: wgpu::Buffer,
     control_shape_count: u32,
+    control_shape_capacity: usize,
     control_shapes: Vec<GlassShape>,
-    /// Optional gear/settings capsule. It is rendered in the same SDF field as
-    /// the bottom control so the two shapes can smoothly merge and separate.
-    gear_shape: Option<GlassShape>,
-    /// Optional settings overlay panel (a large frame-independent glass
-    /// rectangle). `None` when the overlay is closed.
-    settings_panel_shape: Option<GlassShape>,
+    settings_panel_shapes: Vec<GlassShape>,
+    settings_panel_shape_count: u32,
+    settings_panel_shape_capacity: usize,
     settings_panel_shape_buffer: wgpu::Buffer,
     settings_panel_geometry_bind_group: wgpu::BindGroup,
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
-    /// The optional bottom-control capsule. It is not part of `base_shapes`.
-    control_shape: Option<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
@@ -494,13 +489,14 @@ impl LiquidGlassRenderer {
             badge_shapes: Vec::new(),
             control_shape_buffer,
             control_shape_count: 0,
+            control_shape_capacity: 2,
             control_shapes: Vec::new(),
-            gear_shape: None,
-            settings_panel_shape: None,
+            settings_panel_shapes: Vec::new(),
+            settings_panel_shape_count: 0,
+            settings_panel_shape_capacity: 1,
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
             base_shapes: shapes,
-            control_shape: None,
             geometry_texture,
             geometry_view,
             backdrop_texture,
@@ -642,19 +638,17 @@ impl LiquidGlassRenderer {
         self.bind_backdrop_view(device, &view);
     }
 
-    pub fn rebuild_shapes(
+    pub fn set_base_shapes(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        layout: &GridLayout,
-        viewport_w: f32,
-        apps: &[GridApp<'_>],
+        shapes: &[GlassShape],
     ) {
-        let shapes = shapes_from_layout(layout, viewport_w, apps);
-        if self.base_shapes == shapes {
+        if self.base_shapes.as_slice() == shapes {
             return;
         }
-        self.base_shapes = shapes;
+        self.base_shapes.clear();
+        self.base_shapes.extend_from_slice(shapes);
         self.shape_count = self.base_shapes.len() as u32;
         if self.base_shapes.len() > self.shape_capacity {
             self.shape_capacity = next_shape_capacity(self.shape_capacity, self.base_shapes.len());
@@ -685,19 +679,31 @@ impl LiquidGlassRenderer {
     /// uploading the lane twice when both shapes change in the same frame.
     pub fn set_overlay_shapes(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
-        control: Option<GlassShape>,
-        gear: Option<GlassShape>,
+        shapes: &[GlassShape],
     ) {
-        if self.control_shape == control && self.gear_shape == gear {
+        if self.control_shapes.as_slice() == shapes {
             return;
         }
-        self.control_shape = control;
-        self.gear_shape = gear;
         self.control_shapes.clear();
-        self.control_shapes.extend(control);
-        self.control_shapes.extend(gear);
+        self.control_shapes.extend_from_slice(shapes);
         self.control_shape_count = self.control_shapes.len() as u32;
+        if self.control_shapes.len() > self.control_shape_capacity {
+            self.control_shape_capacity =
+                next_shape_capacity(self.control_shape_capacity, self.control_shapes.len());
+            self.control_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.control_shape_capacity,
+                "liquid glass control shape buffer",
+            );
+            self.control_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.control_uniform_buffer,
+                &self.control_shape_buffer,
+            );
+        }
         if !self.control_shapes.is_empty() {
             queue.write_buffer(
                 &self.control_shape_buffer,
@@ -707,17 +713,41 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// Replace the settings overlay panel shape. Pass `None` to hide it.
-    pub fn set_settings_panel_shape(&mut self, queue: &wgpu::Queue, shape: Option<GlassShape>) {
-        if self.settings_panel_shape == shape {
+    /// Replace the modal glass lane atomically.
+    pub fn set_modal_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
+        if self.settings_panel_shapes.as_slice() == shapes {
             return;
         }
-        self.settings_panel_shape = shape;
-        if let Some(shape) = shape {
+        self.settings_panel_shapes.clear();
+        self.settings_panel_shapes.extend_from_slice(shapes);
+        self.settings_panel_shape_count = self.settings_panel_shapes.len() as u32;
+        if self.settings_panel_shapes.len() > self.settings_panel_shape_capacity {
+            self.settings_panel_shape_capacity = next_shape_capacity(
+                self.settings_panel_shape_capacity,
+                self.settings_panel_shapes.len(),
+            );
+            self.settings_panel_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.settings_panel_shape_capacity,
+                "liquid glass modal shape buffer",
+            );
+            self.settings_panel_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.settings_panel_uniform_buffer,
+                &self.settings_panel_shape_buffer,
+            );
+        }
+        if !self.settings_panel_shapes.is_empty() {
             queue.write_buffer(
                 &self.settings_panel_shape_buffer,
                 0,
-                bytemuck::bytes_of(&shape),
+                bytemuck::cast_slice(&self.settings_panel_shapes),
             );
         }
     }
@@ -1198,12 +1228,19 @@ impl LiquidGlassRenderer {
         if !self.params.enabled {
             return;
         }
-        if self.settings_panel_shape.is_none() {
+        if self.settings_panel_shape_count == 0 {
             return;
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
+        let uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            width,
+            height,
+            0.0,
+            self.settings_panel_shape_count,
+        );
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,

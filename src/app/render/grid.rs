@@ -6,7 +6,8 @@ use crate::scroll::{self, Phase};
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, GlyphBatch, GlyphLane, GlyphView, IconView, RenderModel, TileView,
+    Color, GlassBatch, GlassLayer, GlyphBatch, GlyphLane, GlyphView, IconView, RenderModel,
+    TileView,
 };
 
 use super::helpers::SpringPos;
@@ -98,8 +99,11 @@ impl App {
             // The liquid-glass shape rebuild uses the resting positions (the
             // glass doesn't need to follow the slide); the tile/icon instance
             // buffers carry the spring-adjusted positions.
-            r.prepare_grid_glass(&self.layout, &apps);
             let mut model = RenderModel::new();
+            model.glass.push(GlassBatch {
+                layer: GlassLayer::Base,
+                surfaces: self.layout.build_glass_surfaces(w as f32, &apps),
+            });
             model.tiles = Some(tile_instances);
             model.icons = Some(icon_instances);
             r.prepare(&model);

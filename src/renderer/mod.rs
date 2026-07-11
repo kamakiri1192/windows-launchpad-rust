@@ -24,7 +24,6 @@ mod badges;
 pub(crate) mod controls;
 mod counters;
 mod frame;
-mod glass;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
 mod icons;

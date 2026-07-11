@@ -23,6 +23,10 @@ impl App {
                 // "settings closed → modal glass/controls/text don't linger"
                 // path.
                 let mut render = ui_model::render_model::RenderModel::new();
+                render.glass.push(ui_model::render_model::GlassBatch {
+                    layer: ui_model::render_model::GlassLayer::Modal,
+                    surfaces: Vec::new(),
+                });
                 render.ink.push(InkBatch {
                     lane: InkLane::Settings,
                     views: Vec::new(),

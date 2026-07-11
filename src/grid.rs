@@ -31,7 +31,9 @@ use crate::scroll::ScrollBounds;
 use crate::ui_model::geometry::Rect;
 pub use crate::ui_model::grid::{GridApp, TileAnim};
 use crate::ui_model::ids::UiId;
-use crate::ui_model::render_model::{Color, IconSource, IconView, TileView};
+use crate::ui_model::render_model::{
+    Color, GlassBehavior, GlassMaterial, GlassSurface, IconSource, IconView, TileView,
+};
 
 // Re-exported for other binary modules (renderer, liquid_glass) that still
 // reference `crate::grid::*`. These are not all used *inside* this file, hence
@@ -52,6 +54,39 @@ impl<'a> From<&'a AppEntry> for GridApp<'a> {
 }
 
 impl GridLayout {
+    /// Build the base Liquid Glass scene (fixed page frame + scrolling tile
+    /// halos) as renderer-neutral surfaces.
+    pub fn build_glass_surfaces(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<GlassSurface> {
+        let (cx, cy, width, height) = self.frame_panel_rect(viewport_w);
+        let mut surfaces = Vec::with_capacity(1 + apps.len().min(self.total_tiles()));
+        surfaces.push(GlassSurface {
+            id: UiId::backdrop("page-frame"),
+            rect: Rect::new(cx - width * 0.5, cy - height * 0.5, width, height),
+            radius: self.scaled(layout_grid::FRAME_CORNER_RADIUS),
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::FixedFrame,
+            z: -10,
+        });
+        for (index, app) in apps.iter().take(self.total_tiles()).enumerate() {
+            let (x, y) = self.tile_position(viewport_w, index);
+            let halo = self.tile_size + self.scaled(18.0);
+            surfaces.push(GlassSurface {
+                id: UiId::launcher_item(app.id),
+                rect: Rect::new(
+                    x + (self.tile_size - halo) * 0.5,
+                    y + (self.tile_size - halo) * 0.5,
+                    halo,
+                    halo,
+                ),
+                radius: self.scaled(28.0),
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Scrolling,
+                z: 0,
+            });
+        }
+        surfaces
+    }
+
     /// Build the scroll bounds implied by this layout & viewport.
     ///
     /// This is the binary adapter over the pure

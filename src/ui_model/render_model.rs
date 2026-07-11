@@ -5,7 +5,7 @@ use crate::ui_model::text::TextView;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RenderModel {
-    pub glass: Vec<GlassSurface>,
+    pub glass: Vec<GlassBatch>,
     pub tiles: Option<Vec<TileView>>,
     pub icons: Option<Vec<IconView>>,
     pub text: Vec<TextView>,
@@ -39,8 +39,14 @@ pub struct GlassSurface {
     pub rect: Rect,
     pub radius: f32,
     pub material: GlassMaterial,
-    pub layer: GlassLayer,
+    pub behavior: GlassBehavior,
     pub z: i16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlassBatch {
+    pub layer: GlassLayer,
+    pub surfaces: Vec<GlassSurface>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +92,16 @@ pub enum IconSource {
     AtlasCell(String),
     AtlasUv(UvRect),
     Placeholder,
+}
+
+/// Geometry behavior used by the Liquid Glass SDF without exposing its packed
+/// numeric `shape_type` values to layout or feature code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GlassBehavior {
+    Scrolling,
+    FixedFrame,
+    Control,
+    ClipOnly,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -5,11 +5,6 @@
 //! relayout or a tile-data change (reorder / icon load / spring animation), and
 //! never on an animation-only frame.
 
-use crate::layout::grid::GridLayout;
-use crate::ui_model::grid::GridApp;
-
-use super::Renderer;
-
 /// One drawable tile, matching the WGSL `@location(0..4)` instance attributes.
 /// 48 bytes for clean GPU alignment.
 ///
@@ -72,24 +67,4 @@ pub(super) struct Uniforms {
     /// Pointer position (screen px) the dragged icon follows. Only meaningful
     /// while `drag_active` is 1.0.
     pub(super) drag_pos: [f32; 2],
-}
-
-impl Renderer {
-    /// Rebuild the static instance buffer from a fresh layout.
-    ///
-    /// Call after a resize (or any change to tile data) so the GPU sees the
-    /// new tile positions. The buffer grows only if the new list exceeds the
-    /// current capacity; otherwise the existing buffer is reused via
-    /// `queue.write_buffer`.
-    pub fn prepare_grid_glass(&mut self, layout: &GridLayout, apps: &[GridApp<'_>]) {
-        self.counters.record_full_scene_rebuild();
-        self.liquid_glass.rebuild_shapes(
-            &self.device,
-            &self.queue,
-            layout,
-            self.config.width as f32,
-            apps,
-        );
-        self.frame_clip = super::frame_clip(layout, self.config.width);
-    }
 }

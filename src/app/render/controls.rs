@@ -1,21 +1,19 @@
 //! Bottom control / gear / IME / caret render adapter methods.
 
 use crate::features::bottom_control;
-use crate::liquid_glass::geometry::GlassShape;
 use crate::renderer::text_engine as text;
 use crate::ui_model::geometry::{Point, Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, ControlKind, GlyphBatch, GlyphLane, GlyphView, InkBatch, InkLane, InkView, RenderModel,
+    Color, ControlKind, GlassBatch, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface,
+    GlyphBatch, GlyphLane, GlyphView, InkBatch, InkLane, InkView, RenderModel,
 };
 
 use super::helpers::{advance_unit_toward, mul_alpha};
 use crate::app::state::App;
 
 impl App {
-    pub(crate) fn render_bottom_control(
-        &mut self,
-    ) -> Option<crate::liquid_glass::geometry::GlassShape> {
+    pub(crate) fn render_bottom_control(&mut self) -> Option<GlassSurface> {
         // Gather all the immutable data first (avoid overlapping borrows with
         // the mutable renderer/text borrows below).
         let scale = self.scale_factor;
@@ -129,10 +127,7 @@ impl App {
         r.prepare(&model);
     }
 
-    pub(crate) fn render_gear(
-        &mut self,
-        control_shape: Option<crate::liquid_glass::geometry::GlassShape>,
-    ) {
+    pub(crate) fn render_gear(&mut self, control_shape: Option<GlassSurface>) {
         // The gear only appears in edit mode, alongside the Done capsule.
         let edit_progress = self.edit_visual_progress();
         let show = self.visible && edit_progress > 0.0 && !self.settings_panel_active();
@@ -162,8 +157,11 @@ impl App {
             // Submit the overlay lane in one call: the control capsule and the
             // gear share a Liquid Glass SDF field, so they must be submitted
             // together to composite correctly (merge / separate).
-            r.set_overlay_glass(control_shape, gear_shape);
             let mut model = RenderModel::new();
+            model.glass.push(GlassBatch {
+                layer: GlassLayer::Overlay,
+                surfaces: control_shape.into_iter().chain(gear_shape).collect(),
+            });
             model.ink.push(InkBatch {
                 lane: InkLane::Gear,
                 views: gear_instance.into_iter().collect(),
@@ -380,22 +378,36 @@ fn glyph_views(id: UiId, quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
         .collect()
 }
 
-fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassShape> {
-    (geom.half_size.0 >= 1.0).then(|| {
-        GlassShape::control_rounded_rect(
-            [geom.center.0, geom.center.1],
-            [geom.half_size.0 * 2.0, geom.half_size.1 * 2.0],
-            geom.radius,
-        )
+fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSurface> {
+    (geom.half_size.0 >= 1.0).then(|| GlassSurface {
+        id: UiId::bottom_control(),
+        rect: Rect::new(
+            geom.center.0 - geom.half_size.0,
+            geom.center.1 - geom.half_size.1,
+            geom.half_size.0 * 2.0,
+            geom.half_size.1 * 2.0,
+        ),
+        radius: geom.radius,
+        material: GlassMaterial::Regular,
+        behavior: GlassBehavior::Control,
+        z: 0,
     })
 }
 
-fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometry) -> GlassShape {
-    GlassShape::control_rounded_rect(
-        [geom.center.0, geom.center.1],
-        [geom.glass_radius * 2.0, geom.glass_radius * 2.0],
-        geom.glass_radius,
-    )
+fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometry) -> GlassSurface {
+    GlassSurface {
+        id: UiId::edit_settings_gear(),
+        rect: Rect::new(
+            geom.center.0 - geom.glass_radius,
+            geom.center.1 - geom.glass_radius,
+            geom.glass_radius * 2.0,
+            geom.glass_radius * 2.0,
+        ),
+        radius: geom.glass_radius,
+        material: GlassMaterial::Regular,
+        behavior: GlassBehavior::Control,
+        z: 1,
+    }
 }
 
 const QUERY_LABEL_FONT: &str = "Yu Gothic UI";
