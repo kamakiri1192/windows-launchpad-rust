@@ -169,7 +169,6 @@ impl Renderer {
 
         // Edit badges sit above the normal grid but below the lifted dragged
         // icon. The bottom control remains a later, screen-fixed overlay.
-        self.update_edit_badges(args.time);
         self.queue.write_buffer(
             &self.control_uniform_buffer,
             0,
@@ -178,14 +177,14 @@ impl Renderer {
                     args.viewport.0 as f32,
                     args.viewport.1 as f32,
                     args.scroll_x,
-                    0.0,
+                    args.time,
                 ],
                 frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
             }),
         );
         self.liquid_glass
-            .render_badges(&self.queue, &mut encoder, &view, args.scroll_x);
+            .render_badges(&self.queue, &mut encoder, &view, args.scroll_x, args.time);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("edit badge foreground pass"),

@@ -30,6 +30,8 @@ struct GlassUniforms {
     max_displacement: f32,
     shape_count: u32,
     debug_flags: u32,
+    time: f32,
+    _pad: [f32; 3],
 }
 
 #[derive(Debug)]
@@ -189,7 +191,7 @@ impl LiquidGlassRenderer {
         let capture_status = capture.status();
         log_capture_status(&capture_status);
 
-        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0);
+        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0, 0.0);
         let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
         let badge_uniform_buffer =
             create_uniform_buffer(device, "liquid glass badge uniforms", &uniforms);
@@ -870,6 +872,7 @@ impl LiquidGlassRenderer {
             height,
             scroll_x,
             self.shape_count,
+            0.0,
         );
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -1076,6 +1079,7 @@ impl LiquidGlassRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scroll_x: f32,
+        time: f32,
     ) {
         if !self.params.enabled || self.badge_shape_count == 0 {
             return;
@@ -1089,6 +1093,7 @@ impl LiquidGlassRenderer {
             height,
             scroll_x,
             self.badge_shape_count,
+            time,
         );
         queue.write_buffer(&self.badge_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -1163,6 +1168,7 @@ impl LiquidGlassRenderer {
             height,
             0.0,
             self.control_shape_count,
+            0.0,
         );
         queue.write_buffer(
             &self.control_uniform_buffer,
@@ -1240,6 +1246,7 @@ impl LiquidGlassRenderer {
             height,
             0.0,
             self.settings_panel_shape_count,
+            0.0,
         );
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
@@ -1348,6 +1355,7 @@ fn uniforms_from_params(
     height: u32,
     scroll_x: f32,
     shape_count: u32,
+    time: f32,
 ) -> GlassUniforms {
     GlassUniforms {
         viewport: [width as f32, height as f32],
@@ -1373,6 +1381,8 @@ fn uniforms_from_params(
         max_displacement: params.thickness * 10.0,
         shape_count,
         debug_flags: debug.flags(),
+        time,
+        _pad: [0.0; 3],
     }
 }
 
@@ -1711,12 +1721,18 @@ fn premultiplied_blend() -> wgpu::BlendState {
 
 #[cfg(test)]
 mod shape_capacity_tests {
-    use super::next_shape_capacity;
+    use super::{next_shape_capacity, GlassUniforms};
 
     #[test]
     fn shape_capacity_grows_only_past_current_capacity() {
         assert_eq!(next_shape_capacity(1, 2), 2);
         assert_eq!(next_shape_capacity(8, 9), 16);
         assert_eq!(next_shape_capacity(8, 20), 20);
+    }
+
+    #[test]
+    fn glass_uniform_layout_matches_wgsl() {
+        assert_eq!(std::mem::size_of::<GlassUniforms>(), 96);
+        assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
     }
 }

@@ -176,6 +176,7 @@ impl Renderer {
                 Category::Tile,
             );
             self.badge_sources = super::badges::edit_badge_sources(&instances);
+            self.prepare_edit_badges();
         }
         if let Some(icons) = &model.icons {
             let instances: Vec<_> = icons.iter().filter_map(icon_instance).collect();
