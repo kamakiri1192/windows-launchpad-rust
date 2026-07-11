@@ -1,12 +1,13 @@
 use crate::ui_model::geometry::{Point, Rect, UvRect};
+use crate::ui_model::grid::TileAnim;
 use crate::ui_model::ids::UiId;
 use crate::ui_model::text::TextView;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RenderModel {
     pub glass: Vec<GlassSurface>,
-    pub tiles: Vec<TileView>,
-    pub icons: Vec<IconView>,
+    pub tiles: Option<Vec<TileView>>,
+    pub icons: Option<Vec<IconView>>,
     pub text: Vec<TextView>,
     pub controls: Vec<ControlView>,
     /// Procedural renderer-neutral ink primitives, split into draw-order lanes.
@@ -23,8 +24,8 @@ impl RenderModel {
 
     pub fn is_empty(&self) -> bool {
         self.glass.is_empty()
-            && self.tiles.is_empty()
-            && self.icons.is_empty()
+            && self.tiles.as_ref().is_none_or(Vec::is_empty)
+            && self.icons.as_ref().is_none_or(Vec::is_empty)
             && self.text.is_empty()
             && self.controls.is_empty()
             && self.ink.is_empty()
@@ -66,6 +67,8 @@ pub struct TileView {
     pub rect: Rect,
     pub radius: f32,
     pub color: Color,
+    pub has_icon: bool,
+    pub motion: TileAnim,
     pub z: i16,
 }
 
@@ -74,12 +77,14 @@ pub struct IconView {
     pub id: UiId,
     pub rect: Rect,
     pub source: IconSource,
+    pub motion: TileAnim,
     pub z: i16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IconSource {
     AtlasCell(String),
+    AtlasUv(UvRect),
     Placeholder,
 }
 

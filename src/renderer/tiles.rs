@@ -5,10 +5,8 @@
 //! relayout or a tile-data change (reorder / icon load / spring animation), and
 //! never on an animation-only frame.
 
-use super::badges::edit_badge_sources;
-use super::counters::Category;
 use crate::layout::grid::GridLayout;
-use crate::ui_model::grid::{GridApp, TileAnim};
+use crate::ui_model::grid::GridApp;
 
 use super::Renderer;
 
@@ -83,19 +81,7 @@ impl Renderer {
     /// new tile positions. The buffer grows only if the new list exceeds the
     /// current capacity; otherwise the existing buffer is reused via
     /// `queue.write_buffer`.
-    pub fn rebuild_instances(
-        &mut self,
-        layout: &GridLayout,
-        apps: &[GridApp<'_>],
-        anim: &[TileAnim],
-    ) {
-        let instances = layout.build_instances(self.config.width as f32, apps, anim);
-        let outcome = self
-            .instance_buffer
-            .set(&self.device, &self.queue, &instances);
-        if outcome.allocated {
-            self.counters.record_creation(Category::Tile);
-        }
+    pub fn prepare_grid_glass(&mut self, layout: &GridLayout, apps: &[GridApp<'_>]) {
         self.counters.record_full_scene_rebuild();
         self.liquid_glass.rebuild_shapes(
             &self.device,
@@ -105,20 +91,5 @@ impl Renderer {
             apps,
         );
         self.frame_clip = super::frame_clip(layout, self.config.width);
-    }
-
-    /// Push a caller-built tile instance list to the GPU, reallocating the
-    /// buffer only on capacity overflow. Used by the reorder animation, which
-    /// overrides the tile positions with per-tile spring offsets before
-    /// uploading.
-    pub fn set_tile_instances(&mut self, instances: &[TileInstance]) {
-        let outcome = self
-            .instance_buffer
-            .set(&self.device, &self.queue, instances);
-        if outcome.allocated {
-            self.counters.record_growth(Category::Tile);
-        }
-        self.badge_sources = edit_badge_sources(instances);
-        self.update_edit_badges(0.0);
     }
 }

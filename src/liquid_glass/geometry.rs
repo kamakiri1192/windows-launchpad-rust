@@ -1,6 +1,6 @@
 use crate::layout::grid::GridLayout;
-use crate::renderer::tiles::TileInstance;
 use crate::ui_model::grid::GridApp;
+use crate::ui_model::render_model::TileView;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -102,9 +102,9 @@ pub fn with_control(mut shapes: Vec<GlassShape>, control: Option<GlassShape>) ->
     shapes
 }
 
-fn shape_from_tile(layout: &GridLayout, tile: &TileInstance) -> GlassShape {
-    let center = [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5];
-    let halo_size = tile.size + layout.scaled(18.0);
+fn shape_from_tile(layout: &GridLayout, tile: &TileView) -> GlassShape {
+    let center = [tile.rect.center().x, tile.rect.center().y];
+    let halo_size = tile.rect.width + layout.scaled(18.0);
     let size = [halo_size, halo_size];
     GlassShape::rounded_rect(center, size, tile.radius + layout.scaled(9.0))
 }

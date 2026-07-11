@@ -8,8 +8,8 @@
 
 use crate::liquid_glass::geometry::GlassShape;
 use crate::ui_model::render_model::{
-    ControlKind, GlassLayer, GlassMaterial, GlassSurface, GlyphLane, GlyphView, InkLane, InkView,
-    RenderModel,
+    ControlKind, GlassLayer, GlassMaterial, GlassSurface, GlyphLane, GlyphView, IconSource,
+    IconView, InkLane, InkView, RenderModel, TileView,
 };
 
 use super::controls::{
@@ -17,7 +17,9 @@ use super::controls::{
     KIND_MAGNIFIER, KIND_ROUND_RECT,
 };
 use super::counters::Category;
+use super::icon_pipeline::IconInstance;
 use super::text_engine::GlyphQuad;
+use super::tiles::TileInstance;
 use super::Renderer;
 
 /// Convert a renderer-neutral surface into the shader-facing rounded rect.
@@ -88,6 +90,37 @@ fn glyph_quad(view: &GlyphView) -> GlyphQuad {
     }
 }
 
+fn tile_instance(view: &TileView, index: usize) -> TileInstance {
+    TileInstance {
+        x: view.rect.x,
+        y: view.rect.y,
+        size: view.rect.width,
+        radius: view.radius,
+        r: view.color.r,
+        g: view.color.g,
+        b: view.color.b,
+        icon_index: if view.has_icon { index as f32 } else { -1.0 },
+        extra: view.motion.shader_payload(),
+    }
+}
+
+fn icon_instance(view: &IconView) -> Option<IconInstance> {
+    let IconSource::AtlasUv(uv) = view.source else {
+        return None;
+    };
+    Some(IconInstance {
+        x: view.rect.x,
+        y: view.rect.y,
+        size: view.rect.width,
+        radius: view.rect.width * (19.0 / 84.0),
+        u0: uv.u0,
+        v0: uv.v0,
+        u1: uv.u1,
+        v1: uv.v1,
+        extra: view.motion.shader_payload(),
+    })
+}
+
 impl Renderer {
     /// Reflect the proven portions of a renderer-neutral model into persistent
     /// GPU resources. Phase 6 connects the modal glass lane; ink/text and the
@@ -96,6 +129,38 @@ impl Renderer {
         self.counters.record_prepare();
         self.liquid_glass
             .set_settings_panel_shape(&self.queue, modal_shape_for(model));
+
+        if let Some(tiles) = &model.tiles {
+            let instances: Vec<_> = tiles
+                .iter()
+                .enumerate()
+                .map(|(index, view)| tile_instance(view, index))
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Tile,
+            );
+            self.badge_sources = super::badges::edit_badge_sources(&instances);
+        }
+        if let Some(icons) = &model.icons {
+            let instances: Vec<_> = icons.iter().filter_map(icon_instance).collect();
+            self.dragged_icon_instance = instances
+                .last()
+                .map(|instance| (instance.extra[3] as u32 & 2) != 0)
+                .unwrap_or(false);
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.icon_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Icon,
+            );
+        }
 
         for batch in &model.ink {
             let instances: Vec<_> = batch.views.iter().filter_map(ink_instance).collect();

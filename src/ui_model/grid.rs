@@ -10,6 +10,7 @@ use crate::ui_model::geometry::UvRect;
 /// Minimal borrowed view of one visible launcher app.
 #[derive(Debug, Clone, Copy)]
 pub struct GridApp<'a> {
+    pub id: &'a str,
     pub name: &'a str,
     pub uv: Option<UvRect>,
 }

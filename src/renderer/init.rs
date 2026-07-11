@@ -186,7 +186,7 @@ impl Renderer {
             cache: None,
         });
 
-        // Instance buffer starts empty; `rebuild_instances` (called from
+        // Instance buffer starts empty; `Renderer::prepare` (called from
         // App::relayout after icons load) supplies the real tiles via the
         // capacity-managed `InstanceBuffer`.
         let _ = layout.build_instances(config.width as f32, &[], &[]);

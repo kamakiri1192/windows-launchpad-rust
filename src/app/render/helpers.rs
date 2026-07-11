@@ -1,8 +1,7 @@
 //! Shared helper utilities for the render adapter: color blending, the
 //! SpringPos trait, and the linear animation advance helper.
 
-use crate::grid;
-use crate::renderer::icon_pipeline;
+use crate::ui_model::render_model::{IconView, TileView};
 
 pub(crate) fn mul_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
     c[3] *= a.clamp(0.0, 1.0);
@@ -13,17 +12,17 @@ pub(crate) trait SpringPos {
     fn set_pos(&mut self, x: f32, y: f32);
 }
 
-impl SpringPos for grid::TileInstance {
+impl SpringPos for TileView {
     fn set_pos(&mut self, x: f32, y: f32) {
-        self.x = x;
-        self.y = y;
+        self.rect.x = x;
+        self.rect.y = y;
     }
 }
 
-impl SpringPos for icon_pipeline::IconInstance {
+impl SpringPos for IconView {
     fn set_pos(&mut self, x: f32, y: f32) {
-        self.x = x;
-        self.y = y;
+        self.rect.x = x;
+        self.rect.y = y;
     }
 }
 

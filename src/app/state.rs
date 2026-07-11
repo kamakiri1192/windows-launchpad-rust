@@ -511,7 +511,7 @@ impl App {
     ///
     /// Apps the user hid via the edit-mode ✕ badge are excluded here (same path
     /// as the search filter), so they never reach the grid or click resolution.
-    pub(crate) fn grid_apps_owned(&self) -> Vec<(String, Option<crate::icons::UvRect>)> {
+    pub(crate) fn grid_apps_owned(&self) -> Vec<(AppId, String, Option<crate::icons::UvRect>)> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
         self.registry
@@ -519,7 +519,7 @@ impl App {
             .iter()
             .filter(|rec| include_hidden || !self.registry.is_hidden(&rec.app_id))
             .filter(|rec| Self::matches_search(&rec.name, &query))
-            .map(|rec| (rec.name.clone(), rec.uv))
+            .map(|rec| (rec.app_id.clone(), rec.name.clone(), rec.uv))
             .collect()
     }
 

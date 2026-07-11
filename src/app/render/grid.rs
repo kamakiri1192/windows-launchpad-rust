@@ -3,6 +3,11 @@
 use crate::domain::app_id::AppId;
 use crate::grid;
 use crate::scroll::{self, Phase};
+use crate::ui_model::geometry::{Rect, UvRect};
+use crate::ui_model::ids::UiId;
+use crate::ui_model::render_model::{
+    Color, GlyphBatch, GlyphLane, GlyphView, IconView, RenderModel, TileView,
+};
 
 use super::helpers::SpringPos;
 use crate::app::state::App;
@@ -38,7 +43,8 @@ impl App {
 
         let apps: Vec<grid::GridApp<'_>> = owned
             .iter()
-            .map(|(name, uv)| grid::GridApp {
+            .map(|(id, name, uv)| grid::GridApp {
+                id: id.as_str(),
                 name: name.as_str(),
                 uv: *uv,
             })
@@ -51,7 +57,12 @@ impl App {
             let quads = t.layout_labels(&labels, scale);
             let dirty = t.atlas_dirty;
             if let Some(r) = self.renderer.as_mut() {
-                r.set_text_instances(&quads);
+                let mut model = RenderModel::new();
+                model.glyphs.push(GlyphBatch {
+                    lane: GlyphLane::Grid,
+                    views: grid_glyph_views(&quads),
+                });
+                r.prepare(&model);
                 if dirty {
                     r.upload_atlas(t.atlas_rgba());
                 }
@@ -87,9 +98,11 @@ impl App {
             // The liquid-glass shape rebuild uses the resting positions (the
             // glass doesn't need to follow the slide); the tile/icon instance
             // buffers carry the spring-adjusted positions.
-            r.rebuild_instances(&self.layout, &apps, &anim);
-            r.set_tile_instances(&tile_instances);
-            r.set_icon_instances(&icon_instances);
+            r.prepare_grid_glass(&self.layout, &apps);
+            let mut model = RenderModel::new();
+            model.tiles = Some(tile_instances);
+            model.icons = Some(icon_instances);
+            r.prepare(&model);
         }
 
         let atlas_grew = self.ensure_atlas_uploaded();
@@ -174,17 +187,17 @@ impl App {
     /// `drag_pos` to make that trailing instance follow the pointer.
     pub(crate) fn lift_dragged_instances(
         &self,
-        tile_instances: &mut Vec<grid::TileInstance>,
-        icon_instances: &mut Vec<crate::renderer::icon_pipeline::IconInstance>,
+        tile_instances: &mut Vec<TileView>,
+        icon_instances: &mut Vec<IconView>,
         _visible_ids: &[AppId],
     ) {
-        let is_drag = |flags: f32| (flags as u32 & grid::TileAnim::FLAG_DRAG) != 0;
+        let is_drag = |flags: u32| flags & grid::TileAnim::FLAG_DRAG != 0;
 
-        if let Some(pos) = tile_instances.iter().position(|t| is_drag(t.extra[3])) {
+        if let Some(pos) = tile_instances.iter().position(|t| is_drag(t.motion.flags)) {
             let item = tile_instances.swap_remove(pos);
             tile_instances.push(item);
         }
-        if let Some(pos) = icon_instances.iter().position(|i| is_drag(i.extra[3])) {
+        if let Some(pos) = icon_instances.iter().position(|i| is_drag(i.motion.flags)) {
             let item = icon_instances.swap_remove(pos);
             icon_instances.push(item);
         }
@@ -210,7 +223,8 @@ impl App {
         let owned = self.grid_apps_owned();
         let apps: Vec<grid::GridApp<'_>> = owned
             .iter()
-            .map(|(name, uv)| grid::GridApp {
+            .map(|(id, name, uv)| grid::GridApp {
+                id: id.as_str(),
                 name: name.as_str(),
                 uv: *uv,
             })
@@ -224,8 +238,28 @@ impl App {
         self.apply_spring_positions(&visible_ids, &mut icon_instances);
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
         if let Some(r) = self.renderer.as_mut() {
-            r.set_tile_instances(&tile_instances);
-            r.set_icon_instances(&icon_instances);
+            let mut model = RenderModel::new();
+            model.tiles = Some(tile_instances);
+            model.icons = Some(icon_instances);
+            r.prepare(&model);
         }
     }
+}
+
+fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<GlyphView> {
+    quads
+        .iter()
+        .map(|quad| GlyphView {
+            id: UiId::backdrop("grid-label"),
+            rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
+            uv: UvRect {
+                u0: quad.u0,
+                v0: quad.v0,
+                u1: quad.u1,
+                v1: quad.v1,
+            },
+            color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
+            z: 0,
+        })
+        .collect()
 }

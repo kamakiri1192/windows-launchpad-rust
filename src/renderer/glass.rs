@@ -13,7 +13,7 @@
 //!   `GlassSurface` list.
 //!
 //! The base glass shapes (fixed page frame + scrolling tile halos) are still
-//! rebuilt via [`Renderer::rebuild_instances`], which is the base/scrolling
+//! rebuilt via [`Renderer::prepare_grid_glass`], which is the base/scrolling
 //! lane.
 
 use crate::liquid_glass::geometry::GlassShape;
