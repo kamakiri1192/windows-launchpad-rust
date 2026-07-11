@@ -26,9 +26,9 @@
 //! and the [`ScrollBounds`] adapter are added here.
 
 use crate::icons::AppEntry;
-use crate::icons::UvRect;
 use crate::layout::grid as layout_grid;
 use crate::scroll::ScrollBounds;
+pub use crate::ui_model::grid::{GridApp, TileAnim};
 
 // Re-exported for other binary modules (renderer, liquid_glass) that still
 // reference `crate::grid::*`. These are not all used *inside* this file, hence
@@ -38,59 +38,12 @@ pub use layout_grid::GridLayout;
 #[allow(unused_imports)]
 pub use layout_grid::{edit_badge_radius_for_tile_size, BASE_TILE_SIZE, FRAME_CORNER_RADIUS};
 
-/// Minimal view of one app that the layout needs: a label and an optional
-/// atlas UV. This decouples [`GridLayout`] from whichever concrete app-list
-/// type owns the full records (old `AppEntry`, new `AppRecord`, …), so the
-/// grid code doesn't churn when the registry changes.
-#[derive(Debug, Clone, Copy)]
-pub struct GridApp<'a> {
-    pub name: &'a str,
-    pub uv: Option<UvRect>,
-}
-
 impl<'a> From<&'a AppEntry> for GridApp<'a> {
     fn from(a: &'a AppEntry) -> Self {
         Self {
             name: &a.name,
             uv: a.uv,
         }
-    }
-}
-
-/// Per-app edit-mode animation parameters, packed into the tile/icon instance
-/// `extra` vec4.
-///
-/// - `phase` — wiggle phase offset (seconds), per-app so icons wobble out of
-///   sync. Ignored unless `FLAG_WIGGLE` is set.
-/// - `lift` — vertical lift in physical px (dragged icon rises above the grid).
-/// - `scale` — uniform scale multiplier (dragged icon is enlarged).
-/// - `flags` — bitfield; bit 0 = wiggling, bit 1 = dragged (bypass frame clip).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct TileAnim {
-    pub phase: f32,
-    pub lift: f32,
-    pub scale: f32,
-    pub flags: u32,
-}
-
-impl TileAnim {
-    /// Bit set in `flags` while edit mode is active (icon should wiggle).
-    pub const FLAG_WIGGLE: u32 = 1 << 0;
-    /// Bit set in `flags` while this icon is the one being dragged (lifted,
-    /// pointer-following, frame clip bypassed).
-    pub const FLAG_DRAG: u32 = 1 << 1;
-
-    /// An all-zero animation (the resting state — no wiggle, no lift).
-    pub const IDLE: Self = Self {
-        phase: 0.0,
-        lift: 0.0,
-        scale: 1.0,
-        flags: 0,
-    };
-
-    #[inline]
-    fn to_extra(self) -> [f32; 4] {
-        [self.phase, self.lift, self.scale, self.flags as f32]
     }
 }
 
@@ -156,7 +109,7 @@ impl GridLayout {
                 g: g_,
                 b: b_,
                 icon_index,
-                extra: anim.to_extra(),
+                extra: anim.shader_payload(),
             });
         }
         out
@@ -197,7 +150,7 @@ impl GridLayout {
                 v0: uv.v0,
                 u1: uv.u1,
                 v1: uv.v1,
-                extra: anim.to_extra(),
+                extra: anim.shader_payload(),
             });
         }
         out
@@ -242,6 +195,7 @@ impl GridLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_model::geometry::UvRect;
     use std::path::PathBuf;
 
     /// Owned app-list helper for tests (so `GridApp` borrows stable storage).

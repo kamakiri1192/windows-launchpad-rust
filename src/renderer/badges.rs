@@ -9,9 +9,11 @@
 //! wiggling tile) and grows linearly with the visible app count, not the whole
 //! scene.
 
+use crate::layout::grid::edit_badge_radius_for_tile_size;
 use crate::liquid_glass::geometry::GlassShape;
 use crate::renderer::controls::ControlInstance;
 use crate::renderer::tiles::TileInstance;
+use crate::ui_model::grid::TileAnim;
 
 use super::counters::Category;
 use super::Renderer;
@@ -76,8 +78,8 @@ impl Renderer {
 }
 
 pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
-    const FLAG_WIGGLE: u32 = crate::grid::TileAnim::FLAG_WIGGLE;
-    const FLAG_DRAG: u32 = crate::grid::TileAnim::FLAG_DRAG;
+    const FLAG_WIGGLE: u32 = TileAnim::FLAG_WIGGLE;
+    const FLAG_DRAG: u32 = TileAnim::FLAG_DRAG;
 
     let mut sources = Vec::new();
     for tile in instances {
@@ -86,7 +88,7 @@ pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSou
             continue;
         }
 
-        let radius = crate::grid::edit_badge_radius_for_tile_size(tile.size);
+        let radius = edit_badge_radius_for_tile_size(tile.size);
         let inset = radius * 0.45;
         let center = [tile.x + inset, tile.y + inset];
         sources.push(EditBadgeSource {
@@ -118,6 +120,7 @@ fn animated_badge_center(source: EditBadgeSource, time: f32) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::grid::BASE_TILE_SIZE;
 
     fn tile(size: f32) -> TileInstance {
         TileInstance {
@@ -129,21 +132,21 @@ mod tests {
             g: 0.0,
             b: 0.0,
             icon_index: -1.0,
-            extra: [0.25, 0.0, 1.0, crate::grid::TileAnim::FLAG_WIGGLE as f32],
+            extra: [0.25, 0.0, 1.0, TileAnim::FLAG_WIGGLE as f32],
         }
     }
 
     #[test]
     fn edit_badge_sources_use_scaled_radius() {
-        let normal = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE)]);
-        let scaled = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE * 1.5)]);
+        let normal = edit_badge_sources(&[tile(BASE_TILE_SIZE)]);
+        let scaled = edit_badge_sources(&[tile(BASE_TILE_SIZE * 1.5)]);
 
         assert!((scaled[0].radius - normal[0].radius * 1.5).abs() < 1e-2);
     }
 
     #[test]
     fn edit_badge_center_starts_on_tile_top_left() {
-        let source = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE)])[0];
+        let source = edit_badge_sources(&[tile(BASE_TILE_SIZE)])[0];
         let inset = source.radius * 0.45;
 
         assert!((source.base_center[0] - (100.0 + inset)).abs() < 1e-4);

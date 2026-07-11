@@ -1,8 +1,10 @@
 //! Settings panel render adapter methods and builders.
 
 use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
-use crate::features::bottom_control;
 use crate::layout;
+use crate::renderer::controls::{
+    ControlInstance, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_ROUND_RECT,
+};
 use crate::renderer::text_engine as text;
 use crate::ui_model;
 
@@ -52,7 +54,7 @@ impl App {
             layout.left + layout.hw * 2.0 - btn_r * 2.0,
             layout.top + btn_r * 2.0,
             btn_r,
-            bottom_control::KIND_CLOSE,
+            KIND_CLOSE,
             layout::settings_panel::INK,
         );
 
@@ -279,7 +281,7 @@ const SETTINGS_ACCENT: [f32; 4] = [0.35, 0.68, 1.0, 0.42];
 const SETTINGS_GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
 fn transform_settings_instances(
-    instances: &mut [bottom_control::ControlInstance],
+    instances: &mut [ControlInstance],
     origin: [f32; 2],
     scale: f32,
     alpha: f32,
@@ -310,14 +312,8 @@ fn transform_settings_quads(
     }
 }
 
-fn control_icon(
-    x: f32,
-    y: f32,
-    radius: f32,
-    kind: f32,
-    color: [f32; 4],
-) -> bottom_control::ControlInstance {
-    bottom_control::ControlInstance {
+fn control_icon(x: f32, y: f32, radius: f32, kind: f32, color: [f32; 4]) -> ControlInstance {
+    ControlInstance {
         center: [x, y],
         params: [radius, color[3], 1.6, 0.0],
         color,
@@ -331,20 +327,16 @@ fn round_rect_instance(
     half_height: f32,
     radius: f32,
     color: [f32; 4],
-) -> bottom_control::ControlInstance {
-    bottom_control::ControlInstance {
+) -> ControlInstance {
+    ControlInstance {
         center,
         params: [half_height, color[3], half_width, radius],
         color,
-        kind: [bottom_control::KIND_ROUND_RECT, 0.0, 0.0, 0.0],
+        kind: [KIND_ROUND_RECT, 0.0, 0.0, 0.0],
     }
 }
 
-fn divider_instance(
-    center: [f32; 2],
-    half_width: f32,
-    half_height: f32,
-) -> bottom_control::ControlInstance {
+fn divider_instance(center: [f32; 2], half_width: f32, half_height: f32) -> ControlInstance {
     round_rect_instance(center, half_width, half_height, half_height, SETTINGS_DIM)
 }
 
@@ -352,7 +344,7 @@ fn toggle_instances(
     center: [f32; 2],
     enabled: bool,
     scale: f32,
-    instances: &mut Vec<bottom_control::ControlInstance>,
+    instances: &mut Vec<ControlInstance>,
 ) {
     let track_hw = 22.0 * scale;
     let track_hh = 11.0 * scale;
@@ -373,7 +365,7 @@ fn toggle_instances(
             center[0] + 10.0 * scale,
             center[1],
             6.0 * scale,
-            bottom_control::KIND_DOT,
+            KIND_DOT,
             [1.0, 1.0, 1.0, 0.78],
         ));
     }
@@ -385,7 +377,7 @@ fn build_settings_panel_instances(
     category: SettingsCategory,
     settings: &Settings,
     _hidden_count: usize,
-    instances: &mut Vec<bottom_control::ControlInstance>,
+    instances: &mut Vec<ControlInstance>,
 ) {
     let panel_right = layout.left + layout.hw * 2.0;
     let panel_bottom = layout.top + layout.hh * 2.0;
@@ -446,7 +438,7 @@ fn build_settings_panel_instances(
                         left + 15.0 * scale,
                         segment_top + SETTINGS_SEGMENT_H * scale * 0.5,
                         8.0 * scale,
-                        bottom_control::KIND_CHECK,
+                        KIND_CHECK,
                         SETTINGS_INK,
                     ));
                 }
@@ -473,7 +465,7 @@ fn build_settings_panel_instances(
                 content_right - 14.0 * scale,
                 first_top + SETTINGS_ROW_STEP * 2.0 * scale + row_h * 0.5,
                 9.0 * scale,
-                bottom_control::KIND_CHEVRON,
+                KIND_CHEVRON,
                 SETTINGS_MUTED,
             ));
         }
@@ -493,7 +485,7 @@ fn build_settings_panel_instances(
                     content_right - 14.0 * scale,
                     first_top + i as f32 * SETTINGS_ROW_STEP * scale + row_h * 0.5,
                     9.0 * scale,
-                    bottom_control::KIND_CHEVRON,
+                    KIND_CHEVRON,
                     SETTINGS_MUTED,
                 ));
             }
@@ -516,7 +508,7 @@ fn settings_row_backgrounds(
     width: f32,
     height: f32,
     scale: f32,
-    instances: &mut Vec<bottom_control::ControlInstance>,
+    instances: &mut Vec<ControlInstance>,
     count: usize,
 ) {
     for i in 0..count {

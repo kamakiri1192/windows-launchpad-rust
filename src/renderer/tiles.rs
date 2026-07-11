@@ -8,6 +8,7 @@
 use super::badges::edit_badge_sources;
 use super::counters::Category;
 use crate::layout::grid::GridLayout;
+use crate::ui_model::grid::{GridApp, TileAnim};
 
 use super::Renderer;
 
@@ -85,8 +86,8 @@ impl Renderer {
     pub fn rebuild_instances(
         &mut self,
         layout: &GridLayout,
-        apps: &[crate::grid::GridApp<'_>],
-        anim: &[crate::grid::TileAnim],
+        apps: &[GridApp<'_>],
+        anim: &[TileAnim],
     ) {
         let instances = layout.build_instances(self.config.width as f32, apps, anim);
         let outcome = self

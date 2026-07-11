@@ -1,4 +1,6 @@
-use crate::grid::{GridApp, GridLayout, TileInstance};
+use crate::layout::grid::GridLayout;
+use crate::renderer::tiles::TileInstance;
+use crate::ui_model::grid::GridApp;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -80,7 +82,7 @@ pub fn shapes_from_layout(
     shapes.push(GlassShape::fixed_rounded_rect(
         [center_x, center_y],
         [panel_w, panel_h],
-        layout.scaled(crate::grid::FRAME_CORNER_RADIUS),
+        layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
     ));
 
     shapes.extend(

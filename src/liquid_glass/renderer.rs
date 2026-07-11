@@ -6,7 +6,8 @@ use wgpu::util::DeviceExt;
 use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
-use crate::grid::{GridApp, GridLayout};
+use crate::layout::grid::GridLayout;
+use crate::ui_model::grid::GridApp;
 
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;

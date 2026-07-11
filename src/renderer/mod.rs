@@ -145,6 +145,6 @@ pub(super) fn frame_clip(layout: &GridLayout, viewport_w: u32) -> (f32, f32, f32
         cy,
         w * 0.5,
         h * 0.5,
-        layout.scaled(crate::grid::FRAME_CORNER_RADIUS),
+        layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
     )
 }

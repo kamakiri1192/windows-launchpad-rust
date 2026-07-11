@@ -1,6 +1,10 @@
 //! Bottom control / gear / IME / caret render adapter methods.
 
 use crate::features::bottom_control;
+use crate::liquid_glass::geometry::GlassShape;
+use crate::renderer::controls::{
+    ControlInstance, KIND_CARET, KIND_CLOSE, KIND_DOT, KIND_GEAR, KIND_MAGNIFIER,
+};
 use crate::renderer::text_engine as text;
 
 use super::helpers::{advance_unit_toward, mul_alpha};
@@ -62,7 +66,7 @@ impl App {
         let instances = if edit_visual_progress > 0.0 {
             Vec::new()
         } else {
-            bottom_control::build_overlay_instances(&geom, &layers, query_width, caret_blink)
+            build_overlay_instances(&geom, &layers, query_width, caret_blink)
         };
 
         // 2) Text glyphs (label / query / placeholder). Built via the shared
@@ -90,7 +94,7 @@ impl App {
         // 3) Upload the control ink/text and return its glass shape to the
         // caller. `tick_frame` immediately passes it to `render_gear`, keeping
         // the transient GPU-facing value out of persistent app state.
-        let control_shape = bottom_control::glass_shape(&geom);
+        let control_shape = control_glass_shape(&geom);
         self.upload_control_overlay(atlas_dirty, &instances, &quads);
         control_shape
     }
@@ -100,7 +104,7 @@ impl App {
     fn upload_control_overlay(
         &mut self,
         atlas_dirty: bool,
-        instances: &[bottom_control::ControlInstance],
+        instances: &[ControlInstance],
         quads: &[text::GlyphQuad],
     ) {
         let Some(r) = self.renderer.as_mut() else {
@@ -142,9 +146,8 @@ impl App {
         } else {
             None
         };
-        let gear_shape = gear_geom.map(|(geom, _)| bottom_control::edit_gear_glass_shape(&geom));
-        let gear_instance =
-            gear_geom.map(|(geom, alpha)| bottom_control::edit_gear_instance(&geom, alpha));
+        let gear_shape = gear_geom.map(|(geom, _)| edit_gear_glass_shape(&geom));
+        let gear_instance = gear_geom.map(|(geom, alpha)| edit_gear_instance(&geom, alpha));
         if let Some(r) = self.renderer.as_mut() {
             // Submit the overlay lane in one call: the control capsule and the
             // gear share a Liquid Glass SDF field, so they must be submitted
@@ -209,6 +212,113 @@ impl App {
         let origin = bottom_control::field_text_origin_x(&geom);
         origin + self.measure_query_width()
     }
+}
+
+const CONTROL_INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
+const DOT_ACTIVE: [f32; 4] = [1.0, 1.0, 1.0, 0.96];
+const DOT_IDLE: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
+
+fn build_overlay_instances(
+    geom: &bottom_control::ControlGeometry,
+    layers: &[bottom_control::ControlLayer],
+    query_width: f32,
+    caret_blink: f32,
+) -> Vec<ControlInstance> {
+    let mut out = Vec::new();
+    let (cx, cy) = geom.center;
+    let hw = geom.half_size.0;
+    let scale = crate::layout::control_geometry::control_scale(geom);
+
+    for layer in layers {
+        let alpha = layer.alpha;
+        if alpha <= 0.01 {
+            continue;
+        }
+        match layer.visual {
+            bottom_control::Visual::SearchPill => {
+                let (mag_cx, _) = bottom_control::search_pill_content_centers(geom);
+                let size = crate::layout::control_geometry::search_magnifier_size(scale);
+                out.push(ControlInstance {
+                    center: [mag_cx, cy],
+                    params: [size, alpha, 0.0, 0.0],
+                    color: CONTROL_INK,
+                    kind: [KIND_MAGNIFIER, 0.0, 0.0, 0.0],
+                });
+            }
+            bottom_control::Visual::PageIndicator => {
+                let dots = geom.page_count.max(1);
+                let active_r = 3.2 * scale;
+                let idle_r = 2.4 * scale;
+                let gap = 8.0 * scale;
+                let total = dots as f32 * active_r * 2.0 + (dots.saturating_sub(1)) as f32 * gap;
+                let start_x = cx - total * 0.5 + active_r;
+                for index in 0..dots {
+                    let active = index == geom.page;
+                    out.push(ControlInstance {
+                        center: [start_x + index as f32 * (active_r * 2.0 + gap), cy],
+                        params: [if active { active_r } else { idle_r }, alpha, 0.0, 0.0],
+                        color: if active { DOT_ACTIVE } else { DOT_IDLE },
+                        kind: [KIND_DOT, 0.0, 0.0, 0.0],
+                    });
+                }
+            }
+            bottom_control::Visual::SearchField => {
+                let size = 11.0 * scale;
+                let mag_cx = cx - hw + size + 10.0 * scale;
+                out.push(ControlInstance {
+                    center: [mag_cx, cy],
+                    params: [size, alpha, 0.0, 0.0],
+                    color: CONTROL_INK,
+                    kind: [KIND_MAGNIFIER, 0.0, 0.0, 0.0],
+                });
+                if caret_blink > 0.01 {
+                    out.push(ControlInstance {
+                        center: [mag_cx + size + 6.0 * scale + query_width, cy],
+                        params: [8.0 * scale, alpha * caret_blink, scale, 0.0],
+                        color: CONTROL_INK,
+                        kind: [KIND_CARET, 0.0, 0.0, 0.0],
+                    });
+                }
+                out.push(ControlInstance {
+                    center: [cx + hw - 20.0 * scale, cy],
+                    params: [7.0 * scale, alpha, 1.4 * scale, 0.0],
+                    color: CONTROL_INK,
+                    kind: [KIND_CLOSE, 0.0, 0.0, 0.0],
+                });
+            }
+        }
+    }
+    out
+}
+
+fn edit_gear_instance(
+    geom: &crate::layout::control_geometry::EditGearGeometry,
+    alpha: f32,
+) -> ControlInstance {
+    ControlInstance {
+        center: [geom.center.0, geom.center.1],
+        params: [geom.radius * 0.62, alpha, 0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        kind: [KIND_GEAR, 0.0, 0.0, 0.0],
+    }
+}
+
+fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassShape> {
+    (geom.half_size.0 >= 1.0).then(|| {
+        GlassShape::control_rounded_rect(
+            [geom.center.0, geom.center.1],
+            [geom.half_size.0 * 2.0, geom.half_size.1 * 2.0],
+            geom.radius,
+        )
+    })
+}
+
+fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometry) -> GlassShape {
+    GlassShape::control_rounded_rect(
+        [geom.center.0, geom.center.1],
+        [geom.glass_radius * 2.0, geom.glass_radius * 2.0],
+        geom.glass_radius,
+    )
 }
 
 const QUERY_LABEL_FONT: &str = "Yu Gothic UI";
