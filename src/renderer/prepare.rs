@@ -127,6 +127,16 @@ impl Renderer {
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
         for batch in &model.glass {
+            if self
+                .prepared_model
+                .glass
+                .iter()
+                .find(|old| old.layer == batch.layer)
+                == Some(batch)
+            {
+                self.counters.record_dirty_skip();
+                continue;
+            }
             match batch.layer {
                 GlassLayer::Overlay => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
@@ -159,9 +169,12 @@ impl Renderer {
                     self.counters.record_full_scene_rebuild();
                 }
             }
+            self.prepared_model
+                .set_glass_batch(batch.layer, batch.surfaces.clone());
         }
 
-        if let Some(tiles) = &model.tiles {
+        if model.tiles != self.prepared_model.tiles {
+            let tiles = model.tiles.as_deref().unwrap_or_default();
             let instances: Vec<_> = tiles
                 .iter()
                 .enumerate()
@@ -177,8 +190,12 @@ impl Renderer {
             );
             self.badge_sources = super::badges::edit_badge_sources(&instances);
             self.prepare_edit_badges();
+            self.prepared_model.tiles.clone_from(&model.tiles);
+        } else {
+            self.counters.record_dirty_skip();
         }
-        if let Some(icons) = &model.icons {
+        if model.icons != self.prepared_model.icons {
+            let icons = model.icons.as_deref().unwrap_or_default();
             let instances: Vec<_> = icons.iter().filter_map(icon_instance).collect();
             self.dragged_icon_instance = instances
                 .last()
@@ -192,9 +209,22 @@ impl Renderer {
                 &mut self.counters,
                 Category::Icon,
             );
+            self.prepared_model.icons.clone_from(&model.icons);
+        } else {
+            self.counters.record_dirty_skip();
         }
 
         for batch in &model.ink {
+            if self
+                .prepared_model
+                .ink
+                .iter()
+                .find(|old| old.lane == batch.lane)
+                == Some(batch)
+            {
+                self.counters.record_dirty_skip();
+                continue;
+            }
             let instances: Vec<_> = batch.views.iter().filter_map(ink_instance).collect();
             match batch.lane {
                 InkLane::BottomControl => set_instances(
@@ -223,9 +253,21 @@ impl Renderer {
                 ),
                 InkLane::EditBadge => {}
             }
+            self.prepared_model
+                .set_ink_batch(batch.lane, batch.views.clone());
         }
 
         for batch in &model.glyphs {
+            if self
+                .prepared_model
+                .glyphs
+                .iter()
+                .find(|old| old.lane == batch.lane)
+                == Some(batch)
+            {
+                self.counters.record_dirty_skip();
+                continue;
+            }
             let quads: Vec<_> = batch.views.iter().map(glyph_quad).collect();
             match batch.lane {
                 GlyphLane::Grid => set_instances(
@@ -253,6 +295,8 @@ impl Renderer {
                     Category::SettingsText,
                 ),
             }
+            self.prepared_model
+                .set_glyph_batch(batch.lane, batch.views.clone());
         }
     }
 }
@@ -265,8 +309,12 @@ fn set_instances<T: bytemuck::Pod>(
     counters: &mut super::counters::BufferCounters,
     category: Category,
 ) {
-    if buffer.set(device, queue, instances).allocated {
+    let outcome = buffer.set(device, queue, instances);
+    if outcome.allocated {
         counters.record_growth(category);
+    }
+    if outcome.wrote {
+        counters.record_write(category);
     }
 }
 

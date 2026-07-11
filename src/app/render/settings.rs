@@ -7,7 +7,7 @@ use crate::ui_model;
 use crate::ui_model::geometry::{Point, Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, ControlKind, GlyphBatch, GlyphLane, GlyphView, InkBatch, InkLane, InkView,
+    Color, ControlKind, GlassLayer, GlyphLane, GlyphView, InkLane, InkView,
 };
 
 use super::helpers::advance_unit_toward;
@@ -16,27 +16,12 @@ use crate::app::state::App;
 impl App {
     pub(crate) fn render_settings_panel(&mut self) {
         if !self.settings_panel_active() {
-            if let Some(r) = self.renderer.as_mut() {
-                // An empty model clears the modal glass lane (prepare detects
-                // the signature went non-empty -> empty and submits None), and
-                // the ink/text lists are cleared directly. This is the
-                // "settings closed → modal glass/controls/text don't linger"
-                // path.
-                let mut render = ui_model::render_model::RenderModel::new();
-                render.glass.push(ui_model::render_model::GlassBatch {
-                    layer: ui_model::render_model::GlassLayer::Modal,
-                    surfaces: Vec::new(),
-                });
-                render.ink.push(InkBatch {
-                    lane: InkLane::Settings,
-                    views: Vec::new(),
-                });
-                render.glyphs.push(GlyphBatch {
-                    lane: GlyphLane::Settings,
-                    views: Vec::new(),
-                });
-                r.prepare(&render);
-            }
+            self.render_model
+                .set_glass_batch(GlassLayer::Modal, Vec::new());
+            self.render_model
+                .set_ink_batch(InkLane::Settings, Vec::new());
+            self.render_model
+                .set_glyph_batch(GlyphLane::Settings, Vec::new());
             return;
         }
 
@@ -57,15 +42,14 @@ impl App {
             },
             &copy,
         );
-        let layout = model.layout;
+        let panel = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
 
-        // Close × glyph at the top-right inset.
         let btn_r = layout::settings_panel::CLOSE_HALF * scale;
         let close = control_icon(
-            layout.left + layout.hw * 2.0 - btn_r * 2.0,
-            layout.top + btn_r * 2.0,
+            panel.left + panel.hw * 2.0 - btn_r * 2.0,
+            panel.top + btn_r * 2.0,
             btn_r,
             ControlKind::CloseButton,
             layout::settings_panel::INK,
@@ -73,65 +57,51 @@ impl App {
 
         let mut instances = Vec::new();
         let mut quads = Vec::new();
-        let current_settings = self.settings.clone();
-        let current_category = self.settings_category;
-
         build_settings_panel_instances(
-            &layout,
+            &panel,
             scale,
-            current_category,
-            &current_settings,
+            self.settings_category,
+            &self.settings,
             hidden_count,
             &mut instances,
         );
         instances.push(close);
 
-        if let Some(t) = self.text.as_mut() {
-            build_settings_panel_text_views(t, &model.result.render.text, scale, &mut quads);
+        if let Some(text) = self.text.as_mut() {
+            build_settings_panel_text_views(text, &model.result.render.text, scale, &mut quads);
         }
 
         transform_settings_instances(
             &mut instances,
-            [layout.cx, layout.cy],
+            [panel.cx, panel.cy],
             visual_scale,
             visual_alpha,
         );
-        transform_settings_quads(
-            &mut quads,
-            [layout.cx, layout.cy],
-            visual_scale,
-            visual_alpha,
-        );
+        transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
 
-        if let Some(r) = self.renderer.as_mut() {
-            // The panel glass surface is produced by the layout layer as a
-            // renderer-neutral `GlassSurface` (visual_scale already applied).
-            // Route it through the facade's `prepare` instead of recomputing
-            // the shader shape here; `prepare` dirty-tracks it so a frame
-            // whose glass didn't move (settled settings panel) re-submits
-            // nothing.
-            let mut render = model.result.render.clone();
-            render.ink.push(InkBatch {
-                lane: InkLane::Settings,
-                views: instances,
-            });
-            render.glyphs.push(GlyphBatch {
-                lane: GlyphLane::Settings,
-                views: glyph_views(&quads),
-            });
-            r.prepare(&render);
-            // Upload the atlas if the title added any glyphs this frame.
-            if let Some(t) = self.text.as_ref() {
-                if t.atlas_dirty {
-                    r.upload_atlas(t.atlas_rgba());
-                }
+        let modal = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .map(|batch| batch.surfaces.clone())
+            .unwrap_or_default();
+        self.render_model.set_glass_batch(GlassLayer::Modal, modal);
+        self.render_model
+            .set_ink_batch(InkLane::Settings, instances);
+        self.render_model
+            .set_glyph_batch(GlyphLane::Settings, glyph_views(&quads));
+
+        if let (Some(renderer), Some(text)) = (self.renderer.as_mut(), self.text.as_ref()) {
+            if text.atlas_dirty {
+                renderer.upload_atlas(text.atlas_rgba());
             }
         }
-        if let Some(t) = self.text.as_mut() {
-            t.atlas_dirty = false;
+        if let Some(text) = self.text.as_mut() {
+            text.atlas_dirty = false;
         }
     }
-
     pub(crate) fn step_settings_panel(&mut self, dt: f32) -> bool {
         let target = if self.settings_open { 1.0 } else { 0.0 };
         let duration = if self.settings_open {

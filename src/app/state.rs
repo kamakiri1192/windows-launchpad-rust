@@ -138,6 +138,7 @@ pub struct App {
     pub scroller: Option<Scroller>,
     pub text: Option<crate::renderer::text_engine::TextRenderer>,
     pub layout: crate::grid::GridLayout,
+    pub render_model: crate::ui_model::render_model::RenderModel,
     pub timer: StartupTimer,
 
     // ---- app + icon state ----
@@ -257,6 +258,7 @@ impl App {
             scroller: None,
             text: None,
             layout: crate::grid::GridLayout::default(),
+            render_model: crate::ui_model::render_model::RenderModel::new(),
             timer,
             registry: AppRegistry::new(),
             atlas: IconAtlas::new(64),

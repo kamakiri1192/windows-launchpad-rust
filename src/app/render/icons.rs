@@ -10,7 +10,6 @@ use crate::grid;
 use crate::icon_cache::{CacheProbe, CachedIcon};
 use crate::icons::normalize::DecodedIcon;
 use crate::startup_timer::prefix;
-use crate::ui_model::render_model::RenderModel;
 use crate::workers::icon_worker::{IconReason, IconRequest};
 
 use crate::app::state::App;
@@ -131,11 +130,7 @@ impl App {
         let anim = self.edit_anim(&visible_ids);
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
         self.apply_spring_positions(&visible_ids, &mut icon_instances);
-        if let Some(r) = self.renderer.as_mut() {
-            let mut model = RenderModel::new();
-            model.icons = Some(icon_instances);
-            r.prepare(&model);
-        }
+        self.render_model.icons = Some(icon_instances);
     }
 
     /// Mark an app's icon as failed (placeholder stays), logging the error.

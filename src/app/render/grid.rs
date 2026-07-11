@@ -5,10 +5,7 @@ use crate::grid;
 use crate::scroll::{self, Phase};
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::ids::UiId;
-use crate::ui_model::render_model::{
-    Color, GlassBatch, GlassLayer, GlyphBatch, GlyphLane, GlyphView, IconView, RenderModel,
-    TileView,
-};
+use crate::ui_model::render_model::{Color, GlassLayer, GlyphLane, GlyphView, IconView, TileView};
 
 use super::helpers::SpringPos;
 use crate::app::state::App;
@@ -53,25 +50,21 @@ impl App {
 
         // Text labels.
         let scale = self.scale_factor;
-        let dirty = if let Some(t) = self.text.as_mut() {
+        let (grid_glyphs, dirty) = if let Some(t) = self.text.as_mut() {
             let labels = self.layout.build_labels(w as f32, &apps);
             let quads = t.layout_labels(&labels, scale);
             let dirty = t.atlas_dirty;
-            if let Some(r) = self.renderer.as_mut() {
-                let mut model = RenderModel::new();
-                model.glyphs.push(GlyphBatch {
-                    lane: GlyphLane::Grid,
-                    views: grid_glyph_views(&quads),
-                });
-                r.prepare(&model);
-                if dirty {
+            if dirty {
+                if let Some(r) = self.renderer.as_mut() {
                     r.upload_atlas(t.atlas_rgba());
                 }
             }
-            dirty
+            (grid_glyph_views(&quads), dirty)
         } else {
-            false
+            (Vec::new(), false)
         };
+        self.render_model
+            .set_glyph_batch(GlyphLane::Grid, grid_glyphs);
         if dirty {
             if let Some(t) = self.text.as_mut() {
                 t.atlas_dirty = false;
@@ -95,19 +88,12 @@ impl App {
         // normal instance list and append a pointer-following copy at the end so
         // it draws on top of everything else.
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
-        if let Some(r) = self.renderer.as_mut() {
-            // The liquid-glass shape rebuild uses the resting positions (the
-            // glass doesn't need to follow the slide); the tile/icon instance
-            // buffers carry the spring-adjusted positions.
-            let mut model = RenderModel::new();
-            model.glass.push(GlassBatch {
-                layer: GlassLayer::Base,
-                surfaces: self.layout.build_glass_surfaces(w as f32, &apps),
-            });
-            model.tiles = Some(tile_instances);
-            model.icons = Some(icon_instances);
-            r.prepare(&model);
-        }
+        self.render_model.set_glass_batch(
+            GlassLayer::Base,
+            self.layout.build_glass_surfaces(w as f32, &apps),
+        );
+        self.render_model.tiles = Some(tile_instances);
+        self.render_model.icons = Some(icon_instances);
 
         let atlas_grew = self.ensure_atlas_uploaded();
         if atlas_grew {
@@ -241,12 +227,8 @@ impl App {
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
         self.apply_spring_positions(&visible_ids, &mut icon_instances);
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
-        if let Some(r) = self.renderer.as_mut() {
-            let mut model = RenderModel::new();
-            model.tiles = Some(tile_instances);
-            model.icons = Some(icon_instances);
-            r.prepare(&model);
-        }
+        self.render_model.tiles = Some(tile_instances);
+        self.render_model.icons = Some(icon_instances);
     }
 }
 

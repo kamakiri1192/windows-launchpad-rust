@@ -31,6 +31,30 @@ impl RenderModel {
             && self.ink.is_empty()
             && self.glyphs.is_empty()
     }
+
+    pub fn set_glass_batch(&mut self, layer: GlassLayer, surfaces: Vec<GlassSurface>) {
+        if let Some(batch) = self.glass.iter_mut().find(|batch| batch.layer == layer) {
+            batch.surfaces = surfaces;
+        } else {
+            self.glass.push(GlassBatch { layer, surfaces });
+        }
+    }
+
+    pub fn set_ink_batch(&mut self, lane: InkLane, views: Vec<InkView>) {
+        if let Some(batch) = self.ink.iter_mut().find(|batch| batch.lane == lane) {
+            batch.views = views;
+        } else {
+            self.ink.push(InkBatch { lane, views });
+        }
+    }
+
+    pub fn set_glyph_batch(&mut self, lane: GlyphLane, views: Vec<GlyphView>) {
+        if let Some(batch) = self.glyphs.iter_mut().find(|batch| batch.lane == lane) {
+            batch.views = views;
+        } else {
+            self.glyphs.push(GlyphBatch { lane, views });
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

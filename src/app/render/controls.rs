@@ -5,8 +5,8 @@ use crate::renderer::text_engine as text;
 use crate::ui_model::geometry::{Point, Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, ControlKind, GlassBatch, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface,
-    GlyphBatch, GlyphLane, GlyphView, InkBatch, InkLane, InkView, RenderModel,
+    Color, ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, GlyphLane,
+    GlyphView, InkLane, InkView,
 };
 
 use super::helpers::{advance_unit_toward, mul_alpha};
@@ -107,24 +107,17 @@ impl App {
         instances: &[InkView],
         quads: &[text::GlyphQuad],
     ) {
-        let Some(r) = self.renderer.as_mut() else {
-            return;
-        };
         if atlas_dirty {
-            if let Some(t) = self.text.as_ref() {
+            if let (Some(r), Some(t)) = (self.renderer.as_mut(), self.text.as_ref()) {
                 r.upload_atlas(t.atlas_rgba());
             }
         }
-        let mut model = RenderModel::new();
-        model.ink.push(InkBatch {
-            lane: InkLane::BottomControl,
-            views: instances.to_vec(),
-        });
-        model.glyphs.push(GlyphBatch {
-            lane: GlyphLane::BottomControl,
-            views: glyph_views(UiId::bottom_control(), quads),
-        });
-        r.prepare(&model);
+        self.render_model
+            .set_ink_batch(InkLane::BottomControl, instances.to_vec());
+        self.render_model.set_glyph_batch(
+            GlyphLane::BottomControl,
+            glyph_views(UiId::bottom_control(), quads),
+        );
     }
 
     pub(crate) fn render_gear(&mut self, control_shape: Option<GlassSurface>) {
@@ -153,21 +146,12 @@ impl App {
         };
         let gear_shape = gear_geom.map(|(geom, _)| edit_gear_glass_shape(&geom));
         let gear_instance = gear_geom.map(|(geom, alpha)| edit_gear_instance(&geom, alpha));
-        if let Some(r) = self.renderer.as_mut() {
-            // Submit the overlay lane in one call: the control capsule and the
-            // gear share a Liquid Glass SDF field, so they must be submitted
-            // together to composite correctly (merge / separate).
-            let mut model = RenderModel::new();
-            model.glass.push(GlassBatch {
-                layer: GlassLayer::Overlay,
-                surfaces: control_shape.into_iter().chain(gear_shape).collect(),
-            });
-            model.ink.push(InkBatch {
-                lane: InkLane::Gear,
-                views: gear_instance.into_iter().collect(),
-            });
-            r.prepare(&model);
-        }
+        self.render_model.set_glass_batch(
+            GlassLayer::Overlay,
+            control_shape.into_iter().chain(gear_shape).collect(),
+        );
+        self.render_model
+            .set_ink_batch(InkLane::Gear, gear_instance.into_iter().collect());
     }
 
     pub(crate) fn step_edit_control_width(&mut self, dt: f32) -> bool {

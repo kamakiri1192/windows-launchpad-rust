@@ -71,9 +71,13 @@ pub(super) struct BufferCounters {
     #[cfg(debug_assertions)]
     grows: std::collections::HashMap<Category, u64>,
     #[cfg(debug_assertions)]
+    writes: std::collections::HashMap<Category, u64>,
+    #[cfg(debug_assertions)]
     prepare_calls: u64,
     #[cfg(debug_assertions)]
     full_scene_rebuilds: u64,
+    #[cfg(debug_assertions)]
+    dirty_skips: u64,
     #[cfg(debug_assertions)]
     atlas_rebinds: u64,
     /// GPU readbacks excluding QA captures. Should always be 0.
@@ -97,6 +101,21 @@ impl BufferCounters {
         #[cfg(debug_assertions)]
         {
             *self.grows.entry(cat).or_insert(0) += 1;
+        }
+    }
+
+    #[allow(unused_variables)]
+    pub(super) fn record_write(&mut self, cat: Category) {
+        #[cfg(debug_assertions)]
+        {
+            *self.writes.entry(cat).or_insert(0) += 1;
+        }
+    }
+
+    pub(super) fn record_dirty_skip(&mut self) {
+        #[cfg(debug_assertions)]
+        {
+            self.dirty_skips += 1;
         }
     }
 
@@ -158,6 +177,29 @@ impl BufferCounters {
         #[cfg(not(debug_assertions))]
         {
             let _ = cat;
+            0
+        }
+    }
+
+    pub(super) fn writes(&self, cat: Category) -> u64 {
+        #[cfg(debug_assertions)]
+        {
+            *self.writes.get(&cat).unwrap_or(&0)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = cat;
+            0
+        }
+    }
+
+    pub(super) fn dirty_skips(&self) -> u64 {
+        #[cfg(debug_assertions)]
+        {
+            self.dirty_skips
+        }
+        #[cfg(not(debug_assertions))]
+        {
             0
         }
     }
@@ -245,5 +287,16 @@ mod tests {
         c.record_full_scene_rebuild();
         assert_eq!(c.prepare_calls(), 2);
         assert_eq!(c.full_scene_rebuilds(), 1);
+    }
+
+    #[test]
+    fn writes_and_dirty_skips_are_recorded_separately() {
+        let mut c = BufferCounters::default();
+        c.record_write(Category::Icon);
+        c.record_write(Category::Icon);
+        c.record_dirty_skip();
+        assert_eq!(c.writes(Category::Icon), 2);
+        assert_eq!(c.writes(Category::Tile), 0);
+        assert_eq!(c.dirty_skips(), 1);
     }
 }

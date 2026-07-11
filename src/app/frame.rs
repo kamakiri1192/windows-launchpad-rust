@@ -95,6 +95,12 @@ impl App {
         // parked at the caret) so Japanese / other IME input works.
         self.update_ime_state();
 
+        // Submit one complete renderer-neutral frame model. Renderer-side
+        // dirty tracking updates only lanes whose model data changed.
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.prepare(&self.render_model);
+        }
+
         // Render the frame (consumes the uploaded buffers).
         if let Some(r) = self.renderer.as_mut() {
             // QA self-capture trigger: if LAUNCHPAD_QA_SHOT_FILE points

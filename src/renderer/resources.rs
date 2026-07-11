@@ -49,6 +49,8 @@ pub(super) struct SetOutcome {
     pub(super) allocated: bool,
     /// Number of instances now stored.
     pub(super) len: u32,
+    /// Whether bytes were submitted through `queue.write_buffer`.
+    pub(super) wrote: bool,
 }
 
 impl<T: Pod> InstanceBuffer<T> {
@@ -107,6 +109,7 @@ impl<T: Pod> InstanceBuffer<T> {
             return SetOutcome {
                 allocated: false,
                 len: 0,
+                wrote: false,
             };
         }
         let needed = items.len() as u32;
@@ -115,6 +118,7 @@ impl<T: Pod> InstanceBuffer<T> {
             let outcome = SetOutcome {
                 allocated: true,
                 len: self.logical,
+                wrote: true,
             };
             // Fresh buffer: upload the full contents.
             if let Some(buf) = self.buffer.as_ref() {
@@ -128,6 +132,7 @@ impl<T: Pod> InstanceBuffer<T> {
             SetOutcome {
                 allocated: false,
                 len: self.logical,
+                wrote: true,
             }
         }
     }
@@ -183,16 +188,19 @@ mod tests {
             SetOutcome {
                 allocated: false,
                 len: 0,
+                wrote: false,
             }
         } else if needed > capacity {
             SetOutcome {
                 allocated: true,
                 len: needed,
+                wrote: true,
             }
         } else {
             SetOutcome {
                 allocated: false,
                 len: needed,
+                wrote: true,
             }
         }
     }

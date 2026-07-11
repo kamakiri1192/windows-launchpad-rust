@@ -14,7 +14,7 @@
 //! - [`icons`]: icon atlas + icon instance buffer.
 //! - [`text`]: glyph atlas + text instance buffer.
 //! - [`controls`]: procedural overlay instance buffers (control/gear/settings).
-//! - [`glass`]: Liquid Glass shape submission.
+//! - [`prepare`]: renderer-neutral scene preparation and dirty tracking.
 //! - [`badges`]: edit-badge glass + foreground geometry.
 //! - [`frame`]: per-frame draw-pass orchestration and QA capture.
 //!
@@ -111,6 +111,8 @@ pub struct Renderer {
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
     settings_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
+    /// Last prepared neutral scene, updated lane-by-lane only when changed.
+    prepared_model: crate::ui_model::render_model::RenderModel,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.
     counters: BufferCounters,
     /// When set, the next rendered frame is also copied to a host-readable

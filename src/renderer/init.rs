@@ -610,6 +610,7 @@ impl Renderer {
             control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
+            prepared_model: crate::ui_model::render_model::RenderModel::new(),
             counters: BufferCounters::default(),
             qa_shot: None,
         })
