@@ -1815,3 +1815,84 @@ Phase 7/8 follow-ups carried forward:
 - Split `liquid_glass/renderer.rs` (1667 lines) into focused sub-modules.
 - Move edit-badge wobble fully into the shader.
 
+### 2026-07-12: Phase 6.5B/D Closure Follow-up
+
+This follow-up closes the renderer-boundary items that the first Phase 6.5
+report had incorrectly carried into Phase 7.
+
+Architecture closure:
+
+- `GridApp` and `TileAnim` moved to `ui_model::grid`; the renderer no longer
+  imports the binary `grid` adapter.
+- Renderer-neutral `TileView`, `IconView`, `InkView`, `GlyphView`, glass
+  behavior, and named submission lanes now carry the complete production
+  scene. Shader-facing `TileInstance`, `IconInstance`, `ControlInstance`,
+  `GlyphQuad`, and `GlassShape` packing is renderer-internal.
+- `App` owns one current `RenderModel`. Grid, icon, control, gear, settings,
+  text, and all Liquid Glass lanes update that model, and `app/frame.rs` calls
+  `Renderer::prepare(&RenderModel)` exactly once before each draw.
+- Legacy public scene setters were removed from the `Renderer` facade.
+  `prepare`, resource/atlas lifecycle adapters, `render`, resize, and QA
+  capture remain public for the app boundary.
+- `Renderer::prepare` compares each lane with the previously prepared model.
+  Unchanged lanes skip GPU writes; capacity-managed buffers grow only when
+  required. Debug counters separately track prepare calls, buffer growth,
+  writes, dirty skips, atlas rebinds, full-scene rebuilds, and readbacks.
+- Base, overlay, modal, and edit-badge Liquid Glass buffers are persistent.
+  Ordinary frame updates use `queue.write_buffer`; resource creation is
+  limited to initialization, resize, or capacity growth.
+- Edit-badge wobble moved from CPU trigonometry and per-frame geometry upload
+  to `shader_control.wgsl` and `liquid_glass_geometry.wgsl`. The CPU supplies
+  stable badge geometry plus phase/motion data; the shared animation uniform
+  drives the per-frame motion on GPU.
+- `liquid_glass/renderer.rs` was split into focused frame orchestration and
+  resource ownership modules. The remaining facade coordinates pipelines and
+  lane state rather than rebuilding transient resources.
+- Architecture tests now reject `features -> renderer/platform`,
+  `layout -> renderer`, `renderer -> features/grid`, worker back-edges,
+  reintroduced public scene setters, and a CPU edit-badge animation path.
+
+CPU/GPU responsibility after closure:
+
+- CPU: feature state updates, deterministic layout, cosmic-text shaping,
+  renderer-neutral model construction, exact dirty comparison, compact GPU
+  struct packing, uniform writes, and uploads only for changed lanes.
+- GPU: tile springs, scroll, drag/lift, edit wiggle, edit-badge wobble, Liquid
+  Glass SDF/blur/sampling, clipping, blending, and final rasterization.
+- There is no CPU rasterization or CPU readback in the production frame path.
+  GPU readback remains restricted to the explicit QA capture path.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 146 library + 345 passed / 2 ignored binary + 7 architecture
+  + 2 WGSL validation tests; all required tests passed
+- `cargo clippy --all-targets --all-features`: passed with no warnings
+- `cargo build --release`: passed
+- `cargo run --release`: launched with isolated `LOCALAPPDATA`,
+  `LAUNCHPAD_ALLOW_SCREENSHOT=1`, and `LAUNCHPAD_DEBUG=1`
+- `codex review --base main -c 'model="gpt-5.5"'`: attempted, but the CLI
+  stopped before producing findings because the account usage limit was
+  reached. A focused manual boundary/hot-path review found no actionable
+  regression after the single-model submission change.
+
+Screen verification:
+
+- first frame non-blank: verified through Windows.Graphics.Capture; page
+  glass, grid, icons, labels, and bottom control were present;
+- horizontal drag, active animation, inertia, and final page snap: verified;
+- search open, per-key text input, filtering to the single Blender result,
+  query clear, and close: verified;
+- GPU self-capture: verified by writing `target/phase65-search.png` through the
+  documented trigger while the filtered frame was active;
+- settings category/toggle/reset, edit-mode long press/reorder/hide/Done/gear,
+  IME composition, passthrough, empty-frame swallow, and resize/DPI smoke:
+  not re-verified in this follow-up. The available Windows automation API has
+  no pointer-down/hold/up primitive for the edit-mode long press, and those
+  items must not be claimed as visually verified.
+
+Phase 7/8 scope is now limited to the planned launcher-item/domain conversion
+and folder vertical slice. `grid.rs` remains an app/layout adapter until Phase
+7, and cosmic-text/atlas upload adapters remain because they are resource
+lifecycle work rather than feature-specific renderer submission APIs.
+

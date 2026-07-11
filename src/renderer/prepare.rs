@@ -121,9 +121,9 @@ fn icon_instance(view: &IconView) -> Option<IconInstance> {
 }
 
 impl Renderer {
-    /// Reflect the proven portions of a renderer-neutral model into persistent
-    /// GPU resources. Phase 6 connects the modal glass lane; ink/text and the
-    /// animation-heavy grid/control adapters remain at the app boundary.
+    /// Reflect one complete renderer-neutral frame model into persistent GPU
+    /// resources. Exact lane comparisons skip unchanged uploads; packing into
+    /// shader-facing structs remains an internal renderer responsibility.
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
         for batch in &model.glass {
