@@ -2,11 +2,13 @@
 
 use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
 use crate::layout;
-use crate::renderer::controls::{
-    ControlInstance, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_ROUND_RECT,
-};
 use crate::renderer::text_engine as text;
 use crate::ui_model;
+use crate::ui_model::geometry::{Point, Rect, UvRect};
+use crate::ui_model::ids::UiId;
+use crate::ui_model::render_model::{
+    Color, ControlKind, GlyphBatch, GlyphLane, GlyphView, InkBatch, InkLane, InkView,
+};
 
 use super::helpers::advance_unit_toward;
 use crate::app::state::App;
@@ -20,9 +22,16 @@ impl App {
                 // the ink/text lists are cleared directly. This is the
                 // "settings closed → modal glass/controls/text don't linger"
                 // path.
-                r.prepare(&ui_model::render_model::RenderModel::new());
-                r.set_settings_instances(&[]);
-                r.set_settings_text_instances(&[]);
+                let mut render = ui_model::render_model::RenderModel::new();
+                render.ink.push(InkBatch {
+                    lane: InkLane::Settings,
+                    views: Vec::new(),
+                });
+                render.glyphs.push(GlyphBatch {
+                    lane: GlyphLane::Settings,
+                    views: Vec::new(),
+                });
+                r.prepare(&render);
             }
             return;
         }
@@ -54,7 +63,7 @@ impl App {
             layout.left + layout.hw * 2.0 - btn_r * 2.0,
             layout.top + btn_r * 2.0,
             btn_r,
-            KIND_CLOSE,
+            ControlKind::CloseButton,
             layout::settings_panel::INK,
         );
 
@@ -97,15 +106,22 @@ impl App {
             // the shader shape here; `prepare` dirty-tracks it so a frame
             // whose glass didn't move (settled settings panel) re-submits
             // nothing.
-            r.prepare(&model.result.render);
-            r.set_settings_instances(&instances);
+            let mut render = model.result.render.clone();
+            render.ink.push(InkBatch {
+                lane: InkLane::Settings,
+                views: instances,
+            });
+            render.glyphs.push(GlyphBatch {
+                lane: GlyphLane::Settings,
+                views: glyph_views(&quads),
+            });
+            r.prepare(&render);
             // Upload the atlas if the title added any glyphs this frame.
             if let Some(t) = self.text.as_ref() {
                 if t.atlas_dirty {
                     r.upload_atlas(t.atlas_rgba());
                 }
             }
-            r.set_settings_text_instances(&quads);
         }
         if let Some(t) = self.text.as_mut() {
             t.atlas_dirty = false;
@@ -281,19 +297,19 @@ const SETTINGS_ACCENT: [f32; 4] = [0.35, 0.68, 1.0, 0.42];
 const SETTINGS_GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
 fn transform_settings_instances(
-    instances: &mut [ControlInstance],
+    instances: &mut [InkView],
     origin: [f32; 2],
     scale: f32,
     alpha: f32,
 ) {
     for instance in instances {
-        instance.center[0] = origin[0] + (instance.center[0] - origin[0]) * scale;
-        instance.center[1] = origin[1] + (instance.center[1] - origin[1]) * scale;
-        instance.params[0] *= scale;
-        instance.params[2] *= scale;
-        instance.params[3] *= scale;
-        instance.params[1] *= alpha;
-        instance.color[3] *= alpha;
+        instance.center.x = origin[0] + (instance.center.x - origin[0]) * scale;
+        instance.center.y = origin[1] + (instance.center.y - origin[1]) * scale;
+        instance.extent *= scale;
+        instance.stroke *= scale;
+        instance.corner_radius *= scale;
+        instance.opacity *= alpha;
+        instance.color.a *= alpha;
     }
 }
 
@@ -312,13 +328,49 @@ fn transform_settings_quads(
     }
 }
 
-fn control_icon(x: f32, y: f32, radius: f32, kind: f32, color: [f32; 4]) -> ControlInstance {
-    ControlInstance {
-        center: [x, y],
-        params: [radius, color[3], 1.6, 0.0],
-        color,
-        kind: [kind, 0.0, 0.0, 0.0],
+fn control_icon(x: f32, y: f32, radius: f32, kind: ControlKind, color: [f32; 4]) -> InkView {
+    ink_view([x, y], radius, color[3], 1.6, 0.0, color, kind)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ink_view(
+    center: [f32; 2],
+    extent: f32,
+    opacity: f32,
+    stroke: f32,
+    corner_radius: f32,
+    color: [f32; 4],
+    kind: ControlKind,
+) -> InkView {
+    InkView {
+        id: UiId::settings_panel(),
+        center: Point::new(center[0], center[1]),
+        extent,
+        opacity,
+        stroke,
+        corner_radius,
+        color: Color::rgba(color[0], color[1], color[2], color[3]),
+        kind,
+        z: 0,
     }
+}
+
+fn glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
+    quads
+        .iter()
+        .map(|quad| GlyphView {
+            id: UiId::settings_panel(),
+            rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
+            uv: UvRect {
+                u0: quad.u0,
+                v0: quad.v0,
+                u1: quad.u1,
+                v1: quad.v1,
+            },
+            color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
+            z: 0,
+        })
+        .collect()
 }
 
 fn round_rect_instance(
@@ -327,25 +379,23 @@ fn round_rect_instance(
     half_height: f32,
     radius: f32,
     color: [f32; 4],
-) -> ControlInstance {
-    ControlInstance {
+) -> InkView {
+    ink_view(
         center,
-        params: [half_height, color[3], half_width, radius],
+        half_height,
+        color[3],
+        half_width,
+        radius,
         color,
-        kind: [KIND_ROUND_RECT, 0.0, 0.0, 0.0],
-    }
+        ControlKind::RowBackground,
+    )
 }
 
-fn divider_instance(center: [f32; 2], half_width: f32, half_height: f32) -> ControlInstance {
+fn divider_instance(center: [f32; 2], half_width: f32, half_height: f32) -> InkView {
     round_rect_instance(center, half_width, half_height, half_height, SETTINGS_DIM)
 }
 
-fn toggle_instances(
-    center: [f32; 2],
-    enabled: bool,
-    scale: f32,
-    instances: &mut Vec<ControlInstance>,
-) {
+fn toggle_instances(center: [f32; 2], enabled: bool, scale: f32, instances: &mut Vec<InkView>) {
     let track_hw = 22.0 * scale;
     let track_hh = 11.0 * scale;
     let track_color = if enabled {
@@ -365,7 +415,7 @@ fn toggle_instances(
             center[0] + 10.0 * scale,
             center[1],
             6.0 * scale,
-            KIND_DOT,
+            ControlKind::Dot,
             [1.0, 1.0, 1.0, 0.78],
         ));
     }
@@ -377,7 +427,7 @@ fn build_settings_panel_instances(
     category: SettingsCategory,
     settings: &Settings,
     _hidden_count: usize,
-    instances: &mut Vec<ControlInstance>,
+    instances: &mut Vec<InkView>,
 ) {
     let panel_right = layout.left + layout.hw * 2.0;
     let panel_bottom = layout.top + layout.hh * 2.0;
@@ -438,7 +488,7 @@ fn build_settings_panel_instances(
                         left + 15.0 * scale,
                         segment_top + SETTINGS_SEGMENT_H * scale * 0.5,
                         8.0 * scale,
-                        KIND_CHECK,
+                        ControlKind::Checkmark,
                         SETTINGS_INK,
                     ));
                 }
@@ -465,7 +515,7 @@ fn build_settings_panel_instances(
                 content_right - 14.0 * scale,
                 first_top + SETTINGS_ROW_STEP * 2.0 * scale + row_h * 0.5,
                 9.0 * scale,
-                KIND_CHEVRON,
+                ControlKind::Chevron,
                 SETTINGS_MUTED,
             ));
         }
@@ -485,7 +535,7 @@ fn build_settings_panel_instances(
                     content_right - 14.0 * scale,
                     first_top + i as f32 * SETTINGS_ROW_STEP * scale + row_h * 0.5,
                     9.0 * scale,
-                    KIND_CHEVRON,
+                    ControlKind::Chevron,
                     SETTINGS_MUTED,
                 ));
             }
@@ -508,7 +558,7 @@ fn settings_row_backgrounds(
     width: f32,
     height: f32,
     scale: f32,
-    instances: &mut Vec<ControlInstance>,
+    instances: &mut Vec<InkView>,
     count: usize,
 ) {
     for i in 0..count {

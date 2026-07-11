@@ -7,8 +7,17 @@
 //! persistent storage buffers only when a shape actually changes.
 
 use crate::liquid_glass::geometry::GlassShape;
-use crate::ui_model::render_model::{GlassLayer, GlassMaterial, GlassSurface, RenderModel};
+use crate::ui_model::render_model::{
+    ControlKind, GlassLayer, GlassMaterial, GlassSurface, GlyphLane, GlyphView, InkLane, InkView,
+    RenderModel,
+};
 
+use super::controls::{
+    ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_GEAR,
+    KIND_MAGNIFIER, KIND_ROUND_RECT,
+};
+use super::counters::Category;
+use super::text_engine::GlyphQuad;
 use super::Renderer;
 
 /// Convert a renderer-neutral surface into the shader-facing rounded rect.
@@ -37,6 +46,48 @@ fn modal_shape_for(model: &RenderModel) -> Option<GlassShape> {
         .map(|(_, surface)| shape_for(surface))
 }
 
+fn control_kind(kind: &ControlKind) -> f32 {
+    match kind {
+        ControlKind::Magnifier => KIND_MAGNIFIER,
+        ControlKind::Dot => KIND_DOT,
+        ControlKind::Caret => KIND_CARET,
+        ControlKind::CloseButton => KIND_CLOSE,
+        ControlKind::SettingsGear => KIND_GEAR,
+        ControlKind::RowBackground | ControlKind::Toggle | ControlKind::Divider => KIND_ROUND_RECT,
+        ControlKind::Checkmark => KIND_CHECK,
+        ControlKind::Chevron => KIND_CHEVRON,
+        // These are container/semantic views rather than foreground ink.
+        ControlKind::SearchPill
+        | ControlKind::PageIndicator
+        | ControlKind::SearchField
+        | ControlKind::EditBadge => -1.0,
+    }
+}
+
+fn ink_instance(view: &InkView) -> Option<ControlInstance> {
+    let kind = control_kind(&view.kind);
+    (kind >= 0.0).then_some(ControlInstance {
+        center: [view.center.x, view.center.y],
+        params: [view.extent, view.opacity, view.stroke, view.corner_radius],
+        color: [view.color.r, view.color.g, view.color.b, view.color.a],
+        kind: [kind, 0.0, 0.0, 0.0],
+    })
+}
+
+fn glyph_quad(view: &GlyphView) -> GlyphQuad {
+    GlyphQuad {
+        x: view.rect.x,
+        y: view.rect.y,
+        w: view.rect.width,
+        h: view.rect.height,
+        u0: view.uv.u0,
+        v0: view.uv.v0,
+        u1: view.uv.u1,
+        v1: view.uv.v1,
+        color: [view.color.r, view.color.g, view.color.b, view.color.a],
+    }
+}
+
 impl Renderer {
     /// Reflect the proven portions of a renderer-neutral model into persistent
     /// GPU resources. Phase 6 connects the modal glass lane; ink/text and the
@@ -45,14 +96,89 @@ impl Renderer {
         self.counters.record_prepare();
         self.liquid_glass
             .set_settings_panel_shape(&self.queue, modal_shape_for(model));
+
+        for batch in &model.ink {
+            let instances: Vec<_> = batch.views.iter().filter_map(ink_instance).collect();
+            match batch.lane {
+                InkLane::BottomControl => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.control_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Control,
+                ),
+                InkLane::Gear => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.gear_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Gear,
+                ),
+                InkLane::Settings => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.settings_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Settings,
+                ),
+                InkLane::EditBadge => {}
+            }
+        }
+
+        for batch in &model.glyphs {
+            let quads: Vec<_> = batch.views.iter().map(glyph_quad).collect();
+            match batch.lane {
+                GlyphLane::Grid => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::TextLabel,
+                ),
+                GlyphLane::BottomControl => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.control_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::ControlText,
+                ),
+                GlyphLane::Settings => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.settings_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::SettingsText,
+                ),
+            }
+        }
+    }
+}
+
+fn set_instances<T: bytemuck::Pod>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &mut super::resources::InstanceBuffer<T>,
+    instances: &[T],
+    counters: &mut super::counters::BufferCounters,
+    category: Category,
+) {
+    if buffer.set(device, queue, instances).allocated {
+        counters.record_growth(category);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_model::geometry::Rect;
+    use crate::ui_model::geometry::{Point, Rect, UvRect};
     use crate::ui_model::ids::UiId;
+    use crate::ui_model::render_model::{Color, GlyphView, InkView};
 
     fn surface(id: &str, layer: GlassLayer, z: i16, cx: f32) -> GlassSurface {
         GlassSurface {
@@ -124,5 +250,51 @@ mod tests {
     #[test]
     fn empty_model_clears_modal_lane() {
         assert!(modal_shape_for(&RenderModel::new()).is_none());
+    }
+
+    #[test]
+    fn neutral_ink_is_packed_only_inside_renderer() {
+        let view = InkView {
+            id: UiId::bottom_control_close(),
+            center: Point::new(12.25, 34.5),
+            extent: 7.0,
+            opacity: 0.8,
+            stroke: 1.4,
+            corner_radius: 0.0,
+            color: Color::rgba(1.0, 0.9, 0.8, 0.7),
+            kind: ControlKind::CloseButton,
+            z: 3,
+        };
+        let packed = ink_instance(&view).unwrap();
+        assert_eq!(packed.center, [12.25, 34.5]);
+        assert_eq!(packed.params, [7.0, 0.8, 1.4, 0.0]);
+        assert_eq!(packed.color, [1.0, 0.9, 0.8, 0.7]);
+        assert_eq!(packed.kind[0], KIND_CLOSE);
+    }
+
+    #[test]
+    fn neutral_glyph_preserves_geometry_uv_and_color() {
+        let view = GlyphView {
+            id: UiId::settings_panel(),
+            rect: Rect::new(1.0, 2.0, 3.0, 4.0),
+            uv: UvRect {
+                u0: 0.1,
+                v0: 0.2,
+                u1: 0.3,
+                v1: 0.4,
+            },
+            color: Color::rgba(0.5, 0.6, 0.7, 0.8),
+            z: 2,
+        };
+        let packed = glyph_quad(&view);
+        assert_eq!(
+            [packed.x, packed.y, packed.w, packed.h],
+            [1.0, 2.0, 3.0, 4.0]
+        );
+        assert_eq!(
+            [packed.u0, packed.v0, packed.u1, packed.v1],
+            [0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(packed.color, [0.5, 0.6, 0.7, 0.8]);
     }
 }

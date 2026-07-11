@@ -1,4 +1,4 @@
-use crate::ui_model::geometry::Rect;
+use crate::ui_model::geometry::{Point, Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::text::TextView;
 
@@ -9,6 +9,11 @@ pub struct RenderModel {
     pub icons: Vec<IconView>,
     pub text: Vec<TextView>,
     pub controls: Vec<ControlView>,
+    /// Procedural renderer-neutral ink primitives, split into draw-order lanes.
+    pub ink: Vec<InkBatch>,
+    /// Shaped glyph geometry. Glyph rasterization/atlas upload remains a
+    /// resource concern; frame submission uses these neutral quads.
+    pub glyphs: Vec<GlyphBatch>,
 }
 
 impl RenderModel {
@@ -22,6 +27,8 @@ impl RenderModel {
             && self.icons.is_empty()
             && self.text.is_empty()
             && self.controls.is_empty()
+            && self.ink.is_empty()
+            && self.glyphs.is_empty()
     }
 }
 
@@ -101,6 +108,61 @@ pub enum ControlKind {
     Checkmark,
     Chevron,
     Divider,
+}
+
+/// Draw-order lane for procedural foreground ink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InkLane {
+    BottomControl,
+    Gear,
+    Settings,
+    EditBadge,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InkBatch {
+    pub lane: InkLane,
+    pub views: Vec<InkView>,
+}
+
+/// Renderer-neutral procedural foreground primitive.
+///
+/// The named geometry fields deliberately avoid exposing the shader's packed
+/// `ControlInstance` representation. The renderer owns that packing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InkView {
+    pub id: UiId,
+    pub center: Point,
+    pub extent: f32,
+    pub opacity: f32,
+    pub stroke: f32,
+    pub corner_radius: f32,
+    pub color: Color,
+    pub kind: ControlKind,
+    pub z: i16,
+}
+
+/// Draw-order lane for already-shaped glyph geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GlyphLane {
+    Grid,
+    BottomControl,
+    Settings,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphBatch {
+    pub lane: GlyphLane,
+    pub views: Vec<GlyphView>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphView {
+    pub id: UiId,
+    pub rect: Rect,
+    pub uv: UvRect,
+    pub color: Color,
+    pub z: i16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

@@ -2,10 +2,12 @@
 
 use crate::features::bottom_control;
 use crate::liquid_glass::geometry::GlassShape;
-use crate::renderer::controls::{
-    ControlInstance, KIND_CARET, KIND_CLOSE, KIND_DOT, KIND_GEAR, KIND_MAGNIFIER,
-};
 use crate::renderer::text_engine as text;
+use crate::ui_model::geometry::{Point, Rect, UvRect};
+use crate::ui_model::ids::UiId;
+use crate::ui_model::render_model::{
+    Color, ControlKind, GlyphBatch, GlyphLane, GlyphView, InkBatch, InkLane, InkView, RenderModel,
+};
 
 use super::helpers::{advance_unit_toward, mul_alpha};
 use crate::app::state::App;
@@ -104,7 +106,7 @@ impl App {
     fn upload_control_overlay(
         &mut self,
         atlas_dirty: bool,
-        instances: &[ControlInstance],
+        instances: &[InkView],
         quads: &[text::GlyphQuad],
     ) {
         let Some(r) = self.renderer.as_mut() else {
@@ -115,8 +117,16 @@ impl App {
                 r.upload_atlas(t.atlas_rgba());
             }
         }
-        r.set_control_instances(instances);
-        r.set_control_text_instances(quads);
+        let mut model = RenderModel::new();
+        model.ink.push(InkBatch {
+            lane: InkLane::BottomControl,
+            views: instances.to_vec(),
+        });
+        model.glyphs.push(GlyphBatch {
+            lane: GlyphLane::BottomControl,
+            views: glyph_views(UiId::bottom_control(), quads),
+        });
+        r.prepare(&model);
     }
 
     pub(crate) fn render_gear(
@@ -153,11 +163,12 @@ impl App {
             // gear share a Liquid Glass SDF field, so they must be submitted
             // together to composite correctly (merge / separate).
             r.set_overlay_glass(control_shape, gear_shape);
-            if let Some(inst) = gear_instance {
-                r.set_gear_instances(&[inst]);
-            } else {
-                r.set_gear_instances(&[]);
-            }
+            let mut model = RenderModel::new();
+            model.ink.push(InkBatch {
+                lane: InkLane::Gear,
+                views: gear_instance.into_iter().collect(),
+            });
+            r.prepare(&model);
         }
     }
 
@@ -223,7 +234,7 @@ fn build_overlay_instances(
     layers: &[bottom_control::ControlLayer],
     query_width: f32,
     caret_blink: f32,
-) -> Vec<ControlInstance> {
+) -> Vec<InkView> {
     let mut out = Vec::new();
     let (cx, cy) = geom.center;
     let hw = geom.half_size.0;
@@ -238,12 +249,16 @@ fn build_overlay_instances(
             bottom_control::Visual::SearchPill => {
                 let (mag_cx, _) = bottom_control::search_pill_content_centers(geom);
                 let size = crate::layout::control_geometry::search_magnifier_size(scale);
-                out.push(ControlInstance {
-                    center: [mag_cx, cy],
-                    params: [size, alpha, 0.0, 0.0],
-                    color: CONTROL_INK,
-                    kind: [KIND_MAGNIFIER, 0.0, 0.0, 0.0],
-                });
+                out.push(ink_view(
+                    UiId::bottom_control(),
+                    [mag_cx, cy],
+                    size,
+                    alpha,
+                    0.0,
+                    0.0,
+                    CONTROL_INK,
+                    ControlKind::Magnifier,
+                ));
             }
             bottom_control::Visual::PageIndicator => {
                 let dots = geom.page_count.max(1);
@@ -254,37 +269,53 @@ fn build_overlay_instances(
                 let start_x = cx - total * 0.5 + active_r;
                 for index in 0..dots {
                     let active = index == geom.page;
-                    out.push(ControlInstance {
-                        center: [start_x + index as f32 * (active_r * 2.0 + gap), cy],
-                        params: [if active { active_r } else { idle_r }, alpha, 0.0, 0.0],
-                        color: if active { DOT_ACTIVE } else { DOT_IDLE },
-                        kind: [KIND_DOT, 0.0, 0.0, 0.0],
-                    });
+                    out.push(ink_view(
+                        UiId::bottom_control(),
+                        [start_x + index as f32 * (active_r * 2.0 + gap), cy],
+                        if active { active_r } else { idle_r },
+                        alpha,
+                        0.0,
+                        0.0,
+                        if active { DOT_ACTIVE } else { DOT_IDLE },
+                        ControlKind::Dot,
+                    ));
                 }
             }
             bottom_control::Visual::SearchField => {
                 let size = 11.0 * scale;
                 let mag_cx = cx - hw + size + 10.0 * scale;
-                out.push(ControlInstance {
-                    center: [mag_cx, cy],
-                    params: [size, alpha, 0.0, 0.0],
-                    color: CONTROL_INK,
-                    kind: [KIND_MAGNIFIER, 0.0, 0.0, 0.0],
-                });
+                out.push(ink_view(
+                    UiId::bottom_control(),
+                    [mag_cx, cy],
+                    size,
+                    alpha,
+                    0.0,
+                    0.0,
+                    CONTROL_INK,
+                    ControlKind::Magnifier,
+                ));
                 if caret_blink > 0.01 {
-                    out.push(ControlInstance {
-                        center: [mag_cx + size + 6.0 * scale + query_width, cy],
-                        params: [8.0 * scale, alpha * caret_blink, scale, 0.0],
-                        color: CONTROL_INK,
-                        kind: [KIND_CARET, 0.0, 0.0, 0.0],
-                    });
+                    out.push(ink_view(
+                        UiId::bottom_control(),
+                        [mag_cx + size + 6.0 * scale + query_width, cy],
+                        8.0 * scale,
+                        alpha * caret_blink,
+                        scale,
+                        0.0,
+                        CONTROL_INK,
+                        ControlKind::Caret,
+                    ));
                 }
-                out.push(ControlInstance {
-                    center: [cx + hw - 20.0 * scale, cy],
-                    params: [7.0 * scale, alpha, 1.4 * scale, 0.0],
-                    color: CONTROL_INK,
-                    kind: [KIND_CLOSE, 0.0, 0.0, 0.0],
-                });
+                out.push(ink_view(
+                    UiId::bottom_control_close(),
+                    [cx + hw - 20.0 * scale, cy],
+                    7.0 * scale,
+                    alpha,
+                    1.4 * scale,
+                    0.0,
+                    CONTROL_INK,
+                    ControlKind::CloseButton,
+                ));
             }
         }
     }
@@ -294,13 +325,59 @@ fn build_overlay_instances(
 fn edit_gear_instance(
     geom: &crate::layout::control_geometry::EditGearGeometry,
     alpha: f32,
-) -> ControlInstance {
-    ControlInstance {
-        center: [geom.center.0, geom.center.1],
-        params: [geom.radius * 0.62, alpha, 0.0, 0.0],
-        color: [1.0, 1.0, 1.0, 1.0],
-        kind: [KIND_GEAR, 0.0, 0.0, 0.0],
+) -> InkView {
+    ink_view(
+        UiId::edit_settings_gear(),
+        [geom.center.0, geom.center.1],
+        geom.radius * 0.62,
+        alpha,
+        0.0,
+        0.0,
+        [1.0, 1.0, 1.0, 1.0],
+        ControlKind::SettingsGear,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ink_view(
+    id: UiId,
+    center: [f32; 2],
+    extent: f32,
+    opacity: f32,
+    stroke: f32,
+    corner_radius: f32,
+    color: [f32; 4],
+    kind: ControlKind,
+) -> InkView {
+    InkView {
+        id,
+        center: Point::new(center[0], center[1]),
+        extent,
+        opacity,
+        stroke,
+        corner_radius,
+        color: Color::rgba(color[0], color[1], color[2], color[3]),
+        kind,
+        z: 0,
     }
+}
+
+fn glyph_views(id: UiId, quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
+    quads
+        .iter()
+        .map(|quad| GlyphView {
+            id: id.clone(),
+            rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
+            uv: UvRect {
+                u0: quad.u0,
+                v0: quad.v0,
+                u1: quad.u1,
+                v1: quad.v1,
+            },
+            color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
+            z: 0,
+        })
+        .collect()
 }
 
 fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassShape> {
