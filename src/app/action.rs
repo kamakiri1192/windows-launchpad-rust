@@ -570,6 +570,11 @@ impl App {
     fn handle_pointer_release(&mut self, release_action: ReleaseAction) {
         let px = self.pointer_phys_x;
         let py = self.pointer_phys_y;
+        // Always clear the control-press flag on release — it was set by the
+        // press classifier and must not persist beyond the matching release,
+        // otherwise subsequent grid presses would be misclassified through the
+        // stale control branch.
+        self.pressed_on_control = false;
         match release_action {
             ReleaseAction::Settings { pressed, released } => {
                 if pressed == SettingsPressTarget::Outside
@@ -580,9 +585,10 @@ impl App {
                 }
                 if pressed == released {
                     self.handle_settings_click(released);
-                } else {
-                    self.close_settings();
                 }
+                // Mismatched inside/outside releases are ignored (no close),
+                // matching the historical behavior that only dismissed on a
+                // clean outside-press + outside-release.
             }
             ReleaseAction::Control => {
                 self.handle_control_click(px, py);
