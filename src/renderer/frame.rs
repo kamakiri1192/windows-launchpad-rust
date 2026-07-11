@@ -18,7 +18,7 @@
 
 use wgpu::{Color, TextureViewDescriptor};
 
-use crate::grid::TileInstance;
+use crate::renderer::tiles::TileInstance;
 
 use super::controls::ControlUniforms;
 use super::tiles::Uniforms;

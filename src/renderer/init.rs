@@ -8,12 +8,13 @@ use wgpu::{
     SurfaceConfiguration, TextureViewDescriptor,
 };
 
-use crate::features::bottom_control::ControlInstance;
-use crate::grid::{GridLayout, TileInstance};
+use crate::layout::grid::GridLayout;
 use crate::liquid_glass::capture::FallbackCapture;
 use crate::liquid_glass::LiquidGlassRenderer;
+use crate::renderer::controls::ControlInstance;
 use crate::renderer::icon_pipeline::IconInstance;
 use crate::renderer::text_engine::GlyphQuad;
+use crate::renderer::tiles::TileInstance;
 use crate::UserEvent;
 
 use super::controls::ControlUniforms;
