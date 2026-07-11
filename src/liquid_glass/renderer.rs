@@ -110,6 +110,7 @@ pub struct LiquidGlassRenderer {
     settings_panel_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     shape_count: u32,
+    shape_capacity: usize,
     badge_shape_buffer: wgpu::Buffer,
     badge_shape_count: u32,
     badge_shape_capacity: usize,
@@ -205,6 +206,7 @@ impl LiquidGlassRenderer {
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
+        let shape_capacity = shapes.len().max(1);
         let badge_shape_capacity = 1;
         let badge_shape_buffer = create_shape_buffer_with_capacity(
             device,
@@ -485,6 +487,7 @@ impl LiquidGlassRenderer {
             settings_panel_uniform_buffer,
             shape_buffer,
             shape_count,
+            shape_capacity,
             badge_shape_buffer,
             badge_shape_count,
             badge_shape_capacity,
@@ -496,7 +499,7 @@ impl LiquidGlassRenderer {
             settings_panel_shape: None,
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
-            base_shapes: Vec::new(),
+            base_shapes: shapes,
             control_shape: None,
             geometry_texture,
             geometry_view,
@@ -642,12 +645,39 @@ impl LiquidGlassRenderer {
     pub fn rebuild_shapes(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         layout: &GridLayout,
         viewport_w: f32,
         apps: &[GridApp<'_>],
     ) {
-        self.base_shapes = shapes_from_layout(layout, viewport_w, apps);
-        self.rebuild_shape_buffer(device);
+        let shapes = shapes_from_layout(layout, viewport_w, apps);
+        if self.base_shapes == shapes {
+            return;
+        }
+        self.base_shapes = shapes;
+        self.shape_count = self.base_shapes.len() as u32;
+        if self.base_shapes.len() > self.shape_capacity {
+            self.shape_capacity = next_shape_capacity(self.shape_capacity, self.base_shapes.len());
+            self.shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.shape_capacity,
+                "liquid glass base shape buffer",
+            );
+            self.geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.uniform_buffer,
+                &self.shape_buffer,
+            );
+        }
+        if !self.base_shapes.is_empty() {
+            queue.write_buffer(
+                &self.shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.base_shapes),
+            );
+        }
+        self.last_geometry_key = None;
     }
 
     /// Replace the fixed overlay lane atomically. The bottom control and gear
@@ -730,19 +760,6 @@ impl LiquidGlassRenderer {
                 bytemuck::cast_slice(&self.badge_shapes),
             );
         }
-    }
-
-    /// Rebuild the GPU shape buffer from the base frame + tile halo shapes.
-    fn rebuild_shape_buffer(&mut self, device: &wgpu::Device) {
-        self.shape_buffer = create_shape_buffer(device, &self.base_shapes);
-        self.shape_count = self.base_shapes.len() as u32;
-        self.geometry_bind_group = create_geometry_bind_group(
-            device,
-            &self.geometry_bind_group_layout,
-            &self.uniform_buffer,
-            &self.shape_buffer,
-        );
-        self.last_geometry_key = None;
     }
 
     pub fn notify_window_moved(&mut self) {

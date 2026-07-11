@@ -97,8 +97,13 @@ impl Renderer {
             self.counters.record_creation(Category::Tile);
         }
         self.counters.record_full_scene_rebuild();
-        self.liquid_glass
-            .rebuild_shapes(&self.device, layout, self.config.width as f32, apps);
+        self.liquid_glass.rebuild_shapes(
+            &self.device,
+            &self.queue,
+            layout,
+            self.config.width as f32,
+            apps,
+        );
         self.frame_clip = super::frame_clip(layout, self.config.width);
     }
 
