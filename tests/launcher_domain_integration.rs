@@ -305,17 +305,19 @@ fn hide_app_preserves_remaining_order() {
     );
 }
 
-// ---- required test: app in both top-level and folder is consistent ----
+// ---- required test: hidden intent wins over stale top-level placement ----
 
 #[test]
-fn app_in_top_level_and_hidden_normalizes_to_top_level_only() {
+fn hidden_app_in_top_level_stays_hidden_after_normalize() {
+    // A hidden app that is also in the top-level item list (simulating a
+    // damaged persisted state or a legacy migration that kept hidden ids in the
+    // order tail) must stay hidden after normalize. The hidden intent wins over
+    // the visible placement.
     let mut state = LauncherState::from_legacy(vec![app("a")], vec![]);
-    // Force "a" into hidden too (simulating damaged persisted input).
     state.hidden_apps.insert(app("a"));
     state.normalize(&discovered(&["a"]), false);
-    // Top-level wins; "a" is no longer hidden.
-    assert!(state.top_level_app_ids().any(|id| id == &app("a")));
-    assert!(!state.is_hidden(&app("a")));
+    assert!(state.is_hidden(&app("a")));
+    assert!(!state.top_level_app_ids().any(|id| id == &app("a")));
 }
 
 // ---- required test: folder item without folder data is dropped ----

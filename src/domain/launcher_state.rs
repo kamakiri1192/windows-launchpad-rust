@@ -20,9 +20,11 @@
 //!
 //! 1. Each top-level item is unique (no duplicate app or folder ids in `items`).
 //! 2. Each folder id in `items` exists in `folders`.
-//! 3. Each `AppId` appears in at most one place: a top-level item OR a folder
-//!    child OR `hidden_apps` — never two of these, and never twice within
-//!    `children`.
+//! 3. A hidden app never appears in the visible layout: if an `AppId` is in
+//!    `hidden_apps`, `normalize` removes it from `items` (top-level app items)
+//!    and from every folder's `children`. The hidden intent wins over a
+//!    stale visible placement, so a legacy migration or a reorder that left a
+//!    hidden id in `items` cannot silently un-hide it.
 //! 4. `folders` children are deduplicated and never nest folders.
 //!
 //! ## Migration
@@ -323,14 +325,22 @@ impl LauncherState {
                 .retain(|c| child_seen.insert(c.as_str().to_string()));
         }
 
-        // 3. An app id may appear in at most one of: top-level item, a folder
-        //    child, hidden_apps. Priority: top-level > folder child > hidden.
-        //    Remove an app from hidden_apps if it is a top-level item or a
-        //    folder child (the user placed it somewhere visible).
-        let top_level: HashSet<AppId> = self.top_level_app_ids().cloned().collect();
-        let in_folders: HashSet<AppId> = self.folder_child_ids().cloned().collect();
-        self.hidden_apps
-            .retain(|id| !top_level.contains(id) && !in_folders.contains(id));
+        // 3. Hidden apps must never appear in the visible layout. If a hidden
+        //    app id is also in `items` (top-level app item) or a folder child,
+        //    the hidden intent wins: remove it from the visible layout and keep
+        //    it in `hidden_apps`. This is the opposite of an earlier draft that
+        //    let top-level win — that draft silently un-hid apps whenever a
+        //    reorder or legacy migration left a hidden id in `items` (the old
+        //    hide path kept hidden ids in the persisted order tail, and
+        //    `apply_reorder` returns a visible+hidden concatenation that
+        //    `reorder_app_items` writes back into `items`).
+        self.items.retain(|item| match item {
+            LauncherItem::App(id) => !self.hidden_apps.contains(id),
+            LauncherItem::Folder(_) => true,
+        });
+        for f in self.folders.values_mut() {
+            f.children.retain(|c| !self.hidden_apps.contains(c));
+        }
 
         // 4. Ensure every folder referenced by items exists in `folders`; drop
         //    folder items whose folder data is missing (cannot display).
@@ -512,14 +522,33 @@ mod tests {
     }
 
     #[test]
-    fn normalize_app_in_top_level_and_folder_keeps_top_level_only_from_hidden() {
-        // App "x" is top-level and also hidden — hidden must be pruned because
-        // top-level wins.
+    fn normalize_hidden_app_wins_over_top_level_placement() {
+        // App "x" is both top-level and hidden. The hidden intent wins: it is
+        // removed from the visible layout and kept in hidden_apps. This prevents
+        // a legacy migration or reorder that left a hidden id in items from
+        // silently un-hiding it.
         let mut state = LauncherState::from_legacy(vec![app("x")], vec![]);
         state.hidden_apps.insert(app("x"));
         state.normalize(&HashSet::new(), false);
-        assert!(!state.is_hidden(&app("x")));
-        assert!(state.top_level_app_ids().any(|id| id == &app("x")));
+        assert!(state.is_hidden(&app("x")));
+        assert!(!state.top_level_app_ids().any(|id| id == &app("x")));
+    }
+
+    #[test]
+    fn normalize_hidden_app_removed_from_folder_children() {
+        // A hidden app that is also a folder child is removed from the folder;
+        // hidden wins.
+        let mut state = LauncherState::new();
+        let fid = FolderId::generate(0);
+        let mut f = Folder::new(fid, "F");
+        f.children.push(app("visible"));
+        f.children.push(app("secret"));
+        state.upsert_folder(f);
+        state.hidden_apps.insert(app("secret"));
+        state.normalize(&HashSet::new(), false);
+        let folder = state.folders.get(&FolderId::generate(0)).unwrap();
+        assert_eq!(folder.children, vec![app("visible")]);
+        assert!(state.is_hidden(&app("secret")));
     }
 
     #[test]
@@ -580,14 +609,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_order_with_hidden_app_keeps_both() {
-        // Hidden app "h" also in order: preserved as top-level but also hidden.
+    fn legacy_order_with_hidden_app_normalizes_hidden_wins() {
+        // Hidden app "h" is also in the legacy order (the old hide path kept
+        // hidden ids in the order tail). After normalize, the hidden intent
+        // wins: "h" is removed from the visible layout and stays hidden. This
+        // is the regression guard for codex review P2-new.
         let mut state = LauncherState::from_legacy(vec![app("a"), app("h")], vec![app("h")]);
         state.normalize(&discovered(&["a", "h"]), false);
-        // "h" is both in items and hidden: normalize keeps it in items (top-
-        // level wins over hidden), removes from hidden.
-        assert!(state.top_level_app_ids().any(|id| id == &app("h")));
-        assert!(!state.is_hidden(&app("h")));
+        assert!(state.is_hidden(&app("h")));
+        assert!(!state.top_level_app_ids().any(|id| id == &app("h")));
+        // "a" remains visible.
+        assert!(state.top_level_app_ids().any(|id| id == &app("a")));
     }
 
     #[test]
