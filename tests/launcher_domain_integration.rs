@@ -371,3 +371,32 @@ fn domain_compiles_without_binary_deps() {
     let _ = LauncherState::new();
     let _ = AppRegistry::new();
 }
+
+// ---- regression: reorder preserves undiscovered placeholders (codex P2-a) ----
+
+#[test]
+fn reorder_does_not_drop_undiscovered_placeholders() {
+    let mut state = LauncherState::from_legacy(vec![app("a"), app("b"), app("gone")], vec![]);
+    // Only discovered visible apps are in the reorder input.
+    state.reorder_app_items(vec![app("b"), app("a")]);
+    let ids: Vec<AppId> = state.top_level_app_ids().cloned().collect();
+    // "gone" placeholder must survive at the tail.
+    assert!(ids.contains(&app("gone")));
+    assert_eq!(ids[..2], [app("b"), app("a")]);
+}
+
+// ---- regression: cross-placement dedup (codex P2-b) ----
+
+#[test]
+fn normalize_removes_folder_child_that_is_also_top_level() {
+    let mut state = LauncherState::from_legacy(vec![app("a")], vec![]);
+    let fid = FolderId::generate(0);
+    let mut f = Folder::new(fid, "F");
+    f.children = vec![app("a"), app("only_folder")];
+    state.upsert_folder(f);
+    state.normalize(&discovered(&["a", "only_folder"]), false);
+    let folder = state.folders.get(&FolderId::generate(0)).unwrap();
+    // "a" removed from folder (top-level wins); "only_folder" stays.
+    assert_eq!(folder.children, vec![app("only_folder")]);
+    assert!(state.top_level_app_ids().any(|id| id == &app("a")));
+}

@@ -25,7 +25,10 @@
 //!    and from every folder's `children`. The hidden intent wins over a
 //!    stale visible placement, so a legacy migration or a reorder that left a
 //!    hidden id in `items` cannot silently un-hide it.
-//! 4. `folders` children are deduplicated and never nest folders.
+//! 4. An app id appears in at most one *visible* place: a top-level app item
+//!    OR a folder child, never both. Top-level wins: a folder child that is
+//!    also a top-level app item is removed.
+//! 5. `folders` children are deduplicated and never nest folders.
 //!
 //! ## Migration
 //!
@@ -183,12 +186,27 @@ impl LauncherState {
     /// commit a user reorder should also call [`set_items`][Self::set_items] or
     /// set `customized = true`.
     pub fn reorder_app_items(&mut self, visible_app_order: Vec<AppId>) {
-        // Collect current hidden apps (those in hidden_apps that were once in
-        // items). They are not in items right now (hide_app removes them), but
-        // we still preserve a deterministic tail order for persistence by
-        // ensuring hidden ids remain in hidden_apps.
-        // Rebuild items: keep folders in their existing relative positions,
-        // and replace the app items with the new order.
+        // The visible reorder gives us the new order for *visible* (discovered,
+        // non-hidden) app ids. We must also retain:
+        //   - folder items (in their existing relative order), and
+        //   - undiscovered placeholder app items that are not in the visible
+        //     order (so a temporarily-undiscovered app keeps its slot and
+        //     rediscovery restores it). These placeholders are not in
+        //     `visible_app_order` because `visible_app_ids` skips undiscovered
+        //     records.
+        let visible_set: HashSet<&AppId> = visible_app_order.iter().collect();
+
+        // App items not in the visible order = undiscovered placeholders. Keep
+        // them in their existing relative order so their position is stable.
+        let placeholder_apps: Vec<AppId> = self
+            .items
+            .iter()
+            .filter_map(LauncherItem::as_app_id)
+            .filter(|id| !visible_set.contains(*id))
+            .filter(|id| !self.hidden_apps.contains(*id))
+            .cloned()
+            .collect();
+
         let folder_items: Vec<LauncherItem> = self
             .items
             .iter()
@@ -196,16 +214,14 @@ impl LauncherState {
             .cloned()
             .collect();
 
-        // Interleave: preserve folder positions by index. The legacy reorder
-        // only saw apps, so we treat the grid as apps-first then append folders
-        // at the tail if they existed after the reordered apps. To keep this
-        // deterministic and behavior-preserving for the current (folder-less)
-        // grid, we place all reordered apps first, then folders in their prior
-        // relative order.
+        // Rebuild: reordered visible apps first, then undiscovered placeholders
+        // (stable tail), then folders. This keeps the Phase 7 (folder-less)
+        // grid behavior-preserving while not dropping placeholders on reorder.
         let mut new_items: Vec<LauncherItem> = visible_app_order
             .into_iter()
             .map(LauncherItem::App)
             .collect();
+        new_items.extend(placeholder_apps.into_iter().map(LauncherItem::App));
         new_items.extend(folder_items);
         self.items = new_items;
         self.customized = true;
@@ -342,7 +358,17 @@ impl LauncherState {
             f.children.retain(|c| !self.hidden_apps.contains(c));
         }
 
-        // 4. Ensure every folder referenced by items exists in `folders`; drop
+        // 4. An app id may appear in at most one *visible* place: a top-level
+        //    app item OR a folder child (never both). Top-level wins: remove
+        //    any folder child that is also a top-level app item. This enforces
+        //    the stated invariant and prevents a persisted or future folder
+        //    state from rendering the same app as two launcher entries.
+        let top_level: HashSet<AppId> = self.top_level_app_ids().cloned().collect();
+        for f in self.folders.values_mut() {
+            f.children.retain(|c| !top_level.contains(c));
+        }
+
+        // 5. Ensure every folder referenced by items exists in `folders`; drop
         //    folder items whose folder data is missing (cannot display).
         self.items.retain(|item| match item {
             LauncherItem::Folder(fid) => self.folders.contains_key(fid),
@@ -361,7 +387,7 @@ impl LauncherState {
             self.hidden_apps.retain(|id| _present_apps.contains(id));
         }
 
-        // 5. Drop empty folders? No — an empty folder is a valid user state in
+        // 6. Drop empty folders? No — an empty folder is a valid user state in
         //    Phase 8 (the user may have just removed the last child). Keep them.
     }
 
@@ -642,5 +668,40 @@ mod tests {
         let mut state = LauncherState::from_legacy(vec![], vec![app("h")]);
         state.normalize(&discovered(&["h"]), false);
         assert!(state.is_hidden(&app("h")));
+    }
+
+    #[test]
+    fn reorder_preserves_undiscovered_placeholders() {
+        // Regression (codex review P2-a): a temporarily-undiscovered app kept
+        // as a placeholder in items must survive a reorder of visible apps.
+        let mut state = LauncherState::from_legacy(vec![app("a"), app("b"), app("gone")], vec![]);
+        // Reorder visible apps (gone is not discovered so it is not in the
+        // visible order).
+        state.reorder_app_items(vec![app("b"), app("a")]);
+        // "gone" placeholder retained at the tail.
+        assert!(state
+            .items
+            .iter()
+            .any(|i| matches!(i, LauncherItem::App(id) if id == &app("gone"))));
+        // Visible order applied.
+        let visible: Vec<AppId> = state.top_level_app_ids().cloned().collect();
+        assert_eq!(visible[..2], [app("b"), app("a")]);
+    }
+
+    #[test]
+    fn normalize_removes_cross_placement_duplicates() {
+        // Regression (codex review P2-b): an app that is both a top-level item
+        // and a folder child must be removed from the folder child list (top-
+        // level wins).
+        let mut state = LauncherState::from_legacy(vec![app("a")], vec![]);
+        let fid = FolderId::generate(0);
+        let mut f = Folder::new(fid, "F");
+        f.children = vec![app("a"), app("b")];
+        state.upsert_folder(f);
+        state.normalize(&discovered(&["a", "b"]), false);
+        let folder = state.folders.get(&FolderId::generate(0)).unwrap();
+        // "a" removed from folder (top-level wins); "b" stays.
+        assert_eq!(folder.children, vec![app("b")]);
+        assert!(state.top_level_app_ids().any(|id| id == &app("a")));
     }
 }
