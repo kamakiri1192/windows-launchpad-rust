@@ -24,6 +24,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::app_id::AppId;
+use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
 use crate::icons::normalize::DecodedIcon;
 use crate::startup_timer::{self, prefix};
@@ -331,6 +332,34 @@ impl IconCache {
         self.kv_put(SETTINGS_KEY, &bytes)
     }
 
+    /// Read the persisted user-owned launcher layout (Phase 7 item-based
+    /// model). When absent or corrupt, returns `None` so the caller can attempt
+    /// the legacy `app_order` + `hidden_ids` migration. A corrupt blob never
+    /// blocks startup: the caller falls back to an empty state.
+    pub fn get_launcher_state(&self) -> Option<LauncherState> {
+        self.kv_get(LAUNCHER_STATE_KEY)
+            .and_then(|b| serde_json::from_slice::<LauncherState>(&b).ok())
+    }
+
+    /// Persist the user-owned launcher layout as a JSON blob. Writes also clear
+    /// the legacy `app_order` and `hidden_ids` keys so subsequent loads read the
+    /// canonical Phase 7 format and do not migrate twice.
+    pub fn put_launcher_state(&self, state: &LauncherState) -> rusqlite::Result<()> {
+        let bytes = serde_json::to_vec(state)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        conn.execute(
+            "INSERT INTO kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![LAUNCHER_STATE_KEY, bytes],
+        )?;
+        // Remove the legacy keys so a future load reads the new format and the
+        // migration does not re-run.
+        let _ = conn.execute("DELETE FROM kv WHERE key = ?1", params![APP_ORDER_KEY]);
+        let _ = conn.execute("DELETE FROM kv WHERE key = ?1", params![HIDDEN_KEY]);
+        Ok(())
+    }
+
     /// Generic single-blob read from the `kv` table. Returns `None` when the key
     /// is absent or the row can't be decoded.
     fn kv_get(&self, key: &str) -> Option<Vec<u8>> {
@@ -396,6 +425,10 @@ const APP_ORDER_KEY: &str = "app_order";
 const HIDDEN_KEY: &str = "hidden_ids";
 /// `kv` key under which the settings panel preferences are stored.
 const SETTINGS_KEY: &str = "settings";
+/// `kv` key under which the Phase 7 user-owned launcher layout (items,
+/// folders, hidden apps) is stored as JSON. Supersedes `app_order` +
+/// `hidden_ids`; on write the legacy keys are cleared.
+const LAUNCHER_STATE_KEY: &str = "launcher_state";
 
 /// Serialize a slice of `AppId`s into a compact blob: `count:u32` followed by,
 /// for each id, `len:u32` + the normalized string bytes (little-endian). This

@@ -15,7 +15,6 @@
 use std::time::Instant;
 
 use crate::debug_log;
-use crate::domain::app_id::AppId;
 use crate::features::edit_mode::EditModeCommand;
 use crate::scroll::Phase;
 
@@ -23,38 +22,53 @@ use super::event::AppCommand;
 use super::state::App;
 
 impl App {
-    /// Load the persisted user customization (drag-to-reorder result + hidden
-    /// apps) into the registry. Called once at startup, before the first scan
-    /// is ingested, so apps are placed in the user's arrangement from the first
-    /// frame. A missing or corrupt store is a no-op (registry stays name-sorted
-    /// with nothing hidden).
+    /// Load the persisted user customization (Phase 7 launcher layout: item
+    /// order, folders, hidden apps) into `launcher_state`. Called once at
+    /// startup, before the first scan is ingested, so apps are placed in the
+    /// user's arrangement from the first frame.
+    ///
+    /// Migration: if the Phase 7 `launcher_state` key is present it is used
+    /// directly. Otherwise the legacy `app_order` + `hidden_ids` binary keys
+    /// are read and converted via [`LauncherState::from_legacy`]. A missing or
+    /// corrupt store is a no-op (state stays empty / non-customized), so a bad
+    /// blob never blocks startup or wipes other settings.
     pub(crate) fn load_customization(&mut self) {
         self.settings = self.cache.get_settings();
-        let order = self.cache.get_app_order();
-        if !order.is_empty() {
-            self.registry.set_order(order);
+        if let Some(state) = self.cache.get_launcher_state() {
+            self.launcher_state = state;
+            return;
         }
+        // Legacy migration path: convert the old binary app_order + hidden_ids
+        // keys into the item-based launcher state.
+        let order = self.cache.get_app_order();
         let hidden = self.cache.get_hidden_ids();
-        if !hidden.is_empty() {
-            self.registry.set_hidden(hidden);
+        if !order.is_empty() || !hidden.is_empty() {
+            self.launcher_state =
+                crate::domain::launcher_state::LauncherState::from_legacy(order, hidden);
+        }
+    }
+
+    /// Persist the current launcher layout so it survives across launches.
+    /// Called after a drag-to-reorder, hide/unhide, or folder change. Cheap:
+    /// one small JSON blob upsert. Errors are logged but never panic the UI.
+    pub(crate) fn persist_launcher_state(&self) {
+        if let Err(e) = self.cache.put_launcher_state(&self.launcher_state) {
+            eprintln!("layout: failed to persist launcher state: {e}");
         }
     }
 
     /// Persist the current display order so it survives across launches. Called
-    /// after a drag-to-reorder completes (and on hide). Cheap: one small blob
-    /// upsert. Errors are logged but never panic the UI.
+    /// after a drag-to-reorder completes (and on hide). Phase 7 routes this
+    /// through the unified launcher state; this method is kept as the
+    /// edit-mode command target so the command boundary stays stable.
     pub(crate) fn persist_user_order(&self) {
-        if let Err(e) = self.cache.put_app_order(self.registry.order()) {
-            eprintln!("layout: failed to persist app order: {e}");
-        }
+        self.persist_launcher_state();
     }
 
     /// Persist the current hidden-app list. Called after a hide/unhide change.
+    /// Phase 7 routes this through the unified launcher state.
     pub(crate) fn persist_hidden(&self) {
-        let ids: Vec<AppId> = self.registry.hidden().iter().cloned().collect();
-        if let Err(e) = self.cache.put_hidden_ids(&ids) {
-            eprintln!("layout: failed to persist hidden ids: {e}");
-        }
+        self.persist_launcher_state();
     }
 
     pub(crate) fn persist_settings(&self) {

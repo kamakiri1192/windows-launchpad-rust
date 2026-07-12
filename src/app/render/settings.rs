@@ -26,7 +26,7 @@ impl App {
         }
 
         let scale = self.scale_factor;
-        let hidden_count = self.registry.hidden().len();
+        let hidden_count = self.launcher_state.hidden_apps.len();
         let hidden_count_label = format!("{hidden_count} 件");
         let copy = settings_panel_copy(&hidden_count_label);
         let model = layout::settings_panel::build_with_copy(
