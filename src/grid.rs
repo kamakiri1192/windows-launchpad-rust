@@ -26,9 +26,14 @@
 //! and the [`ScrollBounds`] adapter are added here.
 
 use crate::icons::AppEntry;
-use crate::icons::UvRect;
 use crate::layout::grid as layout_grid;
 use crate::scroll::ScrollBounds;
+use crate::ui_model::geometry::Rect;
+pub use crate::ui_model::grid::{GridApp, TileAnim};
+use crate::ui_model::ids::UiId;
+use crate::ui_model::render_model::{
+    Color, GlassBehavior, GlassMaterial, GlassSurface, IconSource, IconView, TileView,
+};
 
 // Re-exported for other binary modules (renderer, liquid_glass) that still
 // reference `crate::grid::*`. These are not all used *inside* this file, hence
@@ -38,105 +43,50 @@ pub use layout_grid::GridLayout;
 #[allow(unused_imports)]
 pub use layout_grid::{edit_badge_radius_for_tile_size, BASE_TILE_SIZE, FRAME_CORNER_RADIUS};
 
-/// Minimal view of one app that the layout needs: a label and an optional
-/// atlas UV. This decouples [`GridLayout`] from whichever concrete app-list
-/// type owns the full records (old `AppEntry`, new `AppRecord`, …), so the
-/// grid code doesn't churn when the registry changes.
-#[derive(Debug, Clone, Copy)]
-pub struct GridApp<'a> {
-    pub name: &'a str,
-    pub uv: Option<UvRect>,
-}
-
 impl<'a> From<&'a AppEntry> for GridApp<'a> {
     fn from(a: &'a AppEntry) -> Self {
         Self {
+            id: a.name.as_str(),
             name: &a.name,
             uv: a.uv,
         }
     }
 }
 
-/// Per-app edit-mode animation parameters, packed into the tile/icon instance
-/// `extra` vec4.
-///
-/// - `phase` — wiggle phase offset (seconds), per-app so icons wobble out of
-///   sync. Ignored unless `FLAG_WIGGLE` is set.
-/// - `lift` — vertical lift in physical px (dragged icon rises above the grid).
-/// - `scale` — uniform scale multiplier (dragged icon is enlarged).
-/// - `flags` — bitfield; bit 0 = wiggling, bit 1 = dragged (bypass frame clip).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct TileAnim {
-    pub phase: f32,
-    pub lift: f32,
-    pub scale: f32,
-    pub flags: u32,
-}
-
-impl TileAnim {
-    /// Bit set in `flags` while edit mode is active (icon should wiggle).
-    pub const FLAG_WIGGLE: u32 = 1 << 0;
-    /// Bit set in `flags` while this icon is the one being dragged (lifted,
-    /// pointer-following, frame clip bypassed).
-    pub const FLAG_DRAG: u32 = 1 << 1;
-
-    /// An all-zero animation (the resting state — no wiggle, no lift).
-    pub const IDLE: Self = Self {
-        phase: 0.0,
-        lift: 0.0,
-        scale: 1.0,
-        flags: 0,
-    };
-
-    #[inline]
-    fn to_extra(self) -> [f32; 4] {
-        [self.phase, self.lift, self.scale, self.flags as f32]
-    }
-}
-
-/// One drawable tile, matching the WGSL `@location(0..4)` instance attributes.
-/// 48 bytes for clean GPU alignment.
-///
-/// `extra` carries the edit-mode animation parameters:
-/// `(phase, lift, scale, flags)` where flags bit 0 = wiggling and bit 1 = being
-/// dragged (lifted + pointer-following, frame clip bypassed).
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct TileInstance {
-    /// Top-left corner of the tile in content pixels.
-    pub x: f32,
-    pub y: f32,
-    pub size: f32,
-    pub radius: f32,
-    /// sRGB-ish color packed as linear RGB in 0..1.
-    pub r: f32,
-    pub g: f32,
-    pub b: f32,
-    /// Icon index into the atlas. `-1.0` means "no icon → render the color
-    /// tile as a fallback". Otherwise it's the atlas entry index as a float.
-    pub icon_index: f32,
-    /// Edit-mode animation: `(phase, lift, scale, flags)`.
-    pub extra: [f32; 4],
-}
-
-impl TileInstance {
-    /// Vertex attributes describing this struct for `wgpu::VertexBufferLayout`.
-    pub const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-        0 => Float32x2,
-        1 => Float32x2,
-        2 => Float32x3,
-        3 => Float32,
-        4 => Float32x4
-    ];
-
-    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<TileInstance>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &TileInstance::ATTRIBS,
-    };
-}
-
 impl GridLayout {
+    /// Build the base Liquid Glass scene (fixed page frame + scrolling tile
+    /// halos) as renderer-neutral surfaces.
+    pub fn build_glass_surfaces(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<GlassSurface> {
+        let (cx, cy, width, height) = self.frame_panel_rect(viewport_w);
+        let mut surfaces = Vec::with_capacity(1 + apps.len().min(self.total_tiles()));
+        surfaces.push(GlassSurface {
+            id: UiId::backdrop("page-frame"),
+            rect: Rect::new(cx - width * 0.5, cy - height * 0.5, width, height),
+            radius: self.scaled(layout_grid::FRAME_CORNER_RADIUS),
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::FixedFrame,
+            z: -10,
+        });
+        for (index, app) in apps.iter().take(self.total_tiles()).enumerate() {
+            let (x, y) = self.tile_position(viewport_w, index);
+            let halo = self.tile_size + self.scaled(18.0);
+            surfaces.push(GlassSurface {
+                id: UiId::launcher_item(app.id),
+                rect: Rect::new(
+                    x + (self.tile_size - halo) * 0.5,
+                    y + (self.tile_size - halo) * 0.5,
+                    halo,
+                    halo,
+                ),
+                radius: self.scaled(28.0),
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Scrolling,
+                z: 0,
+            });
+        }
+        surfaces
+    }
+
     /// Build the scroll bounds implied by this layout & viewport.
     ///
     /// This is the binary adapter over the pure
@@ -167,7 +117,7 @@ impl GridLayout {
         viewport_w: f32,
         apps: &[GridApp<'_>],
         anim: &[TileAnim],
-    ) -> Vec<TileInstance> {
+    ) -> Vec<TileView> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
@@ -183,16 +133,18 @@ impl GridLayout {
             let (r_, g_, b_) = layout_grid::app_color(idx);
             let icon_index = if app.uv.is_some() { idx as f32 } else { -1.0 };
             let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
-            out.push(TileInstance {
-                x,
-                y,
-                size: self.tile_size,
+            out.push(TileView {
+                id: UiId::launcher_item(app.id),
+                rect: Rect::new(x, y, self.tile_size, self.tile_size),
                 radius: self.scaled(19.0),
-                r: r_,
-                g: g_,
-                b: b_,
-                icon_index,
-                extra: anim.to_extra(),
+                color: Color::rgba(r_, g_, b_, 1.0),
+                has_icon: icon_index >= 0.0,
+                motion: anim,
+                z: if anim.flags & TileAnim::FLAG_DRAG != 0 {
+                    20
+                } else {
+                    0
+                },
             });
         }
         out
@@ -207,7 +159,7 @@ impl GridLayout {
         viewport_w: f32,
         apps: &[GridApp<'_>],
         anim: &[TileAnim],
-    ) -> Vec<crate::icon_pipeline::IconInstance> {
+    ) -> Vec<IconView> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
@@ -224,16 +176,16 @@ impl GridLayout {
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
-            out.push(crate::icon_pipeline::IconInstance {
-                x,
-                y,
-                size: self.tile_size,
-                radius: self.scaled(19.0),
-                u0: uv.u0,
-                v0: uv.v0,
-                u1: uv.u1,
-                v1: uv.v1,
-                extra: anim.to_extra(),
+            out.push(IconView {
+                id: UiId::launcher_item(app.id),
+                rect: Rect::new(x, y, self.tile_size, self.tile_size),
+                source: IconSource::AtlasUv(uv),
+                motion: anim,
+                z: if anim.flags & TileAnim::FLAG_DRAG != 0 {
+                    20
+                } else {
+                    0
+                },
             });
         }
         out
@@ -244,7 +196,11 @@ impl GridLayout {
     /// Each label sits below its tile, horizontally centered, with a max
     /// width slightly wider than the tile so two lines can fit. The label
     /// text comes from `apps[i].name`; empty slots after the last app are skipped.
-    pub fn build_labels(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<crate::text::Label> {
+    pub fn build_labels(
+        &self,
+        viewport_w: f32,
+        apps: &[GridApp<'_>],
+    ) -> Vec<crate::renderer::text_engine::Label> {
         let per_page = self.cols * self.rows;
         let app_count = apps.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
@@ -260,7 +216,7 @@ impl GridLayout {
             let label_w = self.tile_size + self.scaled(20.0); // a little wider than the tile
             let label_x = tile_x + (self.tile_size - label_w) * 0.5;
             let label_y = tile_y + self.tile_size + self.scaled(8.0);
-            out.push(crate::text::Label {
+            out.push(crate::renderer::text_engine::Label {
                 text: app.name.to_string(),
                 x: label_x,
                 y: label_y,
@@ -274,10 +230,12 @@ impl GridLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_model::geometry::UvRect;
     use std::path::PathBuf;
 
     /// Owned app-list helper for tests (so `GridApp` borrows stable storage).
     struct OwnedApp {
+        id: String,
         name: String,
         uv: Option<UvRect>,
     }
@@ -287,6 +245,7 @@ mod tests {
     fn fake_apps(n: usize) -> Vec<OwnedApp> {
         (0..n)
             .map(|i| OwnedApp {
+                id: format!("app-{i}"),
                 name: format!("App{i}"),
                 uv: if i % 2 == 0 {
                     Some(UvRect {
@@ -306,6 +265,7 @@ mod tests {
     fn view<'a>(apps: &'a [OwnedApp]) -> Vec<GridApp<'a>> {
         apps.iter()
             .map(|a| GridApp {
+                id: a.id.as_str(),
                 name: a.name.as_str(),
                 uv: a.uv,
             })
@@ -364,9 +324,9 @@ mod tests {
         let apps = fake_apps(g.total_tiles());
         let inst = g.build_instances(vw, &view(&apps), &[]);
         let page_w = g.page_width(vw);
-        let p0 = inst[0].x;
-        let p1 = inst[7 * 5].x; // first tile of page 1
-                                // Page 1's first tile must be exactly one page width to the right.
+        let p0 = inst[0].rect.x;
+        let p1 = inst[7 * 5].rect.x; // first tile of page 1
+                                     // Page 1's first tile must be exactly one page width to the right.
         assert!(
             (p1 - p0 - page_w).abs() < 1e-2,
             "pages spaced by the content page width"
@@ -382,12 +342,9 @@ mod tests {
         // fake_apps gives even indices an icon (uv.is_some()).
         for (i, tile) in inst.iter().enumerate() {
             if apps[i].uv.is_some() {
-                assert_eq!(
-                    tile.icon_index, i as f32,
-                    "icon tile should carry its index"
-                );
+                assert!(tile.has_icon, "icon tile should carry icon presence");
             } else {
-                assert_eq!(tile.icon_index, -1.0, "icon-less tile should fall back");
+                assert!(!tile.has_icon, "icon-less tile should fall back");
             }
         }
     }
@@ -423,7 +380,7 @@ mod tests {
         let grid_w = g.cols as f32 * g.tile_size + (g.cols - 1) as f32 * g.gap;
         let expected_left = (vw - grid_w) * 0.5;
         assert!(
-            (inst[0].x - expected_left).abs() < 1e-2,
+            (inst[0].rect.x - expected_left).abs() < 1e-2,
             "first tile x should center the grid"
         );
     }

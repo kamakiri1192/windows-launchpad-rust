@@ -14,6 +14,10 @@ struct GlassUniforms {
     max_displacement: f32,
     shape_count: u32,
     debug_flags: u32,
+    time: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;

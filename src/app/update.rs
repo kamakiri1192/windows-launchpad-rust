@@ -3,13 +3,13 @@
 
 use std::time::Instant;
 
-use crate::app_id::AppId;
-use crate::app_registry::AppLaunchInfo;
 use crate::debug_log;
-use crate::icon_worker::IconResult;
-use crate::refresh_watcher::RefreshMessage;
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::AppLaunchInfo;
+use crate::domain::settings::{Settings, SortOrder};
 use crate::scroll::Phase;
-use crate::settings::{Settings, SortOrder};
+use crate::workers::icon_worker::IconResult;
+use crate::workers::refresh_watcher::RefreshMessage;
 
 use crate::app::render::{settings_category_id, settings_press_target_from_layout_hit};
 use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
@@ -118,7 +118,10 @@ impl App {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_pointer_release(&mut self) -> Option<AppLaunchInfo> {
+    /// Resolve the scroller-drag release into an optional app launch, then end
+    /// the drag. Returns the launch info if the release was a stationary click
+    /// over a visible app.
+    pub(crate) fn handle_pointer_release_launch(&mut self) -> Option<AppLaunchInfo> {
         let x = self.pointer_phys_x;
         let y = self.pointer_phys_y;
         let dx = x - self.drag_start_x;
@@ -534,12 +537,13 @@ impl App {
             }
             crate::layout::bottom_control::BottomControlPointerIntent::Capsule => {
                 match self.control.mode {
-                    crate::bottom_control::Mode::Pill
-                    | crate::bottom_control::Mode::Indicator
-                    | crate::bottom_control::Mode::Collapsing => {
+                    crate::features::bottom_control::Mode::Pill
+                    | crate::features::bottom_control::Mode::Indicator
+                    | crate::features::bottom_control::Mode::Collapsing => {
                         self.control.open_search();
                     }
-                    crate::bottom_control::Mode::Expanding | crate::bottom_control::Mode::Field => {
+                    crate::features::bottom_control::Mode::Expanding
+                    | crate::features::bottom_control::Mode::Field => {
                         // Clicking inside an open field does nothing (keep
                         // focus). A click outside the field's text area
                         // could move the caret; the MVP leaves the caret at

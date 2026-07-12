@@ -4,15 +4,12 @@
 //! when the CPU-side atlas becomes dirty (new glyphs added). The per-label
 //! glyph quad buffer is rebuilt on a relayout, not on every frame.
 
-use crate::text::GlyphQuad;
-
-use super::counters::Category;
 use super::Renderer;
 
 impl Renderer {
     /// Upload the glyph atlas texture from the given RGBA buffer.
     pub fn upload_atlas(&self, rgba: &[u8]) {
-        let (w, h) = crate::text::TextRenderer::atlas_dimensions();
+        let (w, h) = crate::renderer::text_engine::TextRenderer::atlas_dimensions();
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.atlas_texture,
@@ -32,15 +29,5 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-    }
-
-    /// Replace the per-glyph text instance buffer.
-    pub fn set_text_instances(&mut self, quads: &[GlyphQuad]) {
-        let outcome = self
-            .text_instance_buffer
-            .set(&self.device, &self.queue, quads);
-        if outcome.allocated {
-            self.counters.record_creation(Category::TextLabel);
-        }
     }
 }

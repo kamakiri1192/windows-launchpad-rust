@@ -166,3 +166,20 @@ mod tests {
         );
     }
 }
+
+/// UV rectangle of one icon inside the atlas, in 0..1 texture coordinates.
+///
+/// Stored as a 4-f32 pack so it slots directly into a `@location` instance
+/// attribute in the icon shader. This is renderer-neutral data (texture
+/// coordinates carry no feature semantics), so it lives in `ui_model` rather
+/// than in any feature or worker module. Domain types such as
+/// [`crate::domain::app_registry`] reference it without pulling in GPU or
+/// worker dependencies.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct UvRect {
+    pub u0: f32,
+    pub v0: f32,
+    pub u1: f32,
+    pub v1: f32,
+}

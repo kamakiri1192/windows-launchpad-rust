@@ -16,7 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use crate::app_id::AppId;
+use crate::domain::app_id::AppId;
 use crate::icon_cache::{self, CachedIcon, IconCache};
 use crate::icons::extract::{self, ComScope};
 use crate::icons::normalize::{normalize, DecodedIcon};

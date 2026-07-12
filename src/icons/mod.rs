@@ -10,7 +10,7 @@
 //!   4. [`loader`] orchestrates the above and returns the app list + atlas.
 //!
 //! The **live** launcher no longer uses [`IconAtlas`] / [`loader`]; it uses the
-//! async, fixed-slot [`crate::icon_atlas::IconAtlas`] plus the icon worker,
+//! async, fixed-slot [`crate::renderer::icon_atlas::IconAtlas`] plus the icon worker,
 //! SQLite cache, and app registry. Those older pieces are kept here with
 //! `#[allow(dead_code)]` so the extraction logic and its tests stay available.
 
@@ -25,18 +25,11 @@ pub use loader::{load_all_icons, AppEntry, LoadedIcons};
 #[allow(unused_imports)] // public API surface for icon decoding callers
 pub use normalize::{normalize, DecodedIcon, TARGET};
 
-/// UV rectangle of one icon inside the atlas, in 0..1 texture coordinates.
-///
-/// Stored as a 4-f32 pack so it slots directly into a `@location` instance
-/// attribute in the icon shader.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct UvRect {
-    pub u0: f32,
-    pub v0: f32,
-    pub u1: f32,
-    pub v1: f32,
-}
+/// Re-exported from [`crate::ui_model::geometry`]. `UvRect` is renderer-neutral
+/// data (texture coordinates carry no feature semantics), so the canonical
+/// definition lives in `ui_model`. This re-export keeps historical
+/// `crate::icons::UvRect` references working during the Phase 6.5 migration.
+pub use crate::ui_model::geometry::UvRect;
 
 /// A packed icon atlas: one wide RGBA8 bitmap plus the UV rect of each icon.
 #[derive(Debug)]

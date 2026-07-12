@@ -10,4 +10,5 @@
 //! settings, bottom_control, icons, app_list) are added in later phases per
 //! `docs/DF_REARCHITECTURE_PLAN.md`.
 
+pub mod bottom_control;
 pub mod edit_mode;

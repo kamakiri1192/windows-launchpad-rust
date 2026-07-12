@@ -14,6 +14,10 @@ struct GlassUniforms {
     max_displacement: f32,
     shape_count: u32,
     debug_flags: u32,
+    time: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 };
 
 struct GlassShape {
@@ -21,7 +25,7 @@ struct GlassShape {
     size: vec2<f32>,
     radius: f32,
     shape_type: u32,
-    pad: vec2<u32>,
+    motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -62,6 +66,27 @@ fn smooth_union(d1: f32, d2: f32, k: f32) -> f32 {
     return min(d1, d2) - e * e * 0.25 / k;
 }
 
+fn resolved_center(shape: GlassShape) -> vec2<f32> {
+    var center = shape.center;
+    if shape.shape_type == 4u {
+        let t = u.time + shape.motion.z;
+        let rot = sin(t * 8.0) * 0.06;
+        let dy = abs(sin(t * 8.0)) * 2.0;
+        let pivot = shape.motion.xy;
+        let rel = center - pivot;
+        let cosr = cos(rot);
+        let sinr = sin(rot);
+        center = pivot + vec2<f32>(
+            rel.x * cosr - rel.y * sinr,
+            rel.x * sinr + rel.y * cosr - dy,
+        );
+    }
+    if shape.shape_type == 0u || shape.shape_type == 4u {
+        center.x = center.x + u.scroll_x;
+    }
+    return center;
+}
+
 fn scene_sdf(pixel: vec2<f32>) -> f32 {
     var d = 1.0e6;
     let count = min(u.shape_count, arrayLength(&shapes));
@@ -72,8 +97,7 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
         }
         // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
         // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
-        let cx = select(shape.center.x + u.scroll_x, shape.center.x, shape.shape_type != 0u);
-        let center = vec2<f32>(cx, shape.center.y);
+        let center = resolved_center(shape);
         let local = pixel - center;
         let half_size = shape.size * 0.5;
         let shape_d = sdf_rrect(local, half_size, shape.radius);

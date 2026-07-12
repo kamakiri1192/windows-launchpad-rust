@@ -10,7 +10,7 @@
 //!
 //! Behavior preservation: the state machine, IME handling, caret blink, page
 //! indicator timing, search matching, and `ControlInstance` generation remain
-//! in [`crate::bottom_control`] / `main.rs`. This module only owns the hit map
+//! in [`crate::features::bottom_control`] / `main.rs`. This module only owns the hit map
 //! and the shared geometry snapshot so render geometry and hit regions come
 //! from the same calculation.
 

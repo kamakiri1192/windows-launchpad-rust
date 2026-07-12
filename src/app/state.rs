@@ -18,17 +18,17 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::app_diff::SnapshotEntry;
-use crate::app_id::AppId;
-use crate::app_registry::AppRegistry;
-use crate::icon_atlas::IconAtlas;
+use crate::domain::app_diff::SnapshotEntry;
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::AppRegistry;
+use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
 use crate::icon_cache::IconCache;
-use crate::icon_worker::WorkerHandle;
-use crate::refresh_watcher::RefreshMessage;
+use crate::renderer::icon_atlas::IconAtlas;
 use crate::renderer::Renderer;
 use crate::scroll::Scroller;
-use crate::settings::{Settings, SettingsCategory, SortOrder};
 use crate::startup_timer::StartupTimer;
+use crate::workers::icon_worker::WorkerHandle;
+use crate::workers::refresh_watcher::RefreshMessage;
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::event::UserEvent;
@@ -127,7 +127,7 @@ pub type Inbox = Mutex<Vec<WorkerMessage>>;
 
 #[derive(Debug)]
 pub enum WorkerMessage {
-    Icon(crate::icon_worker::IconResult),
+    Icon(crate::workers::icon_worker::IconResult),
     Refresh(RefreshMessage),
 }
 
@@ -136,8 +136,9 @@ pub struct App {
     pub event_proxy: EventLoopProxy<UserEvent>,
     pub renderer: Option<Renderer>,
     pub scroller: Option<Scroller>,
-    pub text: Option<crate::text::TextRenderer>,
+    pub text: Option<crate::renderer::text_engine::TextRenderer>,
     pub layout: crate::grid::GridLayout,
+    pub render_model: crate::ui_model::render_model::RenderModel,
     pub timer: StartupTimer,
 
     // ---- app + icon state ----
@@ -188,7 +189,7 @@ pub struct App {
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
-    pub control: crate::bottom_control::BottomControl,
+    pub control: crate::features::bottom_control::BottomControl,
     /// Measured laid-out width (physical px) of the current search query, set
     /// once per frame in `render_bottom_control` (where we hold `&mut text`)
     /// and read back by `measure_query_width`. `None` = not measured this
@@ -238,10 +239,10 @@ pub struct App {
     /// Anchor keeping the OS-integration thread (hot key + tray) alive for
     /// the whole process. Underscore-prefixed because we never read it.
     #[cfg(windows)]
-    pub _os: Option<crate::platform_windows::OsIntegrationHandle>,
+    pub _os: Option<crate::platform::windows::OsIntegrationHandle>,
 }
 
-use crate::app_registry::AppLaunchInfo;
+use crate::domain::app_registry::AppLaunchInfo;
 
 impl App {
     pub fn new(
@@ -257,6 +258,7 @@ impl App {
             scroller: None,
             text: None,
             layout: crate::grid::GridLayout::default(),
+            render_model: crate::ui_model::render_model::RenderModel::new(),
             timer,
             registry: AppRegistry::new(),
             atlas: IconAtlas::new(64),
@@ -278,7 +280,7 @@ impl App {
             drag_y: 0.0,
             wiggle_phase: 0.0,
             tile_springs: Vec::new(),
-            control: crate::bottom_control::BottomControl::new(),
+            control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,
             edit_control_progress: 0.0,
@@ -343,19 +345,22 @@ impl App {
     pub(crate) fn resolve_control(
         &self,
     ) -> Option<(
-        crate::bottom_control::ControlGeometry,
-        Vec<crate::bottom_control::ControlLayer>,
+        crate::features::bottom_control::ControlGeometry,
+        Vec<crate::features::bottom_control::ControlLayer>,
     )> {
         let viewport = self.viewport_phys();
         let frame_bottom = self.frame_bottom_y();
         let page = self.current_page();
         let page_count = self.layout.page_count;
-        let edit_width = self
-            .cached_done_width
-            .map(|w| crate::bottom_control::EditWidth {
-                half_width: crate::bottom_control::done_half_width(w, self.scale_factor),
-                progress: self.edit_control_progress,
-            });
+        let edit_width =
+            self.cached_done_width
+                .map(|w| crate::features::bottom_control::EditWidth {
+                    half_width: crate::features::bottom_control::done_half_width(
+                        w,
+                        self.scale_factor,
+                    ),
+                    progress: self.edit_control_progress,
+                });
         Some(self.control.resolve_scaled_with_edit_width(
             viewport,
             frame_bottom,
@@ -508,7 +513,7 @@ impl App {
     ///
     /// Apps the user hid via the edit-mode ✕ badge are excluded here (same path
     /// as the search filter), so they never reach the grid or click resolution.
-    pub(crate) fn grid_apps_owned(&self) -> Vec<(String, Option<crate::icons::UvRect>)> {
+    pub(crate) fn grid_apps_owned(&self) -> Vec<(AppId, String, Option<crate::icons::UvRect>)> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
         self.registry
@@ -516,7 +521,7 @@ impl App {
             .iter()
             .filter(|rec| include_hidden || !self.registry.is_hidden(&rec.app_id))
             .filter(|rec| Self::matches_search(&rec.name, &query))
-            .map(|rec| (rec.name.clone(), rec.uv))
+            .map(|rec| (rec.app_id.clone(), rec.name.clone(), rec.uv))
             .collect()
     }
 
@@ -601,7 +606,7 @@ mod pending_press_tests {
     use std::time::Instant;
 
     use super::{PendingPress, CLICK_SLOP_PHYS};
-    use crate::app_id::AppId;
+    use crate::domain::app_id::AppId;
 
     fn press(app_index: Option<usize>, app_id: Option<AppId>, outside_glass: bool) -> PendingPress {
         PendingPress {

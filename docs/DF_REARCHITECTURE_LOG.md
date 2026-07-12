@@ -1639,3 +1639,260 @@ Phase 7/8 follow-ups:
   `ControlInstance`/`GlyphQuad` bytes from renderer-neutral primitives
   without importing feature semantics.
 
+### 2026-07-11: Phase 6.5, Architecture Boundary Closure
+
+Files changed (per commit on branch `phase-6.5-architecture-closure`):
+
+**Commit 1: Relocate domain/platform/worker modules (6.5C/1)**
+- `src/app_id.rs` → `src/domain/app_id.rs`
+- `src/app_diff.rs` → `src/domain/app_diff.rs`
+- `src/settings.rs` → `src/domain/settings.rs`
+- `src/app_registry.rs` → `src/domain/app_registry.rs`
+- `src/platform_windows.rs` → `src/platform/windows.rs`
+- `src/launch.rs` → `src/platform/launch.rs`
+- `src/icon_worker.rs` → `src/workers/icon_worker.rs`
+- `src/refresh_watcher.rs` → `src/workers/refresh_watcher.rs`
+- `src/app_scan.rs` → `src/workers/app_scan.rs`
+- `src/lib.rs`: now exposes `pub mod domain` alongside `layout` and `ui_model`.
+- `src/ui_model/geometry.rs`: `UvRect` moved here from `src/icons/mod.rs`
+  (renderer-neutral data). `icons/mod.rs` re-exports it for compatibility.
+- `src/main.rs`: mod declarations updated; `mod domain` added.
+
+**Commit 2: Relocate bottom_control/text/icon modules (6.5C/2)**
+- `src/bottom_control.rs` → `src/features/bottom_control/mod.rs`
+- `src/text.rs` → `src/renderer/text_engine.rs`
+- `src/icon_pipeline.rs` → `src/renderer/icon_pipeline.rs`
+- `src/icon_atlas.rs` → `src/renderer/icon_atlas.rs`
+
+**Commit 3: Close production app action dispatch (6.5A)**
+- `src/app/action.rs` (new): `AppAction`, `KeyAction`, `PressAction`,
+  `ReleaseAction` enums + pure classifiers (`keyboard_action`,
+  `pointer_press_action`, `pointer_release_action`) + `App::handle_action`
+  dispatch.
+- `src/app/input.rs` (deleted): `KeyboardRoute`/`PressRoute`/`ReleaseRoute`
+  replaced by `AppAction`.
+- `src/app/handler.rs`: rewritten as a thin adapter — raw event → AppAction →
+  `handle_action`. No inline feature calls, platform calls, or launches.
+- `src/app/event.rs`: Route enums removed; `AppCommand` retained.
+- App launch now routes through `AppCommand::LaunchApp` (no inline
+  `open_shortcut`). hide/summon/passthrough/persist/reset all flow through
+  `execute_command`.
+
+**Commit 4: Split app/render.rs into feature submodules (6.5B/1)**
+- `src/app/render.rs` (1794 lines) → `src/app/render/{mod,controls,grid,
+  icons,settings,helpers}.rs`. Each sub-module owns one feature's adapter
+  logic in its own `impl App` block.
+
+**Commit 5: Move shader-facing GPU structs into renderer (6.5D/1)**
+- `TileInstance`: moved from `src/grid.rs` to `src/renderer/tiles.rs`.
+  `grid.rs` re-exports for compatibility.
+- `ControlInstance` + `KIND_*` constants: moved from
+  `src/features/bottom_control/mod.rs` to `src/renderer/controls.rs`.
+  `features/bottom_control` re-exports for compatibility.
+- `renderer/init.rs`, `renderer/mod.rs`, `renderer/frame.rs`,
+  `renderer/badges.rs`: all `InstanceBuffer<TileInstance/ControlInstance>`
+  fields now reference `crate::renderer::tiles::TileInstance` and
+  `crate::renderer::controls::ControlInstance` directly.
+
+**Commit 6: codex review fixes + architecture tests (6.5E)**
+- Fixed two actionable findings from `codex review --base main`:
+  - [P2] `pressed_on_control` was not reset after a control click release.
+  - [P3] Settings overlay closed on mismatched press/release (now ignored).
+- `tests/architecture_boundaries.rs` (new): 4 boundary tests.
+
+What changed (Phase 6.5 summary):
+
+- **Production AppAction/AppCommand flow**: the handler is now a thin adapter.
+  Every raw `WindowEvent`/`UserEvent` is normalized into an `AppAction` and
+  dispatched through `App::handle_action`. Side effects (hide, launch,
+  passthrough, summon, persist, reset, redraw) all run through
+  `execute_command(AppCommand)`. No inline app launch, hide, or passthrough
+  remains in the handler.
+- **Source ownership**: domain (app_id, app_diff, settings, app_registry) is
+  library-public; platform (windows, launch) and workers (icon_worker,
+  refresh_watcher, app_scan) are bin-only under their target directories.
+  `UvRect` moved from `icons/` to `ui_model::geometry`.
+- **Feature/renderer split**: `bottom_control` is under `features/`;
+  `text_engine`, `icon_pipeline`, `icon_atlas` are under `renderer/`.
+- **Shader-facing struct ownership**: `TileInstance` and `ControlInstance`
+  (the two GPU `#[repr(C)]` instance structs that were in feature/bin modules)
+  are now defined inside the renderer facade. `GlyphQuad` and `IconInstance`
+  were already renderer-owned.
+- **app/render.rs split**: the 1794-line monolith is now 6 feature-focused
+  files (controls 381, settings 666, grid 243, icons 493, helpers 44, mod 22).
+
+Adapters left in place (Phase 7+ follow-up):
+
+- **glass prepare consolidation**: the overlay glass (control + gear) and base
+  glass (page frame) still flow through `set_overlay_glass` and
+  `rebuild_instances`, not through `prepare(&RenderModel)`. Only the settings
+  modal glass uses `prepare`. Routing all glass through `prepare` requires
+  adding `shape_type` (SHAPE_FIXED/SCROLLING/CONTROL/CLIP_ONLY) to the
+  renderer-neutral `GlassSurface`/`GlassMaterial`, which risks the Liquid
+  Glass SDF merge behavior. Deferred to Phase 7.
+- **instance prepare consolidation**: tile/icon/control/text instance setters
+  (`set_tile_instances`, `set_icon_instances`, `set_control_instances`, etc.)
+  remain public because `app/render/` builds the GPU-facing instance bytes
+  (spring positions, icon UVs, control KIND encoding, cosmic-text glyph
+  quads). Moving these into `prepare` requires renderer-neutral
+  `TileAnimView`/`ControlKind` primitives in `ui_model` + renderer-internal
+  instance construction. Deferred to Phase 7.
+- **`crate::grid::{GridApp, TileAnim}` dependency**: the renderer still
+  imports `GridApp` and `TileAnim` from `crate::grid` (the bin adapter). These
+  are renderer-neutral types that should live in `layout::grid` or
+  `ui_model`, but moving them is a larger refactor. `crate::grid` is not a
+  feature module, so this does not violate the "renderer → features"
+  forbidden dependency.
+- **`liquid_glass/renderer.rs` split**: the 1667-file Liquid Glass renderer
+  is still monolithic. Splitting it into resources/pipeline/passes/shapes/frame
+  sub-modules is deferred to Phase 7 (the resource-factory free functions are
+  the cleanest extraction boundary).
+
+Behavior preservation:
+
+- Every commit is behavior-preserving. Module moves, path renames, type
+  relocations, and the AppAction dispatch rewrite preserve the exact branch
+  order, side-effect sequence, and timing of the historical handler.
+- Keyboard/IME/pointer precedence, long-press threshold, drag promotion,
+  pending-press launch, click passthrough, modal-dismiss-without-passthrough,
+  and hide-before-launch ordering are all preserved (pinned by the 28 action
+  tests + the architecture boundary tests).
+- No `#[repr(C)]` field order, vertex layout, bind group layout, shader, or
+  draw-pass order was changed.
+
+Validation:
+
+- `cargo fmt` / `cargo fmt --check`: passed
+- `cargo test`: 146 lib + 339 bin + 4 architecture + 2 WGSL validation = 491
+  tests, all passed
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `codex review --base main -c 'model="gpt-5.5"'`: completed. Initial run
+  found 2 actionable findings (stale `pressed_on_control`, settings dismiss
+  on mismatched release); both fixed. Re-run: "no discrete introduced bug
+  that would warrant an actionable review finding."
+- GPU self-capture (`LAUNCHPAD_ALLOW_SCREENSHOT=1` + `LAUNCHPAD_QA_SHOT_FILE`):
+  first frame non-blank (1920×1200, 57.1% non-transparent, 3320 unique
+  colors). Second frame also non-blank (4658 unique colors), confirming
+  active rendering with no stale/blank frames.
+
+Screen verification:
+
+- Launched with `cargo run --release` (release exe + documented screenshot
+  environment): yes
+- First frame non-blank: yes (GPU self-capture; Liquid Glass page frame +
+  tile grid + icons + labels + bottom control capsule all rendered)
+- Resize / DPI-sensitive layout: not verified on screen this phase; DPI
+  geometry scaling and the render path are unchanged code, covered by
+  existing unit tests.
+- Scroll / snap / rubber-band: not verified on screen; `scroll.rs` physics
+  unchanged.
+- Search / filtering / IME: not verified on screen; bottom-control state
+  machine and IME routing are unchanged code, now routed through AppAction.
+  Keyboard precedence covered by the new action tests.
+- Edit mode (long-press / drag / wiggle / badges / gear): not verified on
+  screen; edit-mode paths now route through AppAction + AppCommand but the
+  feature logic (`features::edit_mode`) is unchanged.
+- Settings overlay (open/close/category/toggle): not verified on screen;
+  settings code paths are unchanged code. The codex-review fix preserves the
+  historical outside-press/outside-release dismiss behavior.
+- Icons / labels / launch hit targets: icons and labels verified in the
+  first-frame captures; launch hit targets are unchanged code covered by the
+  pending_press tests.
+- Click passthrough / transparent-area vs frame-empty: not verified on
+  screen; unchanged code, routed through `AppCommand::HideWithClickPassthrough`.
+
+Phase 7/8 follow-ups carried forward:
+
+- Move `GridApp` / `TileAnim` from `crate::grid` to `layout::grid` or
+  `ui_model` so the renderer depends only on layout/ui_model, not the bin
+  adapter.
+- Route overlay/base glass through `prepare(&RenderModel)` once
+  `shape_type` is expressible renderer-neutrally.
+- Route tile/icon/control/text instances through `prepare` once
+  renderer-neutral `TileAnimView`/`ControlKind` primitives exist and the
+  renderer can build GPU instance bytes internally.
+- Split `liquid_glass/renderer.rs` (1667 lines) into focused sub-modules.
+- Move edit-badge wobble fully into the shader.
+
+### 2026-07-12: Phase 6.5B/D Closure Follow-up
+
+This follow-up closes the renderer-boundary items that the first Phase 6.5
+report had incorrectly carried into Phase 7.
+
+Architecture closure:
+
+- `GridApp` and `TileAnim` moved to `ui_model::grid`; the renderer no longer
+  imports the binary `grid` adapter.
+- Renderer-neutral `TileView`, `IconView`, `InkView`, `GlyphView`, glass
+  behavior, and named submission lanes now carry the complete production
+  scene. Shader-facing `TileInstance`, `IconInstance`, `ControlInstance`,
+  `GlyphQuad`, and `GlassShape` packing is renderer-internal.
+- `App` owns one current `RenderModel`. Grid, icon, control, gear, settings,
+  text, and all Liquid Glass lanes update that model, and `app/frame.rs` calls
+  `Renderer::prepare(&RenderModel)` exactly once before each draw.
+- Legacy public scene setters were removed from the `Renderer` facade.
+  `prepare`, resource/atlas lifecycle adapters, `render`, resize, and QA
+  capture remain public for the app boundary.
+- `Renderer::prepare` compares each lane with the previously prepared model.
+  Unchanged lanes skip GPU writes; capacity-managed buffers grow only when
+  required. Debug counters separately track prepare calls, buffer growth,
+  writes, dirty skips, atlas rebinds, full-scene rebuilds, and readbacks.
+- Base, overlay, modal, and edit-badge Liquid Glass buffers are persistent.
+  Ordinary frame updates use `queue.write_buffer`; resource creation is
+  limited to initialization, resize, or capacity growth.
+- Edit-badge wobble moved from CPU trigonometry and per-frame geometry upload
+  to `shader_control.wgsl` and `liquid_glass_geometry.wgsl`. The CPU supplies
+  stable badge geometry plus phase/motion data; the shared animation uniform
+  drives the per-frame motion on GPU.
+- `liquid_glass/renderer.rs` was split into focused frame orchestration and
+  resource ownership modules. The remaining facade coordinates pipelines and
+  lane state rather than rebuilding transient resources.
+- Architecture tests now reject `features -> renderer/platform`,
+  `layout -> renderer`, `renderer -> features/grid`, worker back-edges,
+  reintroduced public scene setters, and a CPU edit-badge animation path.
+
+CPU/GPU responsibility after closure:
+
+- CPU: feature state updates, deterministic layout, cosmic-text shaping,
+  renderer-neutral model construction, exact dirty comparison, compact GPU
+  struct packing, uniform writes, and uploads only for changed lanes.
+- GPU: tile springs, scroll, drag/lift, edit wiggle, edit-badge wobble, Liquid
+  Glass SDF/blur/sampling, clipping, blending, and final rasterization.
+- There is no CPU rasterization or CPU readback in the production frame path.
+  GPU readback remains restricted to the explicit QA capture path.
+
+Validation:
+
+- `cargo fmt`: passed
+- `cargo test`: 146 library + 345 passed / 2 ignored binary + 7 architecture
+  + 2 WGSL validation tests; all required tests passed
+- `cargo clippy --all-targets --all-features`: passed with no warnings
+- `cargo build --release`: passed
+- `cargo run --release`: launched with isolated `LOCALAPPDATA`,
+  `LAUNCHPAD_ALLOW_SCREENSHOT=1`, and `LAUNCHPAD_DEBUG=1`
+- `codex review --base main -c 'model="gpt-5.5"'`: attempted, but the CLI
+  stopped before producing findings because the account usage limit was
+  reached. A focused manual boundary/hot-path review found no actionable
+  regression after the single-model submission change.
+
+Screen verification:
+
+- first frame non-blank: verified through Windows.Graphics.Capture; page
+  glass, grid, icons, labels, and bottom control were present;
+- horizontal drag, active animation, inertia, and final page snap: verified;
+- search open, per-key text input, filtering to the single Blender result,
+  query clear, and close: verified;
+- GPU self-capture: verified by writing `target/phase65-search.png` through the
+  documented trigger while the filtered frame was active;
+- settings category/toggle/reset, edit-mode long press/reorder/hide/Done/gear,
+  IME composition, passthrough, empty-frame swallow, and resize/DPI smoke:
+  not re-verified in this follow-up. The available Windows automation API has
+  no pointer-down/hold/up primitive for the edit-mode long press, and those
+  items must not be claimed as visually verified.
+
+Phase 7/8 scope is now limited to the planned launcher-item/domain conversion
+and folder vertical slice. `grid.rs` remains an app/layout adapter until Phase
+7, and cosmic-text/atlas upload adapters remain because they are resource
+lifecycle work rather than feature-specific renderer submission APIs.
+

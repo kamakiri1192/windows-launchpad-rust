@@ -1,17 +1,15 @@
 //! Edit-mode delete badges: glass shape sources + foreground ✕ marks.
 //!
-//! Badge geometry is derived from the live tile instance list: every tile that
-//! is wiggling (but not the one being dragged) shows a small Liquid Glass
-//! badge at its top-left corner. The badge center wobbles in the shader from
-//! the global `time` uniform, but the *base* center is recomputed each frame
-//! here so that reorders / spring positions stay in sync. This is the only
-//! remaining per-frame CPU geometry path; it is small (one source per visible
-//! wiggling tile) and grows linearly with the visible app count, not the whole
-//! scene.
+//! Badge geometry is derived when the neutral tile scene changes: every
+//! wiggling non-dragged tile contributes one base center, pivot, radius, and
+//! phase. Those static values are uploaded once; Liquid Glass and foreground
+//! WGSL evaluate the per-frame wobble from the shared animation clock.
 
-use crate::bottom_control::ControlInstance;
-use crate::grid::TileInstance;
+use crate::layout::grid::edit_badge_radius_for_tile_size;
 use crate::liquid_glass::geometry::GlassShape;
+use crate::renderer::controls::ControlInstance;
+use crate::renderer::tiles::TileInstance;
+use crate::ui_model::grid::TileAnim;
 
 use super::counters::Category;
 use super::Renderer;
@@ -26,9 +24,8 @@ pub(crate) struct EditBadgeSource {
 
 impl Renderer {
     /// Recompute the badge glass shapes + foreground ✕ marks from the current
-    /// `badge_sources`, animated by `time`. Called every frame from `render`
-    /// so the badge follows the live wiggle / spring positions.
-    pub(super) fn update_edit_badges(&mut self, time: f32) {
+    /// `badge_sources`. Per-frame motion is evaluated by the shaders.
+    pub(super) fn prepare_edit_badges(&mut self) {
         const KIND_BADGE_CLOSE: f32 = 4.0;
 
         let mut shapes = std::mem::take(&mut self.badge_shape_scratch);
@@ -44,17 +41,23 @@ impl Renderer {
             frame.4,
         );
         for source in &self.badge_sources {
-            let center = animated_badge_center(*source, time);
-            shapes.push(GlassShape::rounded_rect(
-                center,
+            shapes.push(GlassShape::animated_badge(
+                source.base_center,
                 [source.radius * 2.15, source.radius * 2.15],
                 source.radius,
+                source.tile_center,
+                source.phase,
             ));
             marks.push(ControlInstance {
-                center,
+                center: source.base_center,
                 params: [source.radius, 0.92, (source.radius * 0.13).max(1.4), 0.0],
                 color: [1.0, 1.0, 1.0, 0.92],
-                kind: [KIND_BADGE_CLOSE, 0.0, 0.0, 0.0],
+                kind: [
+                    KIND_BADGE_CLOSE,
+                    source.tile_center[0],
+                    source.tile_center[1],
+                    source.phase,
+                ],
             });
         }
 
@@ -76,8 +79,8 @@ impl Renderer {
 }
 
 pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
-    const FLAG_WIGGLE: u32 = crate::grid::TileAnim::FLAG_WIGGLE;
-    const FLAG_DRAG: u32 = crate::grid::TileAnim::FLAG_DRAG;
+    const FLAG_WIGGLE: u32 = TileAnim::FLAG_WIGGLE;
+    const FLAG_DRAG: u32 = TileAnim::FLAG_DRAG;
 
     let mut sources = Vec::new();
     for tile in instances {
@@ -86,7 +89,7 @@ pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSou
             continue;
         }
 
-        let radius = crate::grid::edit_badge_radius_for_tile_size(tile.size);
+        let radius = edit_badge_radius_for_tile_size(tile.size);
         let inset = radius * 0.45;
         let center = [tile.x + inset, tile.y + inset];
         sources.push(EditBadgeSource {
@@ -100,24 +103,10 @@ pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSou
     sources
 }
 
-fn animated_badge_center(source: EditBadgeSource, time: f32) -> [f32; 2] {
-    let t = time + source.phase;
-    let rot = (t * 8.0).sin() * 0.06;
-    let dy = (t * 8.0).sin().abs() * 2.0;
-    let rel_x = source.base_center[0] - source.tile_center[0];
-    let rel_y = source.base_center[1] - source.tile_center[1];
-    let cosr = rot.cos();
-    let sinr = rot.sin();
-
-    [
-        source.tile_center[0] + rel_x * cosr - rel_y * sinr,
-        source.tile_center[1] + rel_x * sinr + rel_y * cosr - dy,
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::grid::BASE_TILE_SIZE;
 
     fn tile(size: f32) -> TileInstance {
         TileInstance {
@@ -129,21 +118,21 @@ mod tests {
             g: 0.0,
             b: 0.0,
             icon_index: -1.0,
-            extra: [0.25, 0.0, 1.0, crate::grid::TileAnim::FLAG_WIGGLE as f32],
+            extra: [0.25, 0.0, 1.0, TileAnim::FLAG_WIGGLE as f32],
         }
     }
 
     #[test]
     fn edit_badge_sources_use_scaled_radius() {
-        let normal = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE)]);
-        let scaled = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE * 1.5)]);
+        let normal = edit_badge_sources(&[tile(BASE_TILE_SIZE)]);
+        let scaled = edit_badge_sources(&[tile(BASE_TILE_SIZE * 1.5)]);
 
         assert!((scaled[0].radius - normal[0].radius * 1.5).abs() < 1e-2);
     }
 
     #[test]
     fn edit_badge_center_starts_on_tile_top_left() {
-        let source = edit_badge_sources(&[tile(crate::grid::BASE_TILE_SIZE)])[0];
+        let source = edit_badge_sources(&[tile(BASE_TILE_SIZE)])[0];
         let inset = source.radius * 0.45;
 
         assert!((source.base_center[0] - (100.0 + inset)).abs() < 1e-4);

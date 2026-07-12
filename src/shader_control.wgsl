@@ -73,6 +73,17 @@ fn vs_main(
     // Only the edit-badge glyph (kind 4) scrolls with the tiles. The gear
     // (kind 5) is a frame-independent control and must not move with scroll.
     if kind.x > 3.5 && kind.x < 4.5 {
+        let t = u.viewport_scroll.w + kind.w;
+        let rot = sin(t * 8.0) * 0.06;
+        let dy = abs(sin(t * 8.0)) * 2.0;
+        let pivot = kind.yz;
+        let rel = element_center - pivot;
+        let cosr = cos(rot);
+        let sinr = sin(rot);
+        element_center = pivot + vec2<f32>(
+            rel.x * cosr - rel.y * sinr,
+            rel.x * sinr + rel.y * cosr - dy,
+        );
         element_center.x = element_center.x + u.viewport_scroll.z;
     }
     let world = vec2<f32>(element_center.x + c.x * extent, element_center.y - c.y * extent);

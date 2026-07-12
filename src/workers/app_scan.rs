@@ -8,13 +8,13 @@
 //!
 //! The expensive Win32 calls here (`SHGetKnownFolderPath`, `IShellLinkW`,
 //! `GetFileAttributesExW`) all live behind [`scan_start_menu`]; the diffing is
-//! pure and lives in [`crate::app_diff`].
+//! pure and lives in [`crate::domain::app_diff`].
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::app_diff::SnapshotEntry;
-use crate::app_id::AppId;
+use crate::domain::app_diff::SnapshotEntry;
+use crate::domain::app_id::AppId;
 use crate::icons::extract::{self, enumerate_start_menu};
 
 /// Scan both Start Menu roots and build a `BTreeMap<AppId, SnapshotEntry>`.

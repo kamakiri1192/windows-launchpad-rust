@@ -4,7 +4,8 @@ use crate::ui_model::geometry::{Point, Rect};
 use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, ControlKind, ControlView, GlassLayer, GlassMaterial, GlassSurface, RenderModel,
+    Color, ControlKind, ControlView, GlassBatch, GlassBehavior, GlassLayer, GlassMaterial,
+    GlassSurface, RenderModel,
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
 
@@ -380,13 +381,16 @@ pub fn build_with_copy(
     let mut render = RenderModel::new();
     let mut hits = HitMap::new();
 
-    render.glass.push(GlassSurface {
-        id: UiId::settings_panel(),
-        rect: scaled_rect_around_center(&layout, visual_scale),
-        radius: layout.radius * visual_scale,
-        material: GlassMaterial::Regular,
+    render.glass.push(GlassBatch {
         layer: GlassLayer::Modal,
-        z: Z_PANEL,
+        surfaces: vec![GlassSurface {
+            id: UiId::settings_panel(),
+            rect: scaled_rect_around_center(&layout, visual_scale),
+            radius: layout.radius * visual_scale,
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::Control,
+            z: Z_PANEL,
+        }],
     });
 
     hits.push(HitRegion::rect_inclusive(

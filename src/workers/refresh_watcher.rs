@@ -15,9 +15,9 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-use crate::app_diff::{diff_snapshots, AppDiff, SnapshotEntry};
-use crate::app_id::AppId;
-use crate::app_scan::scan_start_menu;
+use super::app_scan::scan_start_menu;
+use crate::domain::app_diff::{diff_snapshots, AppDiff, SnapshotEntry};
+use crate::domain::app_id::AppId;
 use crate::startup_timer::{self, prefix};
 
 /// Messages the watcher sends to the UI thread.

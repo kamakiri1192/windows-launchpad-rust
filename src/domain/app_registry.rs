@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::app_id::AppId;
-use crate::icons::UvRect;
+use crate::domain::app_id::AppId;
+use crate::ui_model::geometry::UvRect;
 
 /// Lifecycle state of one app's icon. Drives placeholder rendering and which
 /// apps the worker should (re)extract.

@@ -14,31 +14,33 @@
 //! - [`icons`]: icon atlas + icon instance buffer.
 //! - [`text`]: glyph atlas + text instance buffer.
 //! - [`controls`]: procedural overlay instance buffers (control/gear/settings).
-//! - [`glass`]: Liquid Glass shape submission.
+//! - [`prepare`]: renderer-neutral scene preparation and dirty tracking.
 //! - [`badges`]: edit-badge glass + foreground geometry.
 //! - [`frame`]: per-frame draw-pass orchestration and QA capture.
 //!
 //! Note: written against the wgpu 29 API.
 
 mod badges;
-mod controls;
+pub(crate) mod controls;
 mod counters;
 mod frame;
-mod glass;
+pub(crate) mod icon_atlas;
+pub(crate) mod icon_pipeline;
 mod icons;
 mod init;
 mod prepare;
 mod resources;
 mod text;
-mod tiles;
+pub(crate) mod text_engine;
+pub(crate) mod tiles;
 
 use std::sync::Arc;
 
 use wgpu::{Buffer, Device, Queue, RenderPipeline, Surface, SurfaceConfiguration, TextureFormat};
 
-use crate::grid::GridLayout;
+use crate::layout::grid::GridLayout;
 use crate::liquid_glass::LiquidGlassRenderer;
-use crate::text::GlyphQuad;
+use crate::renderer::text_engine::GlyphQuad;
 
 use counters::BufferCounters;
 use resources::InstanceBuffer;
@@ -56,7 +58,7 @@ pub struct Renderer {
     /// Current decorations state (borderless by default, toggle with M).
     decorated: bool,
     /// Static per-tile instance data (capacity-managed; see `resources`).
-    instance_buffer: InstanceBuffer<crate::grid::TileInstance>,
+    instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
     /// Per-frame uniform data (viewport + scroll).
     uniform_buffer: Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -76,7 +78,7 @@ pub struct Renderer {
 
     // -- Icon rendering -------------------------------------------------
     icon_pipeline: RenderPipeline,
-    icon_instance_buffer: InstanceBuffer<crate::icon_pipeline::IconInstance>,
+    icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
@@ -94,21 +96,23 @@ pub struct Renderer {
     control_pipeline: RenderPipeline,
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
-    control_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
     /// overlay pass alongside the bottom-control ink.
-    gear_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    gear_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     badge_sources: Vec<EditBadgeSource>,
     badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
-    badge_mark_scratch: Vec<crate::bottom_control::ControlInstance>,
-    badge_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    badge_mark_scratch: Vec<crate::renderer::controls::ControlInstance>,
+    badge_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Settings overlay ink (close ×) + title text instances, drawn in a final
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
-    settings_instance_buffer: InstanceBuffer<crate::bottom_control::ControlInstance>,
+    settings_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
+    /// Last prepared neutral scene, updated lane-by-lane only when changed.
+    prepared_model: crate::ui_model::render_model::RenderModel,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.
     counters: BufferCounters,
     /// When set, the next rendered frame is also copied to a host-readable
@@ -142,6 +146,6 @@ pub(super) fn frame_clip(layout: &GridLayout, viewport_w: u32) -> (f32, f32, f32
         cy,
         w * 0.5,
         h * 0.5,
-        layout.scaled(crate::grid::FRAME_CORNER_RADIUS),
+        layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
     )
 }

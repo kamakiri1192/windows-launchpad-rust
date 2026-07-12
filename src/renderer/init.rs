@@ -8,12 +8,13 @@ use wgpu::{
     SurfaceConfiguration, TextureViewDescriptor,
 };
 
-use crate::bottom_control::ControlInstance;
-use crate::grid::{GridLayout, TileInstance};
-use crate::icon_pipeline::IconInstance;
+use crate::layout::grid::GridLayout;
 use crate::liquid_glass::capture::FallbackCapture;
 use crate::liquid_glass::LiquidGlassRenderer;
-use crate::text::GlyphQuad;
+use crate::renderer::controls::ControlInstance;
+use crate::renderer::icon_pipeline::IconInstance;
+use crate::renderer::text_engine::GlyphQuad;
+use crate::renderer::tiles::TileInstance;
 use crate::UserEvent;
 
 use super::controls::ControlUniforms;
@@ -185,7 +186,7 @@ impl Renderer {
             cache: None,
         });
 
-        // Instance buffer starts empty; `rebuild_instances` (called from
+        // Instance buffer starts empty; `Renderer::prepare` (called from
         // App::relayout after icons load) supplies the real tiles via the
         // capacity-managed `InstanceBuffer`.
         let _ = layout.build_instances(config.width as f32, &[], &[]);
@@ -208,7 +209,7 @@ impl Renderer {
         );
 
         // ---- Text pipeline + glyph atlas --------------------------------
-        let (aw, ah) = crate::text::TextRenderer::atlas_dimensions();
+        let (aw, ah) = crate::renderer::text_engine::TextRenderer::atlas_dimensions();
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
             size: wgpu::Extent3d {
@@ -609,6 +610,7 @@ impl Renderer {
             control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
+            prepared_model: crate::ui_model::render_model::RenderModel::new(),
             counters: BufferCounters::default(),
             qa_shot: None,
         })

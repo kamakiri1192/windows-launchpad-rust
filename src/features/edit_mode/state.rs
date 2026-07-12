@@ -9,7 +9,7 @@ use std::time::Instant;
 #[derive(Debug, Clone, Default)]
 pub struct EditModeState {
     pub editing: bool,
-    pub drag_app: Option<crate::app_id::AppId>,
+    pub drag_app: Option<crate::domain::app_id::AppId>,
     pub drag_x: f32,
     pub drag_y: f32,
     pub wiggle_phase: f32,

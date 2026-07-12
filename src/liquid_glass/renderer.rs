@@ -1,20 +1,21 @@
-use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use wgpu::util::DeviceExt;
+mod frame;
+mod resources;
+use resources::*;
 
 use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
-use crate::grid::{GridApp, GridLayout};
+use crate::layout::grid::GridLayout;
 
-const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(super) const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub(super) const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(super) const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GlassUniforms {
+pub(super) struct GlassUniforms {
     viewport: [f32; 2],
     scroll_x: f32,
     thickness: f32,
@@ -30,6 +31,8 @@ struct GlassUniforms {
     max_displacement: f32,
     shape_count: u32,
     debug_flags: u32,
+    time: f32,
+    _pad: [f32; 3],
 }
 
 #[derive(Debug)]
@@ -109,26 +112,23 @@ pub struct LiquidGlassRenderer {
     settings_panel_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     shape_count: u32,
+    shape_capacity: usize,
     badge_shape_buffer: wgpu::Buffer,
     badge_shape_count: u32,
     badge_shape_capacity: usize,
     badge_shapes: Vec<GlassShape>,
     control_shape_buffer: wgpu::Buffer,
     control_shape_count: u32,
+    control_shape_capacity: usize,
     control_shapes: Vec<GlassShape>,
-    /// Optional gear/settings capsule. It is rendered in the same SDF field as
-    /// the bottom control so the two shapes can smoothly merge and separate.
-    gear_shape: Option<GlassShape>,
-    /// Optional settings overlay panel (a large frame-independent glass
-    /// rectangle). `None` when the overlay is closed.
-    settings_panel_shape: Option<GlassShape>,
+    settings_panel_shapes: Vec<GlassShape>,
+    settings_panel_shape_count: u32,
+    settings_panel_shape_capacity: usize,
     settings_panel_shape_buffer: wgpu::Buffer,
     settings_panel_geometry_bind_group: wgpu::BindGroup,
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
-    /// The optional bottom-control capsule. It is not part of `base_shapes`.
-    control_shape: Option<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
@@ -192,7 +192,7 @@ impl LiquidGlassRenderer {
         let capture_status = capture.status();
         log_capture_status(&capture_status);
 
-        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0);
+        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0, 0.0);
         let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
         let badge_uniform_buffer =
             create_uniform_buffer(device, "liquid glass badge uniforms", &uniforms);
@@ -204,6 +204,7 @@ impl LiquidGlassRenderer {
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
+        let shape_capacity = shapes.len().max(1);
         let badge_shape_capacity = 1;
         let badge_shape_buffer = create_shape_buffer_with_capacity(
             device,
@@ -484,19 +485,21 @@ impl LiquidGlassRenderer {
             settings_panel_uniform_buffer,
             shape_buffer,
             shape_count,
+            shape_capacity,
             badge_shape_buffer,
             badge_shape_count,
             badge_shape_capacity,
             badge_shapes: Vec::new(),
             control_shape_buffer,
             control_shape_count: 0,
+            control_shape_capacity: 2,
             control_shapes: Vec::new(),
-            gear_shape: None,
-            settings_panel_shape: None,
+            settings_panel_shapes: Vec::new(),
+            settings_panel_shape_count: 0,
+            settings_panel_shape_capacity: 1,
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
-            base_shapes: Vec::new(),
-            control_shape: None,
+            base_shapes: shapes,
             geometry_texture,
             geometry_view,
             backdrop_texture,
@@ -638,15 +641,40 @@ impl LiquidGlassRenderer {
         self.bind_backdrop_view(device, &view);
     }
 
-    pub fn rebuild_shapes(
+    pub fn set_base_shapes(
         &mut self,
         device: &wgpu::Device,
-        layout: &GridLayout,
-        viewport_w: f32,
-        apps: &[GridApp<'_>],
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
     ) {
-        self.base_shapes = shapes_from_layout(layout, viewport_w, apps);
-        self.rebuild_shape_buffer(device);
+        if self.base_shapes.as_slice() == shapes {
+            return;
+        }
+        self.base_shapes.clear();
+        self.base_shapes.extend_from_slice(shapes);
+        self.shape_count = self.base_shapes.len() as u32;
+        if self.base_shapes.len() > self.shape_capacity {
+            self.shape_capacity = next_shape_capacity(self.shape_capacity, self.base_shapes.len());
+            self.shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.shape_capacity,
+                "liquid glass base shape buffer",
+            );
+            self.geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.uniform_buffer,
+                &self.shape_buffer,
+            );
+        }
+        if !self.base_shapes.is_empty() {
+            queue.write_buffer(
+                &self.shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.base_shapes),
+            );
+        }
+        self.last_geometry_key = None;
     }
 
     /// Replace the fixed overlay lane atomically. The bottom control and gear
@@ -654,19 +682,31 @@ impl LiquidGlassRenderer {
     /// uploading the lane twice when both shapes change in the same frame.
     pub fn set_overlay_shapes(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
-        control: Option<GlassShape>,
-        gear: Option<GlassShape>,
+        shapes: &[GlassShape],
     ) {
-        if self.control_shape == control && self.gear_shape == gear {
+        if self.control_shapes.as_slice() == shapes {
             return;
         }
-        self.control_shape = control;
-        self.gear_shape = gear;
         self.control_shapes.clear();
-        self.control_shapes.extend(control);
-        self.control_shapes.extend(gear);
+        self.control_shapes.extend_from_slice(shapes);
         self.control_shape_count = self.control_shapes.len() as u32;
+        if self.control_shapes.len() > self.control_shape_capacity {
+            self.control_shape_capacity =
+                next_shape_capacity(self.control_shape_capacity, self.control_shapes.len());
+            self.control_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.control_shape_capacity,
+                "liquid glass control shape buffer",
+            );
+            self.control_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.control_uniform_buffer,
+                &self.control_shape_buffer,
+            );
+        }
         if !self.control_shapes.is_empty() {
             queue.write_buffer(
                 &self.control_shape_buffer,
@@ -676,17 +716,41 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// Replace the settings overlay panel shape. Pass `None` to hide it.
-    pub fn set_settings_panel_shape(&mut self, queue: &wgpu::Queue, shape: Option<GlassShape>) {
-        if self.settings_panel_shape == shape {
+    /// Replace the modal glass lane atomically.
+    pub fn set_modal_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
+        if self.settings_panel_shapes.as_slice() == shapes {
             return;
         }
-        self.settings_panel_shape = shape;
-        if let Some(shape) = shape {
+        self.settings_panel_shapes.clear();
+        self.settings_panel_shapes.extend_from_slice(shapes);
+        self.settings_panel_shape_count = self.settings_panel_shapes.len() as u32;
+        if self.settings_panel_shapes.len() > self.settings_panel_shape_capacity {
+            self.settings_panel_shape_capacity = next_shape_capacity(
+                self.settings_panel_shape_capacity,
+                self.settings_panel_shapes.len(),
+            );
+            self.settings_panel_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.settings_panel_shape_capacity,
+                "liquid glass modal shape buffer",
+            );
+            self.settings_panel_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.settings_panel_uniform_buffer,
+                &self.settings_panel_shape_buffer,
+            );
+        }
+        if !self.settings_panel_shapes.is_empty() {
             queue.write_buffer(
                 &self.settings_panel_shape_buffer,
                 0,
-                bytemuck::bytes_of(&shape),
+                bytemuck::cast_slice(&self.settings_panel_shapes),
             );
         }
     }
@@ -729,19 +793,6 @@ impl LiquidGlassRenderer {
                 bytemuck::cast_slice(&self.badge_shapes),
             );
         }
-    }
-
-    /// Rebuild the GPU shape buffer from the base frame + tile halo shapes.
-    fn rebuild_shape_buffer(&mut self, device: &wgpu::Device) {
-        self.shape_buffer = create_shape_buffer(device, &self.base_shapes);
-        self.shape_count = self.base_shapes.len() as u32;
-        self.geometry_bind_group = create_geometry_bind_group(
-            device,
-            &self.geometry_bind_group_layout,
-            &self.uniform_buffer,
-            &self.shape_buffer,
-        );
-        self.last_geometry_key = None;
     }
 
     pub fn notify_window_moved(&mut self) {
@@ -800,445 +851,6 @@ impl LiquidGlassRenderer {
         true
     }
 
-    pub fn render(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        scroll_x: f32,
-        defer_backdrop_capture: bool,
-    ) {
-        if !self.params.enabled || self.shape_count == 0 {
-            return;
-        }
-
-        let render_started = Instant::now();
-        let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
-            &self.params,
-            self.debug,
-            width,
-            height,
-            scroll_x,
-            self.shape_count,
-        );
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-        let mut captured = false;
-        let mut capture_time = Duration::ZERO;
-        let mut upload_time = Duration::ZERO;
-        if self.should_capture(defer_backdrop_capture) {
-            let capture_started = Instant::now();
-            if let Some(gpu_frame) = self.capture.latest_frame_texture(device, width, height) {
-                capture_time = capture_started.elapsed();
-                if let GpuCaptureFrame::New { texture, view } = gpu_frame {
-                    if !self.using_gpu_backdrop {
-                        eprintln!("liquid glass capture path: GPU shared texture");
-                    }
-                    self.bind_backdrop_view(device, &view);
-                    self.gpu_backdrop_texture = Some(texture);
-                    self.using_gpu_backdrop = true;
-                }
-                captured = true;
-            } else if let Some(frame) = self.capture.latest_frame_rgba(width, height) {
-                capture_time = capture_started.elapsed();
-                let upload_started = Instant::now();
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.backdrop_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &frame,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(width * 4),
-                        rows_per_image: Some(height),
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-                upload_time = upload_started.elapsed();
-                if self.using_gpu_backdrop {
-                    eprintln!("liquid glass capture path: CPU texture upload fallback");
-                    self.bind_cpu_backdrop(device);
-                    self.gpu_backdrop_texture = None;
-                    self.using_gpu_backdrop = false;
-                }
-                captured = true;
-            } else {
-                capture_time = capture_started.elapsed();
-            }
-            self.last_capture_at = Some(Instant::now());
-        }
-        let next_status = self.capture.status();
-        if next_status != self.capture_status {
-            log_capture_status(&next_status);
-            self.capture_status = next_status;
-        }
-
-        let blur_levels = self.blur_level_count();
-
-        // Each blur pass runs in its OWN command encoder. wgpu groups all
-        // passes in a single encoder into one "usage scope", and a texture
-        // may not be both RESOURCE and COLOR_TARGET within that scope. Since a
-        // dual-Kawase pyramid feeds each pass's output into the next pass's
-        // input (L2 is written by down then read by up), we must split scopes
-        // by submitting one encoder per pass.
-        let _ = encoder; // the caller's encoder is used only for geometry/final.
-
-        // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
-        // backdrop for i==0 else levels[i-1], and writes levels[i].
-        for i in 0..blur_levels {
-            let dst = &self.blur_levels[i].1;
-            let label = format!("liquid glass blur downsample L{i}->L{}", i + 1);
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(label.as_str()),
-            });
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dst,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blur_downsample_pipeline);
-                pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
-                pass.draw(0..3, 0..1);
-            }
-            queue.submit(std::iter::once(enc.finish()));
-        }
-
-        // Upsample: L(k-1) -> L(k-2) -> ... -> L1 -> full-res blur.
-        // up pass j reads levels[k-1-j] (bind index 3-k+j in the fixed
-        // [L3,L2,L1] bind array) and writes levels[k-2-j], or the full-res
-        // blur texture for the final hop (j == k-1).
-        for j in 0..blur_levels {
-            let dst = if j == blur_levels - 1 {
-                &self.blur_view
-            } else {
-                &self.blur_levels[blur_levels - 2 - j].1
-            };
-            let bind_idx = 3 - blur_levels + j;
-            let label = format!(
-                "liquid glass blur upsample L{}->L{}",
-                blur_levels - j,
-                blur_levels - 1 - j
-            );
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(label.as_str()),
-            });
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dst,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blur_upsample_pipeline);
-                pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
-                pass.draw(0..3, 0..1);
-            }
-            queue.submit(std::iter::once(enc.finish()));
-        }
-
-        let geometry_key = self.geometry_key(scroll_x);
-        if self.last_geometry_key != Some(geometry_key) {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass geometry pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-            self.last_geometry_key = Some(geometry_key);
-        }
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass final pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.final_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        let _ = device;
-        self.stats.record(
-            captured,
-            capture_time,
-            upload_time,
-            render_started.elapsed(),
-        );
-    }
-
-    pub fn render_badges(
-        &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        scroll_x: f32,
-    ) {
-        if !self.params.enabled || self.badge_shape_count == 0 {
-            return;
-        }
-
-        let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
-            &self.params,
-            self.debug,
-            width,
-            height,
-            scroll_x,
-            self.badge_shape_count,
-        );
-        queue.write_buffer(&self.badge_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass badge geometry pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.badge_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass badge final pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.badge_final_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // The badge pass reuses the main geometry texture, so force the base
-        // glass pass to repaint its mask next frame instead of reusing the
-        // now-overwritten badge mask.
-        self.last_geometry_key = None;
-    }
-
-    pub fn render_control(
-        &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-    ) {
-        if !self.params.enabled {
-            return;
-        }
-        if self.control_shape_count == 0 {
-            return;
-        }
-
-        let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
-            &self.params,
-            self.debug,
-            width,
-            height,
-            0.0,
-            self.control_shape_count,
-        );
-        queue.write_buffer(
-            &self.control_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&uniforms),
-        );
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass control geometry pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.control_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass control final pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.control_final_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        self.last_geometry_key = None;
-    }
-
-    /// Render the settings overlay panel glass. Drawn last (over everything),
-    /// so it composites above the grid, control, and gear.
-    pub fn render_settings_panel(
-        &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-    ) {
-        if !self.params.enabled {
-            return;
-        }
-        if self.settings_panel_shape.is_none() {
-            return;
-        }
-
-        let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(&self.params, self.debug, width, height, 0.0, 1);
-        queue.write_buffer(
-            &self.settings_panel_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&uniforms),
-        );
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass settings panel geometry pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.settings_panel_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass settings panel final pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        self.last_geometry_key = None;
-    }
-
     fn should_capture(&self, defer_backdrop_capture: bool) -> bool {
         if defer_backdrop_capture {
             return self.last_capture_at.is_none();
@@ -1293,6 +905,7 @@ fn uniforms_from_params(
     height: u32,
     scroll_x: f32,
     shape_count: u32,
+    time: f32,
 ) -> GlassUniforms {
     GlassUniforms {
         viewport: [width as f32, height as f32],
@@ -1318,308 +931,9 @@ fn uniforms_from_params(
         max_displacement: params.thickness * 10.0,
         shape_count,
         debug_flags: debug.flags(),
+        time,
+        _pad: [0.0; 3],
     }
-}
-
-fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Buffer {
-    let contents: Vec<GlassShape>;
-    let slice = if shapes.is_empty() {
-        contents = vec![GlassShape::rounded_rect([0.0, 0.0], [1.0, 1.0], 1.0)];
-        contents.as_slice()
-    } else {
-        shapes
-    };
-
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("liquid glass shape buffer"),
-        contents: bytemuck::cast_slice(slice),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    })
-}
-
-fn create_shape_buffer_with_capacity(
-    device: &wgpu::Device,
-    capacity: usize,
-    label: &'static str,
-) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (std::mem::size_of::<GlassShape>() * capacity.max(1)) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-
-fn next_shape_capacity(current: usize, needed: usize) -> usize {
-    needed.max(current.saturating_mul(2)).max(1)
-}
-
-fn create_uniform_buffer(
-    device: &wgpu::Device,
-    label: &'static str,
-    uniforms: &GlassUniforms,
-) -> wgpu::Buffer {
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(label),
-        contents: bytemuck::bytes_of(uniforms),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    })
-}
-
-fn create_geometry_texture(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("liquid glass geometry texture"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: GEOMETRY_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
-}
-
-fn create_backdrop_texture(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("liquid glass backdrop texture"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: BACKDROP_FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
-}
-
-/// Create a blur texture for a pyramid level. `level` selects the size:
-/// 0 = full-res (final output), 1 = 1/2, 2 = 1/4, 3 = 1/8.
-fn create_blur_texture_raw(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-    level: u32,
-    label: &'static str,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let (lw, lh) = blur_level_extent(width, height, level);
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: lw,
-            height: lh,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: BLUR_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
-}
-
-/// Pyramid size for a given level (0 = full-res, 1 = 1/2, 2 = 1/4, 3 = 1/8).
-fn blur_level_extent(width: u32, height: u32, level: u32) -> (u32, u32) {
-    let mut w = width.max(1);
-    let mut h = height.max(1);
-    for _ in 0..level.min(3) {
-        w = (w / 2).max(1);
-        h = (h / 2).max(1);
-    }
-    (w, h)
-}
-
-fn upload_initial_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) {
-    let pixels = vec![0u8; (width.max(1) * height.max(1) * 4) as usize];
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &pixels,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(width.max(1) * 4),
-            rows_per_image: Some(height.max(1)),
-        },
-        wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-    );
-}
-
-fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: NonZeroU64::new(std::mem::size_of::<GlassUniforms>() as u64),
-        },
-        count: None,
-    }
-}
-
-fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    }
-}
-
-fn create_geometry_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    uniforms: &wgpu::Buffer,
-    shapes: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("liquid glass geometry bg"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: shapes.as_entire_binding(),
-            },
-        ],
-    })
-}
-
-fn create_final_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    uniforms: &wgpu::Buffer,
-    backdrop_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-    geometry_view: &wgpu::TextureView,
-    blur_view: &wgpu::TextureView,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("liquid glass final bg"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(backdrop_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(geometry_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(blur_view),
-            },
-        ],
-    })
-}
-
-/// Build a single blur bind group: [0]=source texture, [1]=sampler.
-fn create_blur_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    source_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("liquid glass blur bg"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(source_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
-}
-
-/// Build all six pyramid bind groups for one frame's worth of blur.
-///
-/// - `down[i]` reads source `i` (backdrop for i==0, else `levels[i-1]`) and
-///   writes `levels[i]`.
-/// - `up[i]` reads `levels[2-i]` and writes `levels[1-i]` (or the full-res
-///   `blur_view` for i==2).
-fn create_blur_pyramid_bind_groups(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    backdrop_view: &wgpu::TextureView,
-    levels: &[(wgpu::Texture, wgpu::TextureView); 3],
-    blur_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> ([wgpu::BindGroup; 3], [wgpu::BindGroup; 3]) {
-    // Down sources: backdrop, L1, L2.
-    let down = [
-        create_blur_bind_group(device, layout, backdrop_view, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
-    ];
-    // Up sources: L3, L2, L1 (reverse). Each writes the next level up; the
-    // last hop writes the full-res blur texture.
-    let up = [
-        create_blur_bind_group(device, layout, &levels[2].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
-    ];
-    let _ = blur_view;
-    (down, up)
 }
 
 fn fullscreen_vertex_state(shader: &wgpu::ShaderModule) -> wgpu::VertexState<'_> {
@@ -1656,12 +970,18 @@ fn premultiplied_blend() -> wgpu::BlendState {
 
 #[cfg(test)]
 mod shape_capacity_tests {
-    use super::next_shape_capacity;
+    use super::{next_shape_capacity, GlassUniforms};
 
     #[test]
     fn shape_capacity_grows_only_past_current_capacity() {
         assert_eq!(next_shape_capacity(1, 2), 2);
         assert_eq!(next_shape_capacity(8, 9), 16);
         assert_eq!(next_shape_capacity(8, 20), 20);
+    }
+
+    #[test]
+    fn glass_uniform_layout_matches_wgsl() {
+        assert_eq!(std::mem::size_of::<GlassUniforms>(), 96);
+        assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
     }
 }

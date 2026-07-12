@@ -7,9 +7,6 @@
 
 use wgpu::TextureViewDescriptor;
 
-use super::counters::Category;
-use crate::icon_pipeline::IconInstance;
-
 use super::Renderer;
 
 impl Renderer {
@@ -140,19 +137,5 @@ impl Renderer {
             ],
         });
         self.counters.record_atlas_rebind();
-    }
-
-    /// Replace the per-icon instance buffer (one entry per tile with an icon).
-    pub fn set_icon_instances(&mut self, instances: &[IconInstance]) {
-        self.dragged_icon_instance = instances
-            .last()
-            .map(|i| (i.extra[3] as u32 & 2) != 0)
-            .unwrap_or(false);
-        let outcome = self
-            .icon_instance_buffer
-            .set(&self.device, &self.queue, instances);
-        if outcome.allocated {
-            self.counters.record_creation(Category::Icon);
-        }
     }
 }

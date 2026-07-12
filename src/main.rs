@@ -25,47 +25,36 @@
 //!   - Esc → quit.
 
 mod app;
-mod app_diff;
 mod app_icon;
-mod app_id;
-mod app_registry;
-mod app_scan;
-mod bottom_control;
 mod debug_logger;
+mod domain;
 mod features;
 mod grid;
-mod icon_atlas;
 mod icon_cache;
-mod icon_pipeline;
-mod icon_worker;
 mod icons;
-mod launch;
 mod layout;
 mod liquid_glass;
-#[cfg(windows)]
-mod platform_windows;
-mod refresh_watcher;
+mod platform;
 mod renderer;
 mod scroll;
-mod settings;
 mod startup_timer;
-mod text;
 mod ui_model;
+mod workers;
 
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use icon_atlas::IconAtlas;
 use icon_cache::IconCache;
-use icon_worker::IconResult;
-use refresh_watcher::{RefreshConfig, RefreshMessage};
+use renderer::icon_atlas::IconAtlas;
 use startup_timer::{prefix, StartupTimer};
 use winit::dpi::PhysicalPosition;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::Icon;
+use workers::icon_worker::IconResult;
+use workers::refresh_watcher::{RefreshConfig, RefreshMessage};
 
 /// Cell edge (icon + padding) imported from the atlas module for readability.
-const CELL: u32 = icon_atlas::CELL;
+const CELL: u32 = renderer::icon_atlas::CELL;
 
 // ---- app shell re-exports ------------------------------------------------
 // The `App` struct, its constructor, runtime value types (`PendingPress`,
@@ -153,7 +142,7 @@ pub(crate) fn dump_atlas_png(atlas: &IconAtlas) {
 
 fn main() {
     #[cfg(windows)]
-    let _single_instance = match platform_windows::SingleInstanceGuard::acquire() {
+    let _single_instance = match platform::windows::SingleInstanceGuard::acquire() {
         Ok(guard) => guard,
         Err(e) if e.is_already_running() => {
             crate::debug_log!("single-instance: existing instance signaled");
@@ -214,7 +203,7 @@ fn main() {
         std::sync::mpsc::Sender<IconResult>,
         std::sync::mpsc::Receiver<IconResult>,
     ) = std::sync::mpsc::channel();
-    let worker = icon_worker::spawn(cache.clone(), result_tx);
+    let worker = workers::icon_worker::spawn(cache.clone(), result_tx);
     spawn_bridge(result_rx, merged_tx.clone(), WorkerMessage::Icon);
 
     // Spawn the Start Menu refresh watcher, bridging it the same way.
@@ -222,7 +211,7 @@ fn main() {
         std::sync::mpsc::Sender<RefreshMessage>,
         std::sync::mpsc::Receiver<RefreshMessage>,
     ) = std::sync::mpsc::channel();
-    refresh_watcher::spawn(refresh_tx, RefreshConfig::default());
+    workers::refresh_watcher::spawn(refresh_tx, RefreshConfig::default());
     spawn_bridge(refresh_rx, merged_tx, WorkerMessage::Refresh);
 
     // Single forwarder for the merged channel into the shared inbox.
@@ -231,7 +220,7 @@ fn main() {
     // OS integration: global hot key (Win+Space) + tray icon. Spawned before
     // the event loop so the hot key works even during the very first frame.
     #[cfg(windows)]
-    let os = platform_windows::OsIntegrationHandle::spawn(proxy.clone());
+    let os = platform::windows::OsIntegrationHandle::spawn(proxy.clone());
 
     let mut app = App::new(proxy, timer, cache, inbox, worker);
     // Anchor the OS-integration thread for the whole process lifetime.

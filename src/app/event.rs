@@ -11,11 +11,11 @@
 //! [`crate::features::edit_mode::EditModeCommand`]) at the app boundary, so
 //! side effects are requested as data and executed in one place.
 
-use crate::app_diff::AppDiff;
-use crate::app_id::AppId;
-use crate::app_registry::AppLaunchInfo;
+use crate::domain::app_diff::AppDiff;
+use crate::domain::app_id::AppId;
+use crate::domain::app_registry::AppLaunchInfo;
 
-use crate::settings::SettingsCategory;
+use crate::domain::settings::SettingsCategory;
 
 /// Messages delivered to the UI thread. Besides the existing backdrop frame
 /// event, this carries icon-worker results and refresh-watcher diffs.
@@ -51,103 +51,13 @@ pub enum UserEvent {
 pub enum SettingsTarget {
     Close,
     Category(SettingsCategory),
-    Sort(crate::settings::SortOrder),
+    Sort(crate::domain::settings::SortOrder),
     FrequentToggle,
     SearchHiddenToggle,
     ResetCache,
     ResetSettings,
     Inside,
     Outside,
-}
-
-// ---------------------------------------------------------------------------
-// Input routing enums (pure decisions produced by `app::input`).
-//
-// These describe *what should happen* for a given raw event + shell state.
-// They carry no side effects; the handler turns them into method calls on the
-// update/command/frame layers. Keeping them pure-data makes the precedence
-// rules (settings > edit > search > launcher hide, and
-// settings > control > edit/grid) deterministic and unit-testable.
-// ---------------------------------------------------------------------------
-
-/// How a pressed key should be routed. Order matters: it mirrors the historical
-/// `WindowEvent::KeyboardInput` match arms exactly (settings Esc > edit Esc >
-/// search field > launcher hide / debug keys).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyboardRoute {
-    /// Esc while the settings overlay is open → close settings (no launcher
-    /// hide, no passthrough).
-    CloseSettings,
-    /// Esc while editing → exit edit mode (no launcher hide).
-    ExitEditMode,
-    /// Esc while the search field wants keyboard → close the field + clear
-    /// query (no launcher hide).
-    SearchEscClose,
-    /// Backspace inside the search field (preedit empty).
-    SearchBackspace,
-    /// Left arrow inside the search field (preedit empty).
-    SearchLeft,
-    /// Right arrow inside the search field (preedit empty).
-    SearchRight,
-    /// A printable character typed into the search field.
-    SearchChar(String),
-    /// Esc with nothing else open → hide the launcher (stay resident).
-    HideLauncher,
-    /// `M` debug key → toggle OS window decorations.
-    ToggleDecorations,
-    /// `R` debug key (only when the search field does not want keyboard) →
-    /// reset the icon cache and re-extract.
-    ResetIcons,
-    /// A Liquid Glass debug key delegated to the renderer.
-    LiquidGlassKey(winit::keyboard::KeyCode),
-    /// Not handled by the shell (fall through).
-    None,
-}
-
-/// How a left-button press should be routed. Order mirrors the historical
-/// `MouseInput::Pressed` arms: settings overlay first, then the bottom control,
-/// then edit mode, then the normal grid press.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PressRoute {
-    /// Settings overlay open → swallow the press; the release decides close vs
-    /// inside-row action. Carries the press-time hit target.
-    Settings(super::state::SettingsPressTarget),
-    /// Press started on the bottom-control capsule (or edit gear) → mark
-    /// `pressed_on_control`; the release re-tests the capsule and dispatches.
-    Control,
-    /// Editing + press on the grid → hide-app / start-drag / exit (classified
-    /// by [`crate::features::edit_mode::edit_press_classify`]).
-    EditGrid,
-    /// Normal mode grid press → begin a pending press (long-press / click /
-    /// scroll-drag resolution deferred).
-    GridPress,
-    /// Not handled (non-left button, etc.).
-    None,
-}
-
-/// How a left-button release should be routed. Order mirrors the historical
-/// `MouseInput::Released` arms.
-#[derive(Debug, Clone)]
-pub enum ReleaseRoute {
-    /// Settings overlay: outside-press + outside-release → dismiss (no
-    /// passthrough). Inside-press + matching inside-release → run the row
-    /// action.
-    SettingsOutsideDismiss,
-    SettingsInside(super::state::SettingsPressTarget),
-    /// Control capsule release that stayed on the capsule → control click.
-    ControlClick,
-    /// Edit-mode drag release → drop + persist.
-    EditDrop,
-    /// Pending press: stationary release outside the frame → hide + click
-    /// passthrough.
-    PendingOutsidePassthrough,
-    /// Pending press: stationary release over the press-time app id → launch.
-    PendingLaunch(AppId),
-    /// Scroller drag release (no pending press) → resolve click-or-drag, then
-    /// drag end.
-    ScrollerRelease,
-    /// Nothing to release.
-    None,
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +138,7 @@ mod tests {
         // first. We assert the variant exists and is distinct from HideWindow
         // so the two-step ordering cannot be collapsed into one.
         let hide = AppCommand::HideWindow;
-        let launch = AppCommand::LaunchApp(crate::app_registry::AppLaunchInfo {
+        let launch = AppCommand::LaunchApp(crate::domain::app_registry::AppLaunchInfo {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
         });
@@ -252,20 +162,5 @@ mod tests {
         // The two must not be the same command — modal dismiss never replays
         // the click.
         assert!(!matches!(plain_hide, AppCommand::HideWithClickPassthrough));
-    }
-
-    /// Closing the search field (`press_close`) clears the query, caret, and
-    /// preedit before collapsing. That state-machine behavior lives in
-    /// `bottom_control::BottomControl`; this test documents that the
-    /// `SearchEscClose` keyboard route is the command-boundary representation
-    /// of "Esc closes the field (not the launcher)", distinct from
-    /// `HideLauncher`.
-    #[test]
-    fn search_esc_close_is_distinct_from_launcher_hide() {
-        let esc_in_field = KeyboardRoute::SearchEscClose;
-        let esc_hide = KeyboardRoute::HideLauncher;
-        assert_eq!(esc_in_field, KeyboardRoute::SearchEscClose);
-        assert_eq!(esc_hide, KeyboardRoute::HideLauncher);
-        assert_ne!(esc_in_field, esc_hide);
     }
 }

@@ -36,8 +36,8 @@
 // reachable as `crate::layout::control_geometry::*`.
 pub use crate::layout::control_geometry::{
     done_half_width, edit_gear_geometry, field_text_origin_x, search_pill_content_centers,
-    ControlGeometry, ControlLayer, ControlState, EditGearGeometry, EditWidth, Mode, Visual,
-    COLLAPSE_DURATION, EXPAND_DURATION,
+    ControlGeometry, ControlLayer, ControlState, EditWidth, Mode, Visual, COLLAPSE_DURATION,
+    EXPAND_DURATION,
 };
 
 // Used internally by the state machine's `tick`/`step_*` math; not re-exported.
@@ -51,51 +51,6 @@ use crate::layout::control_geometry::{
 };
 
 use std::time::Instant;
-
-// ---- overlay instance data (mirrors shader_control.wgsl) --------------------
-
-/// One drawable overlay element for the bottom control. Matches the WGSL
-/// `@location(0..3)` instance attributes of `shader_control.wgsl`. Built by
-/// [`build_overlay_instances`] from a resolved geometry + layer list.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ControlInstance {
-    /// Element center in physical px.
-    pub center: [f32; 2],
-    /// (size/radius, alpha, extra, _pad).
-    pub params: [f32; 4],
-    /// RGBA tint (non-premultiplied).
-    pub color: [f32; 4],
-    /// (kind, a, b, c) element-specific payload.
-    pub kind: [f32; 4],
-}
-
-impl ControlInstance {
-    pub const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
-
-    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<ControlInstance>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &ControlInstance::ATTRIBS,
-    };
-}
-
-/// Element kind values matching `shader_control.wgsl`.
-const KIND_MAGNIFIER: f32 = 0.0;
-pub const KIND_DOT: f32 = 1.0;
-pub const KIND_CARET: f32 = 2.0;
-/// Close button (×). Public so the settings panel can draw one too.
-pub const KIND_CLOSE: f32 = 3.0;
-/// Settings gear (ring + radial teeth). Drawn frame-independent, so unlike the
-/// edit badge (kind 4) it is neither scroll-coupled nor frame-masked.
-pub const KIND_GEAR: f32 = 5.0;
-/// Rounded rectangle ink/fill used by the settings panel.
-pub const KIND_ROUND_RECT: f32 = 6.0;
-/// Check mark used by the settings panel's selected rows.
-pub const KIND_CHECK: f32 = 7.0;
-/// Chevron used by settings action rows.
-pub const KIND_CHEVRON: f32 = 8.0;
 
 // ---- tunables (edit-mode label width constants used only here) -------------
 
@@ -442,158 +397,6 @@ impl BottomControl {
     ) -> Option<f32> {
         close_button_x_scaled(self.state(), viewport, frame_bottom, scale_factor)
     }
-}
-
-// ---- overlay instance builder ----------------------------------------------
-
-/// Ink color for the control foreground (translucent white). Tuned to read
-/// clearly over the glass capsule without being harsh.
-const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
-/// Active (current-page) indicator dot color.
-const DOT_ACTIVE: [f32; 4] = [1.0, 1.0, 1.0, 0.96];
-/// Inactive indicator dot color.
-const DOT_IDLE: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
-
-/// Build the procedural overlay instances for one frame of the control. The
-/// text glyphs are laid out separately by the caller (via the text renderer);
-/// this only emits the SDF shapes (magnifier, dots, caret, close ×).
-///
-/// `query_width` is the laid-out width of the current query text (0 if empty),
-/// used to place the caret at the right edge of the typed text. `caret_blink`
-/// is a 0..1 visibility factor for the caret this frame.
-pub fn build_overlay_instances(
-    geom: &ControlGeometry,
-    layers: &[ControlLayer],
-    query_width: f32,
-    caret_blink: f32,
-) -> Vec<ControlInstance> {
-    let mut out = Vec::new();
-    let (cx, cy) = geom.center;
-    let hw = geom.half_size.0;
-    let scale = control_scale(geom);
-
-    for layer in layers {
-        let a = layer.alpha;
-        if a <= 0.01 {
-            continue;
-        }
-        match layer.visual {
-            Visual::SearchPill => {
-                // Compact pill: magnifier on the left, "検索" label to its right.
-                // The label text is drawn separately; here only the magnifier.
-                let (mag_cx, _) = search_pill_content_centers(geom);
-                let mag_size = search_magnifier_size(scale);
-                out.push(ControlInstance {
-                    center: [mag_cx, cy],
-                    params: [mag_size, a, 0.0, 0.0],
-                    color: INK,
-                    kind: [KIND_MAGNIFIER, 0.0, 0.0, 0.0],
-                });
-            }
-            Visual::PageIndicator => {
-                let dots = geom.page_count.max(1);
-                // Active dot is slightly larger.
-                let active_r = 3.2 * scale;
-                let idle_r = 2.4 * scale;
-                let gap = 8.0 * scale;
-                let total = dots as f32 * active_r * 2.0 + (dots.saturating_sub(1)) as f32 * gap;
-                let start_x = cx - total * 0.5 + active_r;
-                for i in 0..dots {
-                    let is_active = i == geom.page;
-                    let r = if is_active { active_r } else { idle_r };
-                    out.push(ControlInstance {
-                        center: [start_x + i as f32 * (active_r * 2.0 + gap), cy],
-                        params: [r, a, 0.0, 0.0],
-                        color: if is_active { DOT_ACTIVE } else { DOT_IDLE },
-                        kind: [KIND_DOT, 0.0, 0.0, 0.0],
-                    });
-                }
-            }
-            Visual::SearchField => {
-                // Magnifier at the left inside padding.
-                let mag_size = 11.0 * scale;
-                let mag_cx = cx - hw + mag_size + 10.0 * scale;
-                out.push(ControlInstance {
-                    center: [mag_cx, cy],
-                    params: [mag_size, a, 0.0, 0.0],
-                    color: INK,
-                    kind: [KIND_MAGNIFIER, 0.0, 0.0, 0.0],
-                });
-                // Caret: just past the typed text (which starts after the
-                // magnifier). Only when there's no close button overlap.
-                if caret_blink > 0.01 {
-                    let text_origin_x = mag_cx + mag_size + 6.0 * scale;
-                    let caret_x = text_origin_x + query_width;
-                    out.push(ControlInstance {
-                        center: [caret_x, cy],
-                        // (half-height, alpha, half-width, _)
-                        params: [8.0 * scale, a * caret_blink, 1.0 * scale, 0.0],
-                        color: INK,
-                        kind: [KIND_CARET, 0.0, 0.0, 0.0],
-                    });
-                }
-                // Close × at the right inside padding. Pad mirrors the left
-                // magnifier: the magnifier's visible ring outer edge sits ~15.5px
-                // in from the capsule edge, so we keep the × the same distance.
-                let close_cx = cx + hw - 20.0 * scale;
-                out.push(ControlInstance {
-                    center: [close_cx, cy],
-                    params: [7.0 * scale, a, 1.4 * scale, 0.0],
-                    color: INK,
-                    kind: [KIND_CLOSE, 0.0, 0.0, 0.0],
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Procedural ink instance (the gear glyph) for the edit-mode capsule.
-pub fn edit_gear_instance(geom: &EditGearGeometry, alpha: f32) -> ControlInstance {
-    let glyph_size = geom.radius * 0.62;
-    ControlInstance {
-        center: [geom.center.0, geom.center.1],
-        params: [glyph_size, alpha, 0.0, 0.0],
-        color: [1.0, 1.0, 1.0, 1.0],
-        kind: [KIND_GEAR, 0.0, 0.0, 0.0],
-    }
-}
-
-fn control_scale(geom: &ControlGeometry) -> f32 {
-    crate::layout::control_geometry::control_scale(geom)
-}
-
-fn search_magnifier_size(scale: f32) -> f32 {
-    crate::layout::control_geometry::search_magnifier_size(scale)
-}
-
-// ---- glass shape helpers (renderer-specific; stay in the binary) -----------
-
-/// Build the Liquid Glass capsule shape for the control this frame, ready to
-/// push into the geometry buffer. Returns `None` if the control should not be
-/// drawn (e.g. fully-transparent transition).
-pub fn glass_shape(geom: &ControlGeometry) -> Option<crate::liquid_glass::geometry::GlassShape> {
-    // Hide the capsule entirely while it's effectively zero-width (avoids a
-    // degenerate shape at startup before the first resolve).
-    if geom.half_size.0 < 1.0 {
-        return None;
-    }
-    Some(
-        crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
-            [geom.center.0, geom.center.1],
-            [geom.half_size.0 * 2.0, geom.half_size.1 * 2.0],
-            geom.radius,
-        ),
-    )
-}
-
-/// Glass capsule shape for the edit-mode gear (a circle).
-pub fn edit_gear_glass_shape(geom: &EditGearGeometry) -> crate::liquid_glass::geometry::GlassShape {
-    crate::liquid_glass::geometry::GlassShape::control_rounded_rect(
-        [geom.center.0, geom.center.1],
-        [geom.glass_radius * 2.0, geom.glass_radius * 2.0],
-        geom.glass_radius,
-    )
 }
 
 #[cfg(test)]

@@ -33,11 +33,11 @@
 //! larger behavior change than Phase 5 intends. Only `input` and `event` are
 //! pure-data / pure-function surfaces.
 
+pub mod action;
 pub mod command;
 pub mod event;
 pub mod frame;
 pub mod handler;
-pub mod input;
 pub mod render;
 pub mod state;
 pub mod update;

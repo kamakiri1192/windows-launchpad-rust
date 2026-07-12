@@ -1,4 +1,6 @@
-use crate::grid::{GridApp, GridLayout, TileInstance};
+use crate::layout::grid::GridLayout;
+use crate::ui_model::grid::GridApp;
+use crate::ui_model::render_model::TileView;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -11,7 +13,11 @@ pub struct GlassShape {
     /// 0 = scrolling rounded rect (moves with `scroll_x`, e.g. tile halos),
     /// 1 = fixed rounded rect (ignores `scroll_x`, e.g. the page frame).
     pub shape_type: u32,
+    /// Explicit padding so `motion` starts at the WGSL-required 16-byte
+    /// boundary (offset 32).
     pub _pad: [u32; 2],
+    /// Optional GPU animation payload: `(pivot_x, pivot_y, phase, flags)`.
+    pub motion: [f32; 4],
 }
 
 /// Shape kind encoded into `shape_type`:
@@ -27,6 +33,7 @@ const SHAPE_SCROLLING: u32 = 0;
 const SHAPE_FIXED: u32 = 1;
 const SHAPE_CONTROL: u32 = 2;
 const SHAPE_CLIP_ONLY: u32 = 3;
+const SHAPE_ANIMATED_BADGE: u32 = 4;
 
 impl GlassShape {
     pub fn rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
@@ -53,6 +60,18 @@ impl GlassShape {
         Self::with_kind(center, size, radius, SHAPE_CLIP_ONLY)
     }
 
+    pub fn animated_badge(
+        center: [f32; 2],
+        size: [f32; 2],
+        radius: f32,
+        pivot: [f32; 2],
+        phase: f32,
+    ) -> Self {
+        let mut shape = Self::with_kind(center, size, radius, SHAPE_ANIMATED_BADGE);
+        shape.motion = [pivot[0], pivot[1], phase, 1.0];
+        shape
+    }
+
     fn with_kind(center: [f32; 2], size: [f32; 2], radius: f32, shape_type: u32) -> Self {
         Self {
             center,
@@ -60,6 +79,7 @@ impl GlassShape {
             radius,
             shape_type,
             _pad: [0; 2],
+            motion: [0.0; 4],
         }
     }
 }
@@ -80,7 +100,7 @@ pub fn shapes_from_layout(
     shapes.push(GlassShape::fixed_rounded_rect(
         [center_x, center_y],
         [panel_w, panel_h],
-        layout.scaled(crate::grid::FRAME_CORNER_RADIUS),
+        layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
     ));
 
     shapes.extend(
@@ -100,9 +120,20 @@ pub fn with_control(mut shapes: Vec<GlassShape>, control: Option<GlassShape>) ->
     shapes
 }
 
-fn shape_from_tile(layout: &GridLayout, tile: &TileInstance) -> GlassShape {
-    let center = [tile.x + tile.size * 0.5, tile.y + tile.size * 0.5];
-    let halo_size = tile.size + layout.scaled(18.0);
+fn shape_from_tile(layout: &GridLayout, tile: &TileView) -> GlassShape {
+    let center = [tile.rect.center().x, tile.rect.center().y];
+    let halo_size = tile.rect.width + layout.scaled(18.0);
     let size = [halo_size, halo_size];
     GlassShape::rounded_rect(center, size, tile.radius + layout.scaled(9.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GlassShape;
+
+    #[test]
+    fn glass_shape_layout_matches_wgsl_storage_struct() {
+        assert_eq!(std::mem::size_of::<GlassShape>(), 48);
+        assert_eq!(std::mem::align_of::<GlassShape>(), 4);
+    }
 }
