@@ -255,7 +255,14 @@ impl LauncherState {
         if !self.customized {
             // No user customization yet: rebuild the item list from a name sort
             // of all discovered apps, preserving the legacy name-sorted grid.
-            let mut all: Vec<&AppId> = discovered.iter().collect();
+            // Hidden apps are excluded from the top-level item list (they must
+            // stay hidden — including them here would let the subsequent
+            // `normalize` promote them to top-level and drop them from
+            // `hidden_apps`, silently un-hiding them).
+            let mut all: Vec<&AppId> = discovered
+                .iter()
+                .filter(|id| !self.hidden_apps.contains(*id))
+                .collect();
             all.sort_by(|a, b| {
                 let na = name_of(a).map(|s| s.to_lowercase()).unwrap_or_default();
                 let nb = name_of(b).map(|s| s.to_lowercase()).unwrap_or_default();
@@ -581,5 +588,27 @@ mod tests {
         // level wins over hidden), removes from hidden.
         assert!(state.top_level_app_ids().any(|id| id == &app("h")));
         assert!(!state.is_hidden(&app("h")));
+    }
+
+    #[test]
+    fn integrate_not_customized_keeps_hidden_apps_hidden() {
+        // Regression (codex review P1): when customized is false, the name-sort
+        // rebuild must exclude hidden apps from items so normalize does not
+        // promote them to top-level and silently un-hide them.
+        let mut state = LauncherState::new();
+        state.hidden_apps.insert(app("h"));
+        // h is discovered and hidden; it must stay hidden after integration.
+        state.integrate_discovered_apps(&discovered(&["a", "h"]), name_lookup);
+        assert!(state.is_hidden(&app("h")));
+        assert!(!state.top_level_app_ids().any(|id| id == &app("h")));
+    }
+
+    #[test]
+    fn from_legacy_with_only_hidden_stays_hidden_after_normalize() {
+        // A legacy state with only hidden ids (no order) must not un-hide them
+        // when normalize runs.
+        let mut state = LauncherState::from_legacy(vec![], vec![app("h")]);
+        state.normalize(&discovered(&["h"]), false);
+        assert!(state.is_hidden(&app("h")));
     }
 }

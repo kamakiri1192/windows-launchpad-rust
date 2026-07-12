@@ -515,26 +515,65 @@ impl App {
             .all(|needle| haystack.contains(&needle))
     }
 
+    /// Build the ordered list of app ids that should be considered for the
+    /// visible grid, before search filtering. This is the Phase 7 source of the
+    /// grid order: it follows `launcher_state.items` (app items only), and when
+    /// `include_hidden` is true (the search-includes-hidden setting with a
+    /// non-empty query) it also appends hidden apps that are not in `items`,
+    /// sorted by display name, so a search can still surface hidden matches.
+    /// Apps not currently discovered are skipped at the render step (no record),
+    /// but their position in `items` is retained for re-detection.
+    fn ordered_visible_candidate_ids(&self, include_hidden: bool) -> Vec<AppId> {
+        let mut ids: Vec<AppId> = self
+            .launcher_state
+            .items
+            .iter()
+            .filter_map(LauncherItem::as_app_id)
+            .filter(|id| include_hidden || !self.launcher_state.is_hidden(id))
+            .cloned()
+            .collect();
+        if include_hidden {
+            // Hidden apps are not in `items` (hide_app removes them), so to let a
+            // search surface them we append the discovered hidden ids not already
+            // present, sorted by display name (matching the legacy registry.apps()
+            // iteration order for the hidden tail).
+            let present: std::collections::HashSet<AppId> = ids.iter().cloned().collect();
+            let mut hidden_extra: Vec<AppId> = self
+                .launcher_state
+                .hidden_apps
+                .iter()
+                .filter(|id| !present.contains(*id))
+                .filter(|id| self.registry.get(id).is_some())
+                .cloned()
+                .collect();
+            hidden_extra.sort_by(|a, b| {
+                let na = self.registry.lowercased_name_of(a).unwrap_or_default();
+                let nb = self.registry.lowercased_name_of(b).unwrap_or_default();
+                na.cmp(&nb)
+            });
+            ids.extend(hidden_extra);
+        }
+        ids
+    }
+
     /// Build an owned snapshot of the currently visible app list in display order.
     /// Returns owned data so it doesn't hold a borrow on `self` while the
     /// renderer mutates.
     ///
     /// Order follows the user-owned [`LauncherState`] item list (apps only —
     /// folder items are not yet rendered in Phase 7). Apps the user hid via the
-    /// edit-mode ✕ badge are excluded here (same path as the search filter), so
-    /// they never reach the grid or click resolution. Apps referenced by the
-    /// launcher state but not currently discovered are skipped (no record to
-    /// render), but the launcher state keeps their position for re-detection.
+    /// edit-mode ✕ badge are excluded here unless `search_includes_hidden` is
+    /// on and the query is non-empty (then hidden matches are appended at the
+    /// tail, matching the legacy behavior). Apps referenced by the launcher
+    /// state but not currently discovered are skipped (no record to render),
+    /// but the launcher state keeps their position for re-detection.
     pub(crate) fn grid_apps_owned(&self) -> Vec<(AppId, String, Option<crate::icons::UvRect>)> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
-        self.launcher_state
-            .items
-            .iter()
-            .filter_map(LauncherItem::as_app_id)
-            .filter(|id| include_hidden || !self.launcher_state.is_hidden(id))
+        self.ordered_visible_candidate_ids(include_hidden)
+            .into_iter()
             .filter_map(|id| {
-                let rec = self.registry.get(id)?;
+                let rec = self.registry.get(&id)?;
                 if Self::matches_search(&rec.name, &query) {
                     Some((rec.app_id.clone(), rec.name.clone(), rec.uv))
                 } else {
@@ -547,18 +586,14 @@ impl App {
     pub(crate) fn visible_app_ids(&self) -> Vec<AppId> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
-        self.launcher_state
-            .items
-            .iter()
-            .filter_map(LauncherItem::as_app_id)
-            .filter(|id| include_hidden || !self.launcher_state.is_hidden(id))
+        self.ordered_visible_candidate_ids(include_hidden)
+            .into_iter()
             .filter(|id| {
                 self.registry
                     .get(id)
                     .map(|rec| Self::matches_search(&rec.name, &query))
                     .unwrap_or(false)
             })
-            .cloned()
             .collect()
     }
 
