@@ -2126,3 +2126,45 @@ Notes and discoveries:
   or text rendering. It only changes which app ids feed the grid and where
   order/hidden/folder state lives.
 
+codex review and follow-up corrections (same Phase 7 PR):
+
+`codex review --base main -c 'model="gpt-5.5"'` was run iteratively after the
+initial commit. It found four hidden-app / placeholder regressions, all fixed
+and re-validated. Final review: "The changes cleanly separate discovery state
+from launcher layout state and the affected paths are covered by tests. I did
+not identify any discrete correctness issue that would break existing
+behavior."
+
+- [P1] `integrate_discovered_apps` `customized=false` branch rebuilt `items`
+  from all discovered apps including hidden ones, which `normalize` then
+  promoted to top-level (silently un-hiding them). Fixed by excluding hidden
+  apps from the name-sort rebuild. Test: `integrate_not_customized_keeps_
+  hidden_apps_hidden`.
+- [P2-search] `search_includes_hidden` searched `launcher_state.items`, but
+  `hide_app` removes hidden apps from `items`, so they could never be found.
+  Added `ordered_visible_candidate_ids` which appends discovered hidden ids
+  (not already in `items`) to the candidate list when `include_hidden` is true.
+- [P2-normalize] `normalize` let top-level items win over `hidden_apps`, so a
+  hidden id left in `items` by a legacy migration (old hide kept hidden ids in
+  the order tail) or by a reorder (`apply_reorder` returns visible+hidden) was
+  silently un-hidden. Root-cause fix: invert the rule — hidden wins. `normalize`
+  removes hidden app ids from `items` and folder `children`, keeping them in
+  `hidden_apps`. Invariant 3 and its tests were rewritten.
+- [P2-reorder] `reorder_app_items` rebuilt `items` solely from
+  `visible_app_order`, dropping undiscovered placeholder apps on every reorder.
+  Fixed by retaining app items not in the visible order (and not hidden) as
+  stable placeholders. Test: `reorder_preserves_undiscovered_placeholders`.
+- [P2-cross-placement] `normalize` deduplicated within top-level items and
+  within folder children but never removed an app that appeared in both.
+  Added invariant 4 (top-level wins over folder child) and the enforcement
+  step. Test: `normalize_removes_cross_placement_duplicates`.
+
+Final validation after all corrections:
+
+- `cargo fmt --check`: passed
+- `cargo test`: 173 lib + 372 bin (2 ignored) + 9 architecture + 22 launcher
+  domain integration + 2 WGSL validation = 578 tests, all required passed.
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `codex review --base main -c 'model="gpt-5.5"'`: no actionable findings.
+
