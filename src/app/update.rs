@@ -36,8 +36,13 @@ impl App {
             SettingsPressTarget::Sort(order) => {
                 self.settings.sort_order = order;
                 if order == SortOrder::Name {
-                    self.registry.set_order(Vec::new());
-                    self.persist_user_order();
+                    // Reset the user layout to a name-sorted arrangement. Phase 7
+                    // keeps folder/hidden intents but drops the customized flag so
+                    // the next discovered-app integration rebuilds the item list
+                    // from a display-name sort (legacy "名前順" behavior).
+                    self.launcher_state.customized = false;
+                    self.sync_launcher_layout_with_registry();
+                    self.persist_launcher_state();
                     self.relayout();
                 }
                 self.persist_settings();
@@ -59,11 +64,11 @@ impl App {
             }
             SettingsPressTarget::ResetSettings => {
                 self.settings = Settings::default();
-                self.registry.set_order(Vec::new());
-                self.registry.set_hidden(Vec::new());
+                // Reset the user layout entirely (order, folders, hidden).
+                self.launcher_state = crate::domain::launcher_state::LauncherState::new();
+                self.sync_launcher_layout_with_registry();
                 self.persist_settings();
-                self.persist_user_order();
-                self.persist_hidden();
+                self.persist_launcher_state();
                 self.relayout();
                 self.request_redraw();
             }
@@ -167,23 +172,17 @@ impl App {
     }
 
     /// Hide an app from the launcher (the ✕ badge action): removes it from the
-    /// visible stream, persists the hidden list, and relayouts. Reversible by
-    /// clearing the hidden list later. Stays a no-op if already hidden.
+    /// visible stream, persists the launcher layout, and relayouts. Reversible
+    /// by clearing the hidden list later. Stays a no-op if already hidden.
     ///
-    /// The new order (hidden id moved to the tail so it does not linger
-    /// invisibly mid-grid) is computed by
-    /// [`features::edit_mode::hidden_order_after_hide`]; this function runs the
-    /// registry mutation + persist side effects.
+    /// Phase 7 routes this through `LauncherState::hide_app`, which removes the
+    /// app from the top-level item list and records it as hidden. Persistence
+    /// writes the unified launcher state.
     pub(crate) fn hide_app(&mut self, id: &AppId) {
-        if self.registry.is_hidden(id) {
+        if !self.launcher_state.hide_app(id) {
             return;
         }
-        self.registry.hide(id);
-        // Drop the app from the user order too so it doesn't linger invisibly.
-        let order = crate::features::edit_mode::hidden_order_after_hide(self.registry.order(), id);
-        self.registry.set_order(order);
-        self.persist_hidden();
-        self.persist_user_order();
+        self.persist_launcher_state();
         // Drop any in-flight drag of the just-hidden app.
         if self.drag_app.as_ref() == Some(id) {
             self.drag_app = None;
@@ -450,22 +449,24 @@ impl App {
         self.execute_edit_mode_commands(commands);
     }
 
-    /// Reorder the registry so that `drag_id` moves to `insert_idx` in the
-    /// visible order, shifting the apps between them. Hidden apps are preserved
-    /// after the visible stream.
+    /// Reorder the launcher layout so that `drag_id` moves to `insert_idx` in
+    /// the visible order, shifting the apps between them. Hidden apps are
+    /// preserved in the hidden set (they are not in the visible stream).
     ///
     /// The new order is computed by [`features::edit_mode::apply_reorder`]
-    /// (pure); this function runs the `registry.set_order` + relayout side
-    /// effect.
+    /// (pure); this function applies it to `launcher_state` + relayout. Phase 7
+    /// keeps the historical concatenated visible-then-hidden semantics by
+    /// feeding the current hidden ids as the hidden tail, then applying the
+    /// result to the launcher state's app items.
     pub(crate) fn reorder_by_index(&mut self, drag_id: &AppId, insert_idx: usize) {
         let visible = self.visible_app_ids();
-        let hidden: Vec<AppId> = self.registry.hidden().iter().cloned().collect();
+        let hidden: Vec<AppId> = self.launcher_state.hidden_apps.iter().cloned().collect();
         let Some(order) =
             crate::features::edit_mode::apply_reorder(&visible, &hidden, drag_id, insert_idx)
         else {
             return;
         };
-        self.registry.set_order(order);
+        self.launcher_state.reorder_app_items(order);
         self.relayout();
     }
 
@@ -473,6 +474,22 @@ impl App {
         if let Some(r) = self.renderer.as_ref() {
             r.window.request_redraw();
         }
+    }
+
+    /// Integrate the registry's current discovered-app set into the launcher
+    /// state, then normalize invariants. Used after discovery refresh, sort
+    /// reset, and reset-settings so the user-owned layout reflects what the OS
+    /// currently reports without losing the user's arrangement.
+    ///
+    /// `prune_missing` is false in production: undiscovered apps are retained as
+    /// placeholders so a later re-detection restores them exactly where they
+    /// were. A future "compact layout" action could pass true.
+    pub(crate) fn sync_launcher_layout_with_registry(&mut self) {
+        let discovered = self.registry.discovered_id_set();
+        let name_of = |id: &AppId| self.registry.lowercased_name_of(id);
+        self.launcher_state
+            .integrate_discovered_apps(&discovered, name_of);
+        self.launcher_state.normalize(&discovered, false);
     }
 
     /// Build a feature-side [`EditModeState`] mirror from the app boundary's

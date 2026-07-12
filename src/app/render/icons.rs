@@ -316,6 +316,11 @@ impl App {
             );
         }
 
+        // Integrate newly discovered apps into the user-owned launcher layout so
+        // the grid reflects the current app set without disturbing the user's
+        // arrangement (new apps land at the tail in display-name order).
+        self.sync_launcher_layout_with_registry();
+
         // Relayout once so new tiles + cached icons show up immediately.
         self.relayout();
         self.request_redraw();
@@ -469,6 +474,7 @@ impl App {
             }
         }
 
+        self.sync_launcher_layout_with_registry();
         self.relayout();
         self.request_redraw();
 

@@ -6,22 +6,24 @@
 //!   - apply icons incrementally as the worker reports them,
 //!   - add / remove / update apps at runtime without repacking the whole atlas.
 //!
-//! The registry keeps apps in a stable display order and maps each [`AppId`] to
-//! a stable **slot** in the icon atlas (see [`IconAtlas`]). Click resolution
-//! goes through `app_id`, never a raw positional index, so a rescan that
-//! inserts/removes apps can't shift which app a click hits.
+//! ## Discovery vs. user layout (Phase 7)
 //!
-//! ## Display order
-//! The order is *user-customizable* (iOS Launchpad-style drag-to-reorder). It is
-//! stored as an explicit `order: Vec<AppId>` rather than a sort key so it can be
-//! rearranged freely. When no user order is set (first launch, or the order list
-//! is empty), the registry falls back to sorting by display name. New apps that
-//! aren't yet in the order list are appended to its **tail** (last page's end),
-//! matching iOS. Apps the user hid via the edit-mode ✕ badge are kept in a
-//! separate `hidden` set and excluded from the visible stream.
+//! The registry owns rediscoverable app data only: name, link path, resolved
+//! target, icon state, and a stable atlas slot. It **no longer** owns display
+//! order, hidden state, or the `user_order_set` customization flag — those moved
+//! to [`crate::domain::launcher_state::LauncherState`] so the user's arrangement
+//! is cleanly separated from what the OS reports.
+//!
+//! Apps are kept in a stable internal order (display-name sort) so iteration is
+//! deterministic, but the visible launcher order is driven by `LauncherState`.
+//! The registry's job on a structural change is just to keep its records
+//! consistent; integrating new/removed apps into the user layout is
+//! [`LauncherState::integrate_discovered_apps`].
+//!
+//! Click resolution goes through `app_id`, never a raw positional index, so a
+//! rescan that inserts/removes apps can't shift which app a click hits.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::domain::app_id::AppId;
@@ -84,15 +86,15 @@ impl From<&AppRecord> for AppLaunchInfo {
     }
 }
 
-/// The registry: an ordered list of records plus an id→index map.
+/// The registry: an id→record map plus the icon-atlas slot allocator.
 ///
-/// Ordering is driven by the explicit [`Self::order`] list when it covers the
-/// apps (iOS-style drag-to-reorder); otherwise it falls back to display-name
-/// sort so the grid is stable across rescans. Apps can be hidden from the
-/// visible stream via [`Self::hidden`].
+/// Records are stored in a stable display-name order so iteration is
+/// deterministic, but this order is **not** the user's launcher order — that
+/// lives in [`crate::domain::launcher_state::LauncherState`]. The registry is
+/// purely the discovered-app dataset.
 #[derive(Debug, Default)]
 pub struct AppRegistry {
-    /// Display-order apps.
+    /// Records in display-name order (the discovery dataset's canonical order).
     apps: Vec<AppRecord>,
     /// `app_id` → index into `apps`.
     by_id: HashMap<AppId, usize>,
@@ -100,20 +102,6 @@ pub struct AppRegistry {
     /// (so existing UVs never shift); deleted slots become free for *new* apps
     /// only after a compaction, which we don't do yet (the atlas grows).
     next_slot: u32,
-    /// User-customized display order, as a sequence of `AppId`s. When
-    /// [`Self::user_order_set`] is true this list drives `apps` ordering; ids
-    /// present in the registry but missing from this list are appended at the
-    /// tail. Stored separately so the user's arrangement survives rescans and is
-    /// directly persistable.
-    order: Vec<AppId>,
-    /// True once the user (or the persisted state on load) has explicitly set an
-    /// order via [`Self::set_order`]. While false, `order` is rebuilt from a
-    /// display-name sort on every structural change, so the registry behaves
-    /// exactly like the legacy name-sorted registry until customization begins.
-    user_order_set: bool,
-    /// Apps the user hid via the edit-mode ✕ badge. Kept in the registry (so a
-    /// rescan doesn't resurrect them) but excluded from the visible stream.
-    hidden: HashSet<AppId>,
 }
 
 impl AppRegistry {
@@ -129,6 +117,7 @@ impl AppRegistry {
         self.apps.is_empty()
     }
 
+    /// All discovered records, in display-name order.
     pub fn apps(&self) -> &[AppRecord] {
         &self.apps
     }
@@ -189,98 +178,21 @@ impl AppRegistry {
             return false;
         };
         self.apps.remove(i);
-        self.order.retain(|ordered_id| ordered_id != id);
-        self.hidden.remove(id);
         self.reindex_and_sort();
         true
     }
 
-    /// Rebuild `by_id` and re-sort `apps` into display order. Called after any
-    /// structural change so iteration order stays predictable.
-    ///
-    /// Order resolution:
-    ///   - If [`Self::order`] covers all current apps, the apps are arranged to
-    ///     match it (user's drag-to-reorder result).
-    ///   - Apps missing from `order` (new installs, or order never set) are
-    ///     appended to the **tail of `order`** so subsequent rescans keep them
-    ///     stable, then sorted among themselves by display name (so a fresh
-    ///     install while the user has a custom layout lands at the very end in a
-    ///     predictable spot — iOS-like).
-    ///   - When `order` is empty (first launch) everything sorts by display name
-    ///     and is seeded into `order` in that sequence.
+    /// Rebuild `by_id` and re-sort `apps` by display name. Called after any
+    /// structural change so iteration order stays predictable. The display order
+    /// here is the registry's canonical order, not the user's launcher order.
     fn reindex_and_sort(&mut self) {
-        // 1. Make `order` cover exactly the current app set. When no user order
-        //    is set yet, this rebuilds `order` entirely from a name sort (so the
-        //    registry behaves like the legacy name-sorted one). Once a user
-        //    order exists, it preserves arrangement and appends new ids.
-        self.reconcile_order();
-
-        // 2. Sort `apps` to follow `order`. Stable sort keeps the name-based
-        //    fallback deterministic for ids absent from `order`. Clone the
-        //    order list so the borrow checker lets us mutate `apps` in place.
-        let order = self.order.clone();
-        self.apps.sort_by_key(|a| order_rank(&order, &a.app_id));
-        debug_assert!(
-            self.apps.iter().all(|a| self.order.contains(&a.app_id)),
-            "every app must have an order entry after reconcile"
-        );
-
-        // 3. Rebuild the id→index map for the new positions.
+        self.apps
+            .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         self.by_id.clear();
         self.by_id.reserve(self.apps.len());
         for (i, a) in self.apps.iter().enumerate() {
             self.by_id.insert(a.app_id.clone(), i);
         }
-    }
-
-    /// Make [`Self::order`] cover exactly the current app set.
-    ///
-    /// - When [`Self::user_order_set`] is false (no customization yet): rebuild
-    ///   `order` from scratch as the apps sorted by display name. This keeps the
-    ///   registry identical to the legacy name-sorted behavior.
-    /// - When true (user has a custom layout): drop gone ids from `order`, then
-    ///   append new ids at the tail in display-name order (iOS-like: fresh
-    ///   installs land at the end in a predictable spot, without disturbing the
-    ///   user's arrangement).
-    fn reconcile_order(&mut self) {
-        if !self.user_order_set {
-            // No user customization: `order` mirrors a fresh name sort. Build it
-            // directly from `apps` rather than trusting `by_id` (on a first
-            // insert it still points at push order, and a name change mid-
-            // `update` can leave it momentarily stale).
-            let mut named: Vec<(AppId, String)> = self
-                .apps
-                .iter()
-                .map(|a| (a.app_id.clone(), a.name.to_lowercase()))
-                .collect();
-            named.sort_by(|a, b| a.1.cmp(&b.1));
-            self.order = named.into_iter().map(|(id, _)| id).collect();
-            return;
-        }
-
-        // Snapshot the display names so we can sort new ids without borrowing
-        // `self.apps` while we also extend `self.order`.
-        let name_of: HashMap<AppId, String> = self
-            .apps
-            .iter()
-            .map(|a| (a.app_id.clone(), a.name.to_lowercase()))
-            .collect();
-
-        // Append new ids in display-name order.
-        let mut new_ids: Vec<AppId> = self
-            .apps
-            .iter()
-            .map(|a| a.app_id.clone())
-            .filter(|id| !self.order.contains(id))
-            .collect();
-        new_ids.sort_by(|a, b| {
-            name_of
-                .get(a)
-                .cloned()
-                .unwrap_or_default()
-                .cmp(&name_of.get(b).cloned().unwrap_or_default())
-        });
-        self.order.extend(new_ids);
     }
 
     /// Allocate the next slot index. Used by callers building an `AppRecord`.
@@ -290,79 +202,35 @@ impl AppRegistry {
         s
     }
 
-    /// Reset the registry entirely (used on full reload / corrupt state). Keeps
-    /// the user's `order` and `hidden` lists intact so a reload doesn't wipe
-    /// their customization — use [`Self::reset_customization`] for a full wipe.
+    /// Reset the registry's discovered records entirely (used on full reload /
+    /// corrupt state). The user's launcher layout (order, hidden, folders) is
+    /// owned by `LauncherState` and is not affected by this call.
     pub fn clear(&mut self) {
         self.apps.clear();
         self.by_id.clear();
         self.next_slot = 0;
     }
 
-    /// Replace the user-customized display order. Pass an empty vec to fall
-    /// back to display-name sort (this still marks a user order as *set*, so a
-    /// later rescan keeps the name-derived arrangement rather than re-sorting
-    /// on every insert). The order is reconciled against the current app set on
-    /// the next structural change; ids that no longer exist are dropped, missing
-    /// ids are appended.
-    pub fn set_order(&mut self, order: Vec<AppId>) {
-        self.order = order;
-        self.user_order_set = true;
-        self.reindex_and_sort();
+    /// The set of discovered app ids, for `LauncherState::integrate_discovered_apps`.
+    pub fn discovered_ids(&self) -> impl Iterator<Item = &AppId> {
+        self.apps.iter().map(|r| &r.app_id)
     }
 
-    /// Return the current display order as a stable sequence of `AppId`s (the
-    /// source of truth for persistence). Reflects any drag-to-reorder changes
-    /// once [`Self::set_order`] is called.
-    pub fn order(&self) -> &[AppId] {
-        &self.order
+    /// Lowercased display name lookup, for `LauncherState::integrate_discovered_apps`
+    /// to sort newly discovered apps deterministically.
+    pub fn lowercased_name_of(&self, id: &AppId) -> Option<String> {
+        self.get(id).map(|r| r.name.to_lowercase())
     }
 
-    /// Replace the hidden-app set. Hidden apps stay in the registry (a rescan
-    /// doesn't resurrect them) but are excluded from the visible stream.
-    pub fn set_hidden(&mut self, ids: Vec<AppId>) {
-        self.hidden = ids.into_iter().collect();
-    }
-
-    /// All currently hidden app ids (for persistence).
-    pub fn hidden(&self) -> &HashSet<AppId> {
-        &self.hidden
-    }
-
-    /// Hide an app from the visible stream. No-op if already hidden.
-    pub fn hide(&mut self, id: &AppId) {
-        self.hidden.insert(id.clone());
-    }
-
-    /// Reveal a previously hidden app.
-    pub fn unhide(&mut self, id: &AppId) {
-        self.hidden.remove(id);
-    }
-
-    /// True if `id` is currently hidden from the grid.
-    pub fn is_hidden(&self, id: &AppId) -> bool {
-        self.hidden.contains(id)
-    }
-
-    /// Wipe user customization (order + hidden) — used when resetting state.
-    pub fn reset_customization(&mut self) {
-        self.order.clear();
-        self.hidden.clear();
-        self.user_order_set = false;
-        self.reindex_and_sort();
+    /// Collect discovered ids into a `HashSet` for `LauncherState` integration.
+    pub fn discovered_id_set(&self) -> std::collections::HashSet<AppId> {
+        self.apps.iter().map(|r| r.app_id.clone()).collect()
     }
 
     /// Snapshot lookup by id for click resolution.
     pub fn launch_info(&self, id: &AppId) -> Option<AppLaunchInfo> {
         self.get(id).map(AppLaunchInfo::from)
     }
-}
-
-/// Position of `id` within `order`, or `usize::MAX` if absent so unknown ids
-/// sort last. A free function (not a method) so it can be called from a
-/// `sort_by_key` closure without holding a borrow on the registry.
-fn order_rank(order: &[AppId], id: &AppId) -> usize {
-    order.iter().position(|x| x == id).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -381,6 +249,16 @@ mod tests {
         }
     }
 
+    fn insert_named(r: &mut AppRegistry, id: &str, name: &str) {
+        let mut a = rec(id, name);
+        a.slot = r.alloc_slot();
+        r.insert(a);
+    }
+
+    fn names(r: &AppRegistry) -> Vec<String> {
+        r.apps().iter().map(|a| a.name.clone()).collect()
+    }
+
     #[test]
     fn insert_assigns_distinct_slots() {
         let mut r = AppRegistry::new();
@@ -397,24 +275,17 @@ mod tests {
     #[test]
     fn keeps_sorted_by_name() {
         let mut r = AppRegistry::new();
-        for (id, name) in [("c", "Cherry"), ("a", "Apple"), ("b", "Banana")] {
-            let mut x = rec(id, name);
-            x.slot = r.alloc_slot();
-            r.insert(x);
-        }
-        let names: Vec<_> = r.apps().iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, vec!["Apple", "Banana", "Cherry"]);
+        insert_named(&mut r, "c", "Cherry");
+        insert_named(&mut r, "a", "Apple");
+        insert_named(&mut r, "b", "Banana");
+        assert_eq!(names(&r), vec!["Apple", "Banana", "Cherry"]);
     }
 
     #[test]
     fn update_keeps_slot_stable_and_renames_resort() {
         let mut r = AppRegistry::new();
-        let mut a = rec("a", "Zeta");
-        a.slot = r.alloc_slot();
-        r.insert(a);
-        let mut b = rec("b", "Alpha");
-        b.slot = r.alloc_slot();
-        r.insert(b);
+        insert_named(&mut r, "a", "Zeta");
+        insert_named(&mut r, "b", "Alpha");
         let id = AppId::from_normalized("a".to_string());
         let slot_before = r.get(&id).unwrap().slot;
         r.update(&id, |rec| {
@@ -459,7 +330,6 @@ mod tests {
         let id = a.app_id.clone();
         r.insert(a);
         let info = r.launch_info(&id).unwrap();
-        // Mutate registry after snapshotting; info must be unaffected.
         r.update(&id, |rec| rec.name = "Changed".to_string());
         assert_eq!(info.name, "App");
     }
@@ -474,168 +344,30 @@ mod tests {
         assert!(!IconState::Stale.has_pixels());
     }
 
-    // ---- user-customized display order ----
-
-    fn insert_named(r: &mut AppRegistry, id: &str, name: &str) {
-        let mut a = rec(id, name);
-        a.slot = r.alloc_slot();
-        r.insert(a);
-    }
-
-    fn names(r: &AppRegistry) -> Vec<String> {
-        r.apps().iter().map(|a| a.name.clone()).collect()
-    }
-
     #[test]
-    fn user_order_overrides_name_sort() {
+    fn discovered_id_set_and_name_lookup() {
         let mut r = AppRegistry::new();
         insert_named(&mut r, "a", "Apple");
         insert_named(&mut r, "b", "Banana");
-        insert_named(&mut r, "c", "Cherry");
-        // Default is name sort.
-        assert_eq!(names(&r), vec!["Apple", "Banana", "Cherry"]);
-
-        // User reverses the order.
-        r.set_order(vec![
-            AppId::from_normalized("c".to_string()),
-            AppId::from_normalized("b".to_string()),
-            AppId::from_normalized("a".to_string()),
-        ]);
-        assert_eq!(names(&r), vec!["Cherry", "Banana", "Apple"]);
-        // order() reflects the user arrangement.
+        let set = r.discovered_id_set();
+        assert!(set.contains(&AppId::from_normalized("a".to_string())));
+        assert!(set.contains(&AppId::from_normalized("b".to_string())));
         assert_eq!(
-            r.order().iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
-            vec!["c", "b", "a"]
+            r.lowercased_name_of(&AppId::from_normalized("a".to_string())),
+            Some("apple".to_string())
+        );
+        assert_eq!(
+            r.lowercased_name_of(&AppId::from_normalized("missing".to_string())),
+            None
         );
     }
 
     #[test]
-    fn new_app_appends_to_end_after_user_order() {
+    fn clear_keeps_records_gone_but_slot_allocator_reset() {
         let mut r = AppRegistry::new();
-        insert_named(&mut r, "a", "Apple");
-        insert_named(&mut r, "b", "Banana");
-        r.set_order(vec![
-            AppId::from_normalized("b".to_string()),
-            AppId::from_normalized("a".to_string()),
-        ]);
-        // A brand-new app lands at the tail, after the existing layout.
-        insert_named(&mut r, "c", "Cherry");
-        assert_eq!(names(&r), vec!["Banana", "Apple", "Cherry"]);
-
-        // A second new app also lands at the tail, name-sorted relative to other
-        // new apps (here just "Date").
-        insert_named(&mut r, "d", "Date");
-        assert_eq!(names(&r), vec!["Banana", "Apple", "Cherry", "Date"]);
-    }
-
-    #[test]
-    fn empty_set_order_keeps_name_sort_but_marks_set() {
-        // Passing an empty order is allowed (e.g. persisted state was empty)
-        // and must still produce a stable name-sorted arrangement.
-        let mut r = AppRegistry::new();
-        insert_named(&mut r, "b", "Banana");
-        insert_named(&mut r, "a", "Apple");
-        r.set_order(vec![]);
-        assert_eq!(names(&r), vec!["Apple", "Banana"]);
-    }
-
-    #[test]
-    fn removed_app_dropped_from_user_order() {
-        let mut r = AppRegistry::new();
-        insert_named(&mut r, "a", "Apple");
-        insert_named(&mut r, "b", "Banana");
-        insert_named(&mut r, "c", "Cherry");
-        r.set_order(vec![
-            AppId::from_normalized("c".to_string()),
-            AppId::from_normalized("a".to_string()),
-            AppId::from_normalized("b".to_string()),
-        ]);
-        assert!(r.remove(&AppId::from_normalized("b".to_string())));
-        assert_eq!(names(&r), vec!["Cherry", "Apple"]);
-        assert_eq!(
-            r.order().iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
-            vec!["c", "a"]
-        );
-    }
-
-    #[test]
-    fn removed_app_dropped_from_hidden_set() {
-        let mut r = AppRegistry::new();
-        insert_named(&mut r, "a", "Apple");
-        let id = AppId::from_normalized("a".to_string());
-        r.hide(&id);
-        assert!(r.remove(&id));
-        assert!(!r.is_hidden(&id));
-    }
-
-    #[test]
-    fn rename_keeps_position_in_user_order() {
-        // Renaming an app must NOT re-sort by name when a user order is active.
-        let mut r = AppRegistry::new();
-        insert_named(&mut r, "a", "Apple");
-        insert_named(&mut r, "b", "Banana");
-        r.set_order(vec![
-            AppId::from_normalized("b".to_string()),
-            AppId::from_normalized("a".to_string()),
-        ]);
-        r.update(&AppId::from_normalized("a".to_string()), |rec| {
-            rec.name = "Zucchini".to_string();
-        });
-        // Position preserved: Banana still first.
-        assert_eq!(names(&r), vec!["Banana", "Zucchini"]);
-    }
-
-    #[test]
-    fn set_order_preserves_ids_not_yet_inserted() {
-        // Persisted order is loaded before the first scan is ingested, so it
-        // necessarily references ids not yet inserted. Those ids must be kept
-        // pending and applied as matching apps arrive.
-        let mut r = AppRegistry::new();
-        r.set_order(vec![
-            AppId::from_normalized("b".to_string()),
-            AppId::from_normalized("a".to_string()),
-        ]);
-        assert_eq!(
-            r.order().iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
-            vec!["b", "a"]
-        );
-        insert_named(&mut r, "a", "Apple");
-        insert_named(&mut r, "b", "Banana");
-        assert_eq!(names(&r), vec!["Banana", "Apple"]);
-        assert_eq!(
-            r.order().iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
-            vec!["b", "a"]
-        );
-    }
-
-    // ---- hidden apps ----
-
-    #[test]
-    fn hide_and_unhide_toggle_visibility_flag() {
-        let mut r = AppRegistry::new();
-        insert_named(&mut r, "a", "Apple");
-        let id = AppId::from_normalized("a".to_string());
-        assert!(!r.is_hidden(&id));
-        r.hide(&id);
-        assert!(r.is_hidden(&id));
-        assert!(r.hidden().contains(&id));
-        r.unhide(&id);
-        assert!(!r.is_hidden(&id));
-    }
-
-    #[test]
-    fn reset_customization_clears_order_and_hidden() {
-        let mut r = AppRegistry::new();
-        insert_named(&mut r, "b", "Banana");
-        insert_named(&mut r, "a", "Apple");
-        r.set_order(vec![AppId::from_normalized("b".to_string())]);
-        r.hide(&AppId::from_normalized("a".to_string()));
-        r.reset_customization();
-        // Back to name sort, nothing hidden, no user order.
-        assert_eq!(names(&r), vec!["Apple", "Banana"]);
-        assert!(r.hidden().is_empty());
-        // Re-insert preserves name sort (user_order_set is false again).
-        insert_named(&mut r, "c", "Cherry");
-        assert_eq!(names(&r), vec!["Apple", "Banana", "Cherry"]);
+        insert_named(&mut r, "a", "A");
+        r.clear();
+        assert!(r.is_empty());
+        assert_eq!(r.slot_count(), 0);
     }
 }

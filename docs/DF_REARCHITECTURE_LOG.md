@@ -1896,3 +1896,233 @@ and folder vertical slice. `grid.rs` remains an app/layout adapter until Phase
 7, and cosmic-text/atlas upload adapters remain because they are resource
 lifecycle work rather than feature-specific renderer submission APIs.
 
+### 2026-07-12: Phase 7, Item-Based Launcher Domain
+
+Files changed:
+
+- `src/domain/mod.rs` — added `launcher_item`, `folders`, `launcher_state`
+  submodules; updated the layer docs to describe the discovery vs. user-layout
+  split.
+- `src/domain/launcher_item.rs` (new) — `LauncherItem { App(AppId), Folder(FolderId) }`
+  with `as_app_id`/`as_folder_id`/`is_app`/`stable_key` projections and
+  `From<AppId>`/`From<FolderId>` conversions. serde-serializable.
+- `src/domain/folders.rs` (new) — `FolderId` (stable, opaque, generated from a
+  monotonic counter) and `Folder { id, name, children: Vec<AppId> }`.
+  Children are apps only (no folder nesting in Phase 7). serde-serializable.
+- `src/domain/launcher_state.rs` (new) — `LauncherState { items, folders,
+  hidden_apps, customized }`. Pure operations: `from_legacy` (migration),
+  `set_items`, `upsert_folder`, `remove_folder`, `hide_app`, `unhide_app`,
+  `is_hidden`, `integrate_discovered_apps`, `reorder_app_items`,
+  `forget_app`, `normalize`, `next_folder_counter`. serde-serializable.
+- `src/domain/app_id.rs` — added `serde::Serialize`/`Deserialize` derives so
+  `LauncherItem` and `LauncherState` can round-trip through JSON.
+- `src/domain/app_registry.rs` — **removed** `order: Vec<AppId>`, `hidden:
+  HashSet<AppId>`, `user_order_set`, and the `set_order`/`order`/`set_hidden`/
+  `hidden`/`hide`/`unhide`/`is_hidden`/`reset_customization`/`reconcile_order`
+  API. The registry is now purely the discovered-app dataset: records sorted by
+  display name for deterministic iteration, id→index map, slot allocator.
+  Added `discovered_ids`, `discovered_id_set`, `lowercased_name_of` helpers for
+  `LauncherState::integrate_discovered_apps`.
+- `src/icon_cache.rs` — added `get_launcher_state`/`put_launcher_state` (JSON
+  blob under kv key `"launcher_state"`). On write, the legacy `app_order` and
+  `hidden_ids` keys are cleared so subsequent loads read the canonical Phase 7
+  format and do not migrate twice. Corrupt JSON maps to `None` (caller falls
+  back to legacy migration or an empty state).
+- `src/app/state.rs` — added `launcher_state: LauncherState` field;
+  `grid_apps_owned`/`visible_app_ids` now iterate `launcher_state.items`
+  (app items only) and filter through `launcher_state.is_hidden` + registry
+  search match, instead of `registry.apps()` + `registry.is_hidden`.
+- `src/app/command.rs` — `load_customization` reads `launcher_state` first,
+  falls back to `LauncherState::from_legacy(app_order, hidden_ids)` when the
+  Phase 7 key is absent. `persist_user_order`/`persist_hidden` now route through
+  `persist_launcher_state` (unified JSON write).
+- `src/app/update.rs` — sort reset ("名前順") sets `customized = false` and
+  calls `sync_launcher_layout_with_registry`; reset-settings wipes
+  `launcher_state`. `hide_app` calls `launcher_state.hide_app`.
+  `reorder_by_index` applies `apply_reorder` result via
+  `launcher_state.reorder_app_items`. Added `sync_launcher_layout_with_registry`
+  (integrate discovered apps + normalize) used by discovery refresh and sort
+  reset.
+- `src/app/render/icons.rs` — `ingest_snapshot` and `apply_diff` call
+  `sync_launcher_layout_with_registry` before `relayout` so the user layout
+  reflects the current app set.
+- `src/app/render/settings.rs` — hidden count now reads
+  `launcher_state.hidden_apps.len()`.
+- `tests/launcher_domain_integration.rs` (new) — 20 integration tests covering
+  item/folder order serde round-trip, stable id references, duplicate
+  normalization, deterministic new-app integration, removal/rediscovery
+  preservation, launch resolution, folder child persistence, hidden-app
+  carryover, legacy migration, corrupt-JSON fallback, and hide-preservation.
+- `tests/architecture_boundaries.rs` — added
+  `renderer_does_not_receive_domain_launcher_concepts` (renderer must not
+  import `LauncherItem`/`LauncherState`/`Folder`) and
+  `domain_launcher_item_and_folder_are_library_public`.
+- `docs/DF_REARCHITECTURE_LOG.md` — this entry.
+
+Domain model and invariants (Phase 7):
+
+- `LauncherItem { App(AppId), Folder(FolderId) }` — thin id-only enum; carries
+  no rediscoverable data.
+- `Folder { id: FolderId, name: String, children: Vec<AppId> }` — apps only,
+  no nesting.
+- `LauncherState { items: Vec<LauncherItem>, folders: BTreeMap<FolderId,
+  Folder>, hidden_apps: BTreeSet<AppId>, customized: bool }`.
+- Invariants enforced by `normalize`:
+  1. Each top-level item is unique.
+  2. Each folder id in `items` exists in `folders`.
+  3. Each `AppId` appears in at most one of: a top-level item, a folder child,
+     `hidden_apps` (top-level wins on conflict).
+  4. Folder children are deduplicated; folder nesting is impossible (children
+     are `AppId`, not `LauncherItem`).
+
+Discovery state vs. user-owned state boundary:
+
+- `AppRegistry` owns rediscoverable records: name, link path, resolved target,
+  icon state, atlas slot. Sorted by display name for deterministic iteration.
+  No longer owns order/hidden/customized.
+- `LauncherState` owns user layout: item order, folders, hidden apps, and the
+  `customized` flag. This is the single source of truth for "what the grid
+  looks like".
+- `grid_apps_owned`/`visible_app_ids` read `launcher_state.items` (order) and
+  join against `registry` records (name/icon). Undiscovered ids are retained as
+  placeholders but skipped at render time (no record to draw).
+
+Legacy data migration:
+
+- On startup `load_customization` checks the `"launcher_state"` kv key first.
+  If present, it deserializes directly. If absent, it reads the legacy binary
+  `"app_order"` + `"hidden_ids"` keys and converts via
+  `LauncherState::from_legacy`, preserving the exact order and hidden set.
+- The legacy keys are kept until the first `persist_launcher_state` write
+  (reorder/hide/sort-reset/reset-settings), at which point they are cleared.
+  This means a user who launches once without customizing keeps their legacy
+  data untouched; the migration completes lazily on the next customization.
+- Corrupt JSON maps to `None`; corrupt binary maps to an empty vec. Neither
+  blocks startup or wipes other settings.
+
+App removal / rediscovery behavior:
+
+- `integrate_discovered_apps` retains ids the user placed (top-level or folder)
+  even when they are no longer in the discovered set, so a temporarily
+  uninstalled app keeps its slot and reappears on re-detection exactly where
+  the user left it.
+- New discovered apps that are neither top-level, in a folder, nor hidden are
+  appended at the tail in display-name order (deterministic iOS-like
+  integration).
+- Hidden apps that are no longer discovered remain hidden; a re-detection does
+  not resurrect them visibly unless the user unhides.
+- `registry.remove` (called by `apply_diff` for removed apps) drops the record;
+  the launcher state retains the id as a placeholder. Launch resolution through
+  `registry.launch_info` returns `None` for undiscovered ids, so a removed
+  app cannot be launched.
+
+What was intentionally left for Phase 8 (folder feature):
+
+- Folder open/close, panel layout, rename, drag-to-create, drag-into-folder.
+  `Folder`/`FolderId`/`upsert_folder`/`remove_folder`/`next_folder_counter`
+  provide the stable domain foundation; the feature/UI layer is Phase 8.
+- `reorder_app_items` currently treats the grid as apps-first then folders at
+  the tail (there are no folder items in production yet). Phase 8's
+  folder-aware drag will refine the interleave.
+- Folder panels will be emitted as renderer-neutral `GlassSurface`/`IconView`/
+  `TextView` primitives in a layout pass; the renderer already receives no
+  domain concepts (asserted by the new architecture test).
+- The `layout::grid` pure functions still take an `app_count`/`cell_count`
+  argument. Phase 7 keeps this (the visible item count is the same number);
+  Phase 8 will generalize to item-count when folder tiles render on the grid.
+
+Validation:
+
+- `cargo fmt --check`: passed
+- `cargo test`: 168 lib + 367 bin (2 ignored) + 9 architecture + 20 launcher
+  domain integration + 2 WGSL validation = 566 tests, all required tests
+  passed.
+- `cargo clippy --all-targets --all-features`: passed (no warnings)
+- `cargo build --release`: passed
+- `cargo run --release` with isolated `LOCALAPPDATA`,
+  `LAUNCHPAD_ALLOW_SCREENSHOT=1`, `LAUNCHPAD_DEBUG=1`, and
+  `LAUNCHPAD_QA_SHOT_FILE` GPU self-capture:
+  - first frame non-blank: verified — 1920×1200, 57.1% non-transparent, 3323
+    unique colors, Liquid Glass page-frame tint at center (≈184,170,164),
+    matching the Phase 6.5 baseline pixel stats.
+  - legacy migration: copied the user's real DB (172 apps, legacy
+    `app_order` + `hidden_ids`) to the isolated `LOCALAPPDATA`, launched, and
+    captured a migrated frame — 57.1% non-transparent, 3414 unique colors,
+    visually identical to the non-migrated first frame. The grid renders the
+    migrated app order without loss.
+  - transparent-area click passthrough: verified via debug log — a click on the
+    transparent area logged `outside_glass=true`, hid the launcher, and
+    replayed the click to the underlying window.
+  - app discovery: verified — 172 apps ingested into the icon cache; the grid
+    renders tiles, icons, and labels.
+
+Screen verification:
+
+- Launched with `cargo run --release` (release exe + documented screenshot
+  environment): yes
+- First frame non-blank: yes (GPU self-capture; Liquid Glass page frame + tile
+  grid + icons + labels + bottom control capsule all rendered; pixel stats
+  match Phase 6.5 baseline)
+- Legacy data migration renders correctly: yes (GPU self-capture after loading
+  the user's real legacy DB; grid content identical to non-migrated frame)
+- Transparent-area click passthrough: yes (debug log confirms
+  `outside_glass=true` → hide + click replay)
+- App discovery: yes (172 apps ingested; icon cache populated)
+- Horizontal scroll / inertia / snap: not verified on screen — the sandbox's
+  foreground lock and the automation API's lack of a pointer-down/hold/up
+  primitive prevented interactive scroll simulation. `scroll.rs` physics and
+  the scroller wiring are unchanged code; the launcher-state change only
+  affects which app ids feed the grid, not scroll bounds (page count derives
+  from `grid_apps_owned().len()`, which is the same visible-app count as
+  before).
+- Search / filtering: not verified on screen (same interactive blocker). The
+  search filter path now reads `launcher_state.items` + `matches_search`, which
+  is covered by the unchanged `matches_search` tests and the new
+  `temporary_undiscovery_preserves_order_and_rediscovery_restores` integration
+  test.
+- Edit mode (long-press / drag / reorder / hide / Done / gear): not verified
+  on screen (same interactive blocker; the automation API has no
+  pointer-down/hold/up for the long-press gesture). The reorder order
+  computation (`apply_reorder`), the hide path (`launcher_state.hide_app`),
+  and the commit sequence are covered by deterministic tests.
+- Settings overlay (open/close/category/toggle/reset): not verified on screen;
+  settings code paths route through `launcher_state` now (sort reset, hidden
+  count, reset-settings) but the panel geometry and hit-testing are unchanged
+  code.
+- App click launch resolution (visual): not verified on screen — the
+  foreground lock and the need for sub-pixel-accurate tile-center clicks in a
+  scaled-DPI window prevented a reliable launch capture. Launch resolution
+  (`resolve_clicked_app` → `visible_ids.get(idx)` → `registry.launch_info`)
+  is covered by the `app_item_resolves_to_correct_discovered_app` and
+  `undiscovered_app_id_does_not_resolve_to_launch_info` integration tests.
+- Refresh-preserves-order (visual): not verified on screen (requires observing
+  in-process state across a refresh tick). Covered by the
+  `temporary_undiscovery_preserves_order_and_rediscovery_restores` and
+  `integrate_discovered_apps_is_idempotent` integration tests.
+
+Notes and discoveries:
+
+- The legacy `AppRegistry` owned both discovered records and user layout
+  (order/hidden/user_order_set). Phase 7 separates them: the registry is now
+  discovery-only, and `LauncherState` owns the layout. This required touching
+  `load_customization`, `persist_*`, `grid_apps_owned`, `visible_app_ids`,
+  `hide_app`, `reorder_by_index`, sort reset, reset-settings, hidden count,
+  `ingest_snapshot`, and `apply_diff`. Each call site now goes through
+  `launcher_state` instead of `registry`.
+- `sync_launcher_layout_with_registry` is the single integration point between
+  discovery and layout: it calls `integrate_discovered_apps` (retains user
+  positions, appends new apps at the tail) then `normalize` (dedup, prune
+  orphan folders, enforce the one-place-per-app rule). It is called after
+  initial scan, refresh diff, sort reset, and reset-settings.
+- `AppRegistry::apps()` now always returns records in display-name order
+  (there is no user-order override). `LauncherState::integrate_discovered_apps`
+  with `customized = false` reproduces the legacy name-sorted grid by building
+  the item list from a name sort of discovered apps.
+- The `LauncherState` JSON is compact (~100 bytes per item for app items).
+  The legacy binary `app_order` was ~90 bytes per app; the JSON is larger but
+  human-debuggable and schema-flexible for future folder data.
+- The Phase 7 change does not alter the renderer, shaders, GPU instance
+  layouts, draw-pass order, scroll physics, bottom-control state machine, IME,
+  or text rendering. It only changes which app ids feed the grid and where
+  order/hidden/folder state lives.
+

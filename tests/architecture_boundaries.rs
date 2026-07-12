@@ -113,6 +113,38 @@ fn forbidden_lower_layer_dependencies_are_absent() {
 }
 
 #[test]
+fn renderer_does_not_receive_domain_launcher_concepts() {
+    // Phase 7: the renderer must not import LauncherItem, Folder, FolderId, or
+    // LauncherState. AppId is allowed to remain in the domain (it predates
+    // Phase 7 and is referenced by icon/diff types the renderer-adjacent code
+    // consumes through ui_model), but the item/folder layout concepts must stay
+    // behind the app/layout boundary and cross into the renderer only as
+    // renderer-neutral RenderModel primitives.
+    let renderer = rust_sources("src/renderer");
+    for forbidden in [
+        "LauncherItem",
+        "LauncherState",
+        "domain::folders::Folder",
+        "domain::launcher_item",
+        "domain::launcher_state",
+    ] {
+        assert!(
+            !renderer.contains(forbidden),
+            "renderer imports domain concept: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn domain_launcher_item_and_folder_are_library_public() {
+    use launchpad_windows::domain;
+    let _ = std::marker::PhantomData::<domain::launcher_item::LauncherItem>;
+    let _ = std::marker::PhantomData::<domain::folders::FolderId>;
+    let _ = std::marker::PhantomData::<domain::folders::Folder>;
+    let _ = std::marker::PhantomData::<domain::launcher_state::LauncherState>;
+}
+
+#[test]
 fn renderer_scene_submission_is_prepare_only() {
     let renderer = rust_sources("src/renderer");
     for forbidden in [

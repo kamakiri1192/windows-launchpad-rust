@@ -20,7 +20,9 @@ use std::path::Path;
 /// Wraps the normalized `.lnk` path. Cheap to clone (an `Arc<str>` would be
 /// overkill for our sizes). Compared by the inner string, so it works as a
 /// `HashMap`/`BTreeMap` key out of the box.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct AppId(String);
 
 impl AppId {

@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppRegistry;
+use crate::domain::launcher_item::LauncherItem;
+use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
 use crate::icon_cache::IconCache;
 use crate::renderer::icon_atlas::IconAtlas;
@@ -143,6 +145,11 @@ pub struct App {
 
     // ---- app + icon state ----
     pub registry: AppRegistry,
+    /// User-owned launcher layout: top-level item order, folders, and hidden
+    /// apps. Separated from `registry` so the user's arrangement survives app
+    /// add/remove/re-detect cycles without corruption. Drives the visible grid
+    /// order; the registry is now only the discovered-app dataset.
+    pub launcher_state: LauncherState,
     /// CPU-side fixed-slot atlas; the GPU texture mirrors it.
     pub atlas: IconAtlas,
     /// True once the atlas texture has been allocated+uploaded at least once.
@@ -261,6 +268,7 @@ impl App {
             render_model: crate::ui_model::render_model::RenderModel::new(),
             timer,
             registry: AppRegistry::new(),
+            launcher_state: LauncherState::new(),
             atlas: IconAtlas::new(64),
             atlas_uploaded: false,
             snapshot: BTreeMap::new(),
@@ -511,29 +519,46 @@ impl App {
     /// Returns owned data so it doesn't hold a borrow on `self` while the
     /// renderer mutates.
     ///
-    /// Apps the user hid via the edit-mode ✕ badge are excluded here (same path
-    /// as the search filter), so they never reach the grid or click resolution.
+    /// Order follows the user-owned [`LauncherState`] item list (apps only —
+    /// folder items are not yet rendered in Phase 7). Apps the user hid via the
+    /// edit-mode ✕ badge are excluded here (same path as the search filter), so
+    /// they never reach the grid or click resolution. Apps referenced by the
+    /// launcher state but not currently discovered are skipped (no record to
+    /// render), but the launcher state keeps their position for re-detection.
     pub(crate) fn grid_apps_owned(&self) -> Vec<(AppId, String, Option<crate::icons::UvRect>)> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
-        self.registry
-            .apps()
+        self.launcher_state
+            .items
             .iter()
-            .filter(|rec| include_hidden || !self.registry.is_hidden(&rec.app_id))
-            .filter(|rec| Self::matches_search(&rec.name, &query))
-            .map(|rec| (rec.app_id.clone(), rec.name.clone(), rec.uv))
+            .filter_map(LauncherItem::as_app_id)
+            .filter(|id| include_hidden || !self.launcher_state.is_hidden(id))
+            .filter_map(|id| {
+                let rec = self.registry.get(id)?;
+                if Self::matches_search(&rec.name, &query) {
+                    Some((rec.app_id.clone(), rec.name.clone(), rec.uv))
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
     pub(crate) fn visible_app_ids(&self) -> Vec<AppId> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
-        self.registry
-            .apps()
+        self.launcher_state
+            .items
             .iter()
-            .filter(|rec| include_hidden || !self.registry.is_hidden(&rec.app_id))
-            .filter(|rec| Self::matches_search(&rec.name, &query))
-            .map(|rec| rec.app_id.clone())
+            .filter_map(LauncherItem::as_app_id)
+            .filter(|id| include_hidden || !self.launcher_state.is_hidden(id))
+            .filter(|id| {
+                self.registry
+                    .get(id)
+                    .map(|rec| Self::matches_search(&rec.name, &query))
+                    .unwrap_or(false)
+            })
+            .cloned()
             .collect()
     }
 
