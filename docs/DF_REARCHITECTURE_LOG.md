@@ -2262,3 +2262,16 @@ Final validation:
 - `cargo clippy --all-targets --all-features`: passed with no warnings.
 - `cargo build --release`: passed.
 
+### 2026-07-13 — Closed-folder surface stabilization
+
+- Closed folder tiles now suppress the generic opaque app-tile fallback while
+  retaining the generic Liquid Glass surface and ordered 3x3 mini preview.
+- The suppression is a renderer-neutral tile flag rather than folder logic in
+  the renderer. During edit-mode drag, the folder glass surface follows the
+  pointer with the lifted tile instead of remaining at its original cell.
+- Release-build GPU capture verified that closed folders retain their Liquid
+  Glass container and mini icons without the opaque fallback; opening and
+  closing the folder still returns to the same closed presentation.
+- Validation passed: `cargo fmt --check`, 635 tests (633 passed, 2 ignored),
+  `cargo clippy --all-targets --all-features`, and `cargo build --release`.
+

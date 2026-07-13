@@ -22,8 +22,10 @@ Current behavior to preserve:
 
 - The normal grid interleaves app and folder items in persisted
   `LauncherState.items` order. Search stays a flat app-only result set.
-- A closed folder shows at most the first nine visible child icons in ordered
-  3x3 mini slots. Hidden or currently undiscovered children are not rendered.
+- A closed folder uses only its Liquid Glass container and shows at most the
+  first nine visible child icons in ordered 3x3 mini slots. It does not render
+  the opaque colored fallback used behind a normal app icon. Hidden or
+  currently undiscovered children are not rendered.
 - Clicking a folder opens a centered Liquid Glass modal. The panel size is
   derived from the visible child count, incomplete rows are centered, and more
   than nine children are split into pages with a page indicator.

@@ -51,6 +51,7 @@ const FLAG_WIGGLE: f32 = 1.0;
 // Flag bit set in `extra.w` while this icon is the one being dragged.
 const FLAG_DRAG: f32 = 2.0;
 const FLAG_FIXED: f32 = 4.0;
+const FLAG_NO_FILL: f32 = 16.0;
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -154,6 +155,9 @@ fn sdRoundBox(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    if (u32(in.flags) & u32(FLAG_NO_FILL)) != 0u {
+        discard;
+    }
     let half_size = in.size_r.x * 0.5;
     let r = min(in.size_r.y, half_size);
     let d = sdRoundBox(in.uv, vec2<f32>(half_size, half_size), r);

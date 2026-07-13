@@ -34,6 +34,9 @@ impl TileAnim {
     pub const FLAG_FIXED: u32 = 1 << 2;
     /// Participates in edit motion without exposing the app-only hide badge.
     pub const FLAG_NO_BADGE: u32 = 1 << 3;
+    /// Keeps the tile's geometry/motion instance but suppresses its opaque
+    /// fallback fill. Generic glass and icon layers can remain visible.
+    pub const FLAG_NO_FILL: u32 = 1 << 4;
 
     pub const IDLE: Self = Self {
         phase: 0.0,

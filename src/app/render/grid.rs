@@ -91,10 +91,14 @@ impl App {
         // normal instance list and append a pointer-following copy at the end so
         // it draws on top of everything else.
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances);
-        self.render_model.set_glass_batch(
-            GlassLayer::Base,
-            self.layout.build_glass_surfaces(w as f32, &items),
-        );
+        let mut base_glass = self.layout.build_glass_surfaces(w as f32, &items);
+        if let Some(LauncherItem::Folder(folder_id)) = self.drag_item.as_ref() {
+            let dragged_key = LauncherItem::Folder(folder_id.clone()).stable_key();
+            let dragged_id = UiId::launcher_item(&dragged_key);
+            base_glass.retain(|surface| surface.id != dragged_id);
+        }
+        self.render_model
+            .set_glass_batch(GlassLayer::Base, base_glass);
         self.interaction_glass = self.build_interaction_glass();
         self.render_model.tiles = Some(tile_instances);
         self.render_model.icons = Some(icon_instances);
@@ -116,6 +120,7 @@ impl App {
             .enumerate()
             .map(|(i, item)| {
                 let is_drag = drag_item == Some(item);
+                let item_flags = launcher_item_tile_flags(item);
                 let is_pressed_folder = self
                     .pending_press
                     .as_ref()
@@ -128,34 +133,22 @@ impl App {
                         phase: 0.0,
                         lift: 0.0,
                         scale: background_scale * if is_pressed_folder { 0.96 } else { 1.0 },
-                        flags: 0,
+                        flags: item_flags,
                     };
                 }
                 if is_drag {
-                    let folder_flags = if matches!(item, LauncherItem::Folder(_)) {
-                        grid::TileAnim::FLAG_NO_BADGE
-                    } else {
-                        0
-                    };
                     grid::TileAnim {
                         phase: self.wiggle_phase + i as f32 * 0.37,
                         lift: 24.0 * self.scale_factor.max(1.0),
                         scale: 1.15 * background_scale,
-                        flags: grid::TileAnim::FLAG_WIGGLE
-                            | grid::TileAnim::FLAG_DRAG
-                            | folder_flags,
+                        flags: grid::TileAnim::FLAG_WIGGLE | grid::TileAnim::FLAG_DRAG | item_flags,
                     }
                 } else {
-                    let folder_flags = if matches!(item, LauncherItem::Folder(_)) {
-                        grid::TileAnim::FLAG_NO_BADGE
-                    } else {
-                        0
-                    };
                     grid::TileAnim {
                         phase: self.wiggle_phase + i as f32 * 0.37,
                         lift: 0.0,
                         scale: background_scale,
-                        flags: grid::TileAnim::FLAG_WIGGLE | folder_flags,
+                        flags: grid::TileAnim::FLAG_WIGGLE | item_flags,
                     }
                 }
             })
@@ -202,8 +195,25 @@ impl App {
     }
 
     fn build_interaction_glass(&self) -> Vec<GlassSurface> {
+        let mut surfaces = Vec::new();
+        if matches!(self.drag_item.as_ref(), Some(LauncherItem::Folder(_))) {
+            let size = self.layout.tile_size + 18.0 * self.scale_factor;
+            surfaces.push(GlassSurface {
+                id: UiId::backdrop("dragged-folder-glass"),
+                rect: Rect::new(
+                    self.drag_x - size * 0.5,
+                    self.drag_y - size * 0.5,
+                    size,
+                    size,
+                ),
+                radius: 28.0 * self.scale_factor,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: 22,
+            });
+        }
         let Some(hover) = self.folders.hover.as_ref() else {
-            return Vec::new();
+            return surfaces;
         };
         let Some(index) = self
             .visible_launcher_items()
@@ -219,7 +229,7 @@ impl App {
         let scroll = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
         let target_size = self.layout.tile_size * (1.08 + 0.08 * progress);
         let pointer_size = self.layout.tile_size * (0.98 + 0.08 * progress);
-        vec![
+        surfaces.extend([
             GlassSurface {
                 id: UiId::backdrop("folder-hover-target"),
                 rect: Rect::new(
@@ -246,7 +256,12 @@ impl App {
                 behavior: GlassBehavior::Control,
                 z: 21,
             },
-        ]
+        ]);
+        surfaces
+    }
+
+    pub(crate) fn refresh_interaction_glass(&mut self) {
+        self.interaction_glass = self.build_interaction_glass();
     }
 
     pub(crate) fn apply_icon_spring_offsets(
@@ -339,6 +354,14 @@ impl App {
     }
 }
 
+fn launcher_item_tile_flags(item: &LauncherItem) -> u32 {
+    if matches!(item, LauncherItem::Folder(_)) {
+        grid::TileAnim::FLAG_NO_BADGE | grid::TileAnim::FLAG_NO_FILL
+    } else {
+        0
+    }
+}
+
 fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<GlyphView> {
     quads
         .iter()
@@ -355,4 +378,22 @@ fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<Gl
             z: 0,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{app_id::AppId, folders::FolderId};
+
+    #[test]
+    fn folders_suppress_fill_and_badge_while_apps_do_not() {
+        let folder = LauncherItem::Folder(FolderId::generate(1));
+        assert_eq!(
+            launcher_item_tile_flags(&folder),
+            grid::TileAnim::FLAG_NO_BADGE | grid::TileAnim::FLAG_NO_FILL
+        );
+
+        let app = LauncherItem::App(AppId::from_normalized("app"));
+        assert_eq!(launcher_item_tile_flags(&app), 0);
+    }
 }
