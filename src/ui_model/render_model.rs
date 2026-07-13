@@ -191,6 +191,9 @@ pub struct InkView {
     pub center: Point,
     pub extent: f32,
     pub opacity: f32,
+    /// Renderer-neutral request to blur the already-rendered lower scene
+    /// inside this view's rounded geometry. Zero keeps the normal sharp scene.
+    pub scene_blur: f32,
     pub stroke: f32,
     pub corner_radius: f32,
     pub color: Color,

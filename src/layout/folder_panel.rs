@@ -26,10 +26,9 @@ const CELL_GAP_X: f32 = 34.0;
 const CELL_GAP_Y: f32 = 42.0;
 const LABEL_HEIGHT: f32 = 24.0;
 const PANEL_RADIUS: f32 = 42.0;
-/// A restrained cool-neutral wash over the existing page-frame refraction.
-/// The page glass already supplies the blur; this veil lowers contrast without
-/// replacing the Liquid Glass surface with a flat black window-wide dimmer.
-const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.18;
+/// Cool-neutral tint layered after the scene-space focus blur. Blur carries the
+/// visual separation; this restrained wash only lowers residual contrast.
+const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.14;
 /// Portion of the closed end of the morph used to collapse each child's
 /// colored tile fill into its own center. Icons keep their full trajectory.
 const CHILD_FILL_COLLAPSE_PROGRESS: f32 = 0.42;
@@ -141,6 +140,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         center: input.page_frame_rect.center(),
         extent: input.page_frame_rect.height * 0.5,
         opacity: GLASS_FOCUS_VEIL_OPACITY * progress,
+        scene_blur: progress,
         stroke: input.page_frame_rect.width * 0.5,
         corner_radius: page_frame_radius,
         color: Color::rgba(0.12, 0.15, 0.20, 1.0),
@@ -269,6 +269,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 } else {
                     0.42 * title_alpha
                 },
+                scene_blur: 0.0,
                 stroke: 1.0,
                 corner_radius: 0.0,
                 color: Color::rgba(1.0, 1.0, 1.0, if dot == page { 0.9 } else { 0.42 }),
@@ -634,6 +635,7 @@ mod tests {
         assert_eq!(veil.extent, 340.0);
         assert_eq!(veil.corner_radius, 54.0);
         assert!((veil.opacity - GLASS_FOCUS_VEIL_OPACITY * 0.5).abs() < 0.001);
+        assert!((veil.scene_blur - 0.5).abs() < 0.001);
         assert!(veil.stroke < 1280.0 * 0.5);
         assert!(veil.extent < 800.0 * 0.5);
     }

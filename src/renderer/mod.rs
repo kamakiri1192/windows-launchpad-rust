@@ -23,6 +23,7 @@
 mod badges;
 pub(crate) mod controls;
 mod counters;
+mod focus_blur;
 mod frame;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
@@ -67,6 +68,7 @@ pub struct Renderer {
     #[allow(dead_code)]
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
+    focus_blur: focus_blur::FocusBlurRenderer,
 
     // -- Text rendering -------------------------------------------------
     text_pipeline: RenderPipeline,

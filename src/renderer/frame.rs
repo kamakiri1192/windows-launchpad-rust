@@ -3,7 +3,7 @@
 //! The draw pass order is load-bearing and preserved verbatim from the
 //! historical monolithic renderer:
 //!
-//! 1. surface clear pass (transparent)
+//! 1. lower-scene texture clear pass (transparent)
 //! 2. Liquid Glass base pass (page frame + scrolling tile halos, backdrop)
 //! 3. tile fill pass (opaque app fills; folder fallback fills are discarded)
 //! 4. nested grid Liquid Glass pass (closed folder containers)
@@ -12,8 +12,10 @@
 //! 7. drag overlay pass (dragged tile + icon on top)
 //! 8. Liquid Glass control pass (capsule + gear merge)
 //! 9. control overlay pass (control ink, gear ink, control text)
-//! 10. Liquid Glass settings panel pass (modal)
-//! 11. settings overlay pass (close and title text)
+//! 10. optional lower-scene Dual-Kawase blur + rounded focus composite
+//! 11. focus tint backdrop
+//! 12. Liquid Glass settings/folder panel pass (modal)
+//! 13. modal content pass
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -23,6 +25,7 @@ use wgpu::{Color, TextureViewDescriptor};
 use crate::renderer::tiles::TileInstance;
 
 use super::controls::ControlUniforms;
+use super::focus_blur::FocusBlurParams;
 use super::tiles::Uniforms;
 use super::{DrawArgs, Renderer};
 
@@ -61,6 +64,27 @@ impl Renderer {
             }
         };
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
+        let focus_blur_params = self
+            .prepared_model
+            .ink
+            .iter()
+            .find(|batch| batch.lane == crate::ui_model::render_model::InkLane::Backdrop)
+            .and_then(|batch| batch.views.iter().find(|view| view.scene_blur > 0.001))
+            .map(|focus| FocusBlurParams {
+                viewport: args.viewport,
+                center: [focus.center.x, focus.center.y],
+                half_size: [focus.stroke, focus.extent],
+                radius: focus.corner_radius,
+                strength: focus.scene_blur,
+            })
+            .unwrap_or(FocusBlurParams {
+                viewport: args.viewport,
+                center: [clip.0, clip.1],
+                half_size: [clip.2, clip.3],
+                radius: clip.4,
+                strength: 0.0,
+            });
+        let scene_view = self.focus_blur.scene_view();
 
         let mut encoder = self
             .device
@@ -70,9 +94,9 @@ impl Renderer {
 
         {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("surface clear pass"),
+                label: Some("lower scene clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -97,7 +121,7 @@ impl Renderer {
             &self.device,
             &self.queue,
             &mut encoder,
-            &view,
+            scene_view,
             args.scroll_x,
             args.defer_backdrop_capture,
         );
@@ -121,7 +145,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tile fill pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -148,13 +172,13 @@ impl Renderer {
         }
 
         self.liquid_glass
-            .render_grid_overlay(&self.queue, &mut encoder, &view, args.scroll_x);
+            .render_grid_overlay(&self.queue, &mut encoder, scene_view, args.scroll_x);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("grid icon and text pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -207,13 +231,18 @@ impl Renderer {
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
             }),
         );
-        self.liquid_glass
-            .render_badges(&self.queue, &mut encoder, &view, args.scroll_x, args.time);
+        self.liquid_glass.render_badges(
+            &self.queue,
+            &mut encoder,
+            scene_view,
+            args.scroll_x,
+            args.time,
+        );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("edit badge foreground pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -240,7 +269,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("drag overlay pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -276,13 +305,13 @@ impl Renderer {
         }
 
         self.liquid_glass
-            .render_control(&self.queue, &mut encoder, &view);
+            .render_control(&self.queue, &mut encoder, scene_view);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -322,8 +351,23 @@ impl Renderer {
             }
         }
 
-        // Generic modal dimming lane. It is separate from the Liquid Glass
-        // surface so the glass still refracts real content beneath it.
+        // Finish the complete lower scene before any blur pass samples it.
+        // The pyramid uses separate submissions because wgpu/D3D12 cannot
+        // read and write successive levels inside one texture usage scope.
+        self.queue.submit(std::iter::once(encoder.finish()));
+        if focus_blur_params.strength > 0.001 {
+            self.focus_blur.blur(&self.device, &self.queue);
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("modal and focus encoder"),
+            });
+        self.focus_blur
+            .composite(&self.queue, &mut encoder, &view, focus_blur_params);
+
+        // Generic modal focus tint. The lower-scene blur has already replaced
+        // sharp grid content inside the same rounded geometry.
         if self.backdrop_instance_buffer.len() > 0 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("modal backdrop pass"),

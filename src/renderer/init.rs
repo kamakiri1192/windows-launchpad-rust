@@ -19,6 +19,7 @@ use crate::UserEvent;
 
 use super::controls::ControlUniforms;
 use super::counters::BufferCounters;
+use super::focus_blur::FocusBlurRenderer;
 use super::frame_clip;
 use super::resources::InstanceBuffer;
 use super::tiles::Uniforms;
@@ -432,6 +433,8 @@ impl Renderer {
             layout,
             capture,
         );
+        let focus_blur =
+            FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
 
         // ---- Bottom-control overlay pipelines ---------------------------
         // Small viewport-only uniform shared by the control shape + text
@@ -586,6 +589,7 @@ impl Renderer {
             uniform_bind_group,
             surface_format,
             liquid_glass,
+            focus_blur,
             text_pipeline,
             text_instance_buffer: InstanceBuffer::new("text instance buffer"),
             atlas_texture,
@@ -638,6 +642,8 @@ impl Renderer {
             self.config.width,
             self.config.height,
         );
+        self.focus_blur
+            .resize(&self.device, self.config.width, self.config.height);
     }
 
     #[allow(dead_code)]

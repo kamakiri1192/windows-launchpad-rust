@@ -347,6 +347,7 @@ fn ink_view(
         center: Point::new(center[0], center[1]),
         extent,
         opacity,
+        scene_blur: 0.0,
         stroke,
         corner_radius,
         color: Color::rgba(color[0], color[1], color[2], color[3]),

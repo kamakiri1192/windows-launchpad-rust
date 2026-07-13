@@ -2302,9 +2302,15 @@ Final validation:
   miniatures left at the source tile without changing the endpoint handoff.
 - Replaced the window-wide black folder dimmer with the **Glass Focus Veil**.
   The renderer-neutral veil now takes the exact fixed page-frame rectangle and
-  corner radius from `GridLayout`, applying a low-contrast cool-neutral frost
-  only inside the main Liquid Glass area while leaving the transparent window
-  surround untouched.
-- Validation passed: `cargo fmt --check`, 639 tests (637 passed, 2 ignored),
+  corner radius from `GridLayout`. Its neutral `scene_blur` request makes the
+  renderer finish the lower scene in an intermediate texture, run a three-level
+  Dual-Kawase pyramid, and recompose the blurred result through that rounded
+  shape before adding the low-contrast cool-neutral tint. The page rim stays
+  crisp through a 12 px inner mask, the transparent surround remains untouched,
+  and the modal folder glass/content render sharply after the effect.
+- Release-build transparent-window QA verified that lower app icons, other
+  folders, and labels blur together while the open folder stays sharp; the
+  effect remains inside the page frame and fades out with the close motion.
+- Validation passed: `cargo fmt --check`, 640 tests (638 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 

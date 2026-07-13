@@ -450,6 +450,7 @@ mod tests {
             center: Point::new(12.25, 34.5),
             extent: 7.0,
             opacity: 0.8,
+            scene_blur: 0.0,
             stroke: 1.4,
             corner_radius: 0.0,
             color: Color::rgba(1.0, 0.9, 0.8, 0.7),
