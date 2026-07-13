@@ -294,3 +294,55 @@ Before considering an edit-mode visual change complete:
 - Capture an edge-hold screenshot showing page autoscroll.
 - Confirm no `launchpad-windows.exe` process is left running from temporary
   QA unless intentionally relaunched for the user.
+
+## Phase 8 Folder QA
+
+Folder QA uses the same release build, temporary `LOCALAPPDATA`, screenshot
+opt-in, and GPU self-capture trigger described above. Seed the temporary
+cache's `kv.launcher_state` JSON with at least these cases so the result is
+repeatable without changing the user's real layout:
+
+- an 11-child folder for pagination and a two-item final page;
+- a 3-child folder for the centered incomplete row and narrow dynamic panel;
+- a long Japanese folder name for title fitting;
+- normal app items before, between, and after folder items.
+
+Validate the following on screen:
+
+1. The closed folder preview contains ordered 3x3 mini icons and is interleaved
+   with normal apps.
+2. Clicking it opens a Liquid Glass modal; the background dims/scales and the
+   source tile remains spatially connected to the opening panel.
+3. Capture opening and closing at roughly 100 ms intervals with
+   `LAUNCHPAD_QA_SHOT_FILE`. Confirm the panel rectangle/radius and child icons
+   converge exactly at both endpoints.
+4. Press `Esc` during opening and capture the next frames. The spring must
+   reverse from its current position, with no snap to an endpoint.
+5. Switch an 11-child folder to its second page. Confirm the final two children
+   are centered and the page indicator changes; return to page one.
+6. Open the 3-child folder and confirm its panel uses a centered single row.
+7. Rename the folder, press Enter, close/reopen, and inspect
+   `kv.launcher_state` to confirm persistence. Start another rename and press
+   `Esc`; the committed name must remain unchanged. Exercise Japanese text and
+   IME manually if the automation driver cannot emit IME commit events.
+8. Click outside the panel. It must close without launching or activating the
+   item underneath.
+9. Open search and enter a query. Results must be flat apps; folders and folder
+   panels must not appear.
+10. Long-press and drag to cover app-on-app creation, app-into-folder,
+    child reorder, child-to-folder, and child-to-top-level. Verify one-child
+    folders dissolve in their original slot.
+
+Some Windows automation APIs expose only an atomic drag and cannot express the
+launcher's long-press-then-move gesture. When that limitation applies, record
+the five drag scenarios as not screen-verified and rely on the deterministic
+folder feature/domain/layout tests; do not report them as manually verified.
+
+Before finishing, close the temporary launcher process and run:
+
+```powershell
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features
+cargo build --release
+```

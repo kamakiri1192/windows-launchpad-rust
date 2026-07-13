@@ -10,6 +10,7 @@
 //! - [`helpers`]: shared utilities (color blend, SpringPos trait, animation).
 
 mod controls;
+mod folders;
 mod grid;
 mod helpers;
 mod icons;

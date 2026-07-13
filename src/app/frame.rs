@@ -41,7 +41,15 @@ impl App {
             .map(|s| s.is_animating())
             .unwrap_or(false);
         let auto_scroll_started = self.maybe_autoscroll_edit_drag();
-        if self.editing && self.drag_app.is_some() {
+        // Resolve the stable hover identity before any live reorder. Moving
+        // the dragged item into the target cell first would make the next hit
+        // resolve to the dragged item itself and continuously reset the
+        // app-on-app / app-on-folder hover timer.
+        let hover_candidate = self.folder_hover_candidate_at_pointer();
+        if self.editing
+            && self.drag_item.is_some()
+            && crate::features::folders::top_level_reorder_allowed(hover_candidate.as_ref())
+        {
             self.live_reorder();
         }
 
@@ -53,6 +61,27 @@ impl App {
         };
         if self.editing {
             self.wiggle_phase += anim_dt;
+        }
+        let candidate_folder = hover_candidate.as_ref().and_then(|item| match item {
+            crate::domain::launcher_item::LauncherItem::Folder(id) => Some(id.clone()),
+            crate::domain::launcher_item::LauncherItem::App(_) => None,
+        });
+        if self.folders.hover_opened.is_some()
+            && self.folders.hover_opened.as_ref() != candidate_folder.as_ref()
+        {
+            self.folders.close();
+        }
+        let hover_changed = self.folders.update_hover(hover_candidate, anim_dt);
+        if let (Some(folder_id), Some(hover)) = (candidate_folder, self.folders.hover.as_ref()) {
+            if hover.ready() && self.folders.hover_opened.as_ref() != Some(&folder_id) {
+                self.folders.open(folder_id.clone());
+                self.folders.hover_opened = Some(folder_id);
+            }
+        }
+        let folder_was_active = self.folders.is_active();
+        let folder_animating = self.folders.tick(anim_dt);
+        if folder_animating || hover_changed || (folder_was_active && !self.folders.is_active()) {
+            self.relayout();
         }
 
         // Advance the per-tile position springs and re-push the
@@ -90,6 +119,7 @@ impl App {
         self.render_gear(control_shape);
         // Upload the settings overlay panel (if open).
         self.render_settings_panel();
+        self.render_folder_panel();
 
         // Sync the OS IME with the search field (on while focused,
         // parked at the caret) so Japanese / other IME input works.
@@ -126,7 +156,11 @@ impl App {
                 viewport: vp,
                 defer_backdrop_capture: dragging,
                 time: self.wiggle_phase,
-                drag_active: if self.drag_app.is_some() { 1.0 } else { 0.0 },
+                drag_active: if self.drag_item.is_some() || self.folders.child_drag.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
                 drag_pos: (self.drag_x, self.drag_y),
             });
         }
@@ -140,6 +174,8 @@ impl App {
             || control_animating
             || edit_control_animating
             || settings_animating
+            || folder_animating
+            || hover_changed
             || springs_animating
             || self.editing
         {

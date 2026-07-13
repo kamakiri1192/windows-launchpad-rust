@@ -148,7 +148,12 @@ impl App {
         let gear_instance = gear_geom.map(|(geom, alpha)| edit_gear_instance(&geom, alpha));
         self.render_model.set_glass_batch(
             GlassLayer::Overlay,
-            control_shape.into_iter().chain(gear_shape).collect(),
+            self.interaction_glass
+                .iter()
+                .cloned()
+                .chain(control_shape)
+                .chain(gear_shape)
+                .collect(),
         );
         self.render_model
             .set_ink_batch(InkLane::Gear, gear_instance.into_iter().collect());
@@ -181,14 +186,20 @@ impl App {
         let Some(r) = self.renderer.as_ref() else {
             return;
         };
-        let want_ime = self.control.wants_keyboard();
+        let want_ime = self.folders.rename.is_some() || self.control.wants_keyboard();
         r.window.set_ime_allowed(want_ime);
         if want_ime {
             // Park the IME composition window at the caret so Japanese/IME
             // candidates appear right next to the typed text.
             let scale = self.scale_factor;
-            let caret_x = self.control_caret_screen_x();
-            let caret_y = self.frame_control_cy();
+            let (caret_x, caret_y) = if self.folders.rename.is_some() {
+                self.folder_layout
+                    .as_ref()
+                    .map(|layout| (layout.title_rect.center().x, layout.title_rect.max_y()))
+                    .unwrap_or((0.0, 0.0))
+            } else {
+                (self.control_caret_screen_x(), self.frame_control_cy())
+            };
             r.window.set_ime_cursor_area(
                 winit::dpi::PhysicalPosition::new(caret_x as f64, caret_y as f64),
                 winit::dpi::PhysicalSize::new(1.0, (16.0 * scale) as f64),

@@ -1,13 +1,15 @@
 //! Grid layout / spring / edit animation render adapter methods.
 
-use crate::domain::app_id::AppId;
+use crate::domain::launcher_item::LauncherItem;
 use crate::grid;
 use crate::scroll::{self, Phase};
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::ids::UiId;
-use crate::ui_model::render_model::{Color, GlassLayer, GlyphLane, GlyphView, IconView, TileView};
+use crate::ui_model::render_model::{
+    Color, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, GlyphLane, GlyphView, IconView,
+    TileView,
+};
 
-use super::helpers::SpringPos;
 use crate::app::state::App;
 
 impl App {
@@ -28,8 +30,8 @@ impl App {
     /// label + icon instance buffers to the GPU.
     pub(crate) fn relayout(&mut self) {
         let (w, _h) = self.viewport_phys();
-        let owned = self.grid_apps_owned();
-        // Size pages to the current visible app count so every filtered app is
+        let owned = self.grid_items_owned();
+        // Size pages to the current visible item count so every filtered item is
         // reachable and blank trailing pages disappear during search.
         self.layout = grid::GridLayout::for_app_count(owned.len())
             .with_scale_factor(self.scale_factor)
@@ -39,19 +41,20 @@ impl App {
             s.set_bounds(bounds);
         }
 
-        let apps: Vec<grid::GridApp<'_>> = owned
+        let items: Vec<grid::GridItem<'_>> = owned
             .iter()
-            .map(|(id, name, uv)| grid::GridApp {
-                id: id.as_str(),
-                name: name.as_str(),
-                uv: *uv,
+            .map(|entry| grid::GridItem {
+                key: entry.key.as_str(),
+                name: entry.name.as_str(),
+                uv: entry.uv,
+                preview_uvs: &entry.preview_uvs,
             })
             .collect();
 
         // Text labels.
         let scale = self.scale_factor;
         let (grid_glyphs, dirty) = if let Some(t) = self.text.as_mut() {
-            let labels = self.layout.build_labels(w as f32, &apps);
+            let labels = self.layout.build_labels(w as f32, &items);
             let quads = t.layout_labels(&labels, scale);
             let dirty = t.atlas_dirty;
             if dirty {
@@ -71,27 +74,28 @@ impl App {
             }
         }
 
-        let visible_ids = self.visible_app_ids();
-        let anim = self.edit_anim(&visible_ids);
+        let visible_items = self.visible_launcher_items();
+        let anim = self.edit_anim(&visible_items);
         // Update the per-tile position springs to the new home cells (keeping
         // each spring's current value so tiles glide from where they were).
-        self.update_tile_springs(&visible_ids, w as f32);
+        self.update_tile_springs(&visible_items, w as f32);
         // Build the instances and override each tile's position with its spring
         // value so a reorder (or relayout) animates the icons sliding into place
         // rather than snapping. Done before the renderer borrow so we can read
         // the springs under &self.
-        let mut tile_instances = self.layout.build_instances(w as f32, &apps, &anim);
-        self.apply_spring_positions(&visible_ids, &mut tile_instances);
-        let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
-        self.apply_spring_positions(&visible_ids, &mut icon_instances);
+        let mut tile_instances = self.layout.build_instances(w as f32, &items, &anim);
+        self.apply_tile_spring_positions(&visible_items, &mut tile_instances);
+        let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
+        self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
         // While dragging, lift the dragged app off the grid: remove it from the
         // normal instance list and append a pointer-following copy at the end so
         // it draws on top of everything else.
-        self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
+        self.lift_dragged_instances(&mut tile_instances, &mut icon_instances);
         self.render_model.set_glass_batch(
             GlassLayer::Base,
-            self.layout.build_glass_surfaces(w as f32, &apps),
+            self.layout.build_glass_surfaces(w as f32, &items),
         );
+        self.interaction_glass = self.build_interaction_glass();
         self.render_model.tiles = Some(tile_instances);
         self.render_model.icons = Some(icon_instances);
 
@@ -104,29 +108,54 @@ impl App {
         }
     }
 
-    pub(crate) fn edit_anim(&self, visible_ids: &[AppId]) -> Vec<grid::TileAnim> {
-        if !self.editing {
-            return Vec::new();
-        }
-        let drag_id = self.drag_app.as_ref();
-        visible_ids
+    pub(crate) fn edit_anim(&self, visible_items: &[LauncherItem]) -> Vec<grid::TileAnim> {
+        let drag_item = self.drag_item.as_ref();
+        let folder_progress = self.folders.motion.visual_progress();
+        visible_items
             .iter()
             .enumerate()
-            .map(|(i, id)| {
-                let is_drag = drag_id.map(|d| d == id).unwrap_or(false);
+            .map(|(i, item)| {
+                let is_drag = drag_item == Some(item);
+                let is_pressed_folder = self
+                    .pending_press
+                    .as_ref()
+                    .and_then(|press| press.item.as_ref())
+                    == Some(item)
+                    && matches!(item, LauncherItem::Folder(_));
+                let background_scale = 1.0 - folder_progress * 0.035;
+                if !self.editing {
+                    return grid::TileAnim {
+                        phase: 0.0,
+                        lift: 0.0,
+                        scale: background_scale * if is_pressed_folder { 0.96 } else { 1.0 },
+                        flags: 0,
+                    };
+                }
                 if is_drag {
+                    let folder_flags = if matches!(item, LauncherItem::Folder(_)) {
+                        grid::TileAnim::FLAG_NO_BADGE
+                    } else {
+                        0
+                    };
                     grid::TileAnim {
                         phase: self.wiggle_phase + i as f32 * 0.37,
                         lift: 24.0 * self.scale_factor.max(1.0),
-                        scale: 1.15,
-                        flags: grid::TileAnim::FLAG_WIGGLE | grid::TileAnim::FLAG_DRAG,
+                        scale: 1.15 * background_scale,
+                        flags: grid::TileAnim::FLAG_WIGGLE
+                            | grid::TileAnim::FLAG_DRAG
+                            | folder_flags,
                     }
                 } else {
+                    let folder_flags = if matches!(item, LauncherItem::Folder(_)) {
+                        grid::TileAnim::FLAG_NO_BADGE
+                    } else {
+                        0
+                    };
                     grid::TileAnim {
                         phase: self.wiggle_phase + i as f32 * 0.37,
                         lift: 0.0,
-                        scale: 1.0,
-                        flags: grid::TileAnim::FLAG_WIGGLE,
+                        scale: background_scale,
+                        flags: grid::TileAnim::FLAG_WIGGLE | folder_flags,
                     }
                 }
             })
@@ -136,7 +165,7 @@ impl App {
     /// Realign `tile_springs` with the current visible app set. Existing
     /// springs are matched by `AppId`, not position, so a reordered app keeps
     /// its previous cell as the spring value and glides to its new home cell.
-    pub(crate) fn update_tile_springs(&mut self, visible_ids: &[AppId], viewport_w: f32) {
+    pub(crate) fn update_tile_springs(&mut self, visible_ids: &[LauncherItem], viewport_w: f32) {
         let mut old = std::mem::take(&mut self.tile_springs);
         self.tile_springs.reserve(visible_ids.len());
         for (i, id) in visible_ids.iter().enumerate() {
@@ -155,10 +184,10 @@ impl App {
     /// Override each instance's position with its spring value, so the tile
     /// slides from where it was toward its home cell. Works for both
     /// `TileInstance` and `IconInstance` via the [`SpringPos`] trait.
-    pub(crate) fn apply_spring_positions<T: SpringPos>(
+    pub(crate) fn apply_tile_spring_positions(
         &self,
-        visible_ids: &[AppId],
-        instances: &mut [T],
+        visible_ids: &[LauncherItem],
+        instances: &mut [TileView],
     ) {
         for (id, inst) in visible_ids.iter().zip(instances.iter_mut()) {
             if let Some((_, spring)) = self
@@ -166,7 +195,85 @@ impl App {
                 .iter()
                 .find(|(spring_id, _)| spring_id == id)
             {
-                inst.set_pos(spring.x.value, spring.y.value);
+                inst.rect.x = spring.x.value;
+                inst.rect.y = spring.y.value;
+            }
+        }
+    }
+
+    fn build_interaction_glass(&self) -> Vec<GlassSurface> {
+        let Some(hover) = self.folders.hover.as_ref() else {
+            return Vec::new();
+        };
+        let Some(index) = self
+            .visible_launcher_items()
+            .iter()
+            .position(|item| item == &hover.target)
+        else {
+            return Vec::new();
+        };
+        let progress = hover.progress();
+        let (x, y) = self
+            .layout
+            .tile_position(self.viewport_phys().0 as f32, index);
+        let scroll = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let target_size = self.layout.tile_size * (1.08 + 0.08 * progress);
+        let pointer_size = self.layout.tile_size * (0.98 + 0.08 * progress);
+        vec![
+            GlassSurface {
+                id: UiId::backdrop("folder-hover-target"),
+                rect: Rect::new(
+                    x + scroll + (self.layout.tile_size - target_size) * 0.5,
+                    y + (self.layout.tile_size - target_size) * 0.5,
+                    target_size,
+                    target_size,
+                ),
+                radius: 27.0 * self.scale_factor,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: 20,
+            },
+            GlassSurface {
+                id: UiId::backdrop("folder-hover-drag"),
+                rect: Rect::new(
+                    self.drag_x - pointer_size * 0.5,
+                    self.drag_y - pointer_size * 0.5,
+                    pointer_size,
+                    pointer_size,
+                ),
+                radius: 27.0 * self.scale_factor,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: 21,
+            },
+        ]
+    }
+
+    pub(crate) fn apply_icon_spring_offsets(
+        &self,
+        visible_items: &[LauncherItem],
+        viewport_w: f32,
+        instances: &mut [IconView],
+    ) {
+        for (index, item) in visible_items.iter().enumerate() {
+            let Some((_, spring)) = self
+                .tile_springs
+                .iter()
+                .find(|(spring_item, _)| spring_item == item)
+            else {
+                continue;
+            };
+            let (target_x, target_y) = self.layout.tile_position(viewport_w, index);
+            let dx = spring.x.value - target_x;
+            let dy = spring.y.value - target_y;
+            let key = item.stable_key();
+            let item_id = UiId::launcher_item(&key);
+            let preview_prefix = format!("launcher-preview:{key}:");
+            for instance in instances.iter_mut().filter(|instance| {
+                instance.id == item_id || instance.id.as_str().starts_with(&preview_prefix)
+            }) {
+                instance.rect.x += dx;
+                instance.rect.y += dy;
             }
         }
     }
@@ -179,7 +286,6 @@ impl App {
         &self,
         tile_instances: &mut Vec<TileView>,
         icon_instances: &mut Vec<IconView>,
-        _visible_ids: &[AppId],
     ) {
         let is_drag = |flags: u32| flags & grid::TileAnim::FLAG_DRAG != 0;
 
@@ -210,23 +316,24 @@ impl App {
     /// spring positions, without recomputing the layout. Called every frame
     /// while the springs are animating so the slide is visible.
     pub(crate) fn refresh_spring_instances(&mut self) {
-        let owned = self.grid_apps_owned();
-        let apps: Vec<grid::GridApp<'_>> = owned
+        let owned = self.grid_items_owned();
+        let items: Vec<grid::GridItem<'_>> = owned
             .iter()
-            .map(|(id, name, uv)| grid::GridApp {
-                id: id.as_str(),
-                name: name.as_str(),
-                uv: *uv,
+            .map(|entry| grid::GridItem {
+                key: entry.key.as_str(),
+                name: entry.name.as_str(),
+                uv: entry.uv,
+                preview_uvs: &entry.preview_uvs,
             })
             .collect();
         let (w, _h) = self.viewport_phys();
-        let visible_ids = self.visible_app_ids();
-        let anim = self.edit_anim(&visible_ids);
-        let mut tile_instances = self.layout.build_instances(w as f32, &apps, &anim);
-        self.apply_spring_positions(&visible_ids, &mut tile_instances);
-        let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
-        self.apply_spring_positions(&visible_ids, &mut icon_instances);
-        self.lift_dragged_instances(&mut tile_instances, &mut icon_instances, &visible_ids);
+        let visible_items = self.visible_launcher_items();
+        let anim = self.edit_anim(&visible_items);
+        let mut tile_instances = self.layout.build_instances(w as f32, &items, &anim);
+        self.apply_tile_spring_positions(&visible_items, &mut tile_instances);
+        let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
+        self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.lift_dragged_instances(&mut tile_instances, &mut icon_instances);
         self.render_model.tiles = Some(tile_instances);
         self.render_model.icons = Some(icon_instances);
     }

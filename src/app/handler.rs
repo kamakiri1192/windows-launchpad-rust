@@ -33,8 +33,8 @@ use crate::scroll::{Phase, Scroller};
 use crate::startup_timer::prefix;
 
 use super::action::{
-    keyboard_action, pointer_press_action, pointer_release_action, AppAction, PressAction,
-    ReleaseAction,
+    folder_keyboard_action, keyboard_action, pointer_press_action, pointer_release_action,
+    AppAction, PressAction, ReleaseAction,
 };
 use super::event::UserEvent;
 use super::state::{
@@ -149,14 +149,26 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
-                let key_action = keyboard_action(
-                    self.settings_open,
-                    self.editing,
-                    self.control.wants_keyboard(),
-                    self.control.preedit.is_empty(),
-                    key_code,
-                    event.text.as_deref(),
-                );
+                let key_action = if self.folders.is_active() && !self.settings_open {
+                    folder_keyboard_action(
+                        self.folders.rename.is_some(),
+                        self.folders
+                            .rename
+                            .as_ref()
+                            .is_none_or(|editor| editor.preedit.is_empty()),
+                        key_code,
+                        event.text.as_deref(),
+                    )
+                } else {
+                    keyboard_action(
+                        self.settings_open,
+                        self.editing,
+                        self.control.wants_keyboard(),
+                        self.control.preedit.is_empty(),
+                        key_code,
+                        event.text.as_deref(),
+                    )
+                };
                 AppAction::Keyboard(key_action)
             }
             WindowEvent::Ime(ime) => AppAction::Ime(ime),
@@ -218,6 +230,9 @@ impl App {
     /// shell flags and the pointer position. This feeds
     /// [`AppAction::PointerPress`].
     fn classify_pointer_press(&self, px: f32, py: f32) -> PressAction {
+        if self.folders.is_active() && self.drag_item.is_none() {
+            return PressAction::Folder;
+        }
         let settings_target = if self.settings_open {
             self.settings_hit_target(px, py)
         } else {
@@ -244,6 +259,9 @@ impl App {
     /// shell flags and the press/release state. This feeds
     /// [`AppAction::PointerRelease`].
     fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
+        if self.folders.is_active() && self.drag_item.is_none() {
+            return ReleaseAction::Folder;
+        }
         let settings_pressed = if self.settings_open {
             self.pressed_on_settings
         } else {
@@ -259,7 +277,7 @@ impl App {
         } else {
             false
         };
-        let editing_with_drag = self.editing && self.drag_app.is_some();
+        let editing_with_drag = self.editing && self.drag_item.is_some();
         let has_pending_press = self.pending_press.is_some();
         let is_outside_glass_click = self
             .pending_press
@@ -269,7 +287,7 @@ impl App {
         let has_launch_id = self
             .pending_press
             .as_ref()
-            .and_then(|p| p.launch_id(px, py))
+            .and_then(|p| p.activated_item(px, py))
             .is_some();
         let scroller_dragging = self
             .scroller

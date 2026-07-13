@@ -59,6 +59,7 @@ pub struct Renderer {
     decorated: bool,
     /// Static per-tile instance data (capacity-managed; see `resources`).
     instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
+    modal_tile_instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
     /// Per-frame uniform data (viewport + scroll).
     uniform_buffer: Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -79,6 +80,7 @@ pub struct Renderer {
     // -- Icon rendering -------------------------------------------------
     icon_pipeline: RenderPipeline,
     icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
+    modal_icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
@@ -97,6 +99,7 @@ pub struct Renderer {
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    backdrop_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
     /// overlay pass alongside the bottom-control ink.
     gear_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
@@ -111,6 +114,8 @@ pub struct Renderer {
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
     settings_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
+    modal_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    modal_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Last prepared neutral scene, updated lane-by-lane only when changed.
     prepared_model: crate::ui_model::render_model::RenderModel,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.

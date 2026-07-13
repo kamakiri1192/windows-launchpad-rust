@@ -298,15 +298,11 @@ impl Renderer {
             }
         }
 
-        // Settings overlay panel — drawn last so it composites over everything
-        // (grid, control, gear).
-        self.liquid_glass
-            .render_settings_panel(&self.queue, &mut encoder, &view);
-
-        // Settings panel ink (close ×) + title text, on top of the panel glass.
-        if self.settings_instance_buffer.len() > 0 || self.settings_text_instance_buffer.len() > 0 {
+        // Generic modal dimming lane. It is separate from the Liquid Glass
+        // surface so the glass still refracts real content beneath it.
+        if self.backdrop_instance_buffer.len() > 0 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("settings overlay pass"),
+                label: Some("modal backdrop pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -321,6 +317,73 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(buf) = self.backdrop_instance_buffer.as_ref() {
+                pass.set_pipeline(&self.control_pipeline);
+                pass.set_bind_group(0, &self.control_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..self.backdrop_instance_buffer.len());
+            }
+        }
+
+        // Generic dynamic modal Liquid Glass surface.
+        self.liquid_glass
+            .render_settings_panel(&self.queue, &mut encoder, &view);
+
+        // Generic fixed modal content, plus settings-specific content, on top
+        // of the modal glass.
+        if self.modal_tile_instance_buffer.len() > 0
+            || self.modal_icon_instance_buffer.len() > 0
+            || self.modal_instance_buffer.len() > 0
+            || self.modal_text_instance_buffer.len() > 0
+            || self.settings_instance_buffer.len() > 0
+            || self.settings_text_instance_buffer.len() > 0
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("modal content pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if self.modal_tile_instance_buffer.len() > 0 {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.modal_tile_instance_buffer.buffer().slice(..));
+                pass.draw(0..6, 0..self.modal_tile_instance_buffer.len());
+            }
+            if self.modal_icon_instance_buffer.len() > 0 {
+                if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.modal_icon_instance_buffer.len());
+                }
+            }
+            if self.modal_instance_buffer.len() > 0 {
+                if let Some(buf) = self.modal_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.modal_instance_buffer.len());
+                }
+            }
+            if self.modal_text_instance_buffer.len() > 0 {
+                if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_text_pipeline);
+                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                }
+            }
             if self.settings_instance_buffer.len() > 0 {
                 if let Some(buf) = self.settings_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_pipeline);

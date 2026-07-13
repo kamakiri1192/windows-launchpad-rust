@@ -7,12 +7,14 @@
 
 use crate::ui_model::geometry::UvRect;
 
-/// Minimal borrowed view of one visible launcher app.
+/// Minimal borrowed view of one visible launcher item. A normal app supplies
+/// `uv`; a folder-style item supplies up to nine ordered `preview_uvs`.
 #[derive(Debug, Clone, Copy)]
-pub struct GridApp<'a> {
-    pub id: &'a str,
+pub struct GridItem<'a> {
+    pub key: &'a str,
     pub name: &'a str,
     pub uv: Option<UvRect>,
+    pub preview_uvs: &'a [Option<UvRect>],
 }
 
 /// Renderer-neutral edit/drag animation state for one launcher tile.
@@ -27,6 +29,11 @@ pub struct TileAnim {
 impl TileAnim {
     pub const FLAG_WIGGLE: u32 = 1 << 0;
     pub const FLAG_DRAG: u32 = 1 << 1;
+    /// Fixed screen-space content that bypasses horizontal scrolling and the
+    /// page-frame clip (used by generic modal content).
+    pub const FLAG_FIXED: u32 = 1 << 2;
+    /// Participates in edit motion without exposing the app-only hide badge.
+    pub const FLAG_NO_BADGE: u32 = 1 << 3;
 
     pub const IDLE: Self = Self {
         phase: 0.0,

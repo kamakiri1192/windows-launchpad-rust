@@ -213,6 +213,45 @@ impl Renderer {
         } else {
             self.counters.record_dirty_skip();
         }
+        if model.modal_tiles != self.prepared_model.modal_tiles {
+            let views = model.modal_tiles.as_deref().unwrap_or_default();
+            let instances: Vec<_> = views
+                .iter()
+                .enumerate()
+                .map(|(index, view)| tile_instance(view, index))
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.modal_tile_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Tile,
+            );
+            self.prepared_model
+                .modal_tiles
+                .clone_from(&model.modal_tiles);
+        }
+        if model.modal_icons != self.prepared_model.modal_icons {
+            let instances: Vec<_> = model
+                .modal_icons
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(icon_instance)
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.modal_icon_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Icon,
+            );
+            self.prepared_model
+                .modal_icons
+                .clone_from(&model.modal_icons);
+        }
 
         for batch in &model.ink {
             if self
@@ -227,6 +266,14 @@ impl Renderer {
             }
             let instances: Vec<_> = batch.views.iter().filter_map(ink_instance).collect();
             match batch.lane {
+                InkLane::Backdrop => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.backdrop_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Control,
+                ),
                 InkLane::BottomControl => set_instances(
                     &self.device,
                     &self.queue,
@@ -252,6 +299,14 @@ impl Renderer {
                     Category::Settings,
                 ),
                 InkLane::EditBadge => {}
+                InkLane::Modal => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.modal_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Settings,
+                ),
             }
             self.prepared_model
                 .set_ink_batch(batch.lane, batch.views.clone());
@@ -290,6 +345,14 @@ impl Renderer {
                     &self.device,
                     &self.queue,
                     &mut self.settings_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::SettingsText,
+                ),
+                GlyphLane::Modal => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.modal_text_instance_buffer,
                     &quads,
                     &mut self.counters,
                     Category::SettingsText,

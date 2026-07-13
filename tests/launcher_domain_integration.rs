@@ -83,7 +83,9 @@ fn launcher_item_order_round_trips_through_serde() {
 fn folder_and_app_references_are_stable_across_normalize() {
     let mut state = LauncherState::new();
     let fid = FolderId::generate(3);
-    state.upsert_folder(Folder::new(fid.clone(), "Tools"));
+    let mut folder = Folder::new(fid.clone(), "Tools");
+    folder.children = vec![app("a"), app("b")];
+    state.upsert_folder(folder);
     state.set_items(vec![
         LauncherItem::App(app("x")),
         LauncherItem::Folder(fid.clone()),
@@ -388,15 +390,19 @@ fn reorder_does_not_drop_undiscovered_placeholders() {
 // ---- regression: cross-placement dedup (codex P2-b) ----
 
 #[test]
-fn normalize_removes_folder_child_that_is_also_top_level() {
+fn normalize_resolves_cross_placement_then_dissolves_undersized_folder() {
     let mut state = LauncherState::from_legacy(vec![app("a")], vec![]);
     let fid = FolderId::generate(0);
     let mut f = Folder::new(fid, "F");
     f.children = vec![app("a"), app("only_folder")];
     state.upsert_folder(f);
     state.normalize(&discovered(&["a", "only_folder"]), false);
-    let folder = state.folders.get(&FolderId::generate(0)).unwrap();
-    // "a" removed from folder (top-level wins); "only_folder" stays.
-    assert_eq!(folder.children, vec![app("only_folder")]);
+    // Top-level "a" wins the cross-placement conflict. That leaves a
+    // one-child folder, so Phase 8 promotes its remaining child and removes
+    // the undersized container.
+    assert!(!state.folders.contains_key(&FolderId::generate(0)));
     assert!(state.top_level_app_ids().any(|id| id == &app("a")));
+    assert!(state
+        .top_level_app_ids()
+        .any(|id| id == &app("only_folder")));
 }

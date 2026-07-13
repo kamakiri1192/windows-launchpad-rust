@@ -140,6 +140,19 @@ impl LauncherState {
                 .retain(|item| !matches!(item, LauncherItem::App(a) if a == id));
             changed = true;
         }
+        let affected_folders: Vec<FolderId> = self
+            .folders
+            .iter_mut()
+            .filter_map(|(folder_id, folder)| {
+                let before = folder.children.len();
+                folder.children.retain(|child| child != id);
+                (folder.children.len() != before).then(|| folder_id.clone())
+            })
+            .collect();
+        for folder_id in affected_folders {
+            changed = true;
+            self.dissolve_small_folder(&folder_id);
+        }
         changed
     }
 
@@ -225,6 +238,234 @@ impl LauncherState {
         new_items.extend(folder_items);
         self.items = new_items;
         self.customized = true;
+    }
+
+    /// Reorder the currently visible top-level items while preserving any
+    /// undiscovered placeholder items in their existing slots. The supplied
+    /// order must contain exactly the same unique items as `visible_items`.
+    pub fn reorder_visible_items(
+        &mut self,
+        visible_items: &[LauncherItem],
+        ordered_items: Vec<LauncherItem>,
+    ) -> bool {
+        let visible_set: HashSet<LauncherItem> = visible_items.iter().cloned().collect();
+        let ordered_set: HashSet<LauncherItem> = ordered_items.iter().cloned().collect();
+        if visible_set.len() != visible_items.len()
+            || ordered_set.len() != ordered_items.len()
+            || visible_set != ordered_set
+        {
+            return false;
+        }
+
+        let mut next = ordered_items.into_iter();
+        let mut changed = false;
+        for item in &mut self.items {
+            if visible_set.contains(item) {
+                let replacement = next.next().expect("validated visible item count");
+                changed |= *item != replacement;
+                *item = replacement;
+            }
+        }
+        if next.next().is_some() {
+            return false;
+        }
+        if changed {
+            self.customized = true;
+        }
+        changed
+    }
+
+    /// Create a folder by dropping one top-level app onto another. The target
+    /// app's grid position is retained and child order is target then dragged.
+    pub fn create_folder_from_apps(
+        &mut self,
+        target: &AppId,
+        dragged: &AppId,
+        name: impl Into<String>,
+    ) -> Option<FolderId> {
+        if target == dragged {
+            return None;
+        }
+        let target_item = LauncherItem::App(target.clone());
+        let dragged_item = LauncherItem::App(dragged.clone());
+        if !self.items.contains(&target_item) || !self.items.contains(&dragged_item) {
+            return None;
+        }
+
+        let id = FolderId::generate(self.next_folder_counter());
+        let mut folder = Folder::new(id.clone(), name);
+        folder.children = vec![target.clone(), dragged.clone()];
+        let mut inserted = false;
+        let mut items = Vec::with_capacity(self.items.len() - 1);
+        for item in self.items.drain(..) {
+            if item == target_item {
+                items.push(LauncherItem::Folder(id.clone()));
+                inserted = true;
+            } else if item != dragged_item {
+                items.push(item);
+            }
+        }
+        if !inserted {
+            return None;
+        }
+        self.items = items;
+        self.folders.insert(id.clone(), folder);
+        self.customized = true;
+        Some(id)
+    }
+
+    /// Move a top-level app into an existing folder, appending it to the child
+    /// order. Invalid, duplicate, and self-inconsistent requests are no-ops.
+    pub fn move_top_level_app_into_folder(&mut self, app_id: &AppId, folder_id: &FolderId) -> bool {
+        let item = LauncherItem::App(app_id.clone());
+        if !self.items.contains(&item)
+            || self
+                .folders
+                .get(folder_id)
+                .is_none_or(|folder| folder.contains_child(app_id))
+        {
+            return false;
+        }
+        self.items.retain(|candidate| candidate != &item);
+        self.folders
+            .get_mut(folder_id)
+            .expect("folder checked above")
+            .children
+            .push(app_id.clone());
+        self.customized = true;
+        true
+    }
+
+    /// Reorder one child inside its folder. The app id, not its old index, is
+    /// the stable identity used for the mutation.
+    pub fn reorder_folder_child(
+        &mut self,
+        folder_id: &FolderId,
+        app_id: &AppId,
+        insert_index: usize,
+    ) -> bool {
+        let Some(folder) = self.folders.get_mut(folder_id) else {
+            return false;
+        };
+        let Some(old_index) = folder.children.iter().position(|id| id == app_id) else {
+            return false;
+        };
+        let id = folder.children.remove(old_index);
+        let new_index = insert_index.min(folder.children.len());
+        folder.children.insert(new_index, id);
+        let changed = old_index != new_index;
+        self.customized |= changed;
+        changed
+    }
+
+    /// Move a child between folders and apply the one/zero-child dissolve
+    /// policy to the source folder.
+    pub fn move_child_between_folders(
+        &mut self,
+        source: &FolderId,
+        destination: &FolderId,
+        app_id: &AppId,
+        insert_index: usize,
+    ) -> bool {
+        if source == destination
+            || self
+                .folders
+                .get(destination)
+                .is_none_or(|folder| folder.contains_child(app_id))
+        {
+            return false;
+        }
+        let Some(source_index) = self
+            .folders
+            .get(source)
+            .and_then(|folder| folder.children.iter().position(|id| id == app_id))
+        else {
+            return false;
+        };
+        self.folders
+            .get_mut(source)
+            .expect("source checked above")
+            .children
+            .remove(source_index);
+        let destination_folder = self
+            .folders
+            .get_mut(destination)
+            .expect("destination checked above");
+        destination_folder.children.insert(
+            insert_index.min(destination_folder.children.len()),
+            app_id.clone(),
+        );
+        self.dissolve_small_folder(source);
+        self.customized = true;
+        true
+    }
+
+    /// Move a folder child back to the top-level grid, then dissolve its source
+    /// folder when zero or one child remains.
+    pub fn move_child_to_top_level(
+        &mut self,
+        folder_id: &FolderId,
+        app_id: &AppId,
+        insert_index: usize,
+    ) -> bool {
+        let Some(child_index) = self
+            .folders
+            .get(folder_id)
+            .and_then(|folder| folder.children.iter().position(|id| id == app_id))
+        else {
+            return false;
+        };
+        if self.items.iter().any(|item| item.is_app(app_id)) {
+            return false;
+        }
+        self.folders
+            .get_mut(folder_id)
+            .expect("folder checked above")
+            .children
+            .remove(child_index);
+        self.dissolve_small_folder(folder_id);
+        self.items.insert(
+            insert_index.min(self.items.len()),
+            LauncherItem::App(app_id.clone()),
+        );
+        self.customized = true;
+        true
+    }
+
+    /// Apply the Phase 8 dissolve policy. A one-child folder promotes its
+    /// remaining app at the folder's exact position; an empty folder vanishes.
+    pub fn dissolve_small_folder(&mut self, folder_id: &FolderId) -> bool {
+        let Some(folder) = self.folders.get(folder_id) else {
+            return false;
+        };
+        if folder.children.len() > 1 {
+            return false;
+        }
+        let remaining = folder.children.first().cloned();
+        if let Some(index) = self
+            .items
+            .iter()
+            .position(|item| item.as_folder_id() == Some(folder_id))
+        {
+            match remaining.clone() {
+                Some(app_id) => self.items[index] = LauncherItem::App(app_id),
+                None => {
+                    self.items.remove(index);
+                }
+            }
+        } else if let Some(app_id) = remaining {
+            // Corrupt/legacy input may contain folder data without the matching
+            // top-level item. Do not lose its sole child while normalizing;
+            // append it if it is not already represented or hidden.
+            if !self.hidden_apps.contains(&app_id)
+                && !self.items.iter().any(|item| item.is_app(&app_id))
+            {
+                self.items.push(LauncherItem::App(app_id));
+            }
+        }
+        self.folders.remove(folder_id);
+        self.customized = true;
+        true
     }
 
     /// Integrate the currently-discovered app set into the layout.
@@ -387,8 +628,19 @@ impl LauncherState {
             self.hidden_apps.retain(|id| _present_apps.contains(id));
         }
 
-        // 6. Drop empty folders? No — an empty folder is a valid user state in
-        //    Phase 8 (the user may have just removed the last child). Keep them.
+        // 6. Phase 8 folders are never durable containers with fewer than two
+        //    children. Promote a sole child at the folder item's exact position
+        //    and remove empty folders. This also repairs legacy/corrupt input
+        //    after hidden/cross-placement cleanup above reduced membership.
+        let small_folders: Vec<FolderId> = self
+            .folders
+            .iter()
+            .filter(|(_, folder)| folder.children.len() <= 1)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for folder_id in small_folders {
+            self.dissolve_small_folder(&folder_id);
+        }
     }
 
     /// The next folder id counter, seeded from the highest existing generated
@@ -518,6 +770,20 @@ mod tests {
     }
 
     #[test]
+    fn hide_folder_child_removes_it_and_dissolves_pair_folder() {
+        let folder_id = FolderId::generate(0);
+        let mut state = LauncherState::new();
+        let mut folder = Folder::new(folder_id.clone(), "Pair");
+        folder.children = vec![app("hidden"), app("remaining")];
+        state.upsert_folder(folder);
+        state.items = vec![LauncherItem::Folder(folder_id.clone())];
+        assert!(state.hide_app(&app("hidden")));
+        assert!(state.is_hidden(&app("hidden")));
+        assert!(!state.folders.contains_key(&folder_id));
+        assert_eq!(state.items, vec![LauncherItem::App(app("remaining"))]);
+    }
+
+    #[test]
     fn unhide_app_appends_to_tail() {
         let mut state = LauncherState::from_legacy(vec![app("b")], vec![app("a")]);
         state.unhide_app(&app("a"));
@@ -548,6 +814,36 @@ mod tests {
     }
 
     #[test]
+    fn normalize_dissolves_one_child_and_removes_empty_folders() {
+        let one_id = FolderId::generate(10);
+        let empty_id = FolderId::generate(11);
+        let mut one = Folder::new(one_id.clone(), "One");
+        one.children.push(app("remaining"));
+        let mut state = LauncherState::new();
+        state.upsert_folder(one);
+        state.upsert_folder(Folder::new(empty_id.clone(), "Empty"));
+        state.items = vec![
+            LauncherItem::App(app("before")),
+            LauncherItem::Folder(one_id.clone()),
+            LauncherItem::Folder(empty_id.clone()),
+            LauncherItem::App(app("after")),
+        ];
+
+        state.normalize(&HashSet::new(), false);
+
+        assert_eq!(
+            state.items,
+            vec![
+                LauncherItem::App(app("before")),
+                LauncherItem::App(app("remaining")),
+                LauncherItem::App(app("after")),
+            ]
+        );
+        assert!(!state.folders.contains_key(&one_id));
+        assert!(!state.folders.contains_key(&empty_id));
+    }
+
+    #[test]
     fn normalize_hidden_app_wins_over_top_level_placement() {
         // App "x" is both top-level and hidden. The hidden intent wins: it is
         // removed from the visible layout and kept in hidden_apps. This prevents
@@ -563,7 +859,7 @@ mod tests {
     #[test]
     fn normalize_hidden_app_removed_from_folder_children() {
         // A hidden app that is also a folder child is removed from the folder;
-        // hidden wins.
+        // hidden wins. The remaining one-child folder is then dissolved.
         let mut state = LauncherState::new();
         let fid = FolderId::generate(0);
         let mut f = Folder::new(fid, "F");
@@ -572,8 +868,8 @@ mod tests {
         state.upsert_folder(f);
         state.hidden_apps.insert(app("secret"));
         state.normalize(&HashSet::new(), false);
-        let folder = state.folders.get(&FolderId::generate(0)).unwrap();
-        assert_eq!(folder.children, vec![app("visible")]);
+        assert!(!state.folders.contains_key(&FolderId::generate(0)));
+        assert!(state.top_level_app_ids().any(|id| id == &app("visible")));
         assert!(state.is_hidden(&app("secret")));
     }
 
@@ -635,6 +931,160 @@ mod tests {
     }
 
     #[test]
+    fn visible_item_reorder_preserves_undiscovered_placeholder_slots() {
+        let folder_id = FolderId::generate(0);
+        let mut state = LauncherState::new();
+        state.items = vec![
+            LauncherItem::App(app("a")),
+            LauncherItem::App(app("missing")),
+            LauncherItem::Folder(folder_id.clone()),
+            LauncherItem::App(app("b")),
+        ];
+        state.upsert_folder(Folder::new(folder_id.clone(), "Work"));
+        let visible = vec![
+            LauncherItem::App(app("a")),
+            LauncherItem::Folder(folder_id.clone()),
+            LauncherItem::App(app("b")),
+        ];
+        assert!(state.reorder_visible_items(
+            &visible,
+            vec![
+                LauncherItem::Folder(folder_id.clone()),
+                LauncherItem::App(app("b")),
+                LauncherItem::App(app("a")),
+            ],
+        ));
+        assert_eq!(
+            state.items,
+            vec![
+                LauncherItem::Folder(folder_id),
+                LauncherItem::App(app("missing")),
+                LauncherItem::App(app("b")),
+                LauncherItem::App(app("a")),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_on_app_creates_folder_at_target_position() {
+        let mut state = LauncherState::from_legacy(
+            vec![app("before"), app("target"), app("dragged"), app("after")],
+            vec![],
+        );
+        let id = state
+            .create_folder_from_apps(&app("target"), &app("dragged"), "Work")
+            .unwrap();
+        assert_eq!(
+            state.items,
+            vec![
+                LauncherItem::App(app("before")),
+                LauncherItem::Folder(id.clone()),
+                LauncherItem::App(app("after")),
+            ]
+        );
+        let folder = state.folders.get(&id).unwrap();
+        assert_eq!(folder.name, "Work");
+        assert_eq!(folder.children, vec![app("target"), app("dragged")]);
+    }
+
+    #[test]
+    fn self_duplicate_and_invalid_folder_drops_are_noops() {
+        let mut state = LauncherState::from_legacy(vec![app("a"), app("b")], vec![]);
+        let before = state.clone();
+        assert!(state
+            .create_folder_from_apps(&app("a"), &app("a"), "Invalid")
+            .is_none());
+        assert!(
+            !state.move_top_level_app_into_folder(&app("a"), &FolderId::from_normalized("missing"))
+        );
+        assert_eq!(state, before);
+
+        let folder_id = state
+            .create_folder_from_apps(&app("a"), &app("b"), "Pair")
+            .unwrap();
+        assert!(!state.move_top_level_app_into_folder(&app("a"), &folder_id));
+        assert!(!state.reorder_folder_child(&folder_id, &app("missing"), 0));
+    }
+
+    #[test]
+    fn top_level_app_moves_into_existing_folder() {
+        let folder_id = FolderId::generate(0);
+        let mut state = LauncherState::from_legacy(vec![app("a"), app("b")], vec![]);
+        let mut folder = Folder::new(folder_id.clone(), "Tools");
+        folder.children.push(app("child"));
+        state.upsert_folder(folder);
+        state.items.push(LauncherItem::Folder(folder_id.clone()));
+        assert!(state.move_top_level_app_into_folder(&app("a"), &folder_id));
+        assert!(!state.items.contains(&LauncherItem::App(app("a"))));
+        assert_eq!(
+            state.folders.get(&folder_id).unwrap().children,
+            vec![app("child"), app("a")]
+        );
+    }
+
+    #[test]
+    fn child_reorder_commits_by_stable_app_id() {
+        let folder_id = FolderId::generate(0);
+        let mut state = LauncherState::new();
+        let mut folder = Folder::new(folder_id.clone(), "Tools");
+        folder.children = vec![app("a"), app("b"), app("c")];
+        state.upsert_folder(folder);
+        assert!(state.reorder_folder_child(&folder_id, &app("a"), 2));
+        assert_eq!(
+            state.folders.get(&folder_id).unwrap().children,
+            vec![app("b"), app("c"), app("a")]
+        );
+    }
+
+    #[test]
+    fn moving_between_folders_dissolves_one_child_source_in_place() {
+        let source = FolderId::generate(0);
+        let destination = FolderId::generate(1);
+        let mut state = LauncherState::new();
+        let mut source_folder = Folder::new(source.clone(), "Source");
+        source_folder.children = vec![app("a"), app("b")];
+        let mut destination_folder = Folder::new(destination.clone(), "Destination");
+        destination_folder.children = vec![app("c"), app("d")];
+        state.upsert_folder(source_folder);
+        state.upsert_folder(destination_folder);
+        state.items = vec![
+            LauncherItem::Folder(source.clone()),
+            LauncherItem::App(app("tail")),
+            LauncherItem::Folder(destination.clone()),
+        ];
+        assert!(state.move_child_between_folders(&source, &destination, &app("a"), 1));
+        assert!(!state.folders.contains_key(&source));
+        assert_eq!(state.items[0], LauncherItem::App(app("b")));
+        assert_eq!(
+            state.folders.get(&destination).unwrap().children,
+            vec![app("c"), app("a"), app("d")]
+        );
+    }
+
+    #[test]
+    fn moving_child_out_promotes_remaining_child_and_inserts_dragged_app() {
+        let folder_id = FolderId::generate(0);
+        let mut state = LauncherState::new();
+        let mut folder = Folder::new(folder_id.clone(), "Pair");
+        folder.children = vec![app("a"), app("b")];
+        state.upsert_folder(folder);
+        state.items = vec![
+            LauncherItem::Folder(folder_id.clone()),
+            LauncherItem::App(app("tail")),
+        ];
+        assert!(state.move_child_to_top_level(&folder_id, &app("a"), 2));
+        assert!(!state.folders.contains_key(&folder_id));
+        assert_eq!(
+            state.items,
+            vec![
+                LauncherItem::App(app("b")),
+                LauncherItem::App(app("tail")),
+                LauncherItem::App(app("a")),
+            ]
+        );
+    }
+
+    #[test]
     fn legacy_order_with_hidden_app_normalizes_hidden_wins() {
         // Hidden app "h" is also in the legacy order (the old hide path kept
         // hidden ids in the order tail). After normalize, the hidden intent
@@ -689,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_removes_cross_placement_duplicates() {
+    fn normalize_removes_cross_placement_duplicates_and_dissolves_folder() {
         // Regression (codex review P2-b): an app that is both a top-level item
         // and a folder child must be removed from the folder child list (top-
         // level wins).
@@ -699,9 +1149,10 @@ mod tests {
         f.children = vec![app("a"), app("b")];
         state.upsert_folder(f);
         state.normalize(&discovered(&["a", "b"]), false);
-        let folder = state.folders.get(&FolderId::generate(0)).unwrap();
-        // "a" removed from folder (top-level wins); "b" stays.
-        assert_eq!(folder.children, vec![app("b")]);
+        // "a" is removed from the folder (top-level wins), then the remaining
+        // child is promoted when the one-child folder dissolves.
+        assert!(!state.folders.contains_key(&FolderId::generate(0)));
         assert!(state.top_level_app_ids().any(|id| id == &app("a")));
+        assert!(state.top_level_app_ids().any(|id| id == &app("b")));
     }
 }

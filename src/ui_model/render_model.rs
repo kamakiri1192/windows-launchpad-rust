@@ -8,6 +8,9 @@ pub struct RenderModel {
     pub glass: Vec<GlassBatch>,
     pub tiles: Option<Vec<TileView>>,
     pub icons: Option<Vec<IconView>>,
+    /// Fixed content composited after the generic modal glass lane.
+    pub modal_tiles: Option<Vec<TileView>>,
+    pub modal_icons: Option<Vec<IconView>>,
     pub text: Vec<TextView>,
     pub controls: Vec<ControlView>,
     /// Procedural renderer-neutral ink primitives, split into draw-order lanes.
@@ -26,6 +29,8 @@ impl RenderModel {
         self.glass.is_empty()
             && self.tiles.as_ref().is_none_or(Vec::is_empty)
             && self.icons.as_ref().is_none_or(Vec::is_empty)
+            && self.modal_tiles.as_ref().is_none_or(Vec::is_empty)
+            && self.modal_icons.as_ref().is_none_or(Vec::is_empty)
             && self.text.is_empty()
             && self.controls.is_empty()
             && self.ink.is_empty()
@@ -158,10 +163,12 @@ pub enum ControlKind {
 /// Draw-order lane for procedural foreground ink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InkLane {
+    Backdrop,
     BottomControl,
     Gear,
     Settings,
     EditBadge,
+    Modal,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +200,7 @@ pub enum GlyphLane {
     Grid,
     BottomControl,
     Settings,
+    Modal,
 }
 
 #[derive(Debug, Clone, PartialEq)]

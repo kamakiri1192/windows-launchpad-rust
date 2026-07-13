@@ -81,11 +81,12 @@ impl Renderer {
 pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
     const FLAG_WIGGLE: u32 = TileAnim::FLAG_WIGGLE;
     const FLAG_DRAG: u32 = TileAnim::FLAG_DRAG;
+    const FLAG_NO_BADGE: u32 = TileAnim::FLAG_NO_BADGE;
 
     let mut sources = Vec::new();
     for tile in instances {
         let flags = tile.extra[3] as u32;
-        if flags & FLAG_WIGGLE == 0 || flags & FLAG_DRAG != 0 {
+        if flags & FLAG_WIGGLE == 0 || flags & (FLAG_DRAG | FLAG_NO_BADGE) != 0 {
             continue;
         }
 
@@ -137,5 +138,12 @@ mod tests {
 
         assert!((source.base_center[0] - (100.0 + inset)).abs() < 1e-4);
         assert!((source.base_center[1] - (50.0 + inset)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn no_badge_flag_suppresses_badge_generation() {
+        let mut tile_without_badge = tile(BASE_TILE_SIZE);
+        tile_without_badge.extra[3] = (TileAnim::FLAG_WIGGLE | TileAnim::FLAG_NO_BADGE) as f32;
+        assert!(edit_badge_sources(&[tile_without_badge]).is_empty());
     }
 }

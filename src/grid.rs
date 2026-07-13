@@ -11,7 +11,7 @@
 //! GPU-facing pieces:
 //!
 //! - [`TileInstance`] — the `#[repr(C)]` instance struct the tile shader reads.
-//! - [`GridApp`] — a minimal app view carrying a label and an atlas UV
+//! - [`GridItem`] — a minimal item view carrying a label, icon, or preview UVs
 //!   ([`UvRect`]).
 //! - [`TileAnim`] — per-app edit-mode animation parameters packed into the
 //!   tile/icon instance `extra` vec4.
@@ -29,7 +29,7 @@ use crate::icons::AppEntry;
 use crate::layout::grid as layout_grid;
 use crate::scroll::ScrollBounds;
 use crate::ui_model::geometry::Rect;
-pub use crate::ui_model::grid::{GridApp, TileAnim};
+pub use crate::ui_model::grid::{GridItem, TileAnim};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
     Color, GlassBehavior, GlassMaterial, GlassSurface, IconSource, IconView, TileView,
@@ -43,12 +43,13 @@ pub use layout_grid::GridLayout;
 #[allow(unused_imports)]
 pub use layout_grid::{edit_badge_radius_for_tile_size, BASE_TILE_SIZE, FRAME_CORNER_RADIUS};
 
-impl<'a> From<&'a AppEntry> for GridApp<'a> {
+impl<'a> From<&'a AppEntry> for GridItem<'a> {
     fn from(a: &'a AppEntry) -> Self {
         Self {
-            id: a.name.as_str(),
+            key: a.name.as_str(),
             name: &a.name,
             uv: a.uv,
+            preview_uvs: &[],
         }
     }
 }
@@ -56,9 +57,13 @@ impl<'a> From<&'a AppEntry> for GridApp<'a> {
 impl GridLayout {
     /// Build the base Liquid Glass scene (fixed page frame + scrolling tile
     /// halos) as renderer-neutral surfaces.
-    pub fn build_glass_surfaces(&self, viewport_w: f32, apps: &[GridApp<'_>]) -> Vec<GlassSurface> {
+    pub fn build_glass_surfaces(
+        &self,
+        viewport_w: f32,
+        items: &[GridItem<'_>],
+    ) -> Vec<GlassSurface> {
         let (cx, cy, width, height) = self.frame_panel_rect(viewport_w);
-        let mut surfaces = Vec::with_capacity(1 + apps.len().min(self.total_tiles()));
+        let mut surfaces = Vec::with_capacity(1 + items.len().min(self.total_tiles()));
         surfaces.push(GlassSurface {
             id: UiId::backdrop("page-frame"),
             rect: Rect::new(cx - width * 0.5, cy - height * 0.5, width, height),
@@ -67,11 +72,11 @@ impl GridLayout {
             behavior: GlassBehavior::FixedFrame,
             z: -10,
         });
-        for (index, app) in apps.iter().take(self.total_tiles()).enumerate() {
+        for (index, item) in items.iter().take(self.total_tiles()).enumerate() {
             let (x, y) = self.tile_position(viewport_w, index);
             let halo = self.tile_size + self.scaled(18.0);
             surfaces.push(GlassSurface {
-                id: UiId::launcher_item(app.id),
+                id: UiId::launcher_item(item.key),
                 rect: Rect::new(
                     x + (self.tile_size - halo) * 0.5,
                     y + (self.tile_size - halo) * 0.5,
@@ -115,14 +120,14 @@ impl GridLayout {
     pub fn build_instances(
         &self,
         viewport_w: f32,
-        apps: &[GridApp<'_>],
+        items: &[GridItem<'_>],
         anim: &[TileAnim],
     ) -> Vec<TileView> {
         let per_page = self.cols * self.rows;
-        let app_count = apps.len().min(self.total_tiles());
+        let item_count = items.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
-        let mut out = Vec::with_capacity(app_count);
-        for (idx, app) in apps.iter().take(app_count).enumerate() {
+        let mut out = Vec::with_capacity(item_count);
+        for (idx, item) in items.iter().take(item_count).enumerate() {
             let p = idx / per_page;
             let row_in_page = idx % per_page;
             let r = row_in_page / self.cols;
@@ -131,10 +136,14 @@ impl GridLayout {
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let (r_, g_, b_) = layout_grid::app_color(idx);
-            let icon_index = if app.uv.is_some() { idx as f32 } else { -1.0 };
+            let icon_index = if item.uv.is_some() || item.preview_uvs.iter().any(Option::is_some) {
+                idx as f32
+            } else {
+                -1.0
+            };
             let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
             out.push(TileView {
-                id: UiId::launcher_item(app.id),
+                id: UiId::launcher_item(item.key),
                 rect: Rect::new(x, y, self.tile_size, self.tile_size),
                 radius: self.scaled(19.0),
                 color: Color::rgba(r_, g_, b_, 1.0),
@@ -157,17 +166,14 @@ impl GridLayout {
     pub fn build_icon_instances(
         &self,
         viewport_w: f32,
-        apps: &[GridApp<'_>],
+        items: &[GridItem<'_>],
         anim: &[TileAnim],
     ) -> Vec<IconView> {
         let per_page = self.cols * self.rows;
-        let app_count = apps.len().min(self.total_tiles());
+        let item_count = items.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
-        let mut out = Vec::with_capacity(app_count);
-        for (idx, app) in apps.iter().take(app_count).enumerate() {
-            let Some(uv) = app.uv else {
-                continue;
-            };
+        let mut out = Vec::with_capacity(item_count * 3);
+        for (idx, item) in items.iter().take(item_count).enumerate() {
             let p = idx / per_page;
             let row_in_page = idx % per_page;
             let r = row_in_page / self.cols;
@@ -176,17 +182,50 @@ impl GridLayout {
             let x = page_origin_x + self.margin_left + c as f32 * (self.tile_size + self.gap);
             let y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
-            out.push(IconView {
-                id: UiId::launcher_item(app.id),
-                rect: Rect::new(x, y, self.tile_size, self.tile_size),
-                source: IconSource::AtlasUv(uv),
-                motion: anim,
-                z: if anim.flags & TileAnim::FLAG_DRAG != 0 {
-                    20
-                } else {
-                    0
-                },
-            });
+            let z = if anim.flags & TileAnim::FLAG_DRAG != 0 {
+                20
+            } else {
+                0
+            };
+            if let Some(uv) = item.uv {
+                out.push(IconView {
+                    id: UiId::launcher_item(item.key),
+                    rect: Rect::new(x, y, self.tile_size, self.tile_size),
+                    source: IconSource::AtlasUv(uv),
+                    motion: anim,
+                    z,
+                });
+            } else {
+                // The drag shader centers every dragged instance on the
+                // pointer. A folder has up to nine independently positioned
+                // miniatures, so omit them during the lift instead of stacking
+                // all of them at the same point.
+                if anim.flags & TileAnim::FLAG_DRAG != 0 {
+                    continue;
+                }
+                let mini = self.tile_size * 0.22;
+                let mini_gap = self.tile_size * 0.07;
+                let preview_w = mini * 3.0 + mini_gap * 2.0;
+                let preview_x = x + (self.tile_size - preview_w) * 0.5;
+                let preview_y = y + (self.tile_size - preview_w) * 0.5;
+                for (slot, uv) in item.preview_uvs.iter().take(9).enumerate() {
+                    let Some(uv) = *uv else { continue };
+                    let row = slot / 3;
+                    let col = slot % 3;
+                    out.push(IconView {
+                        id: UiId::launcher_preview(item.key, slot),
+                        rect: Rect::new(
+                            preview_x + col as f32 * (mini + mini_gap),
+                            preview_y + row as f32 * (mini + mini_gap),
+                            mini,
+                            mini,
+                        ),
+                        source: IconSource::AtlasUv(uv),
+                        motion: anim,
+                        z,
+                    });
+                }
+            }
         }
         out
     }
@@ -199,13 +238,13 @@ impl GridLayout {
     pub fn build_labels(
         &self,
         viewport_w: f32,
-        apps: &[GridApp<'_>],
+        items: &[GridItem<'_>],
     ) -> Vec<crate::renderer::text_engine::Label> {
         let per_page = self.cols * self.rows;
-        let app_count = apps.len().min(self.total_tiles());
+        let app_count = items.len().min(self.total_tiles());
         let page_w = self.page_width(viewport_w);
         let mut out = Vec::with_capacity(app_count);
-        for (idx, app) in apps.iter().take(app_count).enumerate() {
+        for (idx, item) in items.iter().take(app_count).enumerate() {
             let p = idx / per_page;
             let row_in_page = idx % per_page;
             let r = row_in_page / self.cols;
@@ -217,7 +256,7 @@ impl GridLayout {
             let label_x = tile_x + (self.tile_size - label_w) * 0.5;
             let label_y = tile_y + self.tile_size + self.scaled(8.0);
             out.push(crate::renderer::text_engine::Label {
-                text: app.name.to_string(),
+                text: item.name.to_string(),
                 x: label_x,
                 y: label_y,
                 max_width: label_w,
@@ -233,7 +272,7 @@ mod tests {
     use crate::ui_model::geometry::UvRect;
     use std::path::PathBuf;
 
-    /// Owned app-list helper for tests (so `GridApp` borrows stable storage).
+    /// Owned app-list helper for tests (so `GridItem` borrows stable storage).
     struct OwnedApp {
         id: String,
         name: String,
@@ -262,12 +301,13 @@ mod tests {
     }
 
     /// Map owned apps to borrowed grid views.
-    fn view<'a>(apps: &'a [OwnedApp]) -> Vec<GridApp<'a>> {
+    fn view<'a>(apps: &'a [OwnedApp]) -> Vec<GridItem<'a>> {
         apps.iter()
-            .map(|a| GridApp {
-                id: a.id.as_str(),
+            .map(|a| GridItem {
+                key: a.id.as_str(),
                 name: a.name.as_str(),
                 uv: a.uv,
+                preview_uvs: &[],
             })
             .collect()
     }

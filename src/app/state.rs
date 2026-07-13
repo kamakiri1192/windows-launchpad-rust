@@ -70,10 +70,10 @@ pub struct PendingPress {
     pub y: f32,
     /// The app under the pointer at press start, if any. Entering edit mode
     /// lifts this app into a drag immediately.
-    pub app_index: Option<usize>,
+    pub item_index: Option<usize>,
     /// Stable id of the app under the pointer at press start. Quick release
     /// launches this id, not whatever happens to be under the release point.
-    pub app_id: Option<AppId>,
+    pub item: Option<LauncherItem>,
     /// True when the press started outside the page-frame Liquid Glass. A
     /// stationary release there dismisses the launcher instead of interacting
     /// with the grid.
@@ -106,11 +106,11 @@ impl PendingPress {
     /// The press-time app id if the release is a click (within slop), else
     /// `None`. Launch uses the press-time id, not whatever moved under the
     /// release point. Mirrors `main.rs::pending_press_launch_id`.
-    pub(crate) fn launch_id(&self, release_x: f32, release_y: f32) -> Option<&AppId> {
+    pub(crate) fn activated_item(&self, release_x: f32, release_y: f32) -> Option<&LauncherItem> {
         if !self.is_click(release_x, release_y) {
             return None;
         }
-        self.app_id.as_ref()
+        self.item.as_ref()
     }
 
     /// True if the press started outside the page-frame glass and the release
@@ -131,6 +131,17 @@ pub type Inbox = Mutex<Vec<WorkerMessage>>;
 pub enum WorkerMessage {
     Icon(crate::workers::icon_worker::IconResult),
     Refresh(RefreshMessage),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OwnedGridItem {
+    pub item: LauncherItem,
+    pub key: String,
+    pub name: String,
+    pub uv: Option<crate::icons::UvRect>,
+    /// Ordered first-page preview slots. `None` retains an undiscovered
+    /// child's position without drawing it.
+    pub preview_uvs: Vec<Option<crate::icons::UvRect>>,
 }
 
 /// Owns the renderer (which owns the window) plus all app/icon state.
@@ -182,7 +193,7 @@ pub struct App {
     pub pending_press: Option<PendingPress>,
     /// The app currently being dragged in edit mode (lifted off the grid). Its
     /// tile is drawn at the pointer instead of its home cell.
-    pub drag_app: Option<AppId>,
+    pub drag_item: Option<LauncherItem>,
     /// Pointer position the dragged tile follows (physical px, screen space).
     pub drag_x: f32,
     pub drag_y: f32,
@@ -192,7 +203,12 @@ pub struct App {
     /// Per-visible-app position springs. Each spring is keyed by `AppId` so it
     /// follows the app across reorder operations: the old cell remains the
     /// current spring value, and the app's new cell becomes the target.
-    pub tile_springs: Vec<(AppId, crate::scroll::Spring2)>,
+    pub tile_springs: Vec<(LauncherItem, crate::scroll::Spring2)>,
+
+    // ---- folder feature -------------------------------------------------
+    pub folders: crate::features::folders::FolderFeatureState,
+    pub folder_layout: Option<crate::layout::folder_panel::FolderPanelModel>,
+    pub interaction_glass: Vec<crate::ui_model::render_model::GlassSurface>,
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
@@ -283,11 +299,14 @@ impl App {
             first_frame_rendered: false,
             editing: false,
             pending_press: None,
-            drag_app: None,
+            drag_item: None,
             drag_x: 0.0,
             drag_y: 0.0,
             wiggle_phase: 0.0,
             tile_springs: Vec::new(),
+            folders: crate::features::folders::FolderFeatureState::default(),
+            folder_layout: None,
+            interaction_glass: Vec::new(),
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,
@@ -583,6 +602,77 @@ impl App {
             .collect()
     }
 
+    /// Build the production top-level item projection. With an empty search it
+    /// preserves the exact app/folder interleave from `LauncherState.items`;
+    /// with a query it intentionally returns flat discovered app results.
+    pub(crate) fn grid_items_owned(&self) -> Vec<OwnedGridItem> {
+        let query = self.visible_search_query();
+        if !query.trim().is_empty() {
+            let include_hidden = self.settings.search_includes_hidden;
+            return self
+                .registry
+                .apps()
+                .iter()
+                .filter(|record| include_hidden || !self.launcher_state.is_hidden(&record.app_id))
+                .filter(|record| Self::matches_search(&record.name, &query))
+                .map(|record| {
+                    let item = LauncherItem::App(record.app_id.clone());
+                    OwnedGridItem {
+                        key: item.stable_key(),
+                        item,
+                        name: record.name.clone(),
+                        uv: record.uv,
+                        preview_uvs: Vec::new(),
+                    }
+                })
+                .collect();
+        }
+
+        self.launcher_state
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LauncherItem::App(id) => {
+                    let record = self.registry.get(id)?;
+                    Some(OwnedGridItem {
+                        item: item.clone(),
+                        key: item.stable_key(),
+                        name: record.name.clone(),
+                        uv: record.uv,
+                        preview_uvs: Vec::new(),
+                    })
+                }
+                LauncherItem::Folder(folder_id) => {
+                    let folder = self.launcher_state.folders.get(folder_id)?;
+                    let preview_uvs = folder
+                        .children
+                        .iter()
+                        .take(9)
+                        .map(|child| {
+                            (!self.launcher_state.is_hidden(child))
+                                .then(|| self.registry.get(child).and_then(|record| record.uv))
+                                .flatten()
+                        })
+                        .collect();
+                    Some(OwnedGridItem {
+                        item: item.clone(),
+                        key: item.stable_key(),
+                        name: folder.name.clone(),
+                        uv: None,
+                        preview_uvs,
+                    })
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn visible_launcher_items(&self) -> Vec<LauncherItem> {
+        self.grid_items_owned()
+            .into_iter()
+            .map(|entry| entry.item)
+            .collect()
+    }
+
     pub(crate) fn visible_app_ids(&self) -> Vec<AppId> {
         let query = self.visible_search_query();
         let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
@@ -604,7 +694,7 @@ impl App {
     pub(crate) fn grid_hit_at_pointer(&self, x: f32, y: f32) -> crate::layout::grid::GridHit {
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
-        let visible_count = self.visible_app_ids().len();
+        let visible_count = self.visible_launcher_items().len();
         self.layout
             .classify(w as f32, x, y, scroll_x, visible_count)
     }
@@ -668,13 +758,17 @@ mod pending_press_tests {
     use super::{PendingPress, CLICK_SLOP_PHYS};
     use crate::domain::app_id::AppId;
 
-    fn press(app_index: Option<usize>, app_id: Option<AppId>, outside_glass: bool) -> PendingPress {
+    fn press(
+        item_index: Option<usize>,
+        app_id: Option<AppId>,
+        outside_glass: bool,
+    ) -> PendingPress {
         PendingPress {
             start: Instant::now(),
             x: 100.0,
             y: 100.0,
-            app_index,
-            app_id,
+            item_index,
+            item: app_id.map(crate::domain::launcher_item::LauncherItem::App),
             outside_glass,
         }
     }
@@ -684,21 +778,27 @@ mod pending_press_tests {
         let pressed = AppId::from_normalized("pressed-app");
         let press = press(Some(3), Some(pressed.clone()), false);
 
-        assert_eq!(press.launch_id(103.0, 102.0), Some(&pressed));
+        assert_eq!(
+            press.activated_item(103.0, 102.0),
+            Some(&crate::domain::launcher_item::LauncherItem::App(pressed))
+        );
     }
 
     #[test]
     fn press_without_app_never_launches_release_target() {
         let press = press(None, None, false);
 
-        assert_eq!(press.launch_id(103.0, 102.0), None);
+        assert_eq!(press.activated_item(103.0, 102.0), None);
     }
 
     #[test]
     fn movement_past_click_slop_does_not_launch() {
         let press = press(Some(0), Some(AppId::from_normalized("pressed-app")), false);
 
-        assert_eq!(press.launch_id(100.0 + CLICK_SLOP_PHYS + 1.0, 100.0), None);
+        assert_eq!(
+            press.activated_item(100.0 + CLICK_SLOP_PHYS + 1.0, 100.0),
+            None
+        );
     }
 
     #[test]

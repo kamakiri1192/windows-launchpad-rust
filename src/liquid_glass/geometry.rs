@@ -1,5 +1,5 @@
 use crate::layout::grid::GridLayout;
-use crate::ui_model::grid::GridApp;
+use crate::ui_model::grid::GridItem;
 use crate::ui_model::render_model::TileView;
 
 #[repr(C)]
@@ -90,7 +90,7 @@ impl GlassShape {
 pub fn shapes_from_layout(
     layout: &GridLayout,
     viewport_w: f32,
-    apps: &[GridApp<'_>],
+    apps: &[GridItem<'_>],
 ) -> Vec<GlassShape> {
     let mut shapes = Vec::with_capacity(1 + apps.len().min(layout.total_tiles()));
     let (center_x, center_y, panel_w, panel_h) = layout.frame_panel_rect(viewport_w);

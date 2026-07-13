@@ -97,6 +97,8 @@ impl App {
         // Close the settings overlay so a re-summon starts clean.
         self.settings_open = false;
         self.settings_panel_progress = 0.0;
+        self.folders = crate::features::folders::FolderFeatureState::default();
+        self.folder_layout = None;
         self.pending_press = None;
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
@@ -192,7 +194,7 @@ impl App {
             AppCommand::ResetIconCache => self.reset_icons(),
             // Edit-mode-consolidated side effects:
             AppCommand::SetEditing(value) => self.set_editing(value),
-            AppCommand::SetDragApp(value) => self.drag_app = value,
+            AppCommand::SetDragItem(value) => self.drag_item = value,
             AppCommand::SetDragPos(x, y) => {
                 self.drag_x = x;
                 self.drag_y = y;
@@ -237,7 +239,7 @@ impl App {
         for cmd in commands {
             let app_cmd = match cmd {
                 EditModeCommand::SetEditing(v) => AppCommand::SetEditing(v),
-                EditModeCommand::SetDragApp(v) => AppCommand::SetDragApp(v),
+                EditModeCommand::SetDragItem(v) => AppCommand::SetDragItem(v),
                 EditModeCommand::SetDragPos(x, y) => AppCommand::SetDragPos(x, y),
                 EditModeCommand::ResetWigglePhase => AppCommand::ResetWigglePhase,
                 EditModeCommand::CancelScroll => AppCommand::CancelScroll,
@@ -274,6 +276,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::domain::app_id::AppId;
+    use crate::domain::launcher_item::LauncherItem;
     use crate::features::edit_mode::EditModeCommand;
 
     /// The pure projection from `EditModeCommand` to `AppCommand` is total:
@@ -286,7 +289,7 @@ mod tests {
         let id = AppId::from_normalized("app-a");
         let edit_cmds = vec![
             EditModeCommand::SetEditing(true),
-            EditModeCommand::SetDragApp(Some(id.clone())),
+            EditModeCommand::SetDragItem(Some(LauncherItem::App(id.clone()))),
             EditModeCommand::SetDragPos(10.0, 20.0),
             EditModeCommand::ResetWigglePhase,
             EditModeCommand::CancelScroll,
@@ -304,7 +307,7 @@ mod tests {
             .iter()
             .map(|c| match c {
                 EditModeCommand::SetEditing(v) => AppCommand::SetEditing(*v),
-                EditModeCommand::SetDragApp(v) => AppCommand::SetDragApp(v.clone()),
+                EditModeCommand::SetDragItem(v) => AppCommand::SetDragItem(v.clone()),
                 EditModeCommand::SetDragPos(x, y) => AppCommand::SetDragPos(*x, *y),
                 EditModeCommand::ResetWigglePhase => AppCommand::ResetWigglePhase,
                 EditModeCommand::CancelScroll => AppCommand::CancelScroll,
@@ -335,7 +338,7 @@ mod tests {
         use crate::features::edit_mode::{commit_drag, EditModeState};
         let mut state = EditModeState {
             editing: true,
-            drag_app: Some(AppId::from_normalized("dragged")),
+            drag_item: Some(LauncherItem::App(AppId::from_normalized("dragged"))),
             ..EditModeState::default()
         };
         let cmds = commit_drag(&state);
@@ -349,7 +352,7 @@ mod tests {
         );
         // No drag → no persist (the historical commit_reorder was only called
         // when a drag was in flight).
-        state.drag_app = None;
+        state.drag_item = None;
         assert!(commit_drag(&state).is_empty());
     }
 
@@ -376,7 +379,7 @@ mod tests {
         // Then the app lift.
         assert_eq!(
             cmds[4],
-            EditModeCommand::SetDragApp(Some(AppId::from_normalized("b")))
+            EditModeCommand::SetDragItem(Some(LauncherItem::App(AppId::from_normalized("b"))))
         );
         assert_eq!(cmds[5], EditModeCommand::SetDragPos(50.0, 60.0));
         // Then relayout + redraw.
@@ -392,7 +395,7 @@ mod tests {
         use crate::features::edit_mode::{commit_drag, exit, EditModeState};
         let mut state = EditModeState {
             editing: true,
-            drag_app: Some(AppId::from_normalized("dragged")),
+            drag_item: Some(LauncherItem::App(AppId::from_normalized("dragged"))),
             ..EditModeState::default()
         };
         let commit = commit_drag(&state);
@@ -403,7 +406,7 @@ mod tests {
         assert_eq!(cmds[2], EditModeCommand::PersistUserOrder);
         // …then the exit transitions.
         assert_eq!(cmds[3], EditModeCommand::SetEditing(false));
-        assert_eq!(cmds[4], EditModeCommand::SetDragApp(None));
+        assert_eq!(cmds[4], EditModeCommand::SetDragItem(None));
         assert_eq!(cmds[5], EditModeCommand::ClearPendingPress);
         assert_eq!(cmds[6], EditModeCommand::Relayout);
         assert_eq!(cmds[7], EditModeCommand::RequestRedraw);

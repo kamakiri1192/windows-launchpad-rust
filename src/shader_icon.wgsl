@@ -52,6 +52,7 @@ struct VsOut {
 const FLAG_WIGGLE: f32 = 1.0;
 // Flag bit set in `extra.w` while this icon is the one being dragged.
 const FLAG_DRAG: f32 = 2.0;
+const FLAG_FIXED: f32 = 4.0;
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -81,6 +82,7 @@ fn vs_main(
     let flags = extra.w;
     let wiggling = (u32(flags) & u32(FLAG_WIGGLE)) != 0u;
     let dragged = (u32(flags) & u32(FLAG_DRAG)) != 0u;
+    let fixed = (u32(flags) & u32(FLAG_FIXED)) != 0u;
 
     // Effective size after the drag scale; re-anchor about the tile center.
     let eff_size = size * scale;
@@ -91,6 +93,8 @@ fn vs_main(
     var tl: vec2<f32>;
     if dragged && u.drag_active > 0.5 {
         tl = vec2<f32>(u.drag_pos.x - eff_size * 0.5, u.drag_pos.y - eff_size * 0.5);
+    } else if fixed {
+        tl = vec2<f32>(origin.x - size_delta, origin.y - size_delta);
     } else {
         tl = vec2<f32>(origin.x + u.scroll_x - size_delta, origin.y - size_delta);
     }
@@ -159,9 +163,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Clip the squircle mask to the fixed page frame's rounded rect. A dragged
     // (lifted) icon bypasses the clip so it can rise above the panel.
     let dragged = (u32(in.flags) & u32(FLAG_DRAG)) != 0u;
+    let fixed = (u32(in.flags) & u32(FLAG_FIXED)) != 0u;
     let wiggling = (u32(in.flags) & u32(FLAG_WIGGLE)) != 0u;
     var frame_alpha = 1.0;
-    if !dragged {
+    if !dragged && !fixed {
         let local = in.pos.xy - u.frame_center;
         let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
         frame_alpha = smoothstep(aa, -aa, fd);

@@ -500,6 +500,9 @@ Introduce folders only after the grid and interaction boundaries are stable.
 
 ### Phase 8: Folder Feature Vertical Slice
 
+Status: completed on 2026-07-13. Implementation details and Screen
+Verification Gate results are recorded in `DF_REARCHITECTURE_LOG.md`.
+
 Build folders as the feature that validates the full target architecture.
 
 - Implement folder open/close as feature state.

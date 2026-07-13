@@ -80,6 +80,13 @@ pub enum AppAction {
 /// the raw key/text payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyAction {
+    CloseFolder,
+    CancelFolderRename,
+    CommitFolderRename,
+    FolderRenameBackspace,
+    FolderRenameLeft,
+    FolderRenameRight,
+    FolderRenameChar(String),
     /// Esc while the settings overlay is open → close settings (no launcher
     /// hide, no passthrough).
     CloseSettings,
@@ -120,6 +127,7 @@ pub enum KeyAction {
 /// shell flags and the pointer position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PressAction {
+    Folder,
     /// Settings overlay open → swallow the press; the release decides close vs
     /// inside-row action. Carries the press-time hit target.
     Settings(SettingsPressTarget),
@@ -139,6 +147,7 @@ pub enum PressAction {
 /// Left-button release intent, classified by [`pointer_release_action`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseAction {
+    Folder,
     /// Settings overlay: outside-press + outside-release → dismiss (no
     /// passthrough). Inside-press + matching inside-release → run the row
     /// action.
@@ -247,6 +256,33 @@ pub fn keyboard_action(
     match key_code {
         Some(k) => KeyAction::LiquidGlassKey(k),
         None => KeyAction::None,
+    }
+}
+
+pub fn folder_keyboard_action(
+    rename_active: bool,
+    preedit_empty: bool,
+    key_code: Option<KeyCode>,
+    text: Option<&str>,
+) -> KeyAction {
+    if !rename_active {
+        return if key_code == Some(KeyCode::Escape) {
+            KeyAction::CloseFolder
+        } else {
+            KeyAction::None
+        };
+    }
+    match key_code {
+        Some(KeyCode::Escape) => KeyAction::CancelFolderRename,
+        Some(KeyCode::Enter) | Some(KeyCode::NumpadEnter) => KeyAction::CommitFolderRename,
+        Some(KeyCode::Backspace) if preedit_empty => KeyAction::FolderRenameBackspace,
+        Some(KeyCode::ArrowLeft) if preedit_empty => KeyAction::FolderRenameLeft,
+        Some(KeyCode::ArrowRight) if preedit_empty => KeyAction::FolderRenameRight,
+        _ if preedit_empty => text
+            .filter(|value| !value.is_empty())
+            .map(|value| KeyAction::FolderRenameChar(value.to_owned()))
+            .unwrap_or(KeyAction::None),
+        _ => KeyAction::None,
     }
 }
 
@@ -407,6 +443,36 @@ impl App {
     /// [`keyboard_action`], this method runs the side effect.
     fn handle_keyboard(&mut self, key_action: KeyAction) {
         match key_action {
+            KeyAction::CloseFolder => self.close_folder(),
+            KeyAction::CancelFolderRename => {
+                self.folders.cancel_rename();
+                self.request_redraw();
+            }
+            KeyAction::CommitFolderRename => self.commit_folder_rename(),
+            KeyAction::FolderRenameBackspace => {
+                if let Some(editor) = self.folders.rename.as_mut() {
+                    editor.backspace();
+                }
+                self.request_redraw();
+            }
+            KeyAction::FolderRenameLeft => {
+                if let Some(editor) = self.folders.rename.as_mut() {
+                    editor.move_left();
+                }
+                self.request_redraw();
+            }
+            KeyAction::FolderRenameRight => {
+                if let Some(editor) = self.folders.rename.as_mut() {
+                    editor.move_right();
+                }
+                self.request_redraw();
+            }
+            KeyAction::FolderRenameChar(value) => {
+                if let Some(editor) = self.folders.rename.as_mut() {
+                    editor.commit_text(&value);
+                }
+                self.request_redraw();
+            }
             KeyAction::CloseSettings => self.close_settings(),
             KeyAction::ExitEditMode => self.exit_edit_mode(),
             KeyAction::SearchEscClose => {
@@ -470,6 +536,26 @@ impl App {
 
     /// Handle an IME event. Gated on `control.wants_keyboard()` by the handler.
     fn handle_ime(&mut self, ime: Ime) {
+        if self.folders.rename.is_some() {
+            match ime {
+                Ime::Preedit(value, _) => {
+                    self.folders.rename.as_mut().unwrap().set_preedit(value);
+                }
+                Ime::Commit(value) => {
+                    self.folders.rename.as_mut().unwrap().commit_text(&value);
+                }
+                Ime::Disabled => {
+                    self.folders
+                        .rename
+                        .as_mut()
+                        .unwrap()
+                        .set_preedit(String::new());
+                }
+                Ime::Enabled => {}
+            }
+            self.request_redraw();
+            return;
+        }
         if !self.control.wants_keyboard() {
             return;
         }
@@ -503,6 +589,7 @@ impl App {
         let px = self.pointer_phys_x;
         let py = self.pointer_phys_y;
         match press_action {
+            PressAction::Folder => self.handle_folder_pointer_press(px, py),
             PressAction::Settings(target) => {
                 self.pressed_on_settings = Some(target);
             }
@@ -512,18 +599,23 @@ impl App {
             PressAction::EditGrid => {
                 let hit = self.grid_hit_at_pointer(px, py);
                 let badge_hit = matches!(hit, crate::layout::grid::GridHit::App(idx)
-                    if self.badge_hit(idx, px, py));
+                    if matches!(self.visible_launcher_items().get(idx),
+                        Some(crate::domain::launcher_item::LauncherItem::App(_)))
+                        && self.badge_hit(idx, px, py));
                 let intent = crate::features::edit_mode::edit_press_classify(hit, badge_hit);
                 match intent {
                     crate::features::edit_mode::EditPressIntent::HideApp { visible_index } => {
-                        let id = self.visible_app_ids()[visible_index].clone();
-                        debug_log!("edit-drag: badge press idx={visible_index}");
-                        self.hide_app(&id);
+                        if let Some(crate::domain::launcher_item::LauncherItem::App(id)) =
+                            self.visible_launcher_items().get(visible_index).cloned()
+                        {
+                            debug_log!("edit-drag: badge press idx={visible_index}");
+                            self.hide_app(&id);
+                        }
                     }
                     crate::features::edit_mode::EditPressIntent::DragApp { visible_index } => {
                         debug_log!("edit-drag: press idx={visible_index}");
-                        let id = self.visible_app_ids()[visible_index].clone();
-                        self.drag_app = Some(id);
+                        let item = self.visible_launcher_items()[visible_index].clone();
+                        self.drag_item = Some(item);
                         self.drag_x = px;
                         self.drag_y = py;
                         self.relayout();
@@ -547,8 +639,12 @@ impl App {
         self.pointer_phys_x = x;
         self.pointer_phys_y = y;
         // Edit-mode drag: follow the pointer and live-reorder.
-        if self.editing && self.drag_app.is_some() {
+        if self.editing && self.drag_item.is_some() {
             self.handle_edit_drag_move();
+            return;
+        }
+        if self.folders.is_active() {
+            self.handle_folder_pointer_move(x, y);
             return;
         }
         // A pending press may promote to a real scroll drag once it moves past
@@ -576,6 +672,7 @@ impl App {
         // stale control branch.
         self.pressed_on_control = false;
         match release_action {
+            ReleaseAction::Folder => self.handle_folder_pointer_release(px, py),
             ReleaseAction::Settings { pressed, released } => {
                 if pressed == SettingsPressTarget::Outside
                     && released == SettingsPressTarget::Outside
@@ -594,8 +691,8 @@ impl App {
                 self.handle_control_click(px, py);
             }
             ReleaseAction::EditDrop => {
-                self.commit_reorder();
-                self.drag_app = None;
+                self.commit_edit_drop();
+                self.drag_item = None;
                 self.relayout();
                 self.execute_command(AppCommand::RequestRedraw);
             }
@@ -605,9 +702,16 @@ impl App {
             }
             ReleaseAction::PendingLaunch => {
                 if let Some(press) = self.pending_press.take() {
-                    if let Some(id) = press.launch_id(px, py) {
-                        if let Some(info) = self.registry.launch_info(id) {
-                            self.execute_command(AppCommand::LaunchApp(info));
+                    if let Some(item) = press.activated_item(px, py).cloned() {
+                        match item {
+                            crate::domain::launcher_item::LauncherItem::App(id) => {
+                                if let Some(info) = self.registry.launch_info(&id) {
+                                    self.execute_command(AppCommand::LaunchApp(info));
+                                }
+                            }
+                            crate::domain::launcher_item::LauncherItem::Folder(id) => {
+                                self.open_folder(id);
+                            }
                         }
                     }
                 }
@@ -633,10 +737,19 @@ impl App {
         if dragging {
             self.handle_drag_end();
         }
-        if self.editing && self.drag_app.is_some() {
+        if self.editing && self.drag_item.is_some() {
             self.commit_reorder();
-            self.drag_app = None;
+            self.drag_item = None;
+            if self.folders.hover_opened.is_some() {
+                self.folders.close();
+            }
+            self.folders.hover = None;
             self.relayout();
+        }
+        if self.folders.child_drag.is_some() || self.folders.pressed_child.is_some() {
+            self.folders.clear_child_pointer();
+            self.editing = false;
+            self.request_redraw();
         }
         self.pending_press = None;
         self.pressed_on_control = false;
@@ -666,7 +779,16 @@ impl App {
                 self.control.mode,
                 crate::features::bottom_control::Mode::Field
             );
-        if scroller_animating || control_animating || self.editing || long_press_pending {
+        if scroller_animating
+            || control_animating
+            || self.editing
+            || long_press_pending
+            || matches!(
+                self.folders.phase,
+                crate::features::folders::FolderPhase::Opening
+                    | crate::features::folders::FolderPhase::Closing
+            )
+        {
             self.execute_command(AppCommand::RequestRedraw);
         }
     }
@@ -682,7 +804,7 @@ impl App {
                 .unwrap_or(false);
             if self.editing {
                 debug_log!("window_event: Focused(false) ignored (editing)");
-            } else if self.settings_panel_active() {
+            } else if self.settings_panel_active() || self.folders.is_active() {
                 debug_log!("window_event: Focused(false) ignored (settings open)");
             } else if in_grace {
                 debug_log!("window_event: Focused(false) ignored (within summon grace)");
@@ -744,6 +866,38 @@ mod tests {
     fn esc_with_nothing_open_hides_launcher() {
         let action = kb_action(false, false, false, Some(KeyCode::Escape));
         assert_eq!(action, KeyAction::HideLauncher);
+    }
+
+    #[test]
+    fn folder_esc_closes_folder_when_not_renaming() {
+        assert_eq!(
+            folder_keyboard_action(false, true, Some(KeyCode::Escape), None),
+            KeyAction::CloseFolder
+        );
+    }
+
+    #[test]
+    fn folder_rename_esc_cancels_before_folder_close() {
+        assert_eq!(
+            folder_keyboard_action(true, true, Some(KeyCode::Escape), None),
+            KeyAction::CancelFolderRename
+        );
+    }
+
+    #[test]
+    fn folder_rename_enter_commits_and_preedit_blocks_edits() {
+        assert_eq!(
+            folder_keyboard_action(true, true, Some(KeyCode::Enter), None),
+            KeyAction::CommitFolderRename
+        );
+        assert_eq!(
+            folder_keyboard_action(true, false, Some(KeyCode::Backspace), None),
+            KeyAction::None
+        );
+        assert_eq!(
+            folder_keyboard_action(true, true, Some(KeyCode::KeyA), Some("あ")),
+            KeyAction::FolderRenameChar("あ".to_owned())
+        );
     }
 
     // ---- search field key handling ----
