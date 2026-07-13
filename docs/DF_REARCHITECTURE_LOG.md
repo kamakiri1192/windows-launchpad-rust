@@ -2290,6 +2290,9 @@ Final validation:
 - A follow-up size correction removes the generic 9 px-per-side tile halo from
   the visible folder container. Its bounds and corner radius now match the
   normal app tile exactly while the separate glass pass remains unchanged.
+- The modal morph now receives that same grid radius as explicit source
+  geometry instead of ending at the legacy 24 px radius. Closing therefore
+  hands off to the 19 px closed-folder glass without an endpoint flash.
 - Validation passed: `cargo fmt --check`, 636 tests (634 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 

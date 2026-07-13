@@ -36,7 +36,8 @@ Current behavior to preserve:
 - Opening morphs the current folder tile rectangle into the panel while child
   icons travel from their mini slots to panel cells. Closing reverses the same
   spring without restarting, and resolves the source rectangle from the latest
-  grid layout on every frame.
+  grid layout on every frame. The morph also receives the current closed-folder
+  corner radius, so its final frame exactly matches the restored grid glass.
 - The modal owns input while visible. Clicking the modal backdrop closes it
   without replaying the click underneath. `Esc` first cancels an active rename;
   otherwise it closes the folder.

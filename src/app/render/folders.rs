@@ -176,6 +176,7 @@ impl App {
             name: &folder_name,
             rename_text: rename_text.as_deref(),
             source_rect: source,
+            source_radius: self.layout.scaled(19.0),
             children: &children,
             page,
             progress,

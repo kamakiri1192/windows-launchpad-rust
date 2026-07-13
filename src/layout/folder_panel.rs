@@ -26,7 +26,6 @@ const CELL_GAP_X: f32 = 34.0;
 const CELL_GAP_Y: f32 = 42.0;
 const LABEL_HEIGHT: f32 = 24.0;
 const PANEL_RADIUS: f32 = 42.0;
-const SOURCE_RADIUS: f32 = 24.0;
 
 #[derive(Debug, Clone)]
 pub struct FolderChildInput<'a> {
@@ -44,6 +43,9 @@ pub struct FolderPanelInput<'a> {
     pub name: &'a str,
     pub rename_text: Option<&'a str>,
     pub source_rect: Rect,
+    /// Physical-pixel corner radius of the closed folder container. Supplying
+    /// it with the source rect keeps the morph endpoint identical to the grid.
+    pub source_radius: f32,
     pub children: &'a [FolderChildInput<'a>],
     pub page: usize,
     pub progress: f32,
@@ -101,7 +103,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     );
     let progress = smooth(input.progress.clamp(0.0, 1.0));
     let current = lerp_rect(input.source_rect, target, progress);
-    let radius = lerp(SOURCE_RADIUS * scale, PANEL_RADIUS * scale, progress)
+    let radius = lerp(input.source_radius.max(0.0), PANEL_RADIUS * scale, progress)
         .min(current.width * 0.5)
         .min(current.height * 0.5);
 
@@ -408,6 +410,7 @@ mod tests {
             name: "仕事",
             rename_text: None,
             source_rect,
+            source_radius: 19.0 * scale,
             children: &input,
             page: 0,
             progress,
@@ -422,6 +425,15 @@ mod tests {
             closed.current_panel_rect,
             Rect::new(100.0, 120.0, 84.0, 84.0)
         );
+        let closed_glass = &closed
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .unwrap()
+            .surfaces[0];
+        assert_eq!(closed_glass.radius, 19.0);
         let open = model(4, 1.0, 1.0);
         assert_eq!(open.current_panel_rect, open.target_panel_rect);
     }
