@@ -33,6 +33,7 @@
 //! that boundary rather than duplicating the gear geometry.
 
 use crate::layout::grid::GridLayout;
+use crate::ui_model::geometry::{Insets, Point, Rect};
 
 /// Configured (pre-gutter-clamp) width of the edit-mode edge-autoscroll zone,
 /// in 100% DPI design px. Matches the historical `EDIT_EDGE_SCROLL_ZONE`
@@ -44,6 +45,24 @@ pub const EDGE_ZONE_FLOOR: f32 = 24.0;
 /// Cap for the configured zone, as a fraction of the page-frame panel width.
 /// Matches the historical `.min(panel_w * 0.25)` clamp.
 pub const EDGE_ZONE_PANEL_FRAC: f32 = 0.25;
+/// Fraction of a destination tile reserved for the deliberate app-on-app or
+/// app-on-folder merge gesture. The surrounding area remains a normal reorder
+/// target, preventing a pass across a tile from being captured as a folder.
+pub const FOLDER_MERGE_ZONE_FRACTION: f32 = 0.52;
+
+pub fn folder_merge_zone(tile: Rect) -> Rect {
+    let inset_x = tile.width * (1.0 - FOLDER_MERGE_ZONE_FRACTION) * 0.5;
+    let inset_y = tile.height * (1.0 - FOLDER_MERGE_ZONE_FRACTION) * 0.5;
+    tile.inset(Insets::new(inset_y, inset_x, inset_y, inset_x))
+}
+
+pub fn folder_merge_intent(tile: Rect, pointer: Point) -> bool {
+    pointer.x.is_finite()
+        && pointer.y.is_finite()
+        && tile.width > 0.0
+        && tile.height > 0.0
+        && folder_merge_zone(tile).contains(pointer)
+}
 
 /// Edit badge geometry for one tile, produced from the same calculation the
 /// renderer's badge source uses. `base_center` is the badge center before the
@@ -252,6 +271,28 @@ mod tests {
 
     fn layout() -> GridLayout {
         GridLayout::default().centered(1280.0)
+    }
+
+    #[test]
+    fn folder_merge_requires_the_central_overlap_zone() {
+        let tile = Rect::new(100.0, 200.0, 100.0, 100.0);
+        let zone = folder_merge_zone(tile);
+        assert_eq!(zone, Rect::new(124.0, 224.0, 52.0, 52.0));
+        assert!(folder_merge_intent(tile, Point::new(150.0, 250.0)));
+        assert!(!folder_merge_intent(tile, Point::new(105.0, 250.0)));
+        assert!(!folder_merge_intent(tile, Point::new(150.0, 205.0)));
+    }
+
+    #[test]
+    fn folder_merge_rejects_invalid_geometry_and_pointer() {
+        assert!(!folder_merge_intent(
+            Rect::new(0.0, 0.0, 0.0, 84.0),
+            Point::new(0.0, 0.0)
+        ));
+        assert!(!folder_merge_intent(
+            Rect::new(0.0, 0.0, 84.0, 84.0),
+            Point::new(f32::NAN, 20.0)
+        ));
     }
 
     // ---- badge geometry / hit ------------------------------------------------

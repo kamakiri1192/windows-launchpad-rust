@@ -46,7 +46,7 @@ impl App {
         self.launcher_item_rect(&LauncherItem::Folder(id.clone()))
     }
 
-    fn launcher_item_rect(&self, item: &LauncherItem) -> Option<Rect> {
+    pub(crate) fn launcher_item_rect(&self, item: &LauncherItem) -> Option<Rect> {
         let index = self
             .visible_launcher_items()
             .iter()

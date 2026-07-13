@@ -618,7 +618,15 @@ impl App {
             .grid_hit_at_pointer(self.drag_x, self.drag_y)
             .app_index()?;
         let target = self.visible_launcher_items().get(index)?.clone();
-        (target != *drag).then_some(target)
+        if target == *drag {
+            return None;
+        }
+        let tile = self.launcher_item_rect(&target)?;
+        crate::layout::edit_mode::folder_merge_intent(
+            tile,
+            crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y),
+        )
+        .then_some(target)
     }
 
     pub(crate) fn commit_edit_drop(&mut self) {
