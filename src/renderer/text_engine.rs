@@ -78,6 +78,9 @@ pub struct Label {
     pub y: f32,
     /// Max width before wrapping (content px).
     pub max_width: f32,
+    /// Non-premultiplied RGBA tint. Folder labels use this to preserve the
+    /// panel open/close fade while sharing the normal launcher label layout.
+    pub color: [f32; 4],
 }
 
 /// Intermediate record from the layout phase.
@@ -86,6 +89,7 @@ struct PlacedGlyph {
     /// On-screen glyph origin before applying the raster image placement.
     x: f32,
     y: f32,
+    color: [f32; 4],
 }
 
 /// Parameters for [`TextRenderer::layout_centered_line`]: a single centered
@@ -124,7 +128,6 @@ const PAD: u32 = 1;
 const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
 const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
-const LABEL_TEXT_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 /// Soft, layered shadow in logical px: (x offset, y offset, alpha).
 const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
     (0.0, 1.0, 0.30),
@@ -164,7 +167,7 @@ impl TextRenderer {
     /// units the rest of the renderer uses). Pass the window's scale factor.
     pub fn layout_labels(&mut self, labels: &[Label], scale_factor: f32) -> Vec<GlyphQuad> {
         let placed = self.layout_phase(labels, scale_factor);
-        self.raster_phase(placed, scale_factor, LABEL_SHADOW_LAYERS, LABEL_TEXT_COLOR)
+        self.raster_phase(placed, scale_factor, LABEL_SHADOW_LAYERS)
     }
 
     /// Lay out a single centered line of text with an explicit color, returning
@@ -224,10 +227,15 @@ impl TextRenderer {
                 let physical = glyph.physical(line_origin, scale_factor);
                 let x = physical.x as f32;
                 let y = physical.y as f32;
-                placed.push(PlacedGlyph { physical, x, y });
+                placed.push(PlacedGlyph {
+                    physical,
+                    x,
+                    y,
+                    color,
+                });
             }
         }
-        self.raster_phase(placed, scale_factor, &[], color)
+        self.raster_phase(placed, scale_factor, &[])
     }
 
     /// Measure a single line of text's laid-out width in physical px without
@@ -299,7 +307,12 @@ impl TextRenderer {
                     let physical = glyph.physical(line_origin, scale_factor);
                     let x = physical.x as f32;
                     let y = physical.y as f32;
-                    out.push(PlacedGlyph { physical, x, y });
+                    out.push(PlacedGlyph {
+                        physical,
+                        x,
+                        y,
+                        color: label.color,
+                    });
                 }
             }
         }
@@ -314,7 +327,6 @@ impl TextRenderer {
         placed: Vec<PlacedGlyph>,
         scale_factor: f32,
         shadow_layers: &[(f32, f32, f32)],
-        text_color: [f32; 4],
     ) -> Vec<GlyphQuad> {
         let mut glyphs = Vec::with_capacity(placed.len());
         for g in placed {
@@ -336,7 +348,7 @@ impl TextRenderer {
                 v0: entry.y as f32 / ATLAS_H as f32,
                 u1: (entry.x + entry.w) as f32 / ATLAS_W as f32,
                 v1: (entry.y + entry.h) as f32 / ATLAS_H as f32,
-                color: text_color,
+                color: g.color,
             });
         }
 
@@ -346,7 +358,7 @@ impl TextRenderer {
                 quads.push(glyph.with_offset_and_color(
                     dx * scale_factor,
                     dy * scale_factor,
-                    [0.0, 0.0, 0.0, alpha],
+                    [0.0, 0.0, 0.0, alpha * glyph.color[3]],
                 ));
             }
         }

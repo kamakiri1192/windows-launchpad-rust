@@ -5,7 +5,7 @@ use crate::app::state::App;
 use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::layout::folder_panel::{self, FolderChildInput, FolderPanelInput};
-use crate::renderer::text_engine::{CenteredLineSpec, GlyphQuad, TextRenderer};
+use crate::renderer::text_engine::{CenteredLineSpec, GlyphQuad, Label, TextRenderer};
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::grid::TileAnim;
 use crate::ui_model::ids::UiId;
@@ -13,7 +13,7 @@ use crate::ui_model::render_model::{
     Color, ControlKind, GlassLayer, GlyphLane, GlyphView, IconSource, IconView, InkLane, InkView,
     TileView,
 };
-use crate::ui_model::text::TextWeight;
+use crate::ui_model::text::{TextRole, TextWeight};
 use cosmic_text::Weight;
 
 impl App {
@@ -260,7 +260,34 @@ impl App {
 
         let mut glyphs = Vec::new();
         if let Some(text) = self.text.as_mut() {
-            for view in &model.result.render.text {
+            let labels: Vec<_> = model
+                .result
+                .render
+                .text
+                .iter()
+                .filter(|view| view.style.role == TextRole::FolderItemLabel)
+                .map(|view| Label {
+                    text: view.text.clone(),
+                    x: view.rect.x,
+                    y: view.rect.y,
+                    max_width: view.rect.width,
+                    color: [
+                        view.style.color.r,
+                        view.style.color.g,
+                        view.style.color.b,
+                        view.style.color.a,
+                    ],
+                })
+                .collect();
+            glyphs.extend(text.layout_labels(&labels, self.scale_factor));
+
+            for view in model
+                .result
+                .render
+                .text
+                .iter()
+                .filter(|view| view.style.role == TextRole::FolderTitle)
+            {
                 let line_height = view.rect.height / self.scale_factor.max(0.01);
                 let fitted = fit_centered_text(
                     text,
@@ -289,14 +316,15 @@ impl App {
                     cosmic_weight(view.style.weight),
                 ));
             }
-            if let (Some(editor), Some(title_view)) =
-                (
-                    self.folders.rename.as_ref(),
-                    model.result.render.text.iter().find(|view| {
-                        view.style.role == crate::ui_model::text::TextRole::FolderTitle
-                    }),
-                )
-            {
+            if let (Some(editor), Some(title_view)) = (
+                self.folders.rename.as_ref(),
+                model
+                    .result
+                    .render
+                    .text
+                    .iter()
+                    .find(|view| view.style.role == TextRole::FolderTitle),
+            ) {
                 let visible = editor.visible_text();
                 let mut caret_prefix = editor.text[..editor.cursor].to_owned();
                 caret_prefix.push_str(&editor.preedit);

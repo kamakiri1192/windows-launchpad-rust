@@ -260,6 +260,7 @@ impl GridLayout {
                 x: label_x,
                 y: label_y,
                 max_width: label_w,
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
         out

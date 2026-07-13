@@ -24,7 +24,7 @@ const PANEL_PADDING_BOTTOM: f32 = 34.0;
 const CELL_SIZE: f32 = 76.0;
 const CELL_GAP_X: f32 = 34.0;
 const CELL_GAP_Y: f32 = 42.0;
-const LABEL_HEIGHT: f32 = 24.0;
+const LABEL_HEIGHT: f32 = 36.0;
 const PANEL_RADIUS: f32 = 42.0;
 /// Cool-neutral tint layered after the scene-space focus blur. Blur carries the
 /// visual separation; this restrained wash only lowers residual contrast.
@@ -265,7 +265,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 ),
                 style: TextStyle::new(
                     TextRole::FolderItemLabel,
-                    12.0,
+                    14.0,
                     Color::rgba(1.0, 1.0, 1.0, 0.90 * title_alpha),
                     TextWeight::Regular,
                     TextAlign::Center,
