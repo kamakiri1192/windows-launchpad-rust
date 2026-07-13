@@ -44,6 +44,10 @@ Current behavior to preserve:
 - While a folder is active, its source tile's grid-preview mini icons are
   suppressed because the modal lane owns the moving child icons. They return
   only after the close morph reaches its endpoint.
+- Opening a folder fades in the **Glass Focus Veil**, a restrained cool-neutral
+  frosting over the existing page-frame refraction. Its rounded bounds and
+  radius come from the same fixed page-frame geometry as the main Liquid Glass
+  surface, so the transparent window area outside that glass is unaffected.
 - The modal owns input while visible. Clicking the modal backdrop closes it
   without replaying the click underneath. `Esc` first cancels an active rename;
   otherwise it closes the folder.

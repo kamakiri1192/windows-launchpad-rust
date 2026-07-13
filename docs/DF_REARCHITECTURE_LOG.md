@@ -2300,6 +2300,11 @@ Final validation:
 - The active folder's grid-preview mini icons are filtered from every grid icon
   rebuild path while modal child icons own the morph. This removes the duplicate
   miniatures left at the source tile without changing the endpoint handoff.
+- Replaced the window-wide black folder dimmer with the **Glass Focus Veil**.
+  The renderer-neutral veil now takes the exact fixed page-frame rectangle and
+  corner radius from `GridLayout`, applying a low-contrast cool-neutral frost
+  only inside the main Liquid Glass area while leaving the transparent window
+  surround untouched.
 - Validation passed: `cargo fmt --check`, 639 tests (637 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 

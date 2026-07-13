@@ -26,6 +26,10 @@ const CELL_GAP_X: f32 = 34.0;
 const CELL_GAP_Y: f32 = 42.0;
 const LABEL_HEIGHT: f32 = 24.0;
 const PANEL_RADIUS: f32 = 42.0;
+/// A restrained cool-neutral wash over the existing page-frame refraction.
+/// The page glass already supplies the blur; this veil lowers contrast without
+/// replacing the Liquid Glass surface with a flat black window-wide dimmer.
+const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.18;
 /// Portion of the closed end of the morph used to collapse each child's
 /// colored tile fill into its own center. Icons keep their full trajectory.
 const CHILD_FILL_COLLAPSE_PROGRESS: f32 = 0.42;
@@ -49,6 +53,10 @@ pub struct FolderPanelInput<'a> {
     /// Physical-pixel corner radius of the closed folder container. Supplying
     /// it with the source rect keeps the morph endpoint identical to the grid.
     pub source_radius: f32,
+    /// Physical-pixel bounds of the fixed page-frame Liquid Glass surface.
+    /// The focus veil is clipped to this shape rather than the whole window.
+    pub page_frame_rect: Rect,
+    pub page_frame_radius: f32,
     pub children: &'a [FolderChildInput<'a>],
     pub page: usize,
     pub progress: f32,
@@ -123,14 +131,19 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         }],
     );
 
+    let page_frame_radius = input
+        .page_frame_radius
+        .max(0.0)
+        .min(input.page_frame_rect.width * 0.5)
+        .min(input.page_frame_rect.height * 0.5);
     let backdrop = InkView {
-        id: UiId::backdrop("folder-modal-dim"),
-        center: Point::new(viewport_w * 0.5, viewport_h * 0.5),
-        extent: viewport_h * 0.5 + 2.0,
-        opacity: 0.30 * progress,
-        stroke: viewport_w * 0.5 + 2.0,
-        corner_radius: 0.0,
-        color: Color::rgba(0.0, 0.0, 0.0, 0.30 * progress),
+        id: UiId::backdrop("glass-focus-veil"),
+        center: input.page_frame_rect.center(),
+        extent: input.page_frame_rect.height * 0.5,
+        opacity: GLASS_FOCUS_VEIL_OPACITY * progress,
+        stroke: input.page_frame_rect.width * 0.5,
+        corner_radius: page_frame_radius,
+        color: Color::rgba(0.12, 0.15, 0.20, 1.0),
         kind: ControlKind::RowBackground,
         z: 90,
     };
@@ -433,6 +446,8 @@ mod tests {
             rename_text: None,
             source_rect,
             source_radius: 19.0 * scale,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0 * scale,
             children: &input,
             page: 0,
             progress,
@@ -595,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn modal_glass_and_dim_are_renderer_neutral_outputs() {
+    fn modal_glass_and_focus_veil_are_renderer_neutral_outputs() {
         let value = model(4, 0.5, 1.0);
         let modal = value
             .result
@@ -605,11 +620,21 @@ mod tests {
             .find(|batch| batch.layer == GlassLayer::Modal)
             .unwrap();
         assert_eq!(modal.surfaces[0].material, GlassMaterial::Regular);
-        assert!(value
+        let veil = &value
             .result
             .render
             .ink
             .iter()
-            .any(|batch| batch.lane == InkLane::Backdrop));
+            .find(|batch| batch.lane == InkLane::Backdrop)
+            .unwrap()
+            .views[0];
+        assert_eq!(veil.id, UiId::backdrop("glass-focus-veil"));
+        assert_eq!(veil.center, Point::new(640.0, 400.0));
+        assert_eq!(veil.stroke, 560.0);
+        assert_eq!(veil.extent, 340.0);
+        assert_eq!(veil.corner_radius, 54.0);
+        assert!((veil.opacity - GLASS_FOCUS_VEIL_OPACITY * 0.5).abs() < 0.001);
+        assert!(veil.stroke < 1280.0 * 0.5);
+        assert!(veil.extent < 800.0 * 0.5);
     }
 }

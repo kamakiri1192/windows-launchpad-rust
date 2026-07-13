@@ -169,14 +169,24 @@ impl App {
                     .map(|editor| editor.visible_text())
             })
             .flatten();
+        let viewport = self.viewport_phys();
+        let (frame_x, frame_y, frame_width, frame_height) =
+            self.layout.frame_panel_rect(viewport.0 as f32);
         let mut model = folder_panel::build(FolderPanelInput {
-            viewport: self.viewport_phys(),
+            viewport,
             scale_factor: self.scale_factor,
             folder_key: &folder_key,
             name: &folder_name,
             rename_text: rename_text.as_deref(),
             source_rect: source,
             source_radius: self.layout.scaled(19.0),
+            page_frame_rect: Rect::new(
+                frame_x - frame_width * 0.5,
+                frame_y - frame_height * 0.5,
+                frame_width,
+                frame_height,
+            ),
+            page_frame_radius: self.layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
             children: &children,
             page,
             progress,
