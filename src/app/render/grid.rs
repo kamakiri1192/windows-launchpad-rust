@@ -125,8 +125,13 @@ impl App {
             .chain(self.drag_item.iter().cloned())
             .filter_map(|item| folder_item_id(&item))
             .collect();
-        let (base_glass, folder_glass) =
+        let (base_glass, mut folder_glass) =
             split_folder_glass_surfaces(surfaces, &folder_ids, &excluded_folder_ids);
+        fit_folder_glass_to_tile(
+            &mut folder_glass,
+            self.layout.tile_size,
+            self.layout.scaled(19.0),
+        );
         self.render_model
             .set_glass_batch(GlassLayer::Base, base_glass);
         self.render_model
@@ -425,6 +430,17 @@ fn split_folder_glass_surfaces(
     (base, folders)
 }
 
+fn fit_folder_glass_to_tile(surfaces: &mut [GlassSurface], size: f32, radius: f32) {
+    for surface in surfaces
+        .iter_mut()
+        .filter(|surface| surface.behavior == GlassBehavior::Scrolling)
+    {
+        let center = surface.rect.center();
+        surface.rect = Rect::new(center.x - size * 0.5, center.y - size * 0.5, size, size);
+        surface.radius = radius;
+    }
+}
+
 fn launcher_item_tile_flags(item: &LauncherItem) -> u32 {
     if matches!(item, LauncherItem::Folder(_)) {
         grid::TileAnim::FLAG_NO_BADGE | grid::TileAnim::FLAG_NO_FILL
@@ -493,15 +509,19 @@ mod tests {
             id: folder_id.clone(),
             ..app.clone()
         };
-        let (base, overlay) = split_folder_glass_surfaces(
+        let (base, mut overlay) = split_folder_glass_surfaces(
             vec![frame, app, folder_surface],
             &BTreeSet::from([folder_id.clone()]),
             &BTreeSet::new(),
         );
+        fit_folder_glass_to_tile(&mut overlay, 84.0, 19.0);
 
         assert!(base.iter().any(|surface| surface.id == app_id));
         assert!(!base.iter().any(|surface| surface.id == folder_id));
         assert_eq!(overlay[0].behavior, GlassBehavior::ClipOnly);
         assert_eq!(overlay[1].id, folder_id);
+        assert_eq!(overlay[1].rect.width, 84.0);
+        assert_eq!(overlay[1].rect.height, 84.0);
+        assert_eq!(overlay[1].radius, 19.0);
     }
 }

@@ -2287,6 +2287,9 @@ Final validation:
 - Release-build GPU capture verified visible closed-folder glass behind both
   nine-icon and three-icon previews, unchanged normal app backgrounds, and
   successful folder open/close with the closed glass restored afterward.
+- A follow-up size correction removes the generic 9 px-per-side tile halo from
+  the visible folder container. Its bounds and corner radius now match the
+  normal app tile exactly while the separate glass pass remains unchanged.
 - Validation passed: `cargo fmt --check`, 636 tests (634 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 

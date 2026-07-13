@@ -27,7 +27,9 @@ Current behavior to preserve:
   the opaque colored fallback used behind a normal app icon. Hidden or
   currently undiscovered children are not rendered. The folder container uses
   a nested grid-glass compositing lane so its rounded boundary remains visible
-  inside the larger page-frame glass, with mini icons drawn above it.
+  inside the larger page-frame glass, with mini icons drawn above it. Its outer
+  bounds and corner radius match a normal app tile; it does not use the larger
+  tile-halo dimensions.
 - Clicking a folder opens a centered Liquid Glass modal. The panel size is
   derived from the visible child count, incomplete rows are centered, and more
   than nine children are split into pages with a page indicator.
