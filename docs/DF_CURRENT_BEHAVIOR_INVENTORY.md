@@ -38,6 +38,9 @@ Current behavior to preserve:
   spring without restarting, and resolves the source rectangle from the latest
   grid layout on every frame. The morph also receives the current closed-folder
   corner radius, so its final frame exactly matches the restored grid glass.
+  During the closed-end portion of the morph, each child's colored tile fill
+  collapses into its own center while the icon continues to its mini slot. The
+  fill is already gone before the closed-folder preview takes over.
 - The modal owns input while visible. Clicking the modal backdrop closes it
   without replaying the click underneath. `Esc` first cancels an active rename;
   otherwise it closes the folder.

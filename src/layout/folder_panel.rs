@@ -26,6 +26,9 @@ const CELL_GAP_X: f32 = 34.0;
 const CELL_GAP_Y: f32 = 42.0;
 const LABEL_HEIGHT: f32 = 24.0;
 const PANEL_RADIUS: f32 = 42.0;
+/// Portion of the closed end of the morph used to collapse each child's
+/// colored tile fill into its own center. Icons keep their full trajectory.
+const CHILD_FILL_COLLAPSE_PROGRESS: f32 = 0.42;
 
 #[derive(Debug, Clone)]
 pub struct FolderChildInput<'a> {
@@ -189,15 +192,18 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             scale: if dragged { 1.12 } else { 1.0 },
             flags: TileAnim::FLAG_FIXED | if dragged { TileAnim::FLAG_DRAG } else { 0 },
         };
-        modal_tiles.push(TileView {
-            id: UiId::folder_child(input.folder_key, child.key),
-            rect,
-            radius: 17.0 * scale,
-            color: child.color,
-            has_icon: child.uv.is_some(),
-            motion,
-            z: if dragged { 150 } else { 120 },
-        });
+        let fill_scale = child_fill_scale(progress);
+        if fill_scale > 0.001 {
+            modal_tiles.push(TileView {
+                id: UiId::folder_child(input.folder_key, child.key),
+                rect: scale_rect_about_center(rect, fill_scale),
+                radius: 17.0 * scale * fill_scale,
+                color: child.color,
+                has_icon: child.uv.is_some(),
+                motion,
+                z: if dragged { 150 } else { 120 },
+            });
+        }
         if let Some(uv) = child.uv {
             modal_icons.push(IconView {
                 id: UiId::folder_child(input.folder_key, child.key),
@@ -352,6 +358,22 @@ fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
     )
 }
 
+fn child_fill_scale(progress: f32) -> f32 {
+    smooth((progress / CHILD_FILL_COLLAPSE_PROGRESS).clamp(0.0, 1.0))
+}
+
+fn scale_rect_about_center(rect: Rect, scale: f32) -> Rect {
+    let scale = scale.clamp(0.0, 1.0);
+    let width = rect.width * scale;
+    let height = rect.height * scale;
+    Rect::new(
+        rect.center().x - width * 0.5,
+        rect.center().y - height * 0.5,
+        width,
+        height,
+    )
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -447,6 +469,27 @@ mod tests {
         let first_tile = &open.result.render.modal_tiles.as_ref().unwrap()[0];
         assert_eq!(open.child_rects[0], first_tile.rect);
         assert_ne!(open.child_rects[0], miniature_rect(source, 0));
+    }
+
+    #[test]
+    fn child_fill_collapses_into_its_center_before_closed_handoff() {
+        let closed = model(4, 0.0, 1.0);
+        assert!(closed
+            .result
+            .render
+            .modal_tiles
+            .as_ref()
+            .unwrap()
+            .is_empty());
+
+        let nearly_closed = model(4, 0.2, 1.0);
+        let tile = &nearly_closed.result.render.modal_tiles.as_ref().unwrap()[0];
+        assert_eq!(tile.rect.center(), nearly_closed.child_rects[0].center());
+        assert!(tile.rect.width < nearly_closed.child_rects[0].width * 0.25);
+
+        let open = model(4, 1.0, 1.0);
+        let tile = &open.result.render.modal_tiles.as_ref().unwrap()[0];
+        assert_eq!(tile.rect, open.child_rects[0]);
     }
 
     #[test]

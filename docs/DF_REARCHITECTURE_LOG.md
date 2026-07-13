@@ -2293,6 +2293,10 @@ Final validation:
 - The modal morph now receives that same grid radius as explicit source
   geometry instead of ending at the legacy 24 px radius. Closing therefore
   hands off to the 19 px closed-folder glass without an endpoint flash.
-- Validation passed: `cargo fmt --check`, 636 tests (634 passed, 2 ignored),
+- Child icon motion and colored tile-fill motion are now separate at the closed
+  end of the morph. During the final 42% the fill scales about the child's
+  center to zero, while the icon keeps moving into its stable miniature slot;
+  the modal-to-grid handoff no longer removes a visible fill in one frame.
+- Validation passed: `cargo fmt --check`, 638 tests (636 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 
