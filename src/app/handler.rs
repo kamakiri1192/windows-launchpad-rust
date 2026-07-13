@@ -152,6 +152,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let key_action = if self.folders.is_active() && !self.settings_open {
                     folder_keyboard_action(
                         self.folders.rename.is_some(),
+                        self.editing,
                         self.folders
                             .rename
                             .as_ref()
@@ -230,9 +231,6 @@ impl App {
     /// shell flags and the pointer position. This feeds
     /// [`AppAction::PointerPress`].
     fn classify_pointer_press(&self, px: f32, py: f32) -> PressAction {
-        if self.folders.is_active() && self.drag_item.is_none() {
-            return PressAction::Folder;
-        }
         let settings_target = if self.settings_open {
             self.settings_hit_target(px, py)
         } else {
@@ -247,6 +245,9 @@ impl App {
                 crate::layout::bottom_control::BottomControlPointerIntent::None
             )
         };
+        if self.folders.is_active() && self.drag_item.is_none() && !(self.editing && over_control) {
+            return PressAction::Folder;
+        }
         pointer_press_action(
             self.settings_open,
             settings_target,
@@ -259,7 +260,7 @@ impl App {
     /// shell flags and the press/release state. This feeds
     /// [`AppAction::PointerRelease`].
     fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
-        if self.folders.is_active() && self.drag_item.is_none() {
+        if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
             return ReleaseAction::Folder;
         }
         let settings_pressed = if self.settings_open {

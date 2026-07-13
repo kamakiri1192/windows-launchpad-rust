@@ -59,6 +59,8 @@ pub struct FolderPanelInput<'a> {
     pub children: &'a [FolderChildInput<'a>],
     pub page: usize,
     pub progress: f32,
+    pub editing: bool,
+    pub wiggle_phase: f32,
     pub dragged_child_key: Option<&'a str>,
 }
 
@@ -156,6 +158,21 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         target.width - 48.0 * scale,
         32.0 * scale,
     );
+    let mut modal_ink = Vec::new();
+    if input.rename_text.is_some() && title_alpha > 0.001 {
+        modal_ink.push(InkView {
+            id: UiId::folder_title(input.folder_key),
+            center: title_rect.center(),
+            extent: title_rect.height * 0.5,
+            opacity: 0.16 * title_alpha,
+            scene_blur: 0.0,
+            stroke: title_rect.width * 0.5,
+            corner_radius: title_rect.height * 0.5,
+            color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+            kind: ControlKind::RowBackground,
+            z: 128,
+        });
+    }
     if title_alpha > 0.001 {
         render.text.push(TextView {
             id: UiId::folder_title(input.folder_key),
@@ -165,7 +182,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 TextRole::FolderTitle,
                 18.0,
                 Color::rgba(1.0, 1.0, 1.0, 0.96 * title_alpha),
-                TextWeight::Medium,
+                TextWeight::Bold,
                 TextAlign::Center,
             ),
             z: 130,
@@ -200,10 +217,20 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         child_rects.push(rect);
         let dragged = input.dragged_child_key == Some(child.key);
         let motion = TileAnim {
-            phase: 0.0,
+            phase: if input.editing {
+                input.wiggle_phase + (start + local_index) as f32 * 0.37
+            } else {
+                0.0
+            },
             lift: if dragged { 18.0 * scale } else { 0.0 },
             scale: if dragged { 1.12 } else { 1.0 },
-            flags: TileAnim::FLAG_FIXED | if dragged { TileAnim::FLAG_DRAG } else { 0 },
+            flags: TileAnim::FLAG_FIXED
+                | if input.editing {
+                    TileAnim::FLAG_WIGGLE
+                } else {
+                    0
+                }
+                | if dragged { TileAnim::FLAG_DRAG } else { 0 },
         };
         let fill_scale = child_fill_scale(progress);
         if fill_scale > 0.001 {
@@ -250,7 +277,6 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     render.modal_tiles = Some(modal_tiles);
     render.modal_icons = Some(modal_icons);
 
-    let mut modal_ink = Vec::new();
     if page_count > 1 && title_alpha > 0.001 {
         let dot_y = target.max_y() - 20.0 * scale;
         let total_w = (page_count.saturating_sub(1) as f32 * 12.0 + 6.0) * scale;
@@ -452,6 +478,8 @@ mod tests {
             children: &input,
             page: 0,
             progress,
+            editing: false,
+            wiggle_phase: 0.0,
             dragged_child_key: None,
         })
     }
@@ -580,6 +608,14 @@ mod tests {
     #[test]
     fn title_panel_and_backdrop_follow_modal_z_order() {
         let value = model(4, 1.0, 1.0);
+        let title = value
+            .result
+            .render
+            .text
+            .iter()
+            .find(|view| view.style.role == TextRole::FolderTitle)
+            .unwrap();
+        assert_eq!(title.style.weight, TextWeight::Bold);
         assert!(matches!(
             value
                 .result
@@ -608,6 +644,43 @@ mod tests {
                 .map(|hit| &hit.target),
             Some(HitTarget::Backdrop { .. })
         ));
+    }
+
+    #[test]
+    fn folder_children_use_the_normal_wiggle_flag_while_editing() {
+        let owned = children(2);
+        let input: Vec<_> = owned
+            .iter()
+            .map(|(id, label)| FolderChildInput {
+                key: id,
+                label,
+                uv: None,
+                color: Color::rgba(0.4, 0.5, 0.7, 1.0),
+            })
+            .collect();
+        let value = build(FolderPanelInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            folder_key: "folder-0",
+            name: "Folder",
+            rename_text: None,
+            source_rect: Rect::new(100.0, 120.0, 84.0, 84.0),
+            source_radius: 19.0,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0,
+            children: &input,
+            page: 0,
+            progress: 1.0,
+            editing: true,
+            wiggle_phase: 1.25,
+            dragged_child_key: None,
+        });
+        let tiles = value.result.render.modal_tiles.unwrap();
+        assert!(tiles
+            .iter()
+            .all(|tile| tile.motion.flags & TileAnim::FLAG_WIGGLE != 0));
+        assert_eq!(tiles[0].motion.phase, 1.25);
+        assert_ne!(tiles[0].motion.phase, tiles[1].motion.phase);
     }
 
     #[test]

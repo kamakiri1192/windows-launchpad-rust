@@ -6,6 +6,7 @@
 use crate::domain::app_id::AppId;
 use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
+use std::time::Instant;
 
 pub const HOVER_OPEN_DELAY: f32 = 0.38;
 const HOVER_PREVIEW_DURATION: f32 = 0.42;
@@ -180,8 +181,26 @@ impl FolderHover {
 pub struct PressedChild {
     pub app_id: AppId,
     pub index: usize,
+    pub start: Instant,
     pub start_x: f32,
     pub start_y: f32,
+}
+
+impl PressedChild {
+    pub fn moved_past_slop(&self, x: f32, y: f32) -> bool {
+        let dx = x - self.start_x;
+        let dy = y - self.start_y;
+        dx * dx + dy * dy > CHILD_DRAG_SLOP * CHILD_DRAG_SLOP
+    }
+
+    pub fn is_click(&self, x: f32, y: f32) -> bool {
+        !self.moved_past_slop(x, y)
+    }
+
+    pub fn long_press_ready(&self, now: Instant, x: f32, y: f32) -> bool {
+        !self.moved_past_slop(x, y)
+            && now.duration_since(self.start) >= crate::features::edit_mode::LONG_PRESS_THRESHOLD
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,22 +334,34 @@ impl FolderFeatureState {
         }
     }
 
-    pub fn begin_child_press(&mut self, app_id: AppId, index: usize, x: f32, y: f32) {
+    pub fn begin_child_press(
+        &mut self,
+        app_id: AppId,
+        index: usize,
+        start: Instant,
+        x: f32,
+        y: f32,
+    ) {
         self.pressed_child = Some(PressedChild {
             app_id,
             index,
+            start,
             start_x: x,
             start_y: y,
         });
+    }
+
+    pub fn child_long_press_ready(&self, now: Instant, x: f32, y: f32) -> bool {
+        self.pressed_child
+            .as_ref()
+            .is_some_and(|press| press.long_press_ready(now, x, y))
     }
 
     pub fn maybe_begin_child_drag(&mut self, children: &[AppId], x: f32, y: f32) -> bool {
         let Some(press) = self.pressed_child.as_ref() else {
             return false;
         };
-        let dx = x - press.start_x;
-        let dy = y - press.start_y;
-        if dx * dx + dy * dy <= CHILD_DRAG_SLOP * CHILD_DRAG_SLOP {
+        if !press.moved_past_slop(x, y) {
             return false;
         }
         let Some(folder_id) = self.active.clone() else {
@@ -355,6 +386,7 @@ impl FolderFeatureState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn app(value: &str) -> AppId {
         AppId::from_normalized(value.to_owned())
@@ -494,5 +526,41 @@ mod tests {
             drag.preview_order,
             vec![app("undiscovered"), app("b"), app("a")]
         );
+    }
+
+    #[test]
+    fn child_long_press_uses_the_shared_edit_threshold_and_slop() {
+        let start = Instant::now();
+        let mut state = FolderFeatureState::default();
+        state.begin_child_press(app("a"), 0, start, 100.0, 100.0);
+
+        assert!(!state.child_long_press_ready(
+            start + crate::features::edit_mode::LONG_PRESS_THRESHOLD - Duration::from_millis(1),
+            100.0,
+            100.0,
+        ));
+        assert!(state.child_long_press_ready(
+            start + crate::features::edit_mode::LONG_PRESS_THRESHOLD,
+            100.0,
+            100.0,
+        ));
+        assert!(!state.child_long_press_ready(
+            start + crate::features::edit_mode::LONG_PRESS_THRESHOLD,
+            109.0,
+            100.0,
+        ));
+    }
+
+    #[test]
+    fn folder_child_click_rejects_a_drag_distance() {
+        let press = PressedChild {
+            app_id: app("a"),
+            index: 0,
+            start: Instant::now(),
+            start_x: 20.0,
+            start_y: 30.0,
+        };
+        assert!(press.is_click(27.0, 30.0));
+        assert!(!press.is_click(29.0, 30.0));
     }
 }

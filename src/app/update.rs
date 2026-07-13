@@ -702,11 +702,18 @@ impl App {
 
     pub(crate) fn handle_folder_pointer_press(&mut self, x: f32, y: f32) {
         use crate::ui_model::hit::HitTarget;
-        match self.folder_hit_target(x, y) {
+        let target = self.folder_hit_target(x, y);
+        if self.folders.rename.is_some() && !matches!(target, Some(HitTarget::FolderTitle { .. })) {
+            self.commit_folder_rename();
+        }
+        match target {
             Some(HitTarget::FolderTitle { .. }) => {
-                if let Some(id) = self.folders.active.as_ref() {
-                    if let Some(folder) = self.launcher_state.folders.get(id) {
-                        self.folders.begin_rename(folder.name.clone());
+                if self.editing {
+                    let id = self.folders.active.clone();
+                    if let Some(id) = id.as_ref() {
+                        if let Some(folder) = self.launcher_state.folders.get(id) {
+                            self.folders.begin_rename(folder.name.clone());
+                        }
                     }
                 }
             }
@@ -719,7 +726,8 @@ impl App {
                     .and_then(|folder_id| self.launcher_state.folders.get(folder_id))
                     .and_then(|folder| folder.children.iter().position(|id| id == &app_id))
                     .unwrap_or(index);
-                self.folders.begin_child_press(app_id, domain_index, x, y);
+                self.folders
+                    .begin_child_press(app_id, domain_index, Instant::now(), x, y);
             }
             Some(HitTarget::FolderPagePrevious { .. }) => {
                 self.folders.page = self.folders.page.saturating_sub(1);
@@ -745,8 +753,8 @@ impl App {
             .get(&folder_id)
             .map(|folder| folder.children.clone())
             .unwrap_or_default();
-        if self.folders.maybe_begin_child_drag(&children, x, y) {
-            self.editing = true;
+        if self.editing {
+            self.folders.maybe_begin_child_drag(&children, x, y);
         }
         if self.folders.child_drag.is_some() {
             self.drag_x = x;
@@ -814,7 +822,6 @@ impl App {
                 self.relayout();
             }
             self.folders.clear_child_pointer();
-            self.editing = false;
             self.request_redraw();
             return;
         }
@@ -823,7 +830,7 @@ impl App {
         if let (Some(pressed), Some(HitTarget::FolderChild { child, .. })) =
             (pressed, self.folder_hit_target(x, y))
         {
-            if pressed.app_id.as_str() == child {
+            if !self.editing && pressed.is_click(x, y) && pressed.app_id.as_str() == child {
                 if let Some(info) = self.registry.launch_info(&pressed.app_id) {
                     self.execute_command(crate::app::event::AppCommand::LaunchApp(info));
                 }

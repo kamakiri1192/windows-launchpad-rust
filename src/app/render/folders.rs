@@ -10,8 +10,11 @@ use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::grid::TileAnim;
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, GlassLayer, GlyphLane, GlyphView, IconSource, IconView, InkLane, TileView,
+    Color, ControlKind, GlassLayer, GlyphLane, GlyphView, IconSource, IconView, InkLane, InkView,
+    TileView,
 };
+use crate::ui_model::text::TextWeight;
+use cosmic_text::Weight;
 
 impl App {
     pub(crate) fn open_folder(&mut self, id: FolderId) {
@@ -190,6 +193,8 @@ impl App {
             children: &children,
             page,
             progress,
+            editing: durable && self.editing,
+            wiggle_phase: self.wiggle_phase,
             dragged_child_key: dragged_key.as_deref(),
         });
 
@@ -264,21 +269,83 @@ impl App {
                     view.style.size,
                     line_height,
                     self.scale_factor,
+                    cosmic_weight(view.style.weight),
                 );
-                glyphs.append(&mut text.layout_centered_line(&CenteredLineSpec {
-                    text: &fitted,
-                    font_size: view.style.size,
+                glyphs.append(&mut text.layout_centered_line_weighted(
+                    &CenteredLineSpec {
+                        text: &fitted,
+                        font_size: view.style.size,
+                        line_height,
+                        family: "Yu Gothic UI",
+                        color: [
+                            view.style.color.r,
+                            view.style.color.g,
+                            view.style.color.b,
+                            view.style.color.a,
+                        ],
+                        center: (view.rect.center().x, view.rect.center().y),
+                        scale_factor: self.scale_factor,
+                    },
+                    cosmic_weight(view.style.weight),
+                ));
+            }
+            if let (Some(editor), Some(title_view)) =
+                (
+                    self.folders.rename.as_ref(),
+                    model.result.render.text.iter().find(|view| {
+                        view.style.role == crate::ui_model::text::TextRole::FolderTitle
+                    }),
+                )
+            {
+                let visible = editor.visible_text();
+                let mut caret_prefix = editor.text[..editor.cursor].to_owned();
+                caret_prefix.push_str(&editor.preedit);
+                let line_height = title_view.rect.height / self.scale_factor.max(0.01);
+                let visible_spec = CenteredLineSpec {
+                    text: &visible,
+                    font_size: title_view.style.size,
                     line_height,
                     family: "Yu Gothic UI",
-                    color: [
-                        view.style.color.r,
-                        view.style.color.g,
-                        view.style.color.b,
-                        view.style.color.a,
-                    ],
-                    center: (view.rect.center().x, view.rect.center().y),
+                    color: [1.0; 4],
+                    center: (0.0, 0.0),
                     scale_factor: self.scale_factor,
-                }));
+                };
+                let prefix_spec = CenteredLineSpec {
+                    text: &caret_prefix,
+                    font_size: title_view.style.size,
+                    line_height,
+                    family: "Yu Gothic UI",
+                    color: [1.0; 4],
+                    center: (0.0, 0.0),
+                    scale_factor: self.scale_factor,
+                };
+                let weight = cosmic_weight(title_view.style.weight);
+                let total_width = text.measure_text_weighted(&visible_spec, weight);
+                let prefix_width = text.measure_text_weighted(&prefix_spec, weight);
+                let caret_x = title_view.rect.center().x - total_width * 0.5 + prefix_width;
+                if let Some(batch) = model
+                    .result
+                    .render
+                    .ink
+                    .iter_mut()
+                    .find(|batch| batch.lane == InkLane::Modal)
+                {
+                    batch.views.push(InkView {
+                        id: UiId::folder_title("rename-caret"),
+                        center: crate::ui_model::geometry::Point::new(
+                            caret_x,
+                            title_view.rect.center().y,
+                        ),
+                        extent: 10.0 * self.scale_factor,
+                        opacity: 0.95,
+                        scene_blur: 0.0,
+                        stroke: 1.0 * self.scale_factor,
+                        corner_radius: 1.0 * self.scale_factor,
+                        color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                        kind: ControlKind::Caret,
+                        z: 131,
+                    });
+                }
             }
             if text.atlas_dirty {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -348,17 +415,21 @@ fn fit_centered_text(
     font_size: f32,
     line_height: f32,
     scale_factor: f32,
+    weight: Weight,
 ) -> String {
     let measure = |renderer: &mut TextRenderer, text: &str| {
-        renderer.measure_text(&CenteredLineSpec {
-            text,
-            font_size,
-            line_height,
-            family: "Yu Gothic UI",
-            color: [1.0; 4],
-            center: (0.0, 0.0),
-            scale_factor,
-        })
+        renderer.measure_text_weighted(
+            &CenteredLineSpec {
+                text,
+                font_size,
+                line_height,
+                family: "Yu Gothic UI",
+                color: [1.0; 4],
+                center: (0.0, 0.0),
+                scale_factor,
+            },
+            weight,
+        )
     };
     if measure(renderer, value) <= max_width {
         return value.to_owned();
@@ -385,6 +456,14 @@ fn fit_centered_text(
         .copied()
         .chain(std::iter::once('…'))
         .collect()
+}
+
+fn cosmic_weight(weight: TextWeight) -> Weight {
+    match weight {
+        TextWeight::Regular => Weight::NORMAL,
+        TextWeight::Medium => Weight::MEDIUM,
+        TextWeight::Bold => Weight::BOLD,
+    }
 }
 
 fn glyph_views(quads: &[GlyphQuad]) -> Vec<GlyphView> {

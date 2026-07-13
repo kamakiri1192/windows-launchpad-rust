@@ -261,13 +261,18 @@ pub fn keyboard_action(
 
 pub fn folder_keyboard_action(
     rename_active: bool,
+    editing: bool,
     preedit_empty: bool,
     key_code: Option<KeyCode>,
     text: Option<&str>,
 ) -> KeyAction {
     if !rename_active {
         return if key_code == Some(KeyCode::Escape) {
-            KeyAction::CloseFolder
+            if editing {
+                KeyAction::ExitEditMode
+            } else {
+                KeyAction::CloseFolder
+            }
         } else {
             KeyAction::None
         };
@@ -765,6 +770,14 @@ impl App {
         if long_press_pending {
             self.maybe_long_press_into_edit(now);
         }
+        let folder_long_press_pending = self.folders.pressed_child.is_some() && !self.editing;
+        if folder_long_press_pending
+            && self
+                .folders
+                .child_long_press_ready(now, self.pointer_phys_x, self.pointer_phys_y)
+        {
+            self.enter_edit_mode(None);
+        }
         let scroller_animating = self
             .scroller
             .as_ref()
@@ -783,6 +796,7 @@ impl App {
             || control_animating
             || self.editing
             || long_press_pending
+            || folder_long_press_pending
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening
@@ -871,15 +885,23 @@ mod tests {
     #[test]
     fn folder_esc_closes_folder_when_not_renaming() {
         assert_eq!(
-            folder_keyboard_action(false, true, Some(KeyCode::Escape), None),
+            folder_keyboard_action(false, false, true, Some(KeyCode::Escape), None),
             KeyAction::CloseFolder
+        );
+    }
+
+    #[test]
+    fn folder_esc_exits_edit_mode_before_closing_folder() {
+        assert_eq!(
+            folder_keyboard_action(false, true, true, Some(KeyCode::Escape), None),
+            KeyAction::ExitEditMode
         );
     }
 
     #[test]
     fn folder_rename_esc_cancels_before_folder_close() {
         assert_eq!(
-            folder_keyboard_action(true, true, Some(KeyCode::Escape), None),
+            folder_keyboard_action(true, true, true, Some(KeyCode::Escape), None),
             KeyAction::CancelFolderRename
         );
     }
@@ -887,15 +909,15 @@ mod tests {
     #[test]
     fn folder_rename_enter_commits_and_preedit_blocks_edits() {
         assert_eq!(
-            folder_keyboard_action(true, true, Some(KeyCode::Enter), None),
+            folder_keyboard_action(true, true, true, Some(KeyCode::Enter), None),
             KeyAction::CommitFolderRename
         );
         assert_eq!(
-            folder_keyboard_action(true, false, Some(KeyCode::Backspace), None),
+            folder_keyboard_action(true, true, false, Some(KeyCode::Backspace), None),
             KeyAction::None
         );
         assert_eq!(
-            folder_keyboard_action(true, true, Some(KeyCode::KeyA), Some("あ")),
+            folder_keyboard_action(true, true, true, Some(KeyCode::KeyA), Some("あ")),
             KeyAction::FolderRenameChar("あ".to_owned())
         );
     }

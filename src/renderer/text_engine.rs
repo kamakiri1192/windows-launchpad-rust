@@ -15,7 +15,8 @@
 use std::collections::HashMap;
 
 use cosmic_text::{
-    Attrs, Buffer, Color, Family, FontSystem, Metrics, PhysicalGlyph, Shaping, SwashCache, Wrap,
+    Attrs, Buffer, Color, Family, FontSystem, Metrics, PhysicalGlyph, Shaping, SwashCache, Weight,
+    Wrap,
 };
 
 /// A drawable glyph quad, matching the WGSL instance attributes for the text
@@ -174,6 +175,15 @@ impl TextRenderer {
     /// `spec.center` is the on-screen center of the line in physical px. The
     /// glyph quads are positioned so the line is horizontally centered on it.
     pub fn layout_centered_line(&mut self, spec: &CenteredLineSpec<'_>) -> Vec<GlyphQuad> {
+        self.layout_centered_line_weighted(spec, Weight::NORMAL)
+    }
+
+    /// Weighted variant used by semantic UI text such as a folder title.
+    pub fn layout_centered_line_weighted(
+        &mut self,
+        spec: &CenteredLineSpec<'_>,
+        weight: Weight,
+    ) -> Vec<GlyphQuad> {
         let CenteredLineSpec {
             text,
             font_size,
@@ -184,12 +194,15 @@ impl TextRenderer {
             scale_factor,
         } = *spec;
         let metrics = Metrics::new(font_size, line_height);
-        let attrs = Attrs::new().family(Family::Name(family)).color(Color::rgba(
-            (color[0] * 255.0).round() as u8,
-            (color[1] * 255.0).round() as u8,
-            (color[2] * 255.0).round() as u8,
-            (color[3] * 255.0).round() as u8,
-        ));
+        let attrs = Attrs::new()
+            .family(Family::Name(family))
+            .weight(weight)
+            .color(Color::rgba(
+                (color[0] * 255.0).round() as u8,
+                (color[1] * 255.0).round() as u8,
+                (color[2] * 255.0).round() as u8,
+                (color[3] * 255.0).round() as u8,
+            ));
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         // No wrapping: the control text is short.
         buffer.set_wrap(Wrap::None);
@@ -223,6 +236,10 @@ impl TextRenderer {
     /// (ASCII / CJK / ligatures all accounted for). Returns 0.0 on an empty
     /// or unshapable string.
     pub fn measure_text(&mut self, spec: &CenteredLineSpec<'_>) -> f32 {
+        self.measure_text_weighted(spec, Weight::NORMAL)
+    }
+
+    pub fn measure_text_weighted(&mut self, spec: &CenteredLineSpec<'_>, weight: Weight) -> f32 {
         let CenteredLineSpec {
             text,
             font_size,
@@ -232,7 +249,7 @@ impl TextRenderer {
             ..
         } = *spec;
         let metrics = Metrics::new(font_size, line_height);
-        let attrs = Attrs::new().family(Family::Name(family));
+        let attrs = Attrs::new().family(Family::Name(family)).weight(weight);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_wrap(Wrap::None);
         buffer.set_size(Some(f32::MAX / 4.0), Some(line_height * 2.0 / scale_factor));
