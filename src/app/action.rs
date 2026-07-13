@@ -407,7 +407,9 @@ impl App {
                 self.execute_command(AppCommand::RequestRedraw);
             }
             AppAction::DrainInbox => {
-                self.drain_inbox();
+                if !self.qa_enabled() {
+                    self.drain_inbox();
+                }
             }
             AppAction::Summon => {
                 self.execute_command(AppCommand::Summon);
@@ -766,6 +768,7 @@ impl App {
             // Quit is handled by the event loop exit in the handler.
             return;
         }
+        self.tick_qa(now);
         let long_press_pending = self.pending_press.is_some();
         if long_press_pending {
             self.maybe_long_press_into_edit(now);
@@ -803,6 +806,7 @@ impl App {
             || self.editing
             || long_press_pending
             || folder_long_press_pending
+            || self.qa_capture_due(now)
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening

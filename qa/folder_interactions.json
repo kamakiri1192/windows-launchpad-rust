@@ -1,0 +1,60 @@
+{
+  "name": "folder-interactions",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 3800,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-app-00", "name": "長いアプリケーション名 Alpha" },
+      { "id": "qa-app-01", "name": "Calendar" },
+      { "id": "qa-app-02", "name": "写真とビデオ編集ツール" },
+      { "id": "qa-app-03", "name": "Mail" },
+      { "id": "qa-app-04", "name": "Music Studio" },
+      { "id": "qa-app-05", "name": "Notes" },
+      { "id": "qa-app-06", "name": "Maps" },
+      { "id": "qa-app-07", "name": "Weather" },
+      { "id": "qa-app-08", "name": "Books" },
+      { "id": "qa-app-09", "name": "Second Page One" },
+      { "id": "qa-app-10", "name": "2ページ目のアプリ" },
+      { "id": "qa-app-11", "name": "Top Level A" },
+      { "id": "qa-app-12", "name": "Top Level B" },
+      { "id": "qa-app-13", "name": "Top Level C" }
+    ],
+    "folders": [
+      {
+        "id": "qa-folder",
+        "name": "制作とコミュニケーション",
+        "children": [
+          "qa-app-00", "qa-app-01", "qa-app-02", "qa-app-03", "qa-app-04",
+          "qa-app-05", "qa-app-06", "qa-app-07", "qa-app-08", "qa-app-09",
+          "qa-app-10"
+        ]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-folder" },
+      { "kind": "app", "id": "qa-app-11" },
+      { "kind": "app", "id": "qa-app-12" },
+      { "kind": "app", "id": "qa-app-13" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "open_folder", "id": "qa-folder" },
+    { "at_ms": 650, "type": "move", "target": { "kind": "folder_child", "index": 0 } },
+    { "at_ms": 700, "type": "pointer_down" },
+    { "at_ms": 1320, "type": "move", "target": { "kind": "folder_child", "index": 1 } },
+    { "at_ms": 1450, "type": "pointer_up" },
+    { "at_ms": 1600, "type": "move", "target": { "kind": "folder_title" } },
+    { "at_ms": 1630, "type": "pointer_down" },
+    { "at_ms": 1660, "type": "pointer_up" },
+    { "at_ms": 1720, "type": "type_text", "value": " QA" },
+    { "at_ms": 1900, "type": "commit_rename" },
+    { "at_ms": 2050, "type": "exit_edit_mode" },
+    { "at_ms": 2200, "type": "move", "target": { "kind": "folder_panel", "x": 0.95, "y": 0.52 } },
+    { "at_ms": 2250, "type": "pointer_down" },
+    { "at_ms": 2420, "type": "move", "target": { "kind": "folder_panel", "x": 0.05, "y": 0.52 } },
+    { "at_ms": 2500, "type": "pointer_up" },
+    { "at_ms": 3350, "type": "escape" }
+  ]
+}

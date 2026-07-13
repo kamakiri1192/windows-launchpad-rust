@@ -52,6 +52,9 @@ impl App {
     /// Called after a drag-to-reorder, hide/unhide, or folder change. Cheap:
     /// one small JSON blob upsert. Errors are logged but never panic the UI.
     pub(crate) fn persist_launcher_state(&self) {
+        if self.qa_enabled() {
+            return;
+        }
         if let Err(e) = self.cache.put_launcher_state(&self.launcher_state) {
             eprintln!("layout: failed to persist launcher state: {e}");
         }
@@ -72,6 +75,9 @@ impl App {
     }
 
     pub(crate) fn persist_settings(&self) {
+        if self.qa_enabled() {
+            return;
+        }
         if let Err(e) = self.cache.put_settings(&self.settings) {
             eprintln!("settings: failed to persist settings: {e}");
         }

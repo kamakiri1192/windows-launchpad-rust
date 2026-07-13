@@ -153,6 +153,7 @@ pub struct App {
     pub layout: crate::grid::GridLayout,
     pub render_model: crate::ui_model::render_model::RenderModel,
     pub timer: StartupTimer,
+    pub qa_runner: Option<crate::qa::QaRunner>,
 
     // ---- app + icon state ----
     pub registry: AppRegistry,
@@ -284,6 +285,7 @@ impl App {
             layout: crate::grid::GridLayout::default(),
             render_model: crate::ui_model::render_model::RenderModel::new(),
             timer,
+            qa_runner: crate::qa::QaRunner::from_env(),
             registry: AppRegistry::new(),
             launcher_state: LauncherState::new(),
             atlas: IconAtlas::new(64),

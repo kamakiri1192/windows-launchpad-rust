@@ -35,6 +35,7 @@ impl Renderer {
         window: winit::window::Window,
         layout: &GridLayout,
         event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+        backdrop_capture_enabled: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // On Windows we render to a transparent winit window. The default DX12
         // swapchain (DxgiFromHwnd) can't carry per-pixel alpha to the DWM, so
@@ -423,7 +424,7 @@ impl Renderer {
             cache: None,
         });
 
-        let capture = create_backdrop_capture(&window, event_proxy);
+        let capture = create_backdrop_capture(&window, event_proxy, backdrop_capture_enabled);
         let liquid_glass = LiquidGlassRenderer::new(
             &device,
             &queue,
@@ -716,7 +717,14 @@ fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
 fn create_backdrop_capture(
     window: &winit::window::Window,
     event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+    enabled: bool,
 ) -> Box<dyn crate::liquid_glass::capture::BackdropCapture> {
+    if !enabled {
+        return Box::new(FallbackCapture::new(
+            "desktop backdrop capture disabled for deterministic QA",
+        ));
+    }
+
     #[cfg(windows)]
     {
         match crate::liquid_glass::windows_capture::create_monitor_capture(window, event_proxy) {

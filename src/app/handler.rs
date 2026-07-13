@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::platform::windows::WindowAttributesExtWindows;
@@ -82,13 +82,21 @@ impl ApplicationHandler<UserEvent> for App {
                 INITIAL_WINDOW_HEIGHT,
             ))
             .with_min_inner_size(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+        if let Some(viewport) = self.qa_runner.as_ref().map(|runner| runner.viewport()) {
+            attrs = attrs
+                .with_visible(false)
+                .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
+            self.visible = false;
+        }
 
         if let Some(icon) = load_window_icon() {
             attrs = attrs.with_window_icon(Some(icon));
         }
 
-        if let Some(position) = initial_window_position(event_loop) {
-            attrs = attrs.with_position(position);
+        if !self.qa_enabled() {
+            if let Some(position) = initial_window_position(event_loop) {
+                attrs = attrs.with_position(position);
+            }
         }
 
         let window = event_loop.create_window(attrs).expect("create window");
@@ -115,6 +123,7 @@ impl ApplicationHandler<UserEvent> for App {
             window,
             &self.layout,
             self.event_proxy.clone(),
+            !self.qa_enabled(),
         ))
         .expect("init renderer");
         self.timer.mark(prefix::STARTUP, "renderer initialization");
@@ -130,6 +139,7 @@ impl ApplicationHandler<UserEvent> for App {
         // core Phase-1 win — the window is visible before any Shell/GDI work.
         self.relayout();
         self.request_redraw();
+        self.start_qa(Instant::now());
         self.timer.mark(prefix::STARTUP, "first redraw requested");
     }
 
@@ -219,10 +229,25 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         // Dispatch a tick action (long-press check + animation-gated redraw).
-        self.handle_action(AppAction::Tick {
-            now: Instant::now(),
-        });
-        event_loop.set_control_flow(ControlFlow::Wait);
+        let now = Instant::now();
+        self.handle_action(AppAction::Tick { now });
+        if self.qa_capture_due(now) {
+            // Windows does not deliver RedrawRequested for a hidden window.
+            // QA therefore advances the exact production frame path from its
+            // own fixed-rate deadline while normal visible mode remains event
+            // driven.
+            self.tick_frame();
+        }
+        if self.qa_finished(now) {
+            self.finalize_qa();
+            event_loop.exit();
+            return;
+        }
+        if let Some(deadline) = self.qa_next_deadline() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 }
 
@@ -230,7 +255,7 @@ impl App {
     /// Classify a left-button press into a [`PressAction`] using the current
     /// shell flags and the pointer position. This feeds
     /// [`AppAction::PointerPress`].
-    fn classify_pointer_press(&self, px: f32, py: f32) -> PressAction {
+    pub(crate) fn classify_pointer_press(&self, px: f32, py: f32) -> PressAction {
         let settings_target = if self.settings_open {
             self.settings_hit_target(px, py)
         } else {
@@ -259,7 +284,7 @@ impl App {
     /// Classify a left-button release into a [`ReleaseAction`] using the current
     /// shell flags and the press/release state. This feeds
     /// [`AppAction::PointerRelease`].
-    fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
+    pub(crate) fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
         if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
             return ReleaseAction::Folder;
         }

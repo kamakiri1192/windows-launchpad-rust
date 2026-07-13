@@ -1,5 +1,9 @@
 # Edit Mode Visual QA
 
+> 長押し・ドラッグ・フォルダページスワイプを非表示で自動再生し、連番 PNG
+> と manifest を取得する場合は [GPU_SEQUENCE_QA.md](GPU_SEQUENCE_QA.md) を参照してください。
+> この文書の単発キャプチャと手動 QA も引き続き利用できます。
+
 This document records the manual visual QA process used for the iOS-style
 edit-mode work: long-press entry, wiggle/lift visuals, drag reordering, edge
 autoscroll, Done exit, delete-badge hiding, and persistence across launches.

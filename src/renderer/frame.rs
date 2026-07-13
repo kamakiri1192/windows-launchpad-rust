@@ -595,10 +595,41 @@ impl Renderer {
                 let start = (row as usize) * (padded as usize);
                 pixels.extend_from_slice(&data[start..start + bytes_per_row as usize]);
             }
+            normalize_capture_rgba(self.surface_format, &mut pixels);
             // Reuse the `image` crate already in the dependency tree.
             if let Some(img) = image::RgbaImage::from_raw(w, h, pixels) {
                 let _ = img.save(&path);
             }
         }
+    }
+}
+
+fn normalize_capture_rgba(format: wgpu::TextureFormat, pixels: &mut [u8]) {
+    if matches!(
+        format,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_capture_rgba;
+
+    #[test]
+    fn qa_capture_converts_bgra_surfaces_to_png_rgba() {
+        let mut pixels = [10, 20, 30, 255, 1, 2, 3, 4];
+        normalize_capture_rgba(wgpu::TextureFormat::Bgra8UnormSrgb, &mut pixels);
+        assert_eq!(pixels, [30, 20, 10, 255, 3, 2, 1, 4]);
+    }
+
+    #[test]
+    fn qa_capture_keeps_rgba_surfaces_unchanged() {
+        let mut pixels = [10, 20, 30, 255];
+        normalize_capture_rgba(wgpu::TextureFormat::Rgba8UnormSrgb, &mut pixels);
+        assert_eq!(pixels, [10, 20, 30, 255]);
     }
 }

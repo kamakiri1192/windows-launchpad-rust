@@ -146,7 +146,12 @@ impl App {
         }
 
         // Render the frame (consumes the uploaded buffers).
+        let qa_capture_path = self.qa_capture_path(now);
+        let qa_enabled = self.qa_enabled();
         if let Some(r) = self.renderer.as_mut() {
+            if let Some(path) = qa_capture_path {
+                r.qa_shot = Some(path);
+            }
             // QA self-capture trigger: if LAUNCHPAD_QA_SHOT_FILE points
             // to a file whose contents name a path, the next rendered
             // frame is saved there as a PNG (see docs/EDIT_MODE_VISUAL_QA.md).
@@ -168,7 +173,7 @@ impl App {
             r.render(&DrawArgs {
                 scroll_x,
                 viewport: vp,
-                defer_backdrop_capture: dragging,
+                defer_backdrop_capture: dragging || qa_enabled,
                 time: self.wiggle_phase,
                 drag_active: if self.drag_item.is_some() || self.folders.child_drag.is_some() {
                     1.0
