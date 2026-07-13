@@ -41,6 +41,9 @@ Current behavior to preserve:
   During the closed-end portion of the morph, each child's colored tile fill
   collapses into its own center while the icon continues to its mini slot. The
   fill is already gone before the closed-folder preview takes over.
+- While a folder is active, its source tile's grid-preview mini icons are
+  suppressed because the modal lane owns the moving child icons. They return
+  only after the close morph reaches its endpoint.
 - The modal owns input while visible. Clicking the modal backdrop closes it
   without replaying the click underneath. `Esc` first cancels an active rename;
   otherwise it closes the folder.

@@ -89,6 +89,7 @@ impl App {
         self.apply_tile_spring_positions(&visible_items, &mut tile_instances);
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
         self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.suppress_active_folder_grid_icons(&mut icon_instances);
         self.refresh_grid_glass_lanes(w as f32, &items, &visible_items, &tile_instances);
         // While dragging, lift the dragged app off the grid: remove it from the
         // normal instance list and append a pointer-following copy at the end so
@@ -319,6 +320,17 @@ impl App {
         }
     }
 
+    /// The modal lane owns every child icon while a folder is opening, open,
+    /// or closing. Remove the matching grid preview so the source tile does
+    /// not leave a second set of miniatures behind the morph.
+    pub(crate) fn suppress_active_folder_grid_icons(&self, icons: &mut Vec<IconView>) {
+        let Some(folder_id) = self.folders.active.as_ref() else {
+            return;
+        };
+        let key = LauncherItem::Folder(folder_id.clone()).stable_key();
+        suppress_folder_preview_icons(icons, &key);
+    }
+
     /// While an edit-mode drag is in flight, move the dragged app's tile + icon
     /// to the end of the instance lists so it draws on top of everything else —
     /// but keep it as the *same* instance, not a duplicate. The shader uses
@@ -374,6 +386,7 @@ impl App {
         self.apply_tile_spring_positions(&visible_items, &mut tile_instances);
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
         self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.suppress_active_folder_grid_icons(&mut icon_instances);
         self.refresh_grid_glass_lanes(w as f32, &items, &visible_items, &tile_instances);
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances);
         self.render_model.tiles = Some(tile_instances);
@@ -383,6 +396,13 @@ impl App {
 
 fn folder_item_id(item: &LauncherItem) -> Option<UiId> {
     matches!(item, LauncherItem::Folder(_)).then(|| UiId::launcher_item(item.stable_key()))
+}
+
+fn suppress_folder_preview_icons(icons: &mut Vec<IconView>, folder_key: &str) {
+    let preview_ids: BTreeSet<_> = (0..9)
+        .map(|slot| UiId::launcher_preview(folder_key, slot))
+        .collect();
+    icons.retain(|icon| !preview_ids.contains(&icon.id));
 }
 
 fn align_glass_to_tiles(surfaces: &mut [GlassSurface], tiles: &[TileView]) {
@@ -471,6 +491,17 @@ fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<Gl
 mod tests {
     use super::*;
     use crate::domain::{app_id::AppId, folders::FolderId};
+    use crate::ui_model::render_model::{IconSource, IconView};
+
+    fn icon(id: UiId) -> IconView {
+        IconView {
+            id,
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            source: IconSource::Placeholder,
+            motion: grid::TileAnim::IDLE,
+            z: 0,
+        }
+    }
 
     #[test]
     fn folders_suppress_fill_and_badge_while_apps_do_not() {
@@ -523,5 +554,25 @@ mod tests {
         assert_eq!(overlay[1].rect.width, 84.0);
         assert_eq!(overlay[1].rect.height, 84.0);
         assert_eq!(overlay[1].radius, 19.0);
+    }
+
+    #[test]
+    fn active_folder_preview_icons_are_removed_without_touching_other_icons() {
+        let mut icons = vec![
+            icon(UiId::launcher_preview("folder:active", 0)),
+            icon(UiId::launcher_preview("folder:active", 8)),
+            icon(UiId::launcher_preview("folder:other", 0)),
+            icon(UiId::launcher_item("app")),
+        ];
+
+        suppress_folder_preview_icons(&mut icons, "folder:active");
+
+        assert_eq!(
+            icons.iter().map(|icon| icon.id.clone()).collect::<Vec<_>>(),
+            vec![
+                UiId::launcher_preview("folder:other", 0),
+                UiId::launcher_item("app"),
+            ]
+        );
     }
 }

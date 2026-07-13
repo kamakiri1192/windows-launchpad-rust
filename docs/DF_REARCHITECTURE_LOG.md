@@ -2297,6 +2297,9 @@ Final validation:
   end of the morph. During the final 42% the fill scales about the child's
   center to zero, while the icon keeps moving into its stable miniature slot;
   the modal-to-grid handoff no longer removes a visible fill in one frame.
-- Validation passed: `cargo fmt --check`, 638 tests (636 passed, 2 ignored),
+- The active folder's grid-preview mini icons are filtered from every grid icon
+  rebuild path while modal child icons own the morph. This removes the duplicate
+  miniatures left at the source tile without changing the endpoint handoff.
+- Validation passed: `cargo fmt --check`, 639 tests (637 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 

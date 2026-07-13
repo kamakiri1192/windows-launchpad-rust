@@ -131,6 +131,7 @@ impl App {
         let anim = self.edit_anim(&visible_items);
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
         self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.suppress_active_folder_grid_icons(&mut icon_instances);
         self.render_model.icons = Some(icon_instances);
     }
 
