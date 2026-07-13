@@ -40,6 +40,16 @@ impl App {
             .as_ref()
             .map(|s| s.is_animating())
             .unwrap_or(false);
+        let folder_scroller_animating = if let Some(scroller) = self.folder_scroller.as_mut() {
+            scroller.tick(now);
+            scroller.is_animating()
+        } else {
+            false
+        };
+        if folder_scroller_animating {
+            self.update_folder_page_from_scroll();
+            self.relayout();
+        }
         let auto_scroll_started = self.maybe_autoscroll_edit_drag();
         // Resolve the stable hover identity before any live reorder. Moving
         // the dragged item into the target cell first would make the next hit
@@ -80,6 +90,9 @@ impl App {
         }
         let folder_was_active = self.folders.is_active();
         let folder_animating = self.folders.tick(anim_dt);
+        if folder_was_active && !self.folders.is_active() {
+            self.folder_scroller = None;
+        }
         if folder_animating || hover_changed || (folder_was_active && !self.folders.is_active()) {
             self.relayout();
         }
@@ -178,6 +191,7 @@ impl App {
             || folder_animating
             || hover_changed
             || springs_animating
+            || folder_scroller_animating
             || self.editing
         {
             self.request_redraw();

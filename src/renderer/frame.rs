@@ -406,6 +406,28 @@ impl Renderer {
             || self.settings_instance_buffer.len() > 0
             || self.settings_text_instance_buffer.len() > 0
         {
+            let modal_tile_count = self.modal_tile_instance_buffer.len();
+            let normal_modal_tile_count =
+                modal_tile_count.saturating_sub(u32::from(self.modal_dragged_tile_instance));
+            let modal_icon_count = self.modal_icon_instance_buffer.len();
+            let normal_modal_icon_count =
+                modal_icon_count.saturating_sub(u32::from(self.modal_dragged_icon_instance));
+            let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
+            let content_scissor = self
+                .modal_clip_rect
+                .map(|rect| {
+                    let x = rect.x.floor().max(0.0) as u32;
+                    let y = rect.y.floor().max(0.0) as u32;
+                    let max_x = rect.max_x().ceil().clamp(0.0, self.config.width as f32) as u32;
+                    let max_y = rect.max_y().ceil().clamp(0.0, self.config.height as f32) as u32;
+                    (
+                        x.min(self.config.width.saturating_sub(1)),
+                        y.min(self.config.height.saturating_sub(1)),
+                        max_x.saturating_sub(x).max(1),
+                        max_y.saturating_sub(y).max(1),
+                    )
+                })
+                .unwrap_or(full_scissor);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("modal content pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -422,18 +444,24 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if self.modal_tile_instance_buffer.len() > 0 {
+            pass.set_scissor_rect(
+                content_scissor.0,
+                content_scissor.1,
+                content_scissor.2,
+                content_scissor.3,
+            );
+            if normal_modal_tile_count > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.modal_tile_instance_buffer.buffer().slice(..));
-                pass.draw(0..6, 0..self.modal_tile_instance_buffer.len());
+                pass.draw(0..6, 0..normal_modal_tile_count);
             }
-            if self.modal_icon_instance_buffer.len() > 0 {
+            if normal_modal_icon_count > 0 {
                 if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.icon_pipeline);
                     pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.modal_icon_instance_buffer.len());
+                    pass.draw(0..6, 0..normal_modal_icon_count);
                 }
             }
             if self.modal_instance_buffer.len() > 0 {
@@ -466,6 +494,32 @@ impl Renderer {
                     pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
+                }
+            }
+            pass.set_scissor_rect(
+                full_scissor.0,
+                full_scissor.1,
+                full_scissor.2,
+                full_scissor.3,
+            );
+            if self.modal_dragged_tile_instance && modal_tile_count > 0 {
+                let stride = std::mem::size_of::<crate::renderer::tiles::TileInstance>()
+                    as wgpu::BufferAddress;
+                let offset = stride * normal_modal_tile_count as wgpu::BufferAddress;
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.modal_tile_instance_buffer.buffer().slice(offset..));
+                pass.draw(0..6, 0..1);
+            }
+            if self.modal_dragged_icon_instance && modal_icon_count > 0 {
+                if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
+                    let stride = std::mem::size_of::<crate::renderer::icon_pipeline::IconInstance>()
+                        as wgpu::BufferAddress;
+                    let offset = stride * normal_modal_icon_count as wgpu::BufferAddress;
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(offset..));
+                    pass.draw(0..6, 0..1);
                 }
             }
         }

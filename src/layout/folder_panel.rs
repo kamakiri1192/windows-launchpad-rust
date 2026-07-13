@@ -58,6 +58,9 @@ pub struct FolderPanelInput<'a> {
     pub page_frame_radius: f32,
     pub children: &'a [FolderChildInput<'a>],
     pub page: usize,
+    /// Horizontal content origin from the shared paging scroller. Page zero
+    /// rests at 0; later pages use negative panel-width multiples.
+    pub page_scroll_x: f32,
     pub progress: f32,
     pub editing: bool,
     pub wiggle_phase: f32,
@@ -81,11 +84,9 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     let viewport_h = input.viewport.1.max(1) as f32;
     let page_count = input.children.len().div_ceil(PAGE_SIZE).max(1);
     let page = input.page.min(page_count - 1);
-    let start = page * PAGE_SIZE;
-    let page_children = &input.children[start..input.children.len().min(start + PAGE_SIZE)];
-    let count = page_children.len();
-    let cols = count.clamp(1, COLS);
-    let rows = count.div_ceil(COLS);
+    let layout_count = input.children.len().min(PAGE_SIZE);
+    let cols = layout_count.clamp(1, COLS);
+    let rows = layout_count.div_ceil(COLS);
     let content_width =
         cols as f32 * CELL_SIZE * scale + cols.saturating_sub(1) as f32 * CELL_GAP_X * scale;
     let panel_w = (content_width + PANEL_PADDING_X * 2.0 * scale)
@@ -192,15 +193,22 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     let grid_top = target.y + PANEL_PADDING_TOP * scale;
     let mut modal_tiles = Vec::new();
     let mut modal_icons = Vec::new();
-    let mut child_rects = Vec::with_capacity(count);
-    for (local_index, child) in page_children.iter().enumerate() {
+    let mut dragged_tile = None;
+    let mut dragged_icon = None;
+    let mut child_rects = Vec::with_capacity(input.children.len());
+    for (global_index, child) in input.children.iter().enumerate() {
+        let child_page = global_index / PAGE_SIZE;
+        let local_index = global_index % PAGE_SIZE;
+        let page_start = child_page * PAGE_SIZE;
+        let page_child_count = (input.children.len() - page_start).min(PAGE_SIZE);
         let row = local_index / COLS;
         let col = local_index % COLS;
         let row_start = row * COLS;
-        let row_count = (count - row_start).min(COLS);
+        let row_count = (page_child_count - row_start).min(COLS);
         let row_width = row_count as f32 * CELL_SIZE * scale
             + row_count.saturating_sub(1) as f32 * CELL_GAP_X * scale;
-        let grid_left = target.x + (target.width - row_width) * 0.5;
+        let page_origin = child_page as f32 * target.width + input.page_scroll_x;
+        let grid_left = target.x + page_origin + (target.width - row_width) * 0.5;
         let final_rect = Rect::new(
             grid_left + col as f32 * (CELL_SIZE + CELL_GAP_X) * scale,
             grid_top + row as f32 * (CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y) * scale,
@@ -208,7 +216,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             CELL_SIZE * scale,
         );
         let source = miniature_rect(input.source_rect, local_index.min(8));
-        let child_progress = if page == 0 {
+        let child_progress = if child_page == 0 {
             progress
         } else {
             ((progress - 0.72) / 0.28).clamp(0.0, 1.0)
@@ -218,7 +226,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         let dragged = input.dragged_child_key == Some(child.key);
         let motion = TileAnim {
             phase: if input.editing {
-                input.wiggle_phase + (start + local_index) as f32 * 0.37
+                input.wiggle_phase + global_index as f32 * 0.37
             } else {
                 0.0
             },
@@ -234,7 +242,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         };
         let fill_scale = child_fill_scale(progress);
         if fill_scale > 0.001 {
-            modal_tiles.push(TileView {
+            let view = TileView {
                 id: UiId::folder_child(input.folder_key, child.key),
                 rect: scale_rect_about_center(rect, fill_scale),
                 radius: 17.0 * scale * fill_scale,
@@ -242,16 +250,26 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 has_icon: child.uv.is_some(),
                 motion,
                 z: if dragged { 150 } else { 120 },
-            });
+            };
+            if dragged {
+                dragged_tile = Some(view);
+            } else {
+                modal_tiles.push(view);
+            }
         }
         if let Some(uv) = child.uv {
-            modal_icons.push(IconView {
+            let view = IconView {
                 id: UiId::folder_child(input.folder_key, child.key),
                 rect,
                 source: IconSource::AtlasUv(uv),
                 motion,
                 z: if dragged { 151 } else { 121 },
-            });
+            };
+            if dragged {
+                dragged_icon = Some(view);
+            } else {
+                modal_icons.push(view);
+            }
         }
         if title_alpha > 0.001 {
             render.text.push(TextView {
@@ -273,6 +291,12 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 z: 125,
             });
         }
+    }
+    if let Some(tile) = dragged_tile {
+        modal_tiles.push(tile);
+    }
+    if let Some(icon) = dragged_icon {
+        modal_icons.push(icon);
     }
     render.modal_tiles = Some(modal_tiles);
     render.modal_icons = Some(modal_icons);
@@ -326,13 +350,15 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             HitTarget::folder_title(input.folder_key),
             130,
         ));
-        for (local_index, (child, rect)) in page_children.iter().zip(&child_rects).enumerate() {
-            hits.push(HitRegion::new(
-                UiId::folder_child(input.folder_key, child.key),
-                *rect,
-                HitTarget::folder_child(input.folder_key, child.key, start + local_index),
-                140,
-            ));
+        for (global_index, (child, rect)) in input.children.iter().zip(&child_rects).enumerate() {
+            if let Some(clipped) = intersect_rect(*rect, target) {
+                hits.push(HitRegion::new(
+                    UiId::folder_child(input.folder_key, child.key),
+                    clipped,
+                    HitTarget::folder_child(input.folder_key, child.key, global_index),
+                    140,
+                ));
+            }
         }
         if page_count > 1 {
             let nav = Rect::new(
@@ -414,6 +440,14 @@ fn scale_rect_about_center(rect: Rect, scale: f32) -> Rect {
     )
 }
 
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.max_x().min(b.max_x());
+    let y1 = a.max_y().min(b.max_y());
+    (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -455,6 +489,17 @@ mod tests {
         scale: f32,
         source_rect: Rect,
     ) -> FolderPanelModel {
+        model_with_page(count, progress, scale, source_rect, 0, 0.0)
+    }
+
+    fn model_with_page(
+        count: usize,
+        progress: f32,
+        scale: f32,
+        source_rect: Rect,
+        page: usize,
+        page_scroll_x: f32,
+    ) -> FolderPanelModel {
         let owned = children(count);
         let input: Vec<_> = owned
             .iter()
@@ -476,7 +521,8 @@ mod tests {
             page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
             page_frame_radius: 54.0 * scale,
             children: &input,
-            page: 0,
+            page,
+            page_scroll_x,
             progress,
             editing: false,
             wiggle_phase: 0.0,
@@ -586,13 +632,43 @@ mod tests {
     fn ten_children_create_two_pages_and_indicator() {
         let value = model(10, 1.0, 1.0);
         assert_eq!(value.page_count, 2);
-        assert_eq!(value.child_rects.len(), 9);
+        assert_eq!(value.child_rects.len(), 10);
         assert!(value
             .result
             .render
             .ink
             .iter()
             .any(|batch| batch.lane == InkLane::Modal));
+    }
+
+    #[test]
+    fn horizontal_scroll_moves_the_next_page_into_the_same_panel() {
+        let source = Rect::new(100.0, 120.0, 84.0, 84.0);
+        let first = model_with_page(10, 1.0, 1.0, source, 0, 0.0);
+        let page_width = first.target_panel_rect.width;
+        assert!(first.child_rects[9].center().x > first.target_panel_rect.max_x());
+
+        let second = model_with_page(10, 1.0, 1.0, source, 1, -page_width);
+        assert!(
+            (second.child_rects[9].center().x - second.target_panel_rect.center().x).abs() < 0.01
+        );
+        assert!(second.child_rects[0].center().x < second.target_panel_rect.x);
+        assert!(matches!(
+            second
+                .result
+                .hits
+                .hit_test(second.child_rects[9].center())
+                .map(|hit| &hit.target),
+            Some(HitTarget::FolderChild { child, index: 9, .. }) if child == "id-9"
+        ));
+    }
+
+    #[test]
+    fn panel_geometry_stays_fixed_across_sparse_last_page() {
+        let source = Rect::new(100.0, 120.0, 84.0, 84.0);
+        let first = model_with_page(10, 1.0, 1.0, source, 0, 0.0);
+        let second = model_with_page(10, 1.0, 1.0, source, 1, -first.target_panel_rect.width);
+        assert_eq!(first.target_panel_rect, second.target_panel_rect);
     }
 
     #[test]
@@ -670,6 +746,7 @@ mod tests {
             page_frame_radius: 54.0,
             children: &input,
             page: 0,
+            page_scroll_x: 0.0,
             progress: 1.0,
             editing: true,
             wiggle_phase: 1.25,

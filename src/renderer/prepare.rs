@@ -126,6 +126,18 @@ impl Renderer {
     /// shader-facing structs remains an internal renderer responsibility.
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
+        self.modal_clip_rect = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| surface.rect)
+            });
         for batch in &model.glass {
             if self
                 .prepared_model
@@ -225,6 +237,9 @@ impl Renderer {
                 .enumerate()
                 .map(|(index, view)| tile_instance(view, index))
                 .collect();
+            self.modal_dragged_tile_instance = instances.last().is_some_and(|instance| {
+                instance.extra[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
+            });
             set_instances(
                 &self.device,
                 &self.queue,
@@ -245,6 +260,9 @@ impl Renderer {
                 .iter()
                 .filter_map(icon_instance)
                 .collect();
+            self.modal_dragged_icon_instance = instances.last().is_some_and(|instance| {
+                instance.extra[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
+            });
             set_instances(
                 &self.device,
                 &self.queue,

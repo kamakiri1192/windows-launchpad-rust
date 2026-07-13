@@ -31,6 +31,7 @@ impl App {
         }
         self.folders.hover = None;
         self.folders.hover_opened = None;
+        self.folder_scroller = None;
         self.folders.open(id);
         self.relayout();
         self.request_redraw();
@@ -74,6 +75,7 @@ impl App {
         let presentation = if let Some(folder_id) = self.folders.active.clone() {
             let Some(folder) = self.launcher_state.folders.get(&folder_id).cloned() else {
                 self.folders = crate::features::folders::FolderFeatureState::default();
+                self.folder_scroller = None;
                 self.clear_folder_panel_presentation();
                 return;
             };
@@ -173,6 +175,11 @@ impl App {
             })
             .flatten();
         let viewport = self.viewport_phys();
+        let page_scroll_x = self
+            .folder_scroller
+            .as_ref()
+            .map(|scroller| scroller.position)
+            .unwrap_or(0.0);
         let (frame_x, frame_y, frame_width, frame_height) =
             self.layout.frame_panel_rect(viewport.0 as f32);
         let mut model = folder_panel::build(FolderPanelInput {
@@ -192,11 +199,26 @@ impl App {
             page_frame_radius: self.layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
             children: &children,
             page,
+            page_scroll_x,
             progress,
             editing: durable && self.editing,
             wiggle_phase: self.wiggle_phase,
             dragged_child_key: dragged_key.as_deref(),
         });
+        if durable {
+            let bounds = crate::scroll::ScrollBounds {
+                page_extent: model.target_panel_rect.width.max(1.0),
+                page_count: model.page_count,
+            };
+            if let Some(scroller) = self.folder_scroller.as_mut() {
+                scroller.set_bounds(bounds);
+            } else {
+                let mut scroller = crate::scroll::Scroller::new(bounds);
+                scroller.position = -(page.min(model.page_count.saturating_sub(1)) as f32)
+                    * model.target_panel_rect.width;
+                self.folder_scroller = Some(scroller);
+            }
+        }
 
         // A top-level app remains pointer-attached after an existing folder
         // spring-opens. Submit that lifted copy through the generic modal lanes
@@ -418,6 +440,9 @@ impl App {
     }
 
     fn clear_folder_panel_presentation(&mut self) {
+        if !self.folders.is_active() {
+            self.folder_scroller = None;
+        }
         self.folder_layout = None;
         self.render_model.modal_tiles = Some(Vec::new());
         self.render_model.modal_icons = Some(Vec::new());

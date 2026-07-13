@@ -61,6 +61,7 @@ pub struct Renderer {
     /// Static per-tile instance data (capacity-managed; see `resources`).
     instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
     modal_tile_instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
+    modal_dragged_tile_instance: bool,
     /// Per-frame uniform data (viewport + scroll).
     uniform_buffer: Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -83,6 +84,7 @@ pub struct Renderer {
     icon_pipeline: RenderPipeline,
     icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     modal_icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
+    modal_dragged_icon_instance: bool,
     dragged_icon_instance: bool,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
@@ -91,6 +93,10 @@ pub struct Renderer {
     // Fixed page-frame geometry in physical px, fed to the tile/icon/text
     // shaders so they clip to the frame's rounded rect. `(cx, cy, hw, hh, r)`.
     frame_clip: (f32, f32, f32, f32, f32),
+    /// Rectangular GPU scissor for generic modal content. It follows the
+    /// highest-z modal glass surface so paged folder children cannot leak
+    /// outside their panel while sliding.
+    modal_clip_rect: Option<crate::ui_model::geometry::Rect>,
 
     // -- Bottom control overlays --------------------------------------
     // The control's glass capsule is drawn by the Liquid Glass pass (it's a

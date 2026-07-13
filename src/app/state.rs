@@ -207,6 +207,7 @@ pub struct App {
 
     // ---- folder feature -------------------------------------------------
     pub folders: crate::features::folders::FolderFeatureState,
+    pub folder_scroller: Option<Scroller>,
     pub folder_layout: Option<crate::layout::folder_panel::FolderPanelModel>,
     pub interaction_glass: Vec<crate::ui_model::render_model::GlassSurface>,
 
@@ -305,6 +306,7 @@ impl App {
             wiggle_phase: 0.0,
             tile_springs: Vec::new(),
             folders: crate::features::folders::FolderFeatureState::default(),
+            folder_scroller: None,
             folder_layout: None,
             interaction_glass: Vec::new(),
             control: crate::features::bottom_control::BottomControl::new(),

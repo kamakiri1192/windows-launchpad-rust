@@ -304,6 +304,7 @@ impl App {
     pub(crate) fn open_settings(&mut self) {
         if self.folders.is_active() {
             self.folders = crate::features::folders::FolderFeatureState::default();
+            self.folder_scroller = None;
             self.folder_layout = None;
         }
         if self.editing {
@@ -728,15 +729,19 @@ impl App {
                     .unwrap_or(index);
                 self.folders
                     .begin_child_press(app_id, domain_index, Instant::now(), x, y);
+                if !self.editing {
+                    self.folders.begin_page_press(x, y);
+                }
             }
             Some(HitTarget::FolderPagePrevious { .. }) => {
-                self.folders.page = self.folders.page.saturating_sub(1);
+                self.settle_folder_page(self.folders.page.saturating_sub(1));
             }
             Some(HitTarget::FolderPageNext { .. }) => {
                 if let Some(layout) = &self.folder_layout {
-                    self.folders.page = (self.folders.page + 1).min(layout.page_count - 1);
+                    self.settle_folder_page((self.folders.page + 1).min(layout.page_count - 1));
                 }
             }
+            Some(HitTarget::FolderPanel { .. }) => self.folders.begin_page_press(x, y),
             Some(HitTarget::Backdrop { .. }) | None => self.close_folder(),
             _ => {}
         }
@@ -753,6 +758,36 @@ impl App {
             .get(&folder_id)
             .map(|folder| folder.children.clone())
             .unwrap_or_default();
+        if self
+            .folder_scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging)
+        {
+            if let Some(scroller) = self.folder_scroller.as_mut() {
+                scroller.drag_move(x);
+            }
+            self.update_folder_page_from_scroll();
+            self.relayout();
+            self.request_redraw();
+            return;
+        }
+        let page_drag_start = self
+            .folders
+            .page_press
+            .as_ref()
+            .filter(|press| press.moved_past_slop(x, y))
+            .filter(|_| !self.editing || self.folders.pressed_child.is_none())
+            .map(|press| press.start_x);
+        if let (Some(start_x), Some(scroller)) = (page_drag_start, self.folder_scroller.as_mut()) {
+            scroller.drag_start(start_x);
+            scroller.drag_move(x);
+            self.folders.pressed_child = None;
+            self.folders.page_press = None;
+            self.update_folder_page_from_scroll();
+            self.relayout();
+            self.request_redraw();
+            return;
+        }
         if self.editing {
             self.folders.maybe_begin_child_drag(&children, x, y);
         }
@@ -773,6 +808,18 @@ impl App {
     pub(crate) fn handle_folder_pointer_release(&mut self, x: f32, y: f32) {
         use crate::domain::launcher_item::LauncherItem;
         use crate::ui_model::hit::HitTarget;
+        if self
+            .folder_scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging)
+        {
+            if let Some(scroller) = self.folder_scroller.as_mut() {
+                scroller.drag_end();
+            }
+            self.folders.clear_child_pointer();
+            self.request_redraw();
+            return;
+        }
         if let Some(drag) = self.folders.child_drag.clone() {
             let hit = self.folder_hit_target(x, y);
             let mut changed = false;
@@ -836,5 +883,28 @@ impl App {
                 }
             }
         }
+        self.folders.page_press = None;
+    }
+
+    fn settle_folder_page(&mut self, page: usize) {
+        if let Some(scroller) = self.folder_scroller.as_mut() {
+            scroller.settle_to_page(page);
+        } else {
+            self.folders.page = page;
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn update_folder_page_from_scroll(&mut self) {
+        let Some(layout) = self.folder_layout.as_ref() else {
+            return;
+        };
+        let Some(scroller) = self.folder_scroller.as_ref() else {
+            return;
+        };
+        let extent = layout.target_panel_rect.width.max(1.0);
+        self.folders.page = ((-scroller.position / extent).round() as isize)
+            .clamp(0, layout.page_count.saturating_sub(1) as isize)
+            as usize;
     }
 }

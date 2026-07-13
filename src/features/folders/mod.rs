@@ -186,6 +186,20 @@ pub struct PressedChild {
     pub start_y: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PagePress {
+    pub start_x: f32,
+    pub start_y: f32,
+}
+
+impl PagePress {
+    pub fn moved_past_slop(&self, x: f32, y: f32) -> bool {
+        let dx = x - self.start_x;
+        let dy = y - self.start_y;
+        dx * dx + dy * dy > CHILD_DRAG_SLOP * CHILD_DRAG_SLOP
+    }
+}
+
 impl PressedChild {
     pub fn moved_past_slop(&self, x: f32, y: f32) -> bool {
         let dx = x - self.start_x;
@@ -247,6 +261,7 @@ pub struct FolderFeatureState {
     /// target can close only the preview.
     pub hover_opened: Option<FolderId>,
     pub pressed_child: Option<PressedChild>,
+    pub page_press: Option<PagePress>,
     pub child_drag: Option<ChildDrag>,
 }
 
@@ -274,6 +289,7 @@ impl FolderFeatureState {
         }
         self.rename = None;
         self.pressed_child = None;
+        self.page_press = None;
         self.child_drag = None;
         self.hover_opened = None;
         self.motion.target = 0.0;
@@ -351,6 +367,13 @@ impl FolderFeatureState {
         });
     }
 
+    pub fn begin_page_press(&mut self, x: f32, y: f32) {
+        self.page_press = Some(PagePress {
+            start_x: x,
+            start_y: y,
+        });
+    }
+
     pub fn child_long_press_ready(&self, now: Instant, x: f32, y: f32) -> bool {
         self.pressed_child
             .as_ref()
@@ -379,6 +402,7 @@ impl FolderFeatureState {
 
     pub fn clear_child_pointer(&mut self) {
         self.pressed_child = None;
+        self.page_press = None;
         self.child_drag = None;
     }
 }
@@ -562,5 +586,15 @@ mod tests {
         };
         assert!(press.is_click(27.0, 30.0));
         assert!(!press.is_click(29.0, 30.0));
+    }
+
+    #[test]
+    fn page_press_uses_the_same_movement_slop_as_child_gestures() {
+        let press = PagePress {
+            start_x: 40.0,
+            start_y: 50.0,
+        };
+        assert!(!press.moved_past_slop(47.0, 50.0));
+        assert!(press.moved_past_slop(49.0, 50.0));
     }
 }

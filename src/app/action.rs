@@ -783,6 +783,11 @@ impl App {
             .as_ref()
             .map(|s| s.is_animating())
             .unwrap_or(false);
+        let folder_scroller_animating = self
+            .folder_scroller
+            .as_ref()
+            .map(|s| s.is_animating())
+            .unwrap_or(false);
         let control_animating = self.control.mode.is_morphing()
             || matches!(
                 self.control.mode,
@@ -793,6 +798,7 @@ impl App {
                 crate::features::bottom_control::Mode::Field
             );
         if scroller_animating
+            || folder_scroller_animating
             || control_animating
             || self.editing
             || long_press_pending
