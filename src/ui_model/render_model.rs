@@ -92,6 +92,10 @@ pub enum GlassMaterial {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GlassLayer {
     Base,
+    /// Glass surfaces composited above opaque grid fills but below grid icons
+    /// and labels. This keeps nested glass boundaries distinct from the page
+    /// frame's SDF union.
+    GridOverlay,
     Overlay,
     Modal,
 }

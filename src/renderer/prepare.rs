@@ -138,6 +138,11 @@ impl Renderer {
                 continue;
             }
             match batch.layer {
+                GlassLayer::GridOverlay => {
+                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    self.liquid_glass
+                        .set_grid_overlay_shapes(&self.device, &self.queue, &shapes);
+                }
                 GlassLayer::Overlay => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass

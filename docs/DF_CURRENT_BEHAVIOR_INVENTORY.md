@@ -25,7 +25,9 @@ Current behavior to preserve:
 - A closed folder uses only its Liquid Glass container and shows at most the
   first nine visible child icons in ordered 3x3 mini slots. It does not render
   the opaque colored fallback used behind a normal app icon. Hidden or
-  currently undiscovered children are not rendered.
+  currently undiscovered children are not rendered. The folder container uses
+  a nested grid-glass compositing lane so its rounded boundary remains visible
+  inside the larger page-frame glass, with mini icons drawn above it.
 - Clicking a folder opens a centered Liquid Glass modal. The panel size is
   derived from the visible child count, incomplete rows are centered, and more
   than nine children are split into pages with a page indicator.

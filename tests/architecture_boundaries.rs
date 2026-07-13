@@ -47,10 +47,11 @@ fn layout_and_ui_model_are_library_public() {
 
 #[test]
 fn glass_layer_is_renderer_neutral() {
-    // GlassLayer (Base/Overlay/Modal) is renderer-neutral compositing intent,
+    // GlassLayer is renderer-neutral compositing intent,
     // not a feature-specific pass selector.
     use launchpad_windows::ui_model::render_model::GlassLayer;
     assert_eq!(GlassLayer::Base, GlassLayer::Base);
+    assert_eq!(GlassLayer::GridOverlay, GlassLayer::GridOverlay);
     assert_eq!(GlassLayer::Overlay, GlassLayer::Overlay);
     assert_eq!(GlassLayer::Modal, GlassLayer::Modal);
     assert_ne!(GlassLayer::Base, GlassLayer::Modal);

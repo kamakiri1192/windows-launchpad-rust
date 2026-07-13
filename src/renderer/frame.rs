@@ -5,13 +5,15 @@
 //!
 //! 1. surface clear pass (transparent)
 //! 2. Liquid Glass base pass (page frame + scrolling tile halos, backdrop)
-//! 3. tile pass (color tiles, normal icons, text labels)
-//! 4. edit-badge glass + foreground ✕ marks (above grid, below dragged icon)
-//! 5. drag overlay pass (dragged tile + icon on top)
-//! 6. Liquid Glass control pass (capsule + gear merge)
-//! 7. control overlay pass (control ink, gear ink, control text)
-//! 8. Liquid Glass settings panel pass (modal)
-//! 9. settings overlay pass (close ×, title text)
+//! 3. tile fill pass (opaque app fills; folder fallback fills are discarded)
+//! 4. nested grid Liquid Glass pass (closed folder containers)
+//! 5. grid icon + text pass (content above nested glass)
+//! 6. edit-badge glass + foreground marks (above grid, below dragged icon)
+//! 7. drag overlay pass (dragged tile + icon on top)
+//! 8. Liquid Glass control pass (capsule + gear merge)
+//! 9. control overlay pass (control ink, gear ink, control text)
+//! 10. Liquid Glass settings panel pass (modal)
+//! 11. settings overlay pass (close and title text)
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -117,7 +119,7 @@ impl Renderer {
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("tile pass"),
+                label: Some("tile fill pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -143,6 +145,28 @@ impl Renderer {
                 // 6 verts per quad (two tris), instance_count quads.
                 pass.draw(0..6, 0..normal_tile_count);
             }
+        }
+
+        self.liquid_glass
+            .render_grid_overlay(&self.queue, &mut encoder, &view, args.scroll_x);
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("grid icon and text pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
             // Normal icons: drawn over the color tiles before labels. The
             // dragged icon, if any, is withheld until after text.

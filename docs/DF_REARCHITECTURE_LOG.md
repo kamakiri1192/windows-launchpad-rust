@@ -2269,9 +2269,24 @@ Final validation:
 - The suppression is a renderer-neutral tile flag rather than folder logic in
   the renderer. During edit-mode drag, the folder glass surface follows the
   pointer with the lifted tile instead of remaining at its original cell.
-- Release-build GPU capture verified that closed folders retain their Liquid
-  Glass container and mini icons without the opaque fallback; opening and
-  closing the folder still returns to the same closed presentation.
+- Initial release-build GPU capture verified removal of the opaque fallback,
+  but a follow-up visual review found that the folder boundary itself was
+  absorbed into the page-frame SDF union and therefore was not visible.
 - Validation passed: `cargo fmt --check`, 635 tests (633 passed, 2 ignored),
+  `cargo clippy --all-targets --all-features`, and `cargo build --release`.
+
+### 2026-07-13 — Visible closed-folder Liquid Glass
+
+- Added the renderer-neutral `GridOverlay` glass lane between opaque tile
+  fills and grid icons/text. Closed folder containers use this separate SDF
+  field, so their rounded boundary remains visible inside the larger page
+  frame instead of being swallowed by its smooth union.
+- Folder mini icons render after the new glass pass. Normal app fills stay in
+  the earlier tile pass, and the active or dragged folder is omitted from the
+  static lane so open/close and drag presentation do not leave duplicate glass.
+- Release-build GPU capture verified visible closed-folder glass behind both
+  nine-icon and three-icon previews, unchanged normal app backgrounds, and
+  successful folder open/close with the closed glass restored afterward.
+- Validation passed: `cargo fmt --check`, 636 tests (634 passed, 2 ignored),
   `cargo clippy --all-targets --all-features`, and `cargo build --release`.
 

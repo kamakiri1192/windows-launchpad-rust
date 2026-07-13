@@ -1,5 +1,7 @@
 //! Grid layout / spring / edit animation render adapter methods.
 
+use std::collections::BTreeSet;
+
 use crate::domain::launcher_item::LauncherItem;
 use crate::grid;
 use crate::scroll::{self, Phase};
@@ -87,18 +89,11 @@ impl App {
         self.apply_tile_spring_positions(&visible_items, &mut tile_instances);
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
         self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.refresh_grid_glass_lanes(w as f32, &items, &visible_items, &tile_instances);
         // While dragging, lift the dragged app off the grid: remove it from the
         // normal instance list and append a pointer-following copy at the end so
         // it draws on top of everything else.
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances);
-        let mut base_glass = self.layout.build_glass_surfaces(w as f32, &items);
-        if let Some(LauncherItem::Folder(folder_id)) = self.drag_item.as_ref() {
-            let dragged_key = LauncherItem::Folder(folder_id.clone()).stable_key();
-            let dragged_id = UiId::launcher_item(&dragged_key);
-            base_glass.retain(|surface| surface.id != dragged_id);
-        }
-        self.render_model
-            .set_glass_batch(GlassLayer::Base, base_glass);
         self.interaction_glass = self.build_interaction_glass();
         self.render_model.tiles = Some(tile_instances);
         self.render_model.icons = Some(icon_instances);
@@ -110,6 +105,32 @@ impl App {
             // more after the registry has been re-synced.
             self.rebuild_icon_instances();
         }
+    }
+
+    fn refresh_grid_glass_lanes(
+        &mut self,
+        viewport_w: f32,
+        items: &[grid::GridItem<'_>],
+        visible_items: &[LauncherItem],
+        tiles: &[TileView],
+    ) {
+        let mut surfaces = self.layout.build_glass_surfaces(viewport_w, items);
+        align_glass_to_tiles(&mut surfaces, tiles);
+        let folder_ids: BTreeSet<_> = visible_items.iter().filter_map(folder_item_id).collect();
+        let excluded_folder_ids: BTreeSet<_> = self
+            .folders
+            .active
+            .iter()
+            .map(|id| LauncherItem::Folder(id.clone()))
+            .chain(self.drag_item.iter().cloned())
+            .filter_map(|item| folder_item_id(&item))
+            .collect();
+        let (base_glass, folder_glass) =
+            split_folder_glass_surfaces(surfaces, &folder_ids, &excluded_folder_ids);
+        self.render_model
+            .set_glass_batch(GlassLayer::Base, base_glass);
+        self.render_model
+            .set_glass_batch(GlassLayer::GridOverlay, folder_glass);
     }
 
     pub(crate) fn edit_anim(&self, visible_items: &[LauncherItem]) -> Vec<grid::TileAnim> {
@@ -348,10 +369,60 @@ impl App {
         self.apply_tile_spring_positions(&visible_items, &mut tile_instances);
         let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
         self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.refresh_grid_glass_lanes(w as f32, &items, &visible_items, &tile_instances);
         self.lift_dragged_instances(&mut tile_instances, &mut icon_instances);
         self.render_model.tiles = Some(tile_instances);
         self.render_model.icons = Some(icon_instances);
     }
+}
+
+fn folder_item_id(item: &LauncherItem) -> Option<UiId> {
+    matches!(item, LauncherItem::Folder(_)).then(|| UiId::launcher_item(item.stable_key()))
+}
+
+fn align_glass_to_tiles(surfaces: &mut [GlassSurface], tiles: &[TileView]) {
+    for surface in surfaces
+        .iter_mut()
+        .filter(|surface| surface.behavior == GlassBehavior::Scrolling)
+    {
+        let Some(tile) = tiles.iter().find(|tile| tile.id == surface.id) else {
+            continue;
+        };
+        let center = tile.rect.center();
+        surface.rect.x = center.x - surface.rect.width * 0.5;
+        surface.rect.y = center.y - surface.rect.height * 0.5;
+    }
+}
+
+fn split_folder_glass_surfaces(
+    surfaces: Vec<GlassSurface>,
+    folder_ids: &BTreeSet<UiId>,
+    excluded_folder_ids: &BTreeSet<UiId>,
+) -> (Vec<GlassSurface>, Vec<GlassSurface>) {
+    let frame = surfaces
+        .iter()
+        .find(|surface| surface.behavior == GlassBehavior::FixedFrame)
+        .cloned();
+    let mut base = Vec::with_capacity(surfaces.len());
+    let mut folders = Vec::new();
+    for surface in surfaces {
+        if folder_ids.contains(&surface.id) {
+            if !excluded_folder_ids.contains(&surface.id) {
+                folders.push(surface);
+            }
+        } else {
+            base.push(surface);
+        }
+    }
+    if !folders.is_empty() {
+        if let Some(mut clip) = frame {
+            clip.id = UiId::backdrop("folder-grid-clip");
+            clip.behavior = GlassBehavior::ClipOnly;
+            clip.z = -1;
+            folders.insert(0, clip);
+        }
+    }
+    (base, folders)
 }
 
 fn launcher_item_tile_flags(item: &LauncherItem) -> u32 {
@@ -395,5 +466,42 @@ mod tests {
 
         let app = LauncherItem::App(AppId::from_normalized("app"));
         assert_eq!(launcher_item_tile_flags(&app), 0);
+    }
+
+    #[test]
+    fn folder_glass_is_separated_from_the_page_union() {
+        let folder = LauncherItem::Folder(FolderId::generate(1));
+        let folder_id = folder_item_id(&folder).unwrap();
+        let frame = GlassSurface {
+            id: UiId::backdrop("page-frame"),
+            rect: Rect::new(0.0, 0.0, 500.0, 400.0),
+            radius: 40.0,
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::FixedFrame,
+            z: -10,
+        };
+        let app_id = UiId::launcher_item("app");
+        let app = GlassSurface {
+            id: app_id.clone(),
+            rect: Rect::new(20.0, 20.0, 100.0, 100.0),
+            radius: 28.0,
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::Scrolling,
+            z: 0,
+        };
+        let folder_surface = GlassSurface {
+            id: folder_id.clone(),
+            ..app.clone()
+        };
+        let (base, overlay) = split_folder_glass_surfaces(
+            vec![frame, app, folder_surface],
+            &BTreeSet::from([folder_id.clone()]),
+            &BTreeSet::new(),
+        );
+
+        assert!(base.iter().any(|surface| surface.id == app_id));
+        assert!(!base.iter().any(|surface| surface.id == folder_id));
+        assert_eq!(overlay[0].behavior, GlassBehavior::ClipOnly);
+        assert_eq!(overlay[1].id, folder_id);
     }
 }

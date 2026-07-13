@@ -226,6 +226,83 @@ impl LiquidGlassRenderer {
         );
     }
 
+    /// Render glass nested inside the grid page after opaque tile fills and
+    /// before icons/text. A separate SDF field keeps inner boundaries from
+    /// being swallowed by the page frame's union.
+    pub fn render_grid_overlay(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        scroll_x: f32,
+    ) {
+        if !self.params.enabled || self.grid_overlay_shape_count == 0 {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            width,
+            height,
+            scroll_x,
+            self.grid_overlay_shape_count,
+            0.0,
+        );
+        queue.write_buffer(
+            &self.grid_overlay_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass grid overlay geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &self.grid_overlay_geometry_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass grid overlay final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.grid_overlay_final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        self.last_geometry_key = None;
+    }
+
     pub fn render_badges(
         &mut self,
         queue: &wgpu::Queue,
