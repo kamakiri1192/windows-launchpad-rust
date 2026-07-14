@@ -41,10 +41,23 @@ fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape 
     let animated_parent = tiles.iter().find(|tile| {
         tile.id == surface.id
             && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0
-            && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_DRAG == 0
     });
     if let Some(tile) = animated_parent {
-        GlassShape::animated_scrolling_rounded_rect(center, size, surface.radius, tile.motion.phase)
+        if surface.behavior == GlassBehavior::Control {
+            GlassShape::animated_control_rounded_rect(
+                center,
+                size,
+                surface.radius,
+                tile.motion.phase,
+            )
+        } else {
+            GlassShape::animated_scrolling_rounded_rect(
+                center,
+                size,
+                surface.radius,
+                tile.motion.phase,
+            )
+        }
     } else {
         shape_for(surface)
     }
@@ -486,6 +499,30 @@ mod tests {
         assert_eq!(shape.center[1], source.rect.center().y);
         assert_eq!(shape.size, [source.rect.width, source.rect.height]);
         assert_eq!(shape.radius, source.radius);
+    }
+
+    #[test]
+    fn dragged_folder_control_glass_keeps_the_tile_wiggle_phase() {
+        let source = surface("folder", 22, 240.0);
+        let tile = TileView {
+            id: source.id.clone(),
+            rect: Rect::new(10.0, 20.0, 84.0, 84.0),
+            radius: 19.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 0.0),
+            has_icon: false,
+            motion: crate::ui_model::grid::TileAnim {
+                phase: 1.75,
+                lift: 24.0,
+                scale: 1.15,
+                flags: crate::ui_model::grid::TileAnim::FLAG_WIGGLE
+                    | crate::ui_model::grid::TileAnim::FLAG_DRAG,
+            },
+            z: 0,
+        };
+
+        let shape = grid_overlay_shape(&source, &[tile]);
+        assert_eq!(shape.shape_type, 6);
+        assert_eq!(shape.motion, [240.0, 60.0, 1.75, 1.0]);
     }
 
     #[test]

@@ -103,7 +103,9 @@ fn vs_main(
     var applied_lift = lift;
     if grouped {
         let t = u.time + phase;
-        if wiggling && !dragged {
+        // The rigid folder group keeps its current wiggle phase while lifted,
+        // avoiding a one-frame snap back to the neutral transform.
+        if wiggling {
             wiggle_rot = sin(t * 8.0) * 0.06;
             wiggle_dy = abs(sin(t * 8.0)) * 2.0;
         }
@@ -143,7 +145,7 @@ fn vs_main(
     // Non-group icons rotate around their own center. Group children already
     // received the shared parent rotation above, but reuse the same angle here
     // so their artwork orientation remains rigidly attached to the folder.
-    if !grouped && wiggling && !dragged {
+    if !grouped && wiggling {
         let t = u.time + phase;
         wiggle_rot = sin(t * 8.0) * 0.06;
         wiggle_dy = abs(sin(t * 8.0)) * 2.0;

@@ -112,7 +112,9 @@ fn vs_main(
     // per-app phase offset, so icons wobble out of sync.
     var wiggle_rot = 0.0;
     var wiggle_dy = 0.0;
-    if wiggling && !dragged {
+    // Keep the same phase after lift-off. Disabling wiggle for the dragged
+    // frame would snap its current rotation/bob to zero on pointer-down.
+    if wiggling {
         let t = u.time + phase;
         wiggle_rot = sin(t * 8.0) * 0.06;          // ±~3.4°
         wiggle_dy = abs(sin(t * 8.0)) * 2.0;        // gentle bob

@@ -184,3 +184,20 @@ fn edit_badge_frame_motion_is_gpu_driven() {
     assert!(control_shader.contains("u.viewport_scroll.w + kind.w"));
     assert!(glass_shader.contains("u.time + shape.motion.z"));
 }
+
+#[test]
+fn dragged_tiles_keep_the_running_wiggle_phase() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in ["src/shader.wgsl", "src/shader_icon.wgsl"] {
+        let shader = std::fs::read_to_string(root.join(relative)).expect("tile shader");
+        assert!(
+            !shader.contains("wiggling && !dragged"),
+            "{relative} must not snap a lifted item back to neutral"
+        );
+    }
+
+    let glass_shader =
+        std::fs::read_to_string(root.join("assets/shaders/liquid_glass_geometry.wgsl"))
+            .expect("glass shader");
+    assert!(glass_shader.contains("shape.shape_type == 5u || shape.shape_type == 6u"));
+}

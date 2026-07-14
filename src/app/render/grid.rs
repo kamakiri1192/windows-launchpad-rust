@@ -277,21 +277,24 @@ impl App {
     }
 
     fn dragged_folder_glass_surface(&self) -> Option<GlassSurface> {
-        matches!(self.drag_item.as_ref(), Some(LauncherItem::Folder(_))).then(|| {
-            let size = self.layout.tile_size * 1.15;
-            GlassSurface {
-                id: UiId::backdrop("dragged-folder-glass"),
-                rect: Rect::new(
-                    self.drag_x - size * 0.5,
-                    self.drag_y - size * 0.5,
-                    size,
-                    size,
-                ),
-                radius: self.layout.scaled(19.0) * 1.15,
-                material: GlassMaterial::Regular,
-                behavior: GlassBehavior::Control,
-                z: 22,
-            }
+        let item = self.drag_item.as_ref()?;
+        let id = folder_item_id(item)?;
+        let size = self.layout.tile_size * 1.15;
+        Some(GlassSurface {
+            // Retain the launcher's stable item id so renderer preparation can
+            // pair this pointer-authored surface with the same TileAnim phase
+            // used by the folder miniatures.
+            id,
+            rect: Rect::new(
+                self.drag_x - size * 0.5,
+                self.drag_y - size * 0.5,
+                size,
+                size,
+            ),
+            radius: self.layout.scaled(19.0) * 1.15,
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::Control,
+            z: 22,
         })
     }
 
