@@ -193,16 +193,10 @@ impl GridLayout {
                     rect: Rect::new(x, y, self.tile_size, self.tile_size),
                     source: IconSource::AtlasUv(uv),
                     motion: anim,
+                    motion_pivot: None,
                     z,
                 });
             } else {
-                // The drag shader centers every dragged instance on the
-                // pointer. A folder has up to nine independently positioned
-                // miniatures, so omit them during the lift instead of stacking
-                // all of them at the same point.
-                if anim.flags & TileAnim::FLAG_DRAG != 0 {
-                    continue;
-                }
                 let mini = self.tile_size * 0.22;
                 let mini_gap = self.tile_size * 0.07;
                 let preview_w = mini * 3.0 + mini_gap * 2.0;
@@ -221,7 +215,14 @@ impl GridLayout {
                             mini,
                         ),
                         source: IconSource::AtlasUv(uv),
-                        motion: anim,
+                        motion: TileAnim {
+                            flags: anim.flags | TileAnim::FLAG_GROUP_MOTION,
+                            ..anim
+                        },
+                        motion_pivot: Some(crate::ui_model::geometry::Point::new(
+                            x + self.tile_size * 0.5,
+                            y + self.tile_size * 0.5,
+                        )),
                         z,
                     });
                 }
@@ -443,5 +444,41 @@ mod tests {
         let x = g.margin_left + g.tile_size * 0.5;
         let y = g.margin_top + g.tile_size + 41.0 * scale;
         assert_eq!(g.hit_test_app(vw, x, y, 0.0, apps.len()), Some(0));
+    }
+
+    #[test]
+    fn dragged_folder_keeps_preview_icons_on_a_shared_parent_pivot() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let uv = UvRect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 0.1,
+            v1: 0.1,
+        };
+        let previews = [Some(uv), Some(uv), Some(uv)];
+        let items = [GridItem {
+            key: "folder",
+            name: "Folder",
+            uv: None,
+            preview_uvs: &previews,
+        }];
+        let anim = [TileAnim {
+            phase: 0.5,
+            lift: 24.0,
+            scale: 1.15,
+            flags: TileAnim::FLAG_WIGGLE | TileAnim::FLAG_DRAG,
+        }];
+        let icons = g.build_icon_instances(vw, &items, &anim);
+        assert_eq!(icons.len(), 3);
+        let expected = crate::ui_model::geometry::Point::new(
+            g.margin_left + g.tile_size * 0.5,
+            g.margin_top + g.tile_size * 0.5,
+        );
+        assert!(icons.iter().all(|icon| icon.motion_pivot == Some(expected)));
+        assert!(icons.iter().all(|icon| {
+            icon.motion.flags & TileAnim::FLAG_GROUP_MOTION != 0
+                && icon.motion.flags & TileAnim::FLAG_DRAG != 0
+        }));
     }
 }

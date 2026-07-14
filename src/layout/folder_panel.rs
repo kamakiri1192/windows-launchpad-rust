@@ -263,6 +263,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 rect,
                 source: IconSource::AtlasUv(uv),
                 motion,
+                motion_pivot: None,
                 z: if dragged { 151 } else { 121 },
             };
             if dragged {

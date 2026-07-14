@@ -182,6 +182,15 @@ pub struct Scroller {
     clock_origin: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollDiagnostics {
+    /// Direct-manipulation position implied by the latest pointer after the
+    /// same rubber-band function used by `drag_move`.
+    pub input_target: Option<f32>,
+    pub settle_target: Option<f32>,
+    pub velocity_sample_count: usize,
+}
+
 impl Scroller {
     pub fn new(bounds: ScrollBounds) -> Self {
         let clock_origin = Instant::now();
@@ -331,6 +340,18 @@ impl Scroller {
     /// True while content is moving — the main loop should keep redrawing.
     pub fn is_animating(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
+    }
+
+    pub fn diagnostics(&self, pointer_x: f32) -> ScrollDiagnostics {
+        let input_target = (self.phase == Phase::Dragging).then(|| {
+            let raw = self.drag_anchor + (pointer_x - self.drag_start_pointer);
+            self.clamp_with_rubber(raw)
+        });
+        ScrollDiagnostics {
+            input_target,
+            settle_target: (self.phase == Phase::Settling).then_some(self.settle_target),
+            velocity_sample_count: self.sample_count,
+        }
     }
 
     /// Programmatically glide to a page boundary. Used by edit-mode

@@ -35,6 +35,8 @@ struct InstanceIn {
     @location(1) uvrect: vec4<f32>,        // (u0, v0, u1, v1)
     // Edit-mode animation: (phase, lift, scale, flags).
     @location(2) extra: vec4<f32>,
+    // Optional common rigid-group pivot: (x, y, enabled, padding).
+    @location(3) motion_pivot: vec4<f32>,
 };
 
 struct VsOut {
@@ -53,6 +55,7 @@ const FLAG_WIGGLE: f32 = 1.0;
 // Flag bit set in `extra.w` while this icon is the one being dragged.
 const FLAG_DRAG: f32 = 2.0;
 const FLAG_FIXED: f32 = 4.0;
+const FLAG_GROUP_MOTION: f32 = 32.0;
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -61,6 +64,7 @@ fn vs_main(
     @location(0) origin_size_r: vec4<f32>,
     @location(1) uvrect: vec4<f32>,
     @location(2) extra: vec4<f32>,
+    @location(3) motion_pivot: vec4<f32>,
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
@@ -83,15 +87,46 @@ fn vs_main(
     let wiggling = (u32(flags) & u32(FLAG_WIGGLE)) != 0u;
     let dragged = (u32(flags) & u32(FLAG_DRAG)) != 0u;
     let fixed = (u32(flags) & u32(FLAG_FIXED)) != 0u;
+    let grouped = (u32(flags) & u32(FLAG_GROUP_MOTION)) != 0u && motion_pivot.z > 0.5;
 
     // Effective size after the drag scale; re-anchor about the tile center.
     let eff_size = size * scale;
     let size_delta = (eff_size - size) * 0.5;
 
-    // World-space top-left, shifted by the scroller + scale re-anchor. While
-    // dragged, follow the pointer instead (centered on `drag_pos`).
+    // World-space top-left, shifted by the scroller + scale re-anchor. A rigid
+    // group transforms each miniature around one folder pivot, so the preview
+    // follows and scales with its parent instead of stacking at the pointer or
+    // letting every child wiggle independently.
     var tl: vec2<f32>;
-    if dragged && u.drag_active > 0.5 {
+    var wiggle_rot = 0.0;
+    var wiggle_dy = 0.0;
+    var applied_lift = lift;
+    if grouped {
+        let t = u.time + phase;
+        if wiggling && !dragged {
+            wiggle_rot = sin(t * 8.0) * 0.06;
+            wiggle_dy = abs(sin(t * 8.0)) * 2.0;
+        }
+        let pivot = motion_pivot.xy;
+        var group_center = pivot;
+        var relative_center = (origin + vec2<f32>(size * 0.5)) - pivot;
+        relative_center = relative_center * scale;
+        if dragged && u.drag_active > 0.5 {
+            group_center = u.drag_pos;
+        } else if !fixed {
+            group_center.x = group_center.x + u.scroll_x;
+        }
+        let cosr = cos(wiggle_rot);
+        let sinr = sin(wiggle_rot);
+        let rotated_center = vec2<f32>(
+            relative_center.x * cosr - relative_center.y * sinr,
+            relative_center.x * sinr + relative_center.y * cosr,
+        );
+        let center = group_center + rotated_center - vec2<f32>(0.0, wiggle_dy);
+        tl = center - vec2<f32>(eff_size * 0.5);
+        applied_lift = 0.0;
+        wiggle_dy = 0.0;
+    } else if dragged && u.drag_active > 0.5 {
         tl = vec2<f32>(u.drag_pos.x - eff_size * 0.5, u.drag_pos.y - eff_size * 0.5);
     } else if fixed {
         tl = vec2<f32>(origin.x - size_delta, origin.y - size_delta);
@@ -105,10 +140,10 @@ fn vs_main(
         (1.0 - c.y) * eff_size - eff_size * 0.5,
     );
 
-    // Wiggle: small rotation + vertical bob (icons don't wiggle while dragged).
-    var wiggle_rot = 0.0;
-    var wiggle_dy = 0.0;
-    if wiggling && !dragged {
+    // Non-group icons rotate around their own center. Group children already
+    // received the shared parent rotation above, but reuse the same angle here
+    // so their artwork orientation remains rigidly attached to the folder.
+    if !grouped && wiggling && !dragged {
         let t = u.time + phase;
         wiggle_rot = sin(t * 8.0) * 0.06;
         wiggle_dy = abs(sin(t * 8.0)) * 2.0;
@@ -121,7 +156,10 @@ fn vs_main(
     let cosr = cos(wiggle_rot);
     let sinr = sin(wiggle_rot);
     let rotated = vec2<f32>(rel.x * cosr - rel.y * sinr, rel.x * sinr + rel.y * cosr);
-    let world = vec2<f32>(center.x + rotated.x, center.y + rotated.y - wiggle_dy - lift);
+    let world = vec2<f32>(
+        center.x + rotated.x,
+        center.y + rotated.y - wiggle_dy - applied_lift,
+    );
 
     // Physical px → clip space. Y is flipped so content origin is top-left.
     let half = u.viewport * 0.5;

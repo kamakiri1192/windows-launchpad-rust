@@ -31,6 +31,7 @@ impl App {
     /// Recompute layout/bounds for the current window size and push tile +
     /// label + icon instance buffers to the GPU.
     pub(crate) fn relayout(&mut self) {
+        self.relayout_serial = self.relayout_serial.wrapping_add(1);
         let (w, _h) = self.viewport_phys();
         let owned = self.grid_items_owned();
         // Size pages to the current visible item count so every filtered item is
@@ -224,7 +225,7 @@ impl App {
     fn build_interaction_glass(&self) -> Vec<GlassSurface> {
         let mut surfaces = Vec::new();
         if matches!(self.drag_item.as_ref(), Some(LauncherItem::Folder(_))) {
-            let size = self.layout.tile_size + 18.0 * self.scale_factor;
+            let size = self.layout.tile_size * 1.15;
             surfaces.push(GlassSurface {
                 id: UiId::backdrop("dragged-folder-glass"),
                 rect: Rect::new(
@@ -233,7 +234,7 @@ impl App {
                     size,
                     size,
                 ),
-                radius: 28.0 * self.scale_factor,
+                radius: self.layout.scaled(19.0) * 1.15,
                 material: GlassMaterial::Regular,
                 behavior: GlassBehavior::Control,
                 z: 22,
@@ -316,6 +317,10 @@ impl App {
             }) {
                 instance.rect.x += dx;
                 instance.rect.y += dy;
+                if let Some(pivot) = instance.motion_pivot.as_mut() {
+                    pivot.x += dx;
+                    pivot.y += dy;
+                }
             }
         }
     }
@@ -342,14 +347,17 @@ impl App {
     ) {
         let is_drag = |flags: u32| flags & grid::TileAnim::FLAG_DRAG != 0;
 
-        if let Some(pos) = tile_instances.iter().position(|t| is_drag(t.motion.flags)) {
-            let item = tile_instances.swap_remove(pos);
-            tile_instances.push(item);
-        }
-        if let Some(pos) = icon_instances.iter().position(|i| is_drag(i.motion.flags)) {
-            let item = icon_instances.swap_remove(pos);
-            icon_instances.push(item);
-        }
+        let (mut normal_tiles, dragged_tiles): (Vec<_>, Vec<_>) = std::mem::take(tile_instances)
+            .into_iter()
+            .partition(|tile| !is_drag(tile.motion.flags));
+        normal_tiles.extend(dragged_tiles);
+        *tile_instances = normal_tiles;
+
+        let (mut normal_icons, dragged_icons): (Vec<_>, Vec<_>) = std::mem::take(icon_instances)
+            .into_iter()
+            .partition(|icon| !is_drag(icon.motion.flags));
+        normal_icons.extend(dragged_icons);
+        *icon_instances = normal_icons;
     }
 
     /// Advance every tile position spring by `dt`. Returns `true` while any
@@ -499,6 +507,7 @@ mod tests {
             rect: Rect::new(0.0, 0.0, 10.0, 10.0),
             source: IconSource::Placeholder,
             motion: grid::TileAnim::IDLE,
+            motion_pivot: None,
             z: 0,
         }
     }

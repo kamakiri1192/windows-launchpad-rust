@@ -79,6 +79,7 @@ impl App {
         if self.editing {
             self.wiggle_phase += anim_dt;
         }
+        let folder_child_page_started = self.tick_folder_child_page_hover(anim_dt);
         let candidate_folder = hover_candidate.as_ref().and_then(|item| match item {
             crate::domain::launcher_item::LauncherItem::Folder(id) => Some(id.clone()),
             crate::domain::launcher_item::LauncherItem::App(_) => None,
@@ -131,6 +132,7 @@ impl App {
             Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
             None => 1.0 / 60.0,
         };
+        self.last_frame_dt_ms = control_dt * 1000.0;
         self.last_redraw = Some(now);
         let control_animating = self.control.tick(now, control_dt);
         let edit_control_animating = self.step_edit_control_width(control_dt);
@@ -208,6 +210,7 @@ impl App {
             || hover_changed
             || springs_animating
             || folder_child_springs_animating
+            || folder_child_page_started
             || folder_scroller_animating
             || self.editing
         {

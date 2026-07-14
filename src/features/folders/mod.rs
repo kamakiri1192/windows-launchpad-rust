@@ -6,6 +6,7 @@
 use crate::domain::app_id::AppId;
 use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
+use crate::ui_model::geometry::{Point, Rect};
 use std::time::Instant;
 
 pub const HOVER_OPEN_DELAY: f32 = 0.38;
@@ -15,6 +16,71 @@ const MOTION_ZETA: f32 = 0.9;
 const MOTION_EPS: f32 = 0.001;
 const MAX_STEP: f32 = 1.0 / 120.0;
 const CHILD_DRAG_SLOP: f32 = 8.0;
+pub const CHILD_PAGE_EDGE_DWELL: f32 = 0.26;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildDragBoundaryIntent {
+    Stay,
+    Page(usize),
+    Exit,
+}
+
+/// Split a folder-child drag boundary into two deliberate gestures:
+/// horizontal edge holding changes the folder page, while leaving through the
+/// top or bottom promotes the child to the main grid. Side corridors remain
+/// owned by paging even on the first/last page, avoiding accidental exits.
+pub fn child_drag_boundary_intent(
+    panel: Rect,
+    pointer: Point,
+    current_page: usize,
+    page_count: usize,
+    scale: f32,
+) -> ChildDragBoundaryIntent {
+    let (edge_zone, vertical_exit_slop) = child_drag_boundary_sizes(panel, scale);
+    let in_side_corridor = pointer.y >= panel.y - vertical_exit_slop
+        && pointer.y <= panel.max_y() + vertical_exit_slop;
+
+    if in_side_corridor && pointer.x <= panel.x + edge_zone {
+        return if current_page > 0 {
+            ChildDragBoundaryIntent::Page(current_page - 1)
+        } else {
+            ChildDragBoundaryIntent::Stay
+        };
+    }
+    if in_side_corridor && pointer.x >= panel.max_x() - edge_zone {
+        return if current_page + 1 < page_count {
+            ChildDragBoundaryIntent::Page(current_page + 1)
+        } else {
+            ChildDragBoundaryIntent::Stay
+        };
+    }
+    if pointer.y < panel.y - vertical_exit_slop || pointer.y > panel.max_y() + vertical_exit_slop {
+        ChildDragBoundaryIntent::Exit
+    } else {
+        ChildDragBoundaryIntent::Stay
+    }
+}
+
+pub fn child_drag_in_page_edge(panel: Rect, pointer: Point, scale: f32) -> bool {
+    let (edge_zone, vertical_exit_slop) = child_drag_boundary_sizes(panel, scale);
+    pointer.y >= panel.y - vertical_exit_slop
+        && pointer.y <= panel.max_y() + vertical_exit_slop
+        && (pointer.x <= panel.x + edge_zone || pointer.x >= panel.max_x() - edge_zone)
+}
+
+fn child_drag_boundary_sizes(panel: Rect, scale: f32) -> (f32, f32) {
+    let scale = scale.max(0.01);
+    (
+        (panel.width * 0.12).clamp(48.0 * scale, 72.0 * scale),
+        28.0 * scale,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChildPageHover {
+    pub target: usize,
+    pub elapsed: f32,
+}
 
 /// A completed folder dwell owns the drop. Before the dwell completes, normal
 /// reordering may still win after the pointer crosses the target's far-side
@@ -277,6 +343,10 @@ pub struct FolderFeatureState {
     pub pressed_child: Option<PressedChild>,
     pub page_press: Option<PagePress>,
     pub child_drag: Option<ChildDrag>,
+    pub child_page_hover: Option<ChildPageHover>,
+    /// A completed edge page change stays latched until the pointer returns to
+    /// the neutral center, preventing one hold from racing through all pages.
+    pub child_page_latched: bool,
 }
 
 impl Default for FolderPhase {
@@ -292,6 +362,8 @@ impl FolderFeatureState {
             self.motion.progress = 0.0;
             self.motion.velocity = 0.0;
             self.page = 0;
+            self.child_page_hover = None;
+            self.child_page_latched = false;
         }
         self.motion.target = 1.0;
         self.phase = FolderPhase::Opening;
@@ -305,6 +377,8 @@ impl FolderFeatureState {
         self.pressed_child = None;
         self.page_press = None;
         self.child_drag = None;
+        self.child_page_hover = None;
+        self.child_page_latched = false;
         self.hover_opened = None;
         self.motion.target = 0.0;
         self.phase = FolderPhase::Closing;
@@ -423,6 +497,8 @@ impl FolderFeatureState {
             origin_index: press.index,
             preview_order: children.to_vec(),
         });
+        self.child_page_hover = None;
+        self.child_page_latched = false;
         self.page_press = None;
         true
     }
@@ -431,6 +507,8 @@ impl FolderFeatureState {
         self.pressed_child = None;
         self.page_press = None;
         self.child_drag = None;
+        self.child_page_hover = None;
+        self.child_page_latched = false;
     }
 }
 
@@ -548,6 +626,32 @@ mod tests {
         assert!(!top_level_reorder_allowed(Some(&folder_target), false));
         assert!(!top_level_reorder_allowed(Some(&app_target), true));
         assert!(top_level_reorder_allowed(None, false));
+    }
+
+    #[test]
+    fn child_drag_side_edges_page_while_top_and_bottom_exit() {
+        let panel = Rect::new(100.0, 100.0, 500.0, 400.0);
+        assert_eq!(
+            child_drag_boundary_intent(panel, Point::new(590.0, 300.0), 0, 3, 1.0),
+            ChildDragBoundaryIntent::Page(1)
+        );
+        assert_eq!(
+            child_drag_boundary_intent(panel, Point::new(110.0, 300.0), 1, 3, 1.0),
+            ChildDragBoundaryIntent::Page(0)
+        );
+        assert_eq!(
+            child_drag_boundary_intent(panel, Point::new(650.0, 300.0), 2, 3, 1.0),
+            ChildDragBoundaryIntent::Stay,
+            "the last-page side corridor must not accidentally eject the child"
+        );
+        assert_eq!(
+            child_drag_boundary_intent(panel, Point::new(350.0, 60.0), 1, 3, 1.0),
+            ChildDragBoundaryIntent::Exit
+        );
+        assert_eq!(
+            child_drag_boundary_intent(panel, Point::new(350.0, 550.0), 1, 3, 1.0),
+            ChildDragBoundaryIntent::Exit
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::domain::app_registry::{AppRecord, AppRegistry, IconState};
 use crate::domain::folders::{Folder, FolderId};
 use crate::domain::launcher_item::LauncherItem;
 use crate::domain::launcher_state::LauncherState;
+use crate::icons::normalize::{DecodedIcon, TARGET};
 use crate::ui_model::geometry::Point;
 
 pub const SCENARIO_ENV: &str = "LAUNCHPAD_QA_SCENARIO";
@@ -118,6 +119,19 @@ pub struct QaFrameRecord {
     pub top_level_drag: bool,
     pub top_level_item_count: usize,
     pub active_folder_child_count: Option<usize>,
+    pub frame_dt_ms: f32,
+    pub pointer_x: f32,
+    pub folder_scroll_input_target_x: Option<f32>,
+    pub folder_scroll_input_error_x: Option<f32>,
+    pub folder_scroll_settle_target_x: Option<f32>,
+    pub folder_scroll_sample_count: Option<usize>,
+    pub folder_scroll_frame_delta_x: Option<f32>,
+    pub folder_pointer_move_serial: u64,
+    pub folder_pointer_move_delta: u64,
+    pub relayout_serial: u64,
+    pub relayout_delta: u64,
+    pub folder_child_page_target: Option<usize>,
+    pub folder_child_page_hover_progress: Option<f32>,
 }
 
 struct QaFrameState {
@@ -131,6 +145,13 @@ struct QaFrameState {
     top_level_drag: bool,
     top_level_item_count: usize,
     active_folder_child_count: Option<usize>,
+    frame_dt_ms: f32,
+    pointer_x: f32,
+    folder_scroll_diagnostics: Option<crate::scroll::ScrollDiagnostics>,
+    folder_pointer_move_serial: u64,
+    relayout_serial: u64,
+    folder_child_page_target: Option<usize>,
+    folder_child_page_hover_progress: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -240,6 +261,29 @@ impl QaRunner {
         }
         let elapsed_ms = self.elapsed_ms(now);
         let file = format!("frame_{:06}.png", self.frame_index);
+        let previous = self.frames.last();
+        let folder_scroll_frame_delta_x = state.folder_scroll.map(|scroll| {
+            scroll.0
+                - previous
+                    .and_then(|frame| frame.folder_scroll_x)
+                    .unwrap_or(scroll.0)
+        });
+        let folder_pointer_move_delta = state.folder_pointer_move_serial.saturating_sub(
+            previous
+                .map(|frame| frame.folder_pointer_move_serial)
+                .unwrap_or(state.folder_pointer_move_serial),
+        );
+        let relayout_delta = state.relayout_serial.saturating_sub(
+            previous
+                .map(|frame| frame.relayout_serial)
+                .unwrap_or(state.relayout_serial),
+        );
+        let folder_scroll_input_target_x = state
+            .folder_scroll_diagnostics
+            .and_then(|diagnostics| diagnostics.input_target);
+        let folder_scroll_input_error_x = state
+            .folder_scroll
+            .and_then(|scroll| folder_scroll_input_target_x.map(|target| scroll.0 - target));
         self.frames.push(QaFrameRecord {
             index: self.frame_index,
             elapsed_ms,
@@ -256,6 +300,23 @@ impl QaRunner {
             top_level_drag: state.top_level_drag,
             top_level_item_count: state.top_level_item_count,
             active_folder_child_count: state.active_folder_child_count,
+            frame_dt_ms: state.frame_dt_ms,
+            pointer_x: state.pointer_x,
+            folder_scroll_input_target_x,
+            folder_scroll_input_error_x,
+            folder_scroll_settle_target_x: state
+                .folder_scroll_diagnostics
+                .and_then(|diagnostics| diagnostics.settle_target),
+            folder_scroll_sample_count: state
+                .folder_scroll_diagnostics
+                .map(|diagnostics| diagnostics.velocity_sample_count),
+            folder_scroll_frame_delta_x,
+            folder_pointer_move_serial: state.folder_pointer_move_serial,
+            folder_pointer_move_delta,
+            relayout_serial: state.relayout_serial,
+            relayout_delta,
+            folder_child_page_target: state.folder_child_page_target,
+            folder_child_page_hover_progress: state.folder_child_page_hover_progress,
         });
         self.frame_index += 1;
         let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
@@ -320,17 +381,32 @@ impl App {
             return;
         };
         self.registry = AppRegistry::new();
-        for app in &fixture.apps {
+        self.atlas = crate::renderer::icon_atlas::IconAtlas::new(64);
+        self.atlas_uploaded = false;
+        for (index, app) in fixture.apps.iter().enumerate() {
             let id = AppId::from_normalized(app.id.clone());
             let slot = self.registry.alloc_slot();
+            let (r, g, b) = crate::layout::grid::app_color(index);
+            let to_byte = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let rgba = [to_byte(r), to_byte(g), to_byte(b), 255];
+            let mut pixels = vec![0u8; (TARGET * TARGET * 4) as usize];
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel.copy_from_slice(&rgba);
+            }
+            let icon = DecodedIcon {
+                rgba: pixels,
+                w: TARGET,
+                h: TARGET,
+            };
+            let (_, _, uv) = self.atlas.write_icon(slot, &icon);
             self.registry.insert(AppRecord {
                 app_id: id,
                 name: app.name.clone(),
                 link_path: PathBuf::from(format!("qa/{}.lnk", app.id)),
                 resolved_target: PathBuf::from(format!("qa/{}.exe", app.id)),
                 slot,
-                icon_state: IconState::Missing,
-                uv: None,
+                icon_state: IconState::Loaded,
+                uv: Some(uv),
             });
         }
         let mut launcher = LauncherState::new();
@@ -484,6 +560,19 @@ impl App {
             .as_ref()
             .and_then(|id| self.launcher_state.folders.get(id))
             .map(|folder| folder.children.len());
+        let folder_scroll_diagnostics = self
+            .folder_scroller
+            .as_ref()
+            .map(|scroller| scroller.diagnostics(self.pointer_phys_x));
+        let folder_child_page_target = self
+            .folders
+            .child_page_hover
+            .as_ref()
+            .map(|hover| hover.target);
+        let folder_child_page_hover_progress =
+            self.folders.child_page_hover.as_ref().map(|hover| {
+                (hover.elapsed / crate::features::folders::CHILD_PAGE_EDGE_DWELL).clamp(0.0, 1.0)
+            });
         self.qa_runner.as_mut()?.next_capture_path(
             now,
             QaFrameState {
@@ -497,6 +586,13 @@ impl App {
                 top_level_drag,
                 top_level_item_count,
                 active_folder_child_count,
+                frame_dt_ms: self.last_frame_dt_ms,
+                pointer_x: self.pointer_phys_x,
+                folder_scroll_diagnostics,
+                folder_pointer_move_serial: self.folder_pointer_move_serial,
+                relayout_serial: self.relayout_serial,
+                folder_child_page_target,
+                folder_child_page_hover_progress,
             },
         )
     }

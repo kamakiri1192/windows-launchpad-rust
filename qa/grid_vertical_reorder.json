@@ -1,0 +1,40 @@
+{
+  "name": "grid-vertical-reorder",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 1750,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-vertical-0", "name": "Vertical 0" },
+      { "id": "qa-vertical-1", "name": "Vertical 1" },
+      { "id": "qa-vertical-2", "name": "Vertical 2" },
+      { "id": "qa-vertical-3", "name": "Vertical 3" },
+      { "id": "qa-vertical-4", "name": "Vertical 4" },
+      { "id": "qa-vertical-5", "name": "Vertical 5" },
+      { "id": "qa-vertical-6", "name": "Vertical 6" },
+      { "id": "qa-vertical-7", "name": "Vertical 7" },
+      { "id": "qa-vertical-8", "name": "Vertical 8" }
+    ],
+    "folders": [],
+    "items": [
+      { "kind": "app", "id": "qa-vertical-0" },
+      { "kind": "app", "id": "qa-vertical-1" },
+      { "kind": "app", "id": "qa-vertical-2" },
+      { "kind": "app", "id": "qa-vertical-3" },
+      { "kind": "app", "id": "qa-vertical-4" },
+      { "kind": "app", "id": "qa-vertical-5" },
+      { "kind": "app", "id": "qa-vertical-6" },
+      { "kind": "app", "id": "qa-vertical-7" },
+      { "kind": "app", "id": "qa-vertical-8" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 1 } },
+    { "at_ms": 100, "type": "pointer_down" },
+    { "at_ms": 680, "type": "move", "target": { "kind": "grid_item_point", "index": 8, "x": 0.20, "y": 0.35 } },
+    { "at_ms": 820, "type": "move", "target": { "kind": "grid_item_point", "index": 8, "x": 0.20, "y": 0.82 } },
+    { "at_ms": 1220, "type": "pointer_up" },
+    { "at_ms": 1450, "type": "escape" }
+  ]
+}

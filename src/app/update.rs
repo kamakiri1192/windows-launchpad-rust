@@ -385,16 +385,27 @@ impl App {
         };
         if let Some(target) = visible.get(target_idx) {
             if target != &drag_item {
-                let crossed = self
-                    .launcher_item_rect(&drag_item)
-                    .zip(self.launcher_item_rect(target))
-                    .is_some_and(|(source, target)| {
-                        crate::layout::edit_mode::reorder_crossed_target(
-                            source,
-                            target,
-                            crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y),
-                        )
-                    });
+                // Reorder intent is based on stable grid slots, not the
+                // in-flight spring positions. A spring can sit between rows
+                // after the previous swap; using it as the source made the
+                // dominant-axis test change frame-to-frame and caused vertical
+                // moves to intermittently stop responding.
+                let viewport_w = self.viewport_phys().0 as f32;
+                let scroll_x = self.scroller.as_ref().map_or(0.0, |s| s.position);
+                let slot_rect = |index: usize| {
+                    let (x, y) = self.layout.tile_position(viewport_w, index);
+                    crate::ui_model::geometry::Rect::new(
+                        x + scroll_x,
+                        y,
+                        self.layout.tile_size,
+                        self.layout.tile_size,
+                    )
+                };
+                let crossed = crate::layout::edit_mode::reorder_crossed_target(
+                    slot_rect(drag_pos),
+                    slot_rect(target_idx),
+                    crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y),
+                );
                 if !crossed {
                     return;
                 }
@@ -821,6 +832,7 @@ impl App {
     }
 
     pub(crate) fn handle_folder_pointer_move(&mut self, x: f32, y: f32) {
+        self.folder_pointer_move_serial = self.folder_pointer_move_serial.wrapping_add(1);
         self.begin_folder_child_edit_drag_if_ready(Instant::now());
         let Some(folder_id) = self.folders.active.clone() else {
             return;
@@ -867,12 +879,10 @@ impl App {
         if self.folders.child_drag.is_some() {
             self.drag_x = x;
             self.drag_y = y;
-            let outside_panel = self.folder_layout.as_ref().is_some_and(|layout| {
-                !layout
-                    .current_panel_rect
-                    .contains(crate::ui_model::geometry::Point::new(x, y))
-            });
-            if outside_panel && self.promote_folder_child_drag_to_top_level() {
+            let boundary_intent = self.folder_child_boundary_intent(x, y);
+            if boundary_intent == crate::features::folders::ChildDragBoundaryIntent::Exit
+                && self.promote_folder_child_drag_to_top_level()
+            {
                 return;
             }
             let mut reordered = false;
@@ -889,6 +899,79 @@ impl App {
             }
             self.request_redraw();
         }
+    }
+
+    fn folder_child_boundary_intent(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> crate::features::folders::ChildDragBoundaryIntent {
+        let Some(layout) = self.folder_layout.as_ref() else {
+            return crate::features::folders::ChildDragBoundaryIntent::Stay;
+        };
+        crate::features::folders::child_drag_boundary_intent(
+            layout.current_panel_rect,
+            crate::ui_model::geometry::Point::new(x, y),
+            self.folders.page,
+            layout.page_count,
+            self.scale_factor,
+        )
+    }
+
+    /// Advance the held-child side-edge dwell. A completed dwell glides one
+    /// folder page and latches until the pointer returns to the panel center.
+    /// Top/bottom exits are handled immediately by the pointer-move path.
+    pub(crate) fn tick_folder_child_page_hover(&mut self, dt: f32) -> bool {
+        if self.folders.child_drag.is_none() {
+            self.folders.child_page_hover = None;
+            self.folders.child_page_latched = false;
+            return false;
+        }
+        let Some(layout) = self.folder_layout.as_ref() else {
+            return false;
+        };
+        let panel = layout.current_panel_rect;
+        let pointer = crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y);
+        let in_page_edge =
+            crate::features::folders::child_drag_in_page_edge(panel, pointer, self.scale_factor);
+        match self.folder_child_boundary_intent(self.drag_x, self.drag_y) {
+            crate::features::folders::ChildDragBoundaryIntent::Page(target)
+                if !self.folders.child_page_latched =>
+            {
+                match self.folders.child_page_hover.as_mut() {
+                    Some(hover) if hover.target == target => {
+                        hover.elapsed += dt.max(0.0);
+                    }
+                    _ => {
+                        self.folders.child_page_hover =
+                            Some(crate::features::folders::ChildPageHover {
+                                target,
+                                elapsed: dt.max(0.0),
+                            });
+                    }
+                }
+                let ready = self.folders.child_page_hover.as_ref().is_some_and(|hover| {
+                    hover.elapsed >= crate::features::folders::CHILD_PAGE_EDGE_DWELL
+                });
+                let can_settle = self
+                    .folder_scroller
+                    .as_ref()
+                    .is_some_and(|scroller| scroller.phase == Phase::Idle);
+                if ready && can_settle {
+                    self.folders.child_page_hover = None;
+                    self.folders.child_page_latched = true;
+                    self.settle_folder_page(target);
+                    return true;
+                }
+            }
+            _ => {
+                self.folders.child_page_hover = None;
+                if !in_page_edge {
+                    self.folders.child_page_latched = false;
+                }
+            }
+        }
+        false
     }
 
     /// Move a lifted folder child into the top-level model as soon as the
@@ -947,11 +1030,9 @@ impl App {
                         changed = true;
                     }
                 }
-            } else if self.folder_layout.as_ref().is_some_and(|layout| {
-                !layout
-                    .current_panel_rect
-                    .contains(crate::ui_model::geometry::Point::new(x, y))
-            }) {
+            } else if self.folder_child_boundary_intent(x, y)
+                == crate::features::folders::ChildDragBoundaryIntent::Exit
+            {
                 self.pointer_phys_x = x;
                 self.pointer_phys_y = y;
                 if self.promote_folder_child_drag_to_top_level() {

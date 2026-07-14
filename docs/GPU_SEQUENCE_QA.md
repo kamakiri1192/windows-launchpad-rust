@@ -33,7 +33,7 @@ target/qa-sequences/folder-interactions-<timestamp>/
 
 ## 連番と動画
 
-`manifest.json` には各フレームの経過時間、編集モード、フォルダの開閉、ページ番号、リネーム状態に加え、フォルダページの scroll 位置・速度・physics phase、子アプリドラッグ、トップレベルドラッグ、トップレベル項目数、開いているフォルダの子数を記録します。見た目のガクつきが入力追従・release velocity・snap のどこで生じたか、フォルダ境界でドラッグの所有権とモデルが同じフレームに引き継がれたかを連番と数値で突き合わせられます。また、その実行結果を MP4 にする `ffmpeg` コマンドも格納します。
+`manifest.json` には各フレームの経過時間、編集モード、フォルダの開閉、ページ番号、リネーム状態に加え、フォルダページの scroll 位置・速度・physics phase、子アプリドラッグ、トップレベルドラッグ、トップレベル項目数、開いているフォルダの子数を記録します。さらに、実フレーム時間、pointer座標、入力から期待されるscroll位置と実位置の誤差、スナップ先、速度サンプル数、フレーム間scroll量、pointer move回数、再レイアウト回数、子アプリの端保持先と進捗を記録します。見た目のガクつきが入力追従・イベント間隔・release velocity・snap のどこで生じたか、フォルダ境界でドラッグの所有権とモデルが同じフレームに引き継がれたかを連番と数値で突き合わせられます。また、その実行結果を MP4 にする `ffmpeg` コマンドも格納します。
 
 ```powershell
 cd target\qa-sequences\folder-interactions-<timestamp>
@@ -79,12 +79,15 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 
 - `qa/folder_creation.json`: アプリ同士の Liquid Glass 融合プレビューから、2アプリのフォルダが作成されて開くまでを記録します。
 - `qa/folder_single_page_scroll.json`: 最初の長押しで子アプリをそのまま持ち上げて並べ替えた後、1ページだけのフォルダの空き領域を横方向へ引っ張ります。`folder_child_drag` と `folder_scroll_phase` が同時に競合せず、`folder_scroll_x` がドラッグ中に0へ強制リセットされず、`Dragging` から `Settling` を経て `Idle` に戻ることを60fpsで確認します。
-- `qa/folder_child_exit.json`: 子アプリを長押ししたままパネル外へ出し、フォルダを閉じながら同じpointerのトップレベルドラッグへ引き継いで配置するまでを記録します。`folder_child_drag` から `top_level_drag` への切り替えと項目数・子数の変化を確認します。
+- `qa/folder_child_page_drag.json`: 子アプリを長押ししたまま右端で保持し、pointerを離さず2ページ目へ送り、そのページのセルへ配置するまでを記録します。端保持の進捗、ページ番号、子ドラッグの所有権が連続することを確認します。
+- `qa/folder_child_exit.json`: 子アプリを長押ししたまま上端からパネル外へ出し、フォルダを閉じながら同じpointerのトップレベルドラッグへ引き継いで配置するまでを記録します。`folder_child_drag` から `top_level_drag` への切り替えと項目数・子数の変化を確認します。
 - `qa/folder_existing_drop.json`: トップレベルのアプリを既存フォルダへ重ね、既存フォルダを並べ替えで逃がさずにスプリングオープンし、子として追加されるまでを記録します。
+- `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして移動し、Liquid Glass面と小アイコンが消えず、共通中心を保つ一体のプレビューとして拡大・wiggle・追従することを確認します。
+- `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず縦方向の70%通過でライブ並べ替えが成立することを確認します。
 
 ## 安全性
 
-- QA fixture はメモリ上の `AppRegistry` と `LauncherState` にだけ入れます。
+- QA fixture はメモリ上の `AppRegistry` と `LauncherState` にだけ入れます。視覚差分でアプリアイコンとフォルダ内プレビューを識別できるよう、fixture専用の決定的な単色アイコンを一時atlasへ生成します。
 - シナリオモードでは設定、並べ替え、フォルダ名を SQLite へ保存しません。
 - Start Menu watcher の結果はシナリオ実行中に取り込みません。
 - Liquid Glass のデスクトップ取り込みは停止し、初期 backdrop texture を使うため、ホストのデスクトップ内容を artifact に含めません。

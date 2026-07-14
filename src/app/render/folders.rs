@@ -285,6 +285,7 @@ impl App {
                                 rect,
                                 source: IconSource::AtlasUv(uv),
                                 motion,
+                                motion_pivot: None,
                                 z: 161,
                             });
                     }
@@ -332,7 +333,7 @@ impl App {
                     self.scale_factor,
                     cosmic_weight(view.style.weight),
                 );
-                glyphs.append(&mut text.layout_centered_line_weighted(
+                glyphs.append(&mut text.layout_centered_line_weighted_with_shadow(
                     &CenteredLineSpec {
                         text: &fitted,
                         font_size: view.style.size,

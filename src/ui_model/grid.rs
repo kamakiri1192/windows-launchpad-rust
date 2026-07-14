@@ -37,6 +37,10 @@ impl TileAnim {
     /// Keeps the tile's geometry/motion instance but suppresses its opaque
     /// fallback fill. Generic glass and icon layers can remain visible.
     pub const FLAG_NO_FILL: u32 = 1 << 4;
+    /// Treat multiple icon instances as rigid children of one parent pivot.
+    /// Used by closed-folder miniatures so the folder, rather than each child,
+    /// owns wiggle, scale, and pointer-follow motion.
+    pub const FLAG_GROUP_MOTION: u32 = 1 << 5;
 
     pub const IDLE: Self = Self {
         phase: 0.0,

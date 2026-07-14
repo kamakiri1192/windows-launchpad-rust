@@ -34,6 +34,7 @@ const SHAPE_FIXED: u32 = 1;
 const SHAPE_CONTROL: u32 = 2;
 const SHAPE_CLIP_ONLY: u32 = 3;
 const SHAPE_ANIMATED_BADGE: u32 = 4;
+const SHAPE_ANIMATED_SCROLLING: u32 = 5;
 
 impl GlassShape {
     pub fn rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
@@ -69,6 +70,17 @@ impl GlassShape {
     ) -> Self {
         let mut shape = Self::with_kind(center, size, radius, SHAPE_ANIMATED_BADGE);
         shape.motion = [pivot[0], pivot[1], phase, 1.0];
+        shape
+    }
+
+    pub fn animated_scrolling_rounded_rect(
+        center: [f32; 2],
+        size: [f32; 2],
+        radius: f32,
+        phase: f32,
+    ) -> Self {
+        let mut shape = Self::with_kind(center, size, radius, SHAPE_ANIMATED_SCROLLING);
+        shape.motion = [center[0], center[1], phase, 1.0];
         shape
     }
 

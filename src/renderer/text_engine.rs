@@ -187,6 +187,26 @@ impl TextRenderer {
         spec: &CenteredLineSpec<'_>,
         weight: Weight,
     ) -> Vec<GlyphQuad> {
+        self.layout_centered_line_weighted_with_layers(spec, weight, &[])
+    }
+
+    /// Centered semantic text with the same soft layered shadow used by app
+    /// labels. Folder titles use this so they retain contrast over the moving
+    /// blurred scene without changing their bold shaping or fitting.
+    pub fn layout_centered_line_weighted_with_shadow(
+        &mut self,
+        spec: &CenteredLineSpec<'_>,
+        weight: Weight,
+    ) -> Vec<GlyphQuad> {
+        self.layout_centered_line_weighted_with_layers(spec, weight, LABEL_SHADOW_LAYERS)
+    }
+
+    fn layout_centered_line_weighted_with_layers(
+        &mut self,
+        spec: &CenteredLineSpec<'_>,
+        weight: Weight,
+        shadow_layers: &[(f32, f32, f32)],
+    ) -> Vec<GlyphQuad> {
         let CenteredLineSpec {
             text,
             font_size,
@@ -235,7 +255,7 @@ impl TextRenderer {
                 });
             }
         }
-        self.raster_phase(placed, scale_factor, &[])
+        self.raster_phase(placed, scale_factor, shadow_layers)
     }
 
     /// Measure a single line of text's laid-out width in physical px without

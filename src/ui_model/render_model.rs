@@ -117,6 +117,10 @@ pub struct IconView {
     pub rect: Rect,
     pub source: IconSource,
     pub motion: TileAnim,
+    /// Optional common pivot for a rigid icon group, such as the 3x3
+    /// miniatures inside a closed folder. The renderer keeps every child at
+    /// its relative offset while the parent folder wiggles or follows a drag.
+    pub motion_pivot: Option<Point>,
     pub z: i16,
 }
 

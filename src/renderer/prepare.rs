@@ -35,6 +35,21 @@ fn shape_for(surface: &GlassSurface) -> GlassShape {
     }
 }
 
+fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape {
+    let center = [surface.rect.center().x, surface.rect.center().y];
+    let size = [surface.rect.width, surface.rect.height];
+    let animated_parent = tiles.iter().find(|tile| {
+        tile.id == surface.id
+            && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0
+            && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_DRAG == 0
+    });
+    if let Some(tile) = animated_parent {
+        GlassShape::animated_scrolling_rounded_rect(center, size, surface.radius, tile.motion.phase)
+    } else {
+        shape_for(surface)
+    }
+}
+
 /// The current Liquid Glass modal pass accepts one surface. Select the
 /// highest-z modal surface, using later model order as the same-z tie-breaker.
 /// The classification comes from renderer-neutral model data rather than a
@@ -117,6 +132,9 @@ fn icon_instance(view: &IconView) -> Option<IconInstance> {
         u1: uv.u1,
         v1: uv.v1,
         extra: view.motion.shader_payload(),
+        motion_pivot: view
+            .motion_pivot
+            .map_or([0.0; 4], |pivot| [pivot.x, pivot.y, 1.0, 0.0]),
     })
 }
 
@@ -140,20 +158,26 @@ impl Renderer {
             });
         self.modal_clip_rect = modal_clip.map(|(rect, _)| rect);
         self.modal_clip_radius = modal_clip.map_or(0.0, |(_, radius)| radius);
+        let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
-            if self
+            let batch_unchanged = self
                 .prepared_model
                 .glass
                 .iter()
                 .find(|old| old.layer == batch.layer)
-                == Some(batch)
-            {
+                == Some(batch);
+            if batch_unchanged && !(batch.layer == GlassLayer::GridOverlay && grid_motion_changed) {
                 self.counters.record_dirty_skip();
                 continue;
             }
             match batch.layer {
                 GlassLayer::GridOverlay => {
-                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    let tiles = model.tiles.as_deref().unwrap_or_default();
+                    let shapes: Vec<_> = batch
+                        .surfaces
+                        .iter()
+                        .map(|surface| grid_overlay_shape(surface, tiles))
+                        .collect();
                     self.liquid_glass
                         .set_grid_overlay_shapes(&self.device, &self.queue, &shapes);
                 }

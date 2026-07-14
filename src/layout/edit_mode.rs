@@ -61,9 +61,10 @@ pub fn folder_merge_intent(tile: Rect, pointer: Point) -> bool {
 }
 
 /// Whether a drag has crossed far enough through `target` to reorder it.
-/// The source/target center delta selects the dominant travel axis and the
-/// entry side. Holding anywhere before this threshold leaves the stable target
-/// available for the timed Liquid Glass folder merge.
+/// A different grid row always selects vertical travel, even when the target
+/// is several columns away. Same-row movement uses horizontal travel. Holding
+/// anywhere before this threshold leaves the stable target available for the
+/// timed Liquid Glass folder merge.
 pub fn reorder_crossed_target(source: Rect, target: Rect, pointer: Point) -> bool {
     if !pointer.x.is_finite()
         || !pointer.y.is_finite()
@@ -77,7 +78,8 @@ pub fn reorder_crossed_target(source: Rect, target: Rect, pointer: Point) -> boo
     }
     let delta_x = target.center().x - source.center().x;
     let delta_y = target.center().y - source.center().y;
-    if delta_x.abs() >= delta_y.abs() {
+    let different_row = delta_y.abs() >= target.height * 0.5;
+    if !different_row {
         if delta_x >= 0.0 {
             pointer.x >= target.x + target.width * FOLDER_REORDER_CROSS_FRACTION
         } else {
@@ -333,6 +335,22 @@ mod tests {
             source,
             left,
             Point::new(-90.0, 50.0)
+        ));
+    }
+
+    #[test]
+    fn reorder_uses_vertical_crossing_for_a_different_row_even_when_far_diagonal() {
+        let source = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let lower_far_right = Rect::new(300.0, 120.0, 100.0, 100.0);
+        assert!(!reorder_crossed_target(
+            source,
+            lower_far_right,
+            Point::new(320.0, 189.0),
+        ));
+        assert!(reorder_crossed_target(
+            source,
+            lower_far_right,
+            Point::new(320.0, 190.0),
         ));
     }
 

@@ -214,6 +214,11 @@ pub struct App {
     /// keys preserve the visible position while preview order changes, then
     /// glide each non-dragged child to its new cell like the main grid.
     pub folder_child_springs: Vec<(AppId, crate::scroll::Spring2)>,
+    /// Monotonic counters exposed only to QA telemetry. They let a sequence
+    /// distinguish input-event cadence from layout/render cadence without
+    /// changing either production path.
+    pub folder_pointer_move_serial: u64,
+    pub relayout_serial: u64,
     pub interaction_glass: Vec<crate::ui_model::render_model::GlassSurface>,
 
     // ---- bottom-center morphing control (search pill / page indicator /
@@ -249,6 +254,7 @@ pub struct App {
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     pub last_redraw: Option<Instant>,
+    pub last_frame_dt_ms: f32,
 
     // ---- resident-lifecycle state ----
     /// Whether the window is currently visible. `set_visible` doesn't query,
@@ -315,6 +321,8 @@ impl App {
             folder_scroller: None,
             folder_layout: None,
             folder_child_springs: Vec::new(),
+            folder_pointer_move_serial: 0,
+            relayout_serial: 0,
             interaction_glass: Vec::new(),
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
@@ -329,6 +337,7 @@ impl App {
             settings: Settings::default(),
             settings_category: SettingsCategory::Apps,
             last_redraw: None,
+            last_frame_dt_ms: 0.0,
             visible: true,
             last_summon: None,
             should_quit: false,
