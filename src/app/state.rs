@@ -210,6 +210,10 @@ pub struct App {
     pub folders: crate::features::folders::FolderFeatureState,
     pub folder_scroller: Option<Scroller>,
     pub folder_layout: Option<crate::layout::folder_panel::FolderPanelModel>,
+    /// Per-child position springs used by the open-folder grid. Stable AppId
+    /// keys preserve the visible position while preview order changes, then
+    /// glide each non-dragged child to its new cell like the main grid.
+    pub folder_child_springs: Vec<(AppId, crate::scroll::Spring2)>,
     pub interaction_glass: Vec<crate::ui_model::render_model::GlassSurface>,
 
     // ---- bottom-center morphing control (search pill / page indicator /
@@ -310,6 +314,7 @@ impl App {
             folders: crate::features::folders::FolderFeatureState::default(),
             folder_scroller: None,
             folder_layout: None,
+            folder_child_springs: Vec::new(),
             interaction_glass: Vec::new(),
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,

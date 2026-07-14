@@ -110,6 +110,10 @@ impl App {
         if springs_animating {
             self.refresh_spring_instances();
         }
+        let folder_child_springs_animating = self.step_folder_child_springs(anim_dt);
+        if folder_child_springs_animating {
+            self.relayout();
+        }
 
         // Detect a page change (settled page differs from the last
         // tracked one) and arm the transient page indicator.
@@ -203,6 +207,7 @@ impl App {
             || folder_animating
             || hover_changed
             || springs_animating
+            || folder_child_springs_animating
             || folder_scroller_animating
             || self.editing
         {

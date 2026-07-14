@@ -206,6 +206,18 @@ impl App {
             dragged_child_key: dragged_key.as_deref(),
         });
         if durable {
+            let animate_reorder = self.editing
+                && self
+                    .folder_scroller
+                    .as_ref()
+                    .is_none_or(|scroller| scroller.phase == crate::scroll::Phase::Idle)
+                && progress > 0.99;
+            self.update_folder_child_springs(&children, &model.child_rects, animate_reorder);
+            self.apply_folder_child_springs(&folder_key, &children, &mut model);
+        } else {
+            self.folder_child_springs.clear();
+        }
+        if durable {
             let bounds = crate::scroll::ScrollBounds {
                 page_extent: model.target_panel_rect.width.max(1.0),
                 page_count: model.page_count,
@@ -372,7 +384,13 @@ impl App {
                 let weight = cosmic_weight(title_view.style.weight);
                 let total_width = text.measure_text_weighted(&visible_spec, weight);
                 let prefix_width = text.measure_text_weighted(&prefix_spec, weight);
-                let caret_x = title_view.rect.center().x - total_width * 0.5 + prefix_width;
+                let text_gap = if prefix_width > 0.0 {
+                    1.5 * self.scale_factor
+                } else {
+                    0.0
+                };
+                let caret_x =
+                    title_view.rect.center().x - total_width * 0.5 + prefix_width + text_gap;
                 let caret_opacity =
                     crate::layout::control_geometry::caret_blink_opacity(self.control.caret_phase);
                 if let Some(batch) = model
@@ -441,9 +459,104 @@ impl App {
         self.folder_layout = Some(model);
     }
 
+    fn update_folder_child_springs(
+        &mut self,
+        children: &[FolderChildInput<'_>],
+        rects: &[Rect],
+        animate: bool,
+    ) {
+        let mut old = std::mem::take(&mut self.folder_child_springs);
+        self.folder_child_springs.reserve(children.len());
+        for (child, rect) in children.iter().zip(rects) {
+            let id = crate::domain::app_id::AppId::from_normalized(child.key.to_owned());
+            if let Some(index) = old.iter().position(|(candidate, _)| candidate == &id) {
+                let (_, mut spring) = old.swap_remove(index);
+                if animate {
+                    spring.glide_to(rect.x, rect.y);
+                } else {
+                    spring.snap_to(rect.x, rect.y);
+                }
+                self.folder_child_springs.push((id, spring));
+            } else {
+                self.folder_child_springs
+                    .push((id, crate::scroll::Spring2::at(rect.x, rect.y)));
+            }
+        }
+    }
+
+    fn apply_folder_child_springs(
+        &self,
+        folder_key: &str,
+        children: &[FolderChildInput<'_>],
+        model: &mut folder_panel::FolderPanelModel,
+    ) {
+        for (child, target) in children.iter().zip(model.child_rects.clone()) {
+            let id = crate::domain::app_id::AppId::from_normalized(child.key.to_owned());
+            let Some((_, spring)) = self
+                .folder_child_springs
+                .iter()
+                .find(|(candidate, _)| candidate == &id)
+            else {
+                continue;
+            };
+            let dx = spring.x.value - target.x;
+            let dy = spring.y.value - target.y;
+            let ui_id = UiId::folder_child(folder_key, child.key);
+            let matches_child = |candidate: &UiId| candidate == &ui_id;
+
+            for tile in model
+                .result
+                .render
+                .modal_tiles
+                .iter_mut()
+                .flatten()
+                .filter(|view| matches_child(&view.id))
+            {
+                tile.rect.x += dx;
+                tile.rect.y += dy;
+            }
+            for icon in model
+                .result
+                .render
+                .modal_icons
+                .iter_mut()
+                .flatten()
+                .filter(|view| matches_child(&view.id))
+            {
+                icon.rect.x += dx;
+                icon.rect.y += dy;
+            }
+            for text in model
+                .result
+                .render
+                .text
+                .iter_mut()
+                .filter(|view| matches_child(&view.id))
+            {
+                text.rect.x += dx;
+                text.rect.y += dy;
+            }
+        }
+    }
+
+    pub(crate) fn step_folder_child_springs(&mut self, dt: f32) -> bool {
+        let cfg = self
+            .folder_scroller
+            .as_ref()
+            .or(self.scroller.as_ref())
+            .map(|scroller| scroller.cfg)
+            .unwrap_or_default();
+        self.folder_child_springs
+            .iter_mut()
+            .fold(false, |animating, (_, spring)| {
+                spring.step(dt, &cfg) || animating
+            })
+    }
+
     fn clear_folder_panel_presentation(&mut self) {
         if !self.folders.is_active() {
             self.folder_scroller = None;
+            self.folder_child_springs.clear();
         }
         self.folder_layout = None;
         self.render_model.modal_tiles = Some(Vec::new());

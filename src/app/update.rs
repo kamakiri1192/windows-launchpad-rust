@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::debug_log;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
+use crate::domain::launcher_item::LauncherItem;
 use crate::domain::settings::{Settings, SortOrder};
 use crate::scroll::Phase;
 use crate::workers::icon_worker::IconResult;
@@ -785,7 +786,42 @@ impl App {
         self.request_redraw();
     }
 
+    /// Enter folder edit mode and lift the child held by the current press in
+    /// one transition. This mirrors the top-level long-press path and prevents
+    /// the same press from being reclassified as a folder page swipe.
+    pub(crate) fn begin_folder_child_edit_drag_if_ready(&mut self, now: Instant) -> bool {
+        if self.editing
+            || !self
+                .folders
+                .pressed_child
+                .as_ref()
+                .is_some_and(|press| press.held_long_enough(now))
+        {
+            return false;
+        }
+        let Some(folder_id) = self.folders.active.clone() else {
+            return false;
+        };
+        let children = self
+            .launcher_state
+            .folders
+            .get(&folder_id)
+            .map(|folder| folder.children.clone())
+            .unwrap_or_default();
+
+        self.enter_edit_mode(None);
+        if !self.folders.begin_child_drag_from_press(&children) {
+            return false;
+        }
+        self.drag_x = self.pointer_phys_x;
+        self.drag_y = self.pointer_phys_y;
+        self.relayout();
+        self.request_redraw();
+        true
+    }
+
     pub(crate) fn handle_folder_pointer_move(&mut self, x: f32, y: f32) {
+        self.begin_folder_child_edit_drag_if_ready(Instant::now());
         let Some(folder_id) = self.folders.active.clone() else {
             return;
         };
@@ -831,19 +867,63 @@ impl App {
         if self.folders.child_drag.is_some() {
             self.drag_x = x;
             self.drag_y = y;
+            let outside_panel = self.folder_layout.as_ref().is_some_and(|layout| {
+                !layout
+                    .current_panel_rect
+                    .contains(crate::ui_model::geometry::Point::new(x, y))
+            });
+            if outside_panel && self.promote_folder_child_drag_to_top_level() {
+                return;
+            }
+            let mut reordered = false;
             if let Some(crate::ui_model::hit::HitTarget::FolderChild { child, .. }) =
                 self.folder_hit_target(x, y)
             {
                 if let Some(drag) = self.folders.child_drag.as_mut() {
-                    drag.preview_reorder_to(&crate::domain::app_id::AppId::from_normalized(child));
+                    reordered = drag
+                        .preview_reorder_to(&crate::domain::app_id::AppId::from_normalized(child));
                 }
+            }
+            if reordered {
+                self.relayout();
             }
             self.request_redraw();
         }
     }
 
+    /// Move a lifted folder child into the top-level model as soon as the
+    /// pointer leaves the folder glass, then continue the same held gesture as
+    /// the ordinary main-grid edit drag. The initial insertion is the source
+    /// folder's slot; subsequent pointer moves can live-reorder it normally.
+    fn promote_folder_child_drag_to_top_level(&mut self) -> bool {
+        let Some(drag) = self.folders.child_drag.clone() else {
+            return false;
+        };
+        let source_item = LauncherItem::Folder(drag.folder_id.clone());
+        let insert_index = self
+            .launcher_state
+            .items
+            .iter()
+            .position(|item| item == &source_item)
+            .unwrap_or(self.launcher_state.items.len());
+        if !self
+            .launcher_state
+            .move_child_to_top_level(&drag.folder_id, &drag.app_id, insert_index)
+        {
+            return false;
+        }
+
+        self.drag_item = Some(LauncherItem::App(drag.app_id));
+        self.drag_x = self.pointer_phys_x;
+        self.drag_y = self.pointer_phys_y;
+        self.folders.close();
+        self.folders.hover = None;
+        self.relayout();
+        self.request_redraw();
+        true
+    }
+
     pub(crate) fn handle_folder_pointer_release(&mut self, x: f32, y: f32) {
-        use crate::domain::launcher_item::LauncherItem;
         use crate::ui_model::hit::HitTarget;
         if self
             .folder_scroller
@@ -872,30 +952,14 @@ impl App {
                     .current_panel_rect
                     .contains(crate::ui_model::geometry::Point::new(x, y))
             }) {
-                if let Some(index) = self
-                    .grid_hit_at_pointer(x, y)
-                    .app_index()
-                    .or_else(|| self.edit_drop_index_at_pointer(x, y))
-                {
-                    match self.visible_launcher_items().get(index).cloned() {
-                        Some(LauncherItem::Folder(destination))
-                            if destination != drag.folder_id =>
-                        {
-                            changed = self.launcher_state.move_child_between_folders(
-                                &drag.folder_id,
-                                &destination,
-                                &drag.app_id,
-                                usize::MAX,
-                            );
-                        }
-                        _ => {
-                            changed = self.launcher_state.move_child_to_top_level(
-                                &drag.folder_id,
-                                &drag.app_id,
-                                index,
-                            );
-                        }
-                    }
+                self.pointer_phys_x = x;
+                self.pointer_phys_y = y;
+                if self.promote_folder_child_drag_to_top_level() {
+                    self.commit_edit_drop();
+                    self.drag_item = None;
+                    self.relayout();
+                    self.request_redraw();
+                    return;
                 }
             }
             if changed {

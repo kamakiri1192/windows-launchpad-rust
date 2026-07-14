@@ -109,6 +109,7 @@ pub struct LiquidGlassRenderer {
     uniform_buffer: wgpu::Buffer,
     grid_overlay_uniform_buffer: wgpu::Buffer,
     badge_uniform_buffer: wgpu::Buffer,
+    modal_badge_uniform_buffer: wgpu::Buffer,
     control_uniform_buffer: wgpu::Buffer,
     settings_panel_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
@@ -122,6 +123,10 @@ pub struct LiquidGlassRenderer {
     badge_shape_count: u32,
     badge_shape_capacity: usize,
     badge_shapes: Vec<GlassShape>,
+    modal_badge_shape_buffer: wgpu::Buffer,
+    modal_badge_shape_count: u32,
+    modal_badge_shape_capacity: usize,
+    modal_badge_shapes: Vec<GlassShape>,
     control_shape_buffer: wgpu::Buffer,
     control_shape_count: u32,
     control_shape_capacity: usize,
@@ -162,10 +167,12 @@ pub struct LiquidGlassRenderer {
     final_bind_group: wgpu::BindGroup,
     grid_overlay_final_bind_group: wgpu::BindGroup,
     badge_final_bind_group: wgpu::BindGroup,
+    modal_badge_final_bind_group: wgpu::BindGroup,
     control_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     grid_overlay_geometry_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
+    modal_badge_geometry_bind_group: wgpu::BindGroup,
     control_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
     last_capture_at: Option<Instant>,
@@ -205,6 +212,8 @@ impl LiquidGlassRenderer {
             create_uniform_buffer(device, "liquid glass grid overlay uniforms", &uniforms);
         let badge_uniform_buffer =
             create_uniform_buffer(device, "liquid glass badge uniforms", &uniforms);
+        let modal_badge_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass modal badge uniforms", &uniforms);
         let control_uniform_buffer =
             create_uniform_buffer(device, "liquid glass control uniforms", &uniforms);
         let settings_panel_uniform_buffer =
@@ -225,6 +234,12 @@ impl LiquidGlassRenderer {
             device,
             badge_shape_capacity,
             "liquid glass badge shape buffer",
+        );
+        let modal_badge_shape_capacity = 1;
+        let modal_badge_shape_buffer = create_shape_buffer_with_capacity(
+            device,
+            modal_badge_shape_capacity,
+            "liquid glass modal badge shape buffer",
         );
         let control_shape_buffer =
             create_shape_buffer_with_capacity(device, 2, "liquid glass control shape buffer");
@@ -311,6 +326,12 @@ impl LiquidGlassRenderer {
             &badge_uniform_buffer,
             &badge_shape_buffer,
         );
+        let modal_badge_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &modal_badge_uniform_buffer,
+            &modal_badge_shape_buffer,
+        );
         let control_geometry_bind_group = create_geometry_bind_group(
             device,
             &geometry_bind_group_layout,
@@ -345,6 +366,15 @@ impl LiquidGlassRenderer {
             device,
             &final_bind_group_layout,
             &badge_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &geometry_view,
+            &blur_view,
+        );
+        let modal_badge_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &modal_badge_uniform_buffer,
             &backdrop_view,
             &sampler,
             &geometry_view,
@@ -512,6 +542,7 @@ impl LiquidGlassRenderer {
             uniform_buffer,
             grid_overlay_uniform_buffer,
             badge_uniform_buffer,
+            modal_badge_uniform_buffer,
             control_uniform_buffer,
             settings_panel_uniform_buffer,
             shape_buffer,
@@ -525,6 +556,10 @@ impl LiquidGlassRenderer {
             badge_shape_count,
             badge_shape_capacity,
             badge_shapes: Vec::new(),
+            modal_badge_shape_buffer,
+            modal_badge_shape_count: 0,
+            modal_badge_shape_capacity,
+            modal_badge_shapes: Vec::new(),
             control_shape_buffer,
             control_shape_count: 0,
             control_shape_capacity: 2,
@@ -558,10 +593,12 @@ impl LiquidGlassRenderer {
             final_bind_group,
             grid_overlay_final_bind_group,
             badge_final_bind_group,
+            modal_badge_final_bind_group,
             control_final_bind_group,
             settings_panel_final_bind_group,
             grid_overlay_geometry_bind_group,
             badge_geometry_bind_group,
+            modal_badge_geometry_bind_group,
             control_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
             last_capture_at: None,
@@ -656,6 +693,15 @@ impl LiquidGlassRenderer {
             device,
             &self.final_bind_group_layout,
             &self.badge_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+        self.modal_badge_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.modal_badge_uniform_buffer,
             backdrop_view,
             &self.sampler,
             &self.geometry_view,
@@ -878,6 +924,47 @@ impl LiquidGlassRenderer {
                 &self.badge_shape_buffer,
                 0,
                 bytemuck::cast_slice(&self.badge_shapes),
+            );
+        }
+    }
+
+    /// Replace the open-folder child badge shapes. They use a dedicated
+    /// resource lane because they must composite after the modal folder glass,
+    /// while top-level badges remain below that modal.
+    pub fn set_modal_badge_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
+        if self.modal_badge_shapes.as_slice() == shapes {
+            return;
+        }
+        self.modal_badge_shapes.clear();
+        self.modal_badge_shapes.extend_from_slice(shapes);
+        self.modal_badge_shape_count = self.modal_badge_shapes.len() as u32;
+        if self.modal_badge_shapes.len() > self.modal_badge_shape_capacity {
+            self.modal_badge_shape_capacity = next_shape_capacity(
+                self.modal_badge_shape_capacity,
+                self.modal_badge_shapes.len(),
+            );
+            self.modal_badge_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.modal_badge_shape_capacity,
+                "liquid glass modal badge shape buffer",
+            );
+            self.modal_badge_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.modal_badge_uniform_buffer,
+                &self.modal_badge_shape_buffer,
+            );
+        }
+        if !self.modal_badge_shapes.is_empty() {
+            queue.write_buffer(
+                &self.modal_badge_shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.modal_badge_shapes),
             );
         }
     }

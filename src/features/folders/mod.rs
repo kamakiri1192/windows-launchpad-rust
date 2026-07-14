@@ -23,7 +23,14 @@ pub fn top_level_reorder_allowed(
     hover_candidate: Option<&LauncherItem>,
     hover_ready: bool,
 ) -> bool {
-    hover_candidate.is_none() || !hover_ready
+    match hover_candidate {
+        None => true,
+        Some(LauncherItem::App(_)) => !hover_ready,
+        // Existing folders own their full target tile immediately. Reordering
+        // a folder underneath the pointer while its spring-open dwell is
+        // running makes the target jump and intermittently resets the hover.
+        Some(LauncherItem::Folder(_)) => false,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +212,10 @@ impl PagePress {
 }
 
 impl PressedChild {
+    pub fn held_long_enough(&self, now: Instant) -> bool {
+        now.duration_since(self.start) >= crate::features::edit_mode::LONG_PRESS_THRESHOLD
+    }
+
     pub fn moved_past_slop(&self, x: f32, y: f32) -> bool {
         let dx = x - self.start_x;
         let dy = y - self.start_y;
@@ -216,8 +227,7 @@ impl PressedChild {
     }
 
     pub fn long_press_ready(&self, now: Instant, x: f32, y: f32) -> bool {
-        !self.moved_past_slop(x, y)
-            && now.duration_since(self.start) >= crate::features::edit_mode::LONG_PRESS_THRESHOLD
+        !self.moved_past_slop(x, y) && self.held_long_enough(now)
     }
 }
 
@@ -391,16 +401,29 @@ impl FolderFeatureState {
         if !press.moved_past_slop(x, y) {
             return false;
         }
+        self.begin_child_drag_from_press(children)
+    }
+
+    /// Lift the child currently held by the pointer into a drag immediately.
+    /// The folder long-press path uses this at the same moment edit mode is
+    /// entered, matching the top-level grid instead of requiring a second
+    /// release and grab. Any pending page gesture belongs to that same press
+    /// and must be cancelled atomically.
+    pub fn begin_child_drag_from_press(&mut self, children: &[AppId]) -> bool {
+        let Some(press) = self.pressed_child.take() else {
+            return false;
+        };
         let Some(folder_id) = self.active.clone() else {
+            self.pressed_child = Some(press);
             return false;
         };
         self.child_drag = Some(ChildDrag {
             folder_id,
-            app_id: press.app_id.clone(),
+            app_id: press.app_id,
             origin_index: press.index,
             preview_order: children.to_vec(),
         });
-        self.pressed_child = None;
+        self.page_press = None;
         true
     }
 
@@ -522,7 +545,7 @@ mod tests {
         let app_target = LauncherItem::App(app("target"));
         let folder_target = LauncherItem::Folder(FolderId::generate(1));
         assert!(top_level_reorder_allowed(Some(&app_target), false));
-        assert!(top_level_reorder_allowed(Some(&folder_target), false));
+        assert!(!top_level_reorder_allowed(Some(&folder_target), false));
         assert!(!top_level_reorder_allowed(Some(&app_target), true));
         assert!(top_level_reorder_allowed(None, false));
     }
@@ -578,6 +601,21 @@ mod tests {
             109.0,
             100.0,
         ));
+    }
+
+    #[test]
+    fn long_pressed_child_lifts_and_cancels_the_page_press() {
+        let folder = FolderId::generate(0);
+        let mut state = FolderFeatureState::default();
+        state.open(folder.clone());
+        state.begin_child_press(app("a"), 0, Instant::now(), 100.0, 100.0);
+        state.begin_page_press(100.0, 100.0);
+
+        assert!(state.begin_child_drag_from_press(&[app("a"), app("b")]));
+        assert!(state.pressed_child.is_none());
+        assert!(state.page_press.is_none());
+        assert_eq!(state.child_drag.as_ref().unwrap().folder_id, folder);
+        assert_eq!(state.child_drag.as_ref().unwrap().app_id, app("a"));
     }
 
     #[test]

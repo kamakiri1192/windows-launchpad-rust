@@ -377,6 +377,80 @@ impl LiquidGlassRenderer {
         self.last_geometry_key = None;
     }
 
+    pub fn render_modal_badges(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        time: f32,
+    ) {
+        if !self.params.enabled || self.modal_badge_shape_count == 0 {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            width,
+            height,
+            0.0,
+            self.modal_badge_shape_count,
+            time,
+        );
+        queue.write_buffer(
+            &self.modal_badge_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass modal badge geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &self.modal_badge_geometry_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass modal badge final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.modal_badge_final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        self.last_geometry_key = None;
+    }
+
     pub fn render_control(
         &mut self,
         queue: &wgpu::Queue,

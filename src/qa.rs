@@ -114,6 +114,10 @@ pub struct QaFrameRecord {
     pub folder_scroll_x: Option<f32>,
     pub folder_scroll_velocity: Option<f32>,
     pub folder_scroll_phase: Option<String>,
+    pub folder_child_drag: bool,
+    pub top_level_drag: bool,
+    pub top_level_item_count: usize,
+    pub active_folder_child_count: Option<usize>,
 }
 
 struct QaFrameState {
@@ -123,6 +127,10 @@ struct QaFrameState {
     renaming: bool,
     folder_rename_caret_visible: Option<bool>,
     folder_scroll: Option<(f32, f32, crate::scroll::Phase)>,
+    folder_child_drag: bool,
+    top_level_drag: bool,
+    top_level_item_count: usize,
+    active_folder_child_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,6 +252,10 @@ impl QaRunner {
             folder_scroll_x: state.folder_scroll.map(|value| value.0),
             folder_scroll_velocity: state.folder_scroll.map(|value| value.1),
             folder_scroll_phase: state.folder_scroll.map(|value| format!("{:?}", value.2)),
+            folder_child_drag: state.folder_child_drag,
+            top_level_drag: state.top_level_drag,
+            top_level_item_count: state.top_level_item_count,
+            active_folder_child_count: state.active_folder_child_count,
         });
         self.frame_index += 1;
         let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
@@ -463,6 +475,15 @@ impl App {
             .folder_scroller
             .as_ref()
             .map(|scroller| (scroller.position, scroller.velocity, scroller.phase));
+        let folder_child_drag = self.folders.child_drag.is_some();
+        let top_level_drag = self.drag_item.is_some();
+        let top_level_item_count = self.launcher_state.items.len();
+        let active_folder_child_count = self
+            .folders
+            .active
+            .as_ref()
+            .and_then(|id| self.launcher_state.folders.get(id))
+            .map(|folder| folder.children.len());
         self.qa_runner.as_mut()?.next_capture_path(
             now,
             QaFrameState {
@@ -472,6 +493,10 @@ impl App {
                 renaming,
                 folder_rename_caret_visible,
                 folder_scroll,
+                folder_child_drag,
+                top_level_drag,
+                top_level_item_count,
+                active_folder_child_count,
             },
         )
     }

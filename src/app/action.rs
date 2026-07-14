@@ -779,7 +779,7 @@ impl App {
                 .folders
                 .child_long_press_ready(now, self.pointer_phys_x, self.pointer_phys_y)
         {
-            self.enter_edit_mode(None);
+            self.begin_folder_child_edit_drag_if_ready(now);
         }
         let scroller_animating = self
             .scroller

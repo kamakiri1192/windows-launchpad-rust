@@ -428,98 +428,157 @@ impl Renderer {
                     )
                 })
                 .unwrap_or(full_scissor);
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("modal content pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_scissor_rect(
-                content_scissor.0,
-                content_scissor.1,
-                content_scissor.2,
-                content_scissor.3,
-            );
-            if normal_modal_tile_count > 0 {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.modal_tile_instance_buffer.buffer().slice(..));
-                pass.draw(0..6, 0..normal_modal_tile_count);
-            }
-            if normal_modal_icon_count > 0 {
-                if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.icon_pipeline);
-                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..normal_modal_icon_count);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("modal content pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_scissor_rect(
+                    content_scissor.0,
+                    content_scissor.1,
+                    content_scissor.2,
+                    content_scissor.3,
+                );
+                if normal_modal_tile_count > 0 {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_vertex_buffer(0, self.modal_tile_instance_buffer.buffer().slice(..));
+                    pass.draw(0..6, 0..normal_modal_tile_count);
+                }
+                if normal_modal_icon_count > 0 {
+                    if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.icon_pipeline);
+                        pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..normal_modal_icon_count);
+                    }
+                }
+                if self.modal_instance_buffer.len() > 0 {
+                    if let Some(buf) = self.modal_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_pipeline);
+                        pass.set_bind_group(0, &self.control_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..self.modal_instance_buffer.len());
+                    }
+                }
+                if self.modal_text_instance_buffer.len() > 0 {
+                    if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_text_pipeline);
+                        pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                    }
+                }
+                if self.settings_instance_buffer.len() > 0 {
+                    if let Some(buf) = self.settings_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_pipeline);
+                        pass.set_bind_group(0, &self.control_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..self.settings_instance_buffer.len());
+                    }
+                }
+                if self.settings_text_instance_buffer.len() > 0 {
+                    if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_text_pipeline);
+                        pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
+                    }
                 }
             }
-            if self.modal_instance_buffer.len() > 0 {
-                if let Some(buf) = self.modal_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.control_pipeline);
-                    pass.set_bind_group(0, &self.control_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.modal_instance_buffer.len());
+
+            // Folder child badges are a nested Liquid Glass layer over the
+            // modal content. Their GPU animation uses the same time/pivot as
+            // the child tiles, so the disk and × remain attached while
+            // wiggling and while reorder springs move the base rect.
+            self.liquid_glass
+                .render_modal_badges(&self.queue, &mut encoder, &view, args.time);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("modal edit badge foreground pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_scissor_rect(
+                    content_scissor.0,
+                    content_scissor.1,
+                    content_scissor.2,
+                    content_scissor.3,
+                );
+                if self.modal_badge_instance_buffer.len() > 0 {
+                    if let Some(buf) = self.modal_badge_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_pipeline);
+                        pass.set_bind_group(0, &self.control_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..self.modal_badge_instance_buffer.len());
+                    }
                 }
             }
-            if self.modal_text_instance_buffer.len() > 0 {
-                if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.control_text_pipeline);
-                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
-                }
-            }
-            if self.settings_instance_buffer.len() > 0 {
-                if let Some(buf) = self.settings_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.control_pipeline);
-                    pass.set_bind_group(0, &self.control_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.settings_instance_buffer.len());
-                }
-            }
-            if self.settings_text_instance_buffer.len() > 0 {
-                if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.control_text_pipeline);
-                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
-                }
-            }
-            pass.set_scissor_rect(
-                full_scissor.0,
-                full_scissor.1,
-                full_scissor.2,
-                full_scissor.3,
-            );
-            if self.modal_dragged_tile_instance && modal_tile_count > 0 {
-                let stride = std::mem::size_of::<crate::renderer::tiles::TileInstance>()
-                    as wgpu::BufferAddress;
-                let offset = stride * normal_modal_tile_count as wgpu::BufferAddress;
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.modal_tile_instance_buffer.buffer().slice(offset..));
-                pass.draw(0..6, 0..1);
-            }
-            if self.modal_dragged_icon_instance && modal_icon_count > 0 {
-                if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
-                    let stride = std::mem::size_of::<crate::renderer::icon_pipeline::IconInstance>()
+
+            // Keep the pointer-attached child above every non-dragged badge.
+            if self.modal_dragged_tile_instance || self.modal_dragged_icon_instance {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("modal drag overlay pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if self.modal_dragged_tile_instance && modal_tile_count > 0 {
+                    let stride = std::mem::size_of::<crate::renderer::tiles::TileInstance>()
                         as wgpu::BufferAddress;
-                    let offset = stride * normal_modal_icon_count as wgpu::BufferAddress;
-                    pass.set_pipeline(&self.icon_pipeline);
-                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(offset..));
+                    let offset = stride * normal_modal_tile_count as wgpu::BufferAddress;
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_vertex_buffer(
+                        0,
+                        self.modal_tile_instance_buffer.buffer().slice(offset..),
+                    );
                     pass.draw(0..6, 0..1);
+                }
+                if self.modal_dragged_icon_instance && modal_icon_count > 0 {
+                    if let Some(buf) = self.modal_icon_instance_buffer.as_ref() {
+                        let stride =
+                            std::mem::size_of::<crate::renderer::icon_pipeline::IconInstance>()
+                                as wgpu::BufferAddress;
+                        let offset = stride * normal_modal_icon_count as wgpu::BufferAddress;
+                        pass.set_pipeline(&self.icon_pipeline);
+                        pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(offset..));
+                        pass.draw(0..6, 0..1);
+                    }
                 }
             }
         }

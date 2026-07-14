@@ -97,6 +97,7 @@ pub struct Renderer {
     /// highest-z modal glass surface so paged folder children cannot leak
     /// outside their panel while sliding.
     modal_clip_rect: Option<crate::ui_model::geometry::Rect>,
+    modal_clip_radius: f32,
 
     // -- Bottom control overlays --------------------------------------
     // The control's glass capsule is drawn by the Liquid Glass pass (it's a
@@ -115,6 +116,10 @@ pub struct Renderer {
     badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
     badge_mark_scratch: Vec<crate::renderer::controls::ControlInstance>,
     badge_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    modal_badge_sources: Vec<EditBadgeSource>,
+    modal_badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
+    modal_badge_mark_scratch: Vec<crate::renderer::controls::ControlInstance>,
+    modal_badge_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
