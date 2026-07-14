@@ -204,10 +204,20 @@ impl Scroller {
     }
 
     pub fn set_bounds(&mut self, bounds: ScrollBounds) {
+        let bounds_unchanged = self.bounds.page_count == bounds.page_count
+            && (self.bounds.page_extent - bounds.page_extent).abs()
+                <= f32::EPSILON * self.bounds.page_extent.abs().max(1.0);
         self.bounds = bounds;
         // The rubber-band dimension tracks the content (page) extent so the
         // overshoot feel scales with the page width, exactly like iOS.
         self.cfg.rubber_dimension = bounds.page_extent;
+        // Layout is rebuilt while a pointer gesture or snap animation is in
+        // progress. Re-applying identical bounds must not clamp the live
+        // rubber-band position: on a one-page folder min == max == 0, which
+        // otherwise makes layout and direct manipulation fight every frame.
+        if bounds_unchanged {
+            return;
+        }
         // Re-clamp current position into the new range and re-snap if idle.
         let clamped = self
             .position
@@ -458,7 +468,8 @@ impl Scroller {
         let last = self.samples[VEL_SAMPLES - 1];
         // Walk back to find a sample at least 16ms older but within ~120ms.
         let mut chosen = last;
-        for i in (0..VEL_SAMPLES - 1).rev() {
+        let first_valid = VEL_SAMPLES - self.sample_count;
+        for i in (first_valid..VEL_SAMPLES - 1).rev() {
             let s = self.samples[i];
             let dt = last.0 - s.0;
             if dt >= 0.016 {
@@ -630,6 +641,30 @@ mod tests {
         s.drag_start(500.0);
         s.drag_move(450.0); // pointer -50 → content follows -50 (next page)
         assert!((s.position - (-1050.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn identical_bounds_do_not_cancel_single_page_rubber_band() {
+        let mut s = Scroller::new(bounds(1));
+        s.drag_start(500.0);
+        s.drag_move(400.0);
+        let rubber_position = s.position;
+        assert!(rubber_position < 0.0);
+
+        // Folder relayout re-submits the same bounds every pointer frame.
+        s.set_bounds(bounds(1));
+
+        assert_eq!(s.phase, Phase::Dragging);
+        assert_eq!(s.position, rubber_position);
+    }
+
+    #[test]
+    fn velocity_estimation_ignores_unused_sample_slots() {
+        let mut s = Scroller::new(bounds(2));
+        s.samples = [(0.0, -9000.0), (0.0, -9000.0), (1.00, 0.0), (1.02, -10.0)];
+        s.sample_count = 2;
+
+        assert!((s.estimate_velocity() - -500.0).abs() < 0.1);
     }
 
     #[test]
