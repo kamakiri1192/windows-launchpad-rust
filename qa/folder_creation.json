@@ -1,0 +1,29 @@
+{
+  "name": "folder-creation",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 1900,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-create-0", "name": "Source App" },
+      { "id": "qa-create-1", "name": "Target App" },
+      { "id": "qa-create-2", "name": "Third App" },
+      { "id": "qa-create-3", "name": "Fourth App" }
+    ],
+    "folders": [],
+    "items": [
+      { "kind": "app", "id": "qa-create-0" },
+      { "kind": "app", "id": "qa-create-1" },
+      { "kind": "app", "id": "qa-create-2" },
+      { "kind": "app", "id": "qa-create-3" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 100, "type": "pointer_down" },
+    { "at_ms": 700, "type": "move", "target": { "kind": "grid_item_point", "index": 1, "x": 0.25, "y": 0.50 } },
+    { "at_ms": 900, "type": "move", "target": { "kind": "grid_item_point", "index": 1, "x": 0.50, "y": 0.50 } },
+    { "at_ms": 1150, "type": "pointer_up" }
+  ]
+}

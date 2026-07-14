@@ -95,6 +95,7 @@ pub enum QaAction {
 pub enum QaTarget {
     Point { x: f32, y: f32 },
     GridItem { index: usize },
+    GridItemPoint { index: usize, x: f32, y: f32 },
     FolderChild { index: usize },
     FolderTitle,
     FolderPanel { x: f32, y: f32 },
@@ -109,6 +110,19 @@ pub struct QaFrameRecord {
     pub folder_open: bool,
     pub folder_page: usize,
     pub renaming: bool,
+    pub folder_rename_caret_visible: Option<bool>,
+    pub folder_scroll_x: Option<f32>,
+    pub folder_scroll_velocity: Option<f32>,
+    pub folder_scroll_phase: Option<String>,
+}
+
+struct QaFrameState {
+    editing: bool,
+    folder_open: bool,
+    folder_page: usize,
+    renaming: bool,
+    folder_rename_caret_visible: Option<bool>,
+    folder_scroll: Option<(f32, f32, crate::scroll::Phase)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,14 +226,7 @@ impl QaRunner {
         self.start.is_some() && self.elapsed_ms(now) >= self.next_capture_ms && !self.finished(now)
     }
 
-    pub fn next_capture_path(
-        &mut self,
-        now: Instant,
-        editing: bool,
-        folder_open: bool,
-        folder_page: usize,
-        renaming: bool,
-    ) -> Option<PathBuf> {
+    fn next_capture_path(&mut self, now: Instant, state: QaFrameState) -> Option<PathBuf> {
         if !self.capture_due(now) {
             return None;
         }
@@ -229,10 +236,14 @@ impl QaRunner {
             index: self.frame_index,
             elapsed_ms,
             file: file.clone(),
-            editing,
-            folder_open,
-            folder_page,
-            renaming,
+            editing: state.editing,
+            folder_open: state.folder_open,
+            folder_page: state.folder_page,
+            renaming: state.renaming,
+            folder_rename_caret_visible: state.folder_rename_caret_visible,
+            folder_scroll_x: state.folder_scroll.map(|value| value.0),
+            folder_scroll_velocity: state.folder_scroll.map(|value| value.1),
+            folder_scroll_phase: state.folder_scroll.map(|value| format!("{:?}", value.2)),
         });
         self.frame_index += 1;
         let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
@@ -410,6 +421,16 @@ impl App {
                 .get(*index)
                 .and_then(|item| self.launcher_item_rect(item))
                 .map(|rect| rect.center()),
+            QaTarget::GridItemPoint { index, x, y } => self
+                .visible_launcher_items()
+                .get(*index)
+                .and_then(|item| self.launcher_item_rect(item))
+                .map(|rect| {
+                    Point::new(
+                        rect.x + rect.width * x.clamp(0.0, 1.0),
+                        rect.y + rect.height * y.clamp(0.0, 1.0),
+                    )
+                }),
             QaTarget::FolderChild { index } => self
                 .folder_layout
                 .as_ref()?
@@ -435,9 +456,24 @@ impl App {
         let folder_open = self.folders.is_active();
         let folder_page = self.folders.page;
         let renaming = self.folders.rename.is_some();
-        self.qa_runner
-            .as_mut()?
-            .next_capture_path(now, editing, folder_open, folder_page, renaming)
+        let folder_rename_caret_visible = renaming.then(|| {
+            crate::layout::control_geometry::caret_blink_opacity(self.control.caret_phase) > 0.5
+        });
+        let folder_scroll = self
+            .folder_scroller
+            .as_ref()
+            .map(|scroller| (scroller.position, scroller.velocity, scroller.phase));
+        self.qa_runner.as_mut()?.next_capture_path(
+            now,
+            QaFrameState {
+                editing,
+                folder_open,
+                folder_page,
+                renaming,
+                folder_rename_caret_visible,
+                folder_scroll,
+            },
+        )
     }
 
     pub(crate) fn qa_capture_due(&self, now: Instant) -> bool {

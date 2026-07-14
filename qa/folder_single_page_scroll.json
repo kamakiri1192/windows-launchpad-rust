@@ -1,0 +1,36 @@
+{
+  "name": "folder-single-page-scroll",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 2400,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-single-0", "name": "One" },
+      { "id": "qa-single-1", "name": "Two" },
+      { "id": "qa-single-2", "name": "Three" },
+      { "id": "qa-single-3", "name": "Four" }
+    ],
+    "folders": [
+      {
+        "id": "qa-single-folder",
+        "name": "Single Page",
+        "children": ["qa-single-0", "qa-single-1", "qa-single-2", "qa-single-3"]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-single-folder" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "open_folder", "id": "qa-single-folder" },
+    { "at_ms": 700, "type": "move", "target": { "kind": "folder_panel", "x": 0.80, "y": 0.52 } },
+    { "at_ms": 750, "type": "pointer_down" },
+    { "at_ms": 850, "type": "move", "target": { "kind": "folder_panel", "x": 0.65, "y": 0.52 } },
+    { "at_ms": 950, "type": "move", "target": { "kind": "folder_panel", "x": 0.50, "y": 0.52 } },
+    { "at_ms": 1050, "type": "move", "target": { "kind": "folder_panel", "x": 0.35, "y": 0.52 } },
+    { "at_ms": 1150, "type": "move", "target": { "kind": "folder_panel", "x": 0.20, "y": 0.52 } },
+    { "at_ms": 1200, "type": "pointer_up" },
+    { "at_ms": 2100, "type": "escape" }
+  ]
+}

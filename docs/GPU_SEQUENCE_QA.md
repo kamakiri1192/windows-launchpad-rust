@@ -16,6 +16,8 @@ $env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\folder_interactions.json).Path
 .\target\release\launchpad-windows.exe
 ```
 
+`qa/folder_creation.json` は、トップレベルのアプリを長押しして別アプリ上で保持し、Liquid Glass の融合previewから実際のフォルダ作成へ到達する経路を確認します。
+
 シナリオの `duration_ms` に達するとプロセスは自動終了します。出力先はシナリオの `output_dir` 配下に実行時刻付きディレクトリとして作られます。
 
 ```text
@@ -31,7 +33,7 @@ target/qa-sequences/folder-interactions-<timestamp>/
 
 ## 連番と動画
 
-`manifest.json` には各フレームの経過時間、編集モード、フォルダの開閉、ページ番号、リネーム状態を記録します。また、その実行結果を MP4 にする `ffmpeg` コマンドも格納します。
+`manifest.json` には各フレームの経過時間、編集モード、フォルダの開閉、ページ番号、リネーム状態に加え、フォルダページの scroll 位置・速度・physics phase を記録します。見た目のガクつきが入力追従・release velocity・snap のどこで生じたかを連番と数値で突き合わせられます。また、その実行結果を MP4 にする `ffmpeg` コマンドも格納します。
 
 ```powershell
 cd target\qa-sequences\folder-interactions-<timestamp>
@@ -72,6 +74,11 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 4. 太字タイトルの名前編集、文字入力、確定。
 5. 編集モード終了後の横スワイプと2ページ目へのスナップ。
 6. フォルダを閉じるアニメーション。
+
+追加シナリオ:
+
+- `qa/folder_creation.json`: アプリ同士の Liquid Glass 融合プレビューから、2アプリのフォルダが作成されて開くまでを記録します。
+- `qa/folder_single_page_scroll.json`: 1ページだけのフォルダを横方向へ引っ張り、ラバーバンド中の位置とリリース後の0へのスナップを60fpsで記録します。`folder_scroll_x` がドラッグ中に0へ強制リセットされず、`Dragging` から `Settling` を経て `Idle` に戻ることを確認します。
 
 ## 安全性
 

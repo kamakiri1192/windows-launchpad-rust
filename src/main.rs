@@ -143,15 +143,23 @@ pub(crate) fn dump_atlas_png(atlas: &IconAtlas) {
 
 fn main() {
     #[cfg(windows)]
-    let _single_instance = match platform::windows::SingleInstanceGuard::acquire() {
-        Ok(guard) => guard,
-        Err(e) if e.is_already_running() => {
-            crate::debug_log!("single-instance: existing instance signaled");
-            return;
-        }
-        Err(e) => {
-            eprintln!("single-instance: {e}");
-            std::process::exit(1);
+    let _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some() {
+        // Hidden deterministic QA must be able to run beside the user's
+        // foreground launcher (and beside other branch worktrees). It owns no
+        // tray/hotkey/persistence state, so the production singleton does not
+        // apply to this process.
+        None
+    } else {
+        match platform::windows::SingleInstanceGuard::acquire() {
+            Ok(guard) => Some(guard),
+            Err(e) if e.is_already_running() => {
+                crate::debug_log!("single-instance: existing instance signaled");
+                return;
+            }
+            Err(e) => {
+                eprintln!("single-instance: {e}");
+                std::process::exit(1);
+            }
         }
     };
 
