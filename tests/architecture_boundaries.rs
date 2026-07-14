@@ -201,3 +201,24 @@ fn dragged_tiles_keep_the_running_wiggle_phase() {
             .expect("glass shader");
     assert!(glass_shader.contains("shape.shape_type == 5u || shape.shape_type == 6u"));
 }
+
+#[test]
+fn dragged_folder_glass_is_isolated_and_drawn_immediately_before_drag_content() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let frame =
+        std::fs::read_to_string(root.join("src/renderer/frame.rs")).expect("renderer frame source");
+    let badges = frame.find("render_badges(").expect("edit badge glass pass");
+    let drag_glass = frame
+        .find("render_drag_overlay(")
+        .expect("dragged folder glass pass");
+    let drag_content = frame
+        .find("label: Some(\"drag overlay pass\")")
+        .expect("drag content pass");
+    assert!(badges < drag_glass && drag_glass < drag_content);
+
+    let grid =
+        std::fs::read_to_string(root.join("src/app/render/grid.rs")).expect("grid render adapter");
+    assert!(grid.contains("GlassLayer::GridOverlay, folder_glass"));
+    assert!(grid.contains("GlassLayer::DragOverlay"));
+    assert!(grid.contains("batch.layer == GlassLayer::DragOverlay"));
+}

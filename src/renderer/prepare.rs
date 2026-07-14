@@ -179,7 +179,11 @@ impl Renderer {
                 .iter()
                 .find(|old| old.layer == batch.layer)
                 == Some(batch);
-            if batch_unchanged && !(batch.layer == GlassLayer::GridOverlay && grid_motion_changed) {
+            let follows_grid_motion = matches!(
+                batch.layer,
+                GlassLayer::GridOverlay | GlassLayer::DragOverlay
+            );
+            if batch_unchanged && !(follows_grid_motion && grid_motion_changed) {
                 self.counters.record_dirty_skip();
                 continue;
             }
@@ -193,6 +197,16 @@ impl Renderer {
                         .collect();
                     self.liquid_glass
                         .set_grid_overlay_shapes(&self.device, &self.queue, &shapes);
+                }
+                GlassLayer::DragOverlay => {
+                    let tiles = model.tiles.as_deref().unwrap_or_default();
+                    let shapes: Vec<_> = batch
+                        .surfaces
+                        .iter()
+                        .map(|surface| grid_overlay_shape(surface, tiles))
+                        .collect();
+                    self.liquid_glass
+                        .set_drag_overlay_shapes(&self.device, &self.queue, &shapes);
                 }
                 GlassLayer::Overlay => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();

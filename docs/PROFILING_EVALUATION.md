@@ -158,6 +158,7 @@ nvidia-smi pmon -s um -d 1 -c 5 |
 - `grid_icons_text`
 - `edit_badge_glass` / `edit_badge_ink`
 - `top_level_drag_overlay`
+- `drag_folder_liquid_glass`
 - `control_liquid_glass` / `control_content`
 - `focus_blur_downsample_1` 〜 `focus_blur_downsample_3`
 - `focus_blur_upsample_1` 〜 `focus_blur_upsample_3`

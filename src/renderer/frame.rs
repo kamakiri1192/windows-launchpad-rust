@@ -9,13 +9,14 @@
 //! 4. nested grid Liquid Glass pass (closed folder containers)
 //! 5. grid icon + text pass (content above nested glass)
 //! 6. edit-badge glass + foreground marks (above grid, below dragged icon)
-//! 7. drag overlay pass (dragged tile + icon on top)
-//! 8. Liquid Glass control pass (capsule + gear merge)
-//! 9. control overlay pass (control ink, gear ink, control text)
-//! 10. optional lower-scene Dual-Kawase blur + rounded focus composite
-//! 11. focus tint backdrop
-//! 12. Liquid Glass settings/folder panel pass (modal)
-//! 13. modal content pass
+//! 7. isolated dragged-folder Liquid Glass pass
+//! 8. drag overlay pass (dragged tile + icon on top)
+//! 9. Liquid Glass control pass (capsule + gear merge)
+//! 10. control overlay pass (control ink, gear ink, control text)
+//! 11. optional lower-scene Dual-Kawase blur + rounded focus composite
+//! 12. focus tint backdrop
+//! 13. Liquid Glass settings/folder panel pass (modal)
+//! 14. modal content pass
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -279,6 +280,13 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        let profile_scope = self
+            .gpu_profiler
+            .begin("drag_folder_liquid_glass", &mut encoder);
+        self.liquid_glass
+            .render_drag_overlay(&self.queue, &mut encoder, scene_view, args.time);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
         let profile_scope = self

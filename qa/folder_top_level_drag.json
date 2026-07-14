@@ -2,7 +2,7 @@
   "name": "folder-top-level-drag",
   "viewport": [1280, 800],
   "fps": 60,
-  "duration_ms": 2300,
+  "duration_ms": 2400,
   "output_dir": "target/qa-sequences",
   "fixture": {
     "apps": [
@@ -10,6 +10,8 @@
       { "id": "qa-folder-drag-1", "name": "Mini Two" },
       { "id": "qa-folder-drag-2", "name": "Mini Three" },
       { "id": "qa-folder-drag-3", "name": "Mini Four" },
+      { "id": "qa-folder-drag-4", "name": "Mini Five" },
+      { "id": "qa-folder-drag-5", "name": "Mini Six" },
       { "id": "qa-folder-drag-a", "name": "Top A" },
       { "id": "qa-folder-drag-b", "name": "Top B" }
     ],
@@ -21,21 +23,29 @@
           "qa-folder-drag-0", "qa-folder-drag-1",
           "qa-folder-drag-2", "qa-folder-drag-3"
         ]
+      },
+      {
+        "id": "qa-folder-drag-target-folder",
+        "name": "Separate Glass",
+        "children": [
+          "qa-folder-drag-4", "qa-folder-drag-5"
+        ]
       }
     ],
     "items": [
       { "kind": "folder", "id": "qa-folder-drag-folder" },
       { "kind": "app", "id": "qa-folder-drag-a" },
+      { "kind": "folder", "id": "qa-folder-drag-target-folder" },
       { "kind": "app", "id": "qa-folder-drag-b" }
     ]
   },
   "actions": [
     { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
     { "at_ms": 100, "type": "pointer_down" },
-    { "at_ms": 950, "type": "move", "target": { "kind": "point", "x": 440.0, "y": 360.0 } },
-    { "at_ms": 1100, "type": "move", "target": { "kind": "point", "x": 600.0, "y": 440.0 } },
-    { "at_ms": 1250, "type": "move", "target": { "kind": "point", "x": 760.0, "y": 520.0 } },
-    { "at_ms": 1450, "type": "pointer_up" },
-    { "at_ms": 2000, "type": "escape" }
+    { "at_ms": 950, "type": "move", "target": { "kind": "grid_item_point", "index": 1, "x": 0.50, "y": 0.50 } },
+    { "at_ms": 1150, "type": "move", "target": { "kind": "grid_item_point", "index": 2, "x": 0.50, "y": 0.50 } },
+    { "at_ms": 1350, "type": "move", "target": { "kind": "point", "x": 760.0, "y": 520.0 } },
+    { "at_ms": 1550, "type": "pointer_up" },
+    { "at_ms": 2100, "type": "escape" }
   ]
 }

@@ -134,14 +134,14 @@ impl App {
             self.layout.tile_size,
             self.layout.scaled(19.0),
         );
-        // The dragged folder container belongs behind its miniature icons.
-        // Keeping it in the later control-overlay lane tinted those icons and
-        // made them look translucent while moving.
-        folder_glass.extend(self.dragged_folder_glass_surface());
         self.render_model
             .set_glass_batch(GlassLayer::Base, base_glass);
         self.render_model
             .set_glass_batch(GlassLayer::GridOverlay, folder_glass);
+        self.render_model.set_glass_batch(
+            GlassLayer::DragOverlay,
+            self.dragged_folder_glass_surface().into_iter().collect(),
+        );
     }
 
     pub(crate) fn edit_anim(&self, visible_items: &[LauncherItem]) -> Vec<grid::TileAnim> {
@@ -311,7 +311,7 @@ impl App {
             .render_model
             .glass
             .iter_mut()
-            .find(|batch| batch.layer == GlassLayer::GridOverlay)
+            .find(|batch| batch.layer == GlassLayer::DragOverlay)
         else {
             return;
         };

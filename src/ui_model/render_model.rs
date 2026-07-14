@@ -96,6 +96,10 @@ pub enum GlassLayer {
     /// and labels. This keeps nested glass boundaries distinct from the page
     /// frame's SDF union.
     GridOverlay,
+    /// Pointer-following Liquid Glass for a lifted top-level folder. It is
+    /// isolated from `GridOverlay` so overlapping closed folders never enter
+    /// the same SDF union, and is composited immediately before drag content.
+    DragOverlay,
     Overlay,
     Modal,
 }

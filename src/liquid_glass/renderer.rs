@@ -103,11 +103,13 @@ pub struct LiquidGlassRenderer {
     debug: DebugOptions,
     capture: Box<dyn BackdropCapture>,
     capture_status: CaptureStatus,
-    // Base, grid-overlay, badge, control, and settings passes are encoded into one frame.
+    // Base, grid-overlay, drag-overlay, badge, control, and settings passes are
+    // encoded into one frame.
     // Keep their uniforms separate because queued buffer writes are not a
     // per-render-pass state snapshot.
     uniform_buffer: wgpu::Buffer,
     grid_overlay_uniform_buffer: wgpu::Buffer,
+    drag_overlay_uniform_buffer: wgpu::Buffer,
     badge_uniform_buffer: wgpu::Buffer,
     modal_badge_uniform_buffer: wgpu::Buffer,
     control_uniform_buffer: wgpu::Buffer,
@@ -119,6 +121,10 @@ pub struct LiquidGlassRenderer {
     grid_overlay_shape_count: u32,
     grid_overlay_shape_capacity: usize,
     grid_overlay_shapes: Vec<GlassShape>,
+    drag_overlay_shape_buffer: wgpu::Buffer,
+    drag_overlay_shape_count: u32,
+    drag_overlay_shape_capacity: usize,
+    drag_overlay_shapes: Vec<GlassShape>,
     badge_shape_buffer: wgpu::Buffer,
     badge_shape_count: u32,
     badge_shape_capacity: usize,
@@ -166,11 +172,13 @@ pub struct LiquidGlassRenderer {
     blur_up_bind_groups: [wgpu::BindGroup; 3],
     final_bind_group: wgpu::BindGroup,
     grid_overlay_final_bind_group: wgpu::BindGroup,
+    drag_overlay_final_bind_group: wgpu::BindGroup,
     badge_final_bind_group: wgpu::BindGroup,
     modal_badge_final_bind_group: wgpu::BindGroup,
     control_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     grid_overlay_geometry_bind_group: wgpu::BindGroup,
+    drag_overlay_geometry_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
     modal_badge_geometry_bind_group: wgpu::BindGroup,
     control_geometry_bind_group: wgpu::BindGroup,
@@ -210,6 +218,8 @@ impl LiquidGlassRenderer {
         let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
         let grid_overlay_uniform_buffer =
             create_uniform_buffer(device, "liquid glass grid overlay uniforms", &uniforms);
+        let drag_overlay_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass drag overlay uniforms", &uniforms);
         let badge_uniform_buffer =
             create_uniform_buffer(device, "liquid glass badge uniforms", &uniforms);
         let modal_badge_uniform_buffer =
@@ -228,6 +238,12 @@ impl LiquidGlassRenderer {
             device,
             grid_overlay_shape_capacity,
             "liquid glass grid overlay shape buffer",
+        );
+        let drag_overlay_shape_capacity = 1;
+        let drag_overlay_shape_buffer = create_shape_buffer_with_capacity(
+            device,
+            drag_overlay_shape_capacity,
+            "liquid glass drag overlay shape buffer",
         );
         let badge_shape_capacity = 1;
         let badge_shape_buffer = create_shape_buffer_with_capacity(
@@ -320,6 +336,12 @@ impl LiquidGlassRenderer {
             &grid_overlay_uniform_buffer,
             &grid_overlay_shape_buffer,
         );
+        let drag_overlay_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &drag_overlay_uniform_buffer,
+            &drag_overlay_shape_buffer,
+        );
         let badge_geometry_bind_group = create_geometry_bind_group(
             device,
             &geometry_bind_group_layout,
@@ -357,6 +379,15 @@ impl LiquidGlassRenderer {
             device,
             &final_bind_group_layout,
             &grid_overlay_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &geometry_view,
+            &blur_view,
+        );
+        let drag_overlay_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &drag_overlay_uniform_buffer,
             &backdrop_view,
             &sampler,
             &geometry_view,
@@ -541,6 +572,7 @@ impl LiquidGlassRenderer {
             capture_status,
             uniform_buffer,
             grid_overlay_uniform_buffer,
+            drag_overlay_uniform_buffer,
             badge_uniform_buffer,
             modal_badge_uniform_buffer,
             control_uniform_buffer,
@@ -552,6 +584,10 @@ impl LiquidGlassRenderer {
             grid_overlay_shape_count: 0,
             grid_overlay_shape_capacity,
             grid_overlay_shapes: Vec::new(),
+            drag_overlay_shape_buffer,
+            drag_overlay_shape_count: 0,
+            drag_overlay_shape_capacity,
+            drag_overlay_shapes: Vec::new(),
             badge_shape_buffer,
             badge_shape_count,
             badge_shape_capacity,
@@ -592,11 +628,13 @@ impl LiquidGlassRenderer {
             blur_up_bind_groups,
             final_bind_group,
             grid_overlay_final_bind_group,
+            drag_overlay_final_bind_group,
             badge_final_bind_group,
             modal_badge_final_bind_group,
             control_final_bind_group,
             settings_panel_final_bind_group,
             grid_overlay_geometry_bind_group,
+            drag_overlay_geometry_bind_group,
             badge_geometry_bind_group,
             modal_badge_geometry_bind_group,
             control_geometry_bind_group,
@@ -684,6 +722,15 @@ impl LiquidGlassRenderer {
             device,
             &self.final_bind_group_layout,
             &self.grid_overlay_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.geometry_view,
+            &self.blur_view,
+        );
+        self.drag_overlay_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.drag_overlay_uniform_buffer,
             backdrop_view,
             &self.sampler,
             &self.geometry_view,
@@ -806,6 +853,47 @@ impl LiquidGlassRenderer {
                 &self.grid_overlay_shape_buffer,
                 0,
                 bytemuck::cast_slice(&self.grid_overlay_shapes),
+            );
+        }
+    }
+
+    /// Replace the isolated top-level drag glass lane. Keeping this surface in
+    /// a separate SDF field prevents it from smoothly unioning with stationary
+    /// closed folders while it passes over them.
+    pub fn set_drag_overlay_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
+        if self.drag_overlay_shapes.as_slice() == shapes {
+            return;
+        }
+        self.drag_overlay_shapes.clear();
+        self.drag_overlay_shapes.extend_from_slice(shapes);
+        self.drag_overlay_shape_count = self.drag_overlay_shapes.len() as u32;
+        if self.drag_overlay_shapes.len() > self.drag_overlay_shape_capacity {
+            self.drag_overlay_shape_capacity = next_shape_capacity(
+                self.drag_overlay_shape_capacity,
+                self.drag_overlay_shapes.len(),
+            );
+            self.drag_overlay_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.drag_overlay_shape_capacity,
+                "liquid glass drag overlay shape buffer",
+            );
+            self.drag_overlay_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.drag_overlay_uniform_buffer,
+                &self.drag_overlay_shape_buffer,
+            );
+        }
+        if !self.drag_overlay_shapes.is_empty() {
+            queue.write_buffer(
+                &self.drag_overlay_shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.drag_overlay_shapes),
             );
         }
     }

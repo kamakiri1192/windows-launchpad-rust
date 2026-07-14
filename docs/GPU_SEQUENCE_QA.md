@@ -84,7 +84,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `qa/folder_child_page_drag.json`: 子アプリを長押ししたまま右端で保持し、pointerを離さず2ページ目へ送り、そのページのセルへ配置するまでを記録します。端保持の進捗、ページ番号、子ドラッグの所有権が連続することを確認します。
 - `qa/folder_child_exit.json`: 子アプリを長押ししたまま上端からパネル外へ出し、フォルダを閉じながら同じpointerのトップレベルドラッグへ引き継いで配置するまでを記録します。`folder_child_drag` から `top_level_drag` への切り替えと項目数・子数の変化を確認します。
 - `qa/folder_existing_drop.json`: トップレベルのアプリを既存フォルダへ重ね、既存フォルダを並べ替えで逃がさずにスプリングオープンし、子として追加されるまでを記録します。
-- `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして移動し、Liquid Glass面と小アイコンが消えず、共通中心を保つ一体のプレビューとして拡大・wiggle・追従することを確認します。
+- `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして通常アプリと別フォルダの上へ順に移動します。Liquid Glass面と小アイコンが共通中心を保つ一体のプレビューとして最前面で拡大・wiggle・追従し、下のアプリアイコンへ潜らず、別フォルダのLiquid Glassとは融合しないことを確認します。
 - `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず対象行へ縦方向に25%入った時点でライブ並べ替えが成立することを確認します。
 - `qa/edit_drag_wiggle_continuity.json`: 先に編集モードへ入り、wiggleが進んだ状態でフォルダと通常アプリを順に持ち上げます。pointer downの前後で回転・上下動の位相が0へ戻らず、ドラッグ中も同じ波形を継続することを60fps連番で確認します。
 
