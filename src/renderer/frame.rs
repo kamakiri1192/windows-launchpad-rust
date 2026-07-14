@@ -134,12 +134,9 @@ impl Renderer {
         } else {
             instance_count
         };
-        let drag_icon_active = self.dragged_icon_instance && icon_instance_count > 0;
-        let normal_icon_count = if drag_icon_active {
-            icon_instance_count - 1
-        } else {
-            icon_instance_count
-        };
+        let dragged_icon_count = self.dragged_icon_instance_count.min(icon_instance_count);
+        let drag_icon_active = dragged_icon_count > 0;
+        let normal_icon_count = icon_instance_count - dragged_icon_count;
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -171,8 +168,13 @@ impl Renderer {
             }
         }
 
-        self.liquid_glass
-            .render_grid_overlay(&self.queue, &mut encoder, scene_view, args.scroll_x);
+        self.liquid_glass.render_grid_overlay(
+            &self.queue,
+            &mut encoder,
+            scene_view,
+            args.scroll_x,
+            args.time,
+        );
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -299,7 +301,7 @@ impl Renderer {
                     pass.set_pipeline(&self.icon_pipeline);
                     pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(offset..));
-                    pass.draw(0..6, 0..1);
+                    pass.draw(0..6, 0..dragged_icon_count);
                 }
             }
         }

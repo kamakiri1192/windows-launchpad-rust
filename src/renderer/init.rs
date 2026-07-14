@@ -601,7 +601,7 @@ impl Renderer {
             icon_instance_buffer: InstanceBuffer::new("icon instance buffer"),
             modal_icon_instance_buffer: InstanceBuffer::new("modal icon instance buffer"),
             modal_dragged_icon_instance: false,
-            dragged_icon_instance: false,
+            dragged_icon_instance_count: 0,
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
@@ -682,15 +682,25 @@ impl Renderer {
     }
 }
 
-/// Prefer Mailbox (low-latency VSync); fall back to FIFO.
+/// Use FIFO VSync for the continuously animated launcher surface. Mailbox
+/// replaces queued frames and allows the edit-mode redraw loop to run up to
+/// `maximum_frame_latency * monitor_hz` on DX12, which can saturate the GPU
+/// while most submitted frames are never displayed.
 fn select_present_mode(available: &[PresentMode]) -> PresentMode {
-    if available.contains(&PresentMode::Mailbox) {
-        PresentMode::Mailbox
+    let selected = if available.contains(&PresentMode::Fifo) {
+        PresentMode::Fifo
     } else if available.contains(&PresentMode::AutoVsync) {
         PresentMode::AutoVsync
+    } else if available.contains(&PresentMode::Mailbox) {
+        PresentMode::Mailbox
     } else {
         PresentMode::Fifo
-    }
+    };
+    eprintln!(
+        "surface present_mode: {:?} (available: {:?})",
+        selected, available
+    );
+    selected
 }
 
 fn default_backends() -> Backends {
@@ -759,5 +769,18 @@ fn create_backdrop_capture(
         Box::new(FallbackCapture::new(
             "Windows.Graphics.Capture is only available on Windows",
         ))
+    }
+}
+
+#[cfg(test)]
+mod present_mode_tests {
+    use super::*;
+
+    #[test]
+    fn fifo_is_preferred_over_mailbox_for_animation_pacing() {
+        assert_eq!(
+            select_present_mode(&[PresentMode::Mailbox, PresentMode::Fifo]),
+            PresentMode::Fifo
+        );
     }
 }

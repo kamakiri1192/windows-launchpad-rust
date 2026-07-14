@@ -51,6 +51,10 @@ pub const EDGE_ZONE_PANEL_FRAC: f32 = 0.25;
 /// target from its entry side, avoiding the old midpoint swap while keeping
 /// rapid passes responsive.
 pub const FOLDER_REORDER_CROSS_FRACTION: f32 = 0.70;
+/// Different-row moves should react shortly after the pointer enters the new
+/// row. The horizontal 70% threshold protects deliberate same-row overlap,
+/// but applying it to row acquisition makes vertical movement feel sticky.
+pub const ROW_REORDER_ENTRY_FRACTION: f32 = 0.25;
 
 pub fn folder_merge_intent(tile: Rect, pointer: Point) -> bool {
     pointer.x.is_finite()
@@ -86,9 +90,9 @@ pub fn reorder_crossed_target(source: Rect, target: Rect, pointer: Point) -> boo
             pointer.x <= target.x + target.width * (1.0 - FOLDER_REORDER_CROSS_FRACTION)
         }
     } else if delta_y >= 0.0 {
-        pointer.y >= target.y + target.height * FOLDER_REORDER_CROSS_FRACTION
+        pointer.y >= target.y + target.height * ROW_REORDER_ENTRY_FRACTION
     } else {
-        pointer.y <= target.y + target.height * (1.0 - FOLDER_REORDER_CROSS_FRACTION)
+        pointer.y <= target.y + target.height * (1.0 - ROW_REORDER_ENTRY_FRACTION)
     }
 }
 
@@ -345,12 +349,28 @@ mod tests {
         assert!(!reorder_crossed_target(
             source,
             lower_far_right,
-            Point::new(320.0, 189.0),
+            Point::new(320.0, 144.0),
         ));
         assert!(reorder_crossed_target(
             source,
             lower_far_right,
-            Point::new(320.0, 190.0),
+            Point::new(320.0, 145.0),
+        ));
+    }
+
+    #[test]
+    fn different_row_reorders_after_twenty_five_percent_entry_from_either_direction() {
+        let source = Rect::new(0.0, 120.0, 100.0, 100.0);
+        let above = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert!(!reorder_crossed_target(
+            source,
+            above,
+            Point::new(50.0, 76.0),
+        ));
+        assert!(reorder_crossed_target(
+            source,
+            above,
+            Point::new(50.0, 75.0),
         ));
     }
 

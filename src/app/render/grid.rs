@@ -134,6 +134,10 @@ impl App {
             self.layout.tile_size,
             self.layout.scaled(19.0),
         );
+        // The dragged folder container belongs behind its miniature icons.
+        // Keeping it in the later control-overlay lane tinted those icons and
+        // made them look translucent while moving.
+        folder_glass.extend(self.dragged_folder_glass_surface());
         self.render_model
             .set_glass_batch(GlassLayer::Base, base_glass);
         self.render_model
@@ -224,22 +228,6 @@ impl App {
 
     fn build_interaction_glass(&self) -> Vec<GlassSurface> {
         let mut surfaces = Vec::new();
-        if matches!(self.drag_item.as_ref(), Some(LauncherItem::Folder(_))) {
-            let size = self.layout.tile_size * 1.15;
-            surfaces.push(GlassSurface {
-                id: UiId::backdrop("dragged-folder-glass"),
-                rect: Rect::new(
-                    self.drag_x - size * 0.5,
-                    self.drag_y - size * 0.5,
-                    size,
-                    size,
-                ),
-                radius: self.layout.scaled(19.0) * 1.15,
-                material: GlassMaterial::Regular,
-                behavior: GlassBehavior::Control,
-                z: 22,
-            });
-        }
         let Some(hover) = self.folders.hover.as_ref() else {
             return surfaces;
         };
@@ -286,6 +274,25 @@ impl App {
             },
         ]);
         surfaces
+    }
+
+    fn dragged_folder_glass_surface(&self) -> Option<GlassSurface> {
+        matches!(self.drag_item.as_ref(), Some(LauncherItem::Folder(_))).then(|| {
+            let size = self.layout.tile_size * 1.15;
+            GlassSurface {
+                id: UiId::backdrop("dragged-folder-glass"),
+                rect: Rect::new(
+                    self.drag_x - size * 0.5,
+                    self.drag_y - size * 0.5,
+                    size,
+                    size,
+                ),
+                radius: self.layout.scaled(19.0) * 1.15,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: 22,
+            }
+        })
     }
 
     pub(crate) fn refresh_interaction_glass(&mut self) {

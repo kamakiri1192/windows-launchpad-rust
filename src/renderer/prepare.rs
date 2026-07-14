@@ -240,10 +240,11 @@ impl Renderer {
         if model.icons != self.prepared_model.icons {
             let icons = model.icons.as_deref().unwrap_or_default();
             let instances: Vec<_> = icons.iter().filter_map(icon_instance).collect();
-            self.dragged_icon_instance = instances
-                .last()
-                .map(|instance| (instance.extra[3] as u32 & 2) != 0)
-                .unwrap_or(false);
+            self.dragged_icon_instance_count = instances
+                .iter()
+                .rev()
+                .take_while(|instance| (instance.extra[3] as u32 & 2) != 0)
+                .count() as u32;
             set_instances(
                 &self.device,
                 &self.queue,

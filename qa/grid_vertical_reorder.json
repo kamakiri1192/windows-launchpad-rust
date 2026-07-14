@@ -32,7 +32,7 @@
   "actions": [
     { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 1 } },
     { "at_ms": 100, "type": "pointer_down" },
-    { "at_ms": 680, "type": "move", "target": { "kind": "grid_item_point", "index": 8, "x": 0.20, "y": 0.35 } },
+    { "at_ms": 680, "type": "move", "target": { "kind": "grid_item_point", "index": 8, "x": 0.20, "y": 0.26 } },
     { "at_ms": 820, "type": "move", "target": { "kind": "grid_item_point", "index": 8, "x": 0.20, "y": 0.82 } },
     { "at_ms": 1220, "type": "pointer_up" },
     { "at_ms": 1450, "type": "escape" }

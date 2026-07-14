@@ -33,6 +33,39 @@ const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.14;
 /// colored tile fill into its own center. Icons keep their full trajectory.
 const CHILD_FILL_COLLAPSE_PROGRESS: f32 = 0.42;
 
+/// Resolve an insertion slot on the current folder page, including empty
+/// cells. Existing child hit regions remain the more precise target; this
+/// fallback lets a held child be dropped into unused cells after edge paging.
+pub fn child_drop_index(
+    panel: Rect,
+    pointer: Point,
+    page: usize,
+    child_count: usize,
+    scale_factor: f32,
+) -> Option<usize> {
+    let scale = sanitize_scale(scale_factor);
+    let pitch_x = (CELL_SIZE + CELL_GAP_X) * scale;
+    let pitch_y = (CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y) * scale;
+    let grid_width = (COLS as f32 * CELL_SIZE + (COLS - 1) as f32 * CELL_GAP_X) * scale;
+    let grid_left = panel.center().x - grid_width * 0.5;
+    let first_center = Point::new(
+        grid_left + CELL_SIZE * scale * 0.5,
+        panel.y + PANEL_PADDING_TOP * scale + CELL_SIZE * scale * 0.5,
+    );
+    let col_position = (pointer.x - first_center.x) / pitch_x;
+    let row_position = (pointer.y - first_center.y) / pitch_y;
+    if !col_position.is_finite()
+        || !row_position.is_finite()
+        || !(-0.5..=COLS as f32 - 0.5).contains(&col_position)
+        || !(-0.5..=COLS as f32 - 0.5).contains(&row_position)
+    {
+        return None;
+    }
+    let col = col_position.round().clamp(0.0, (COLS - 1) as f32) as usize;
+    let row = row_position.round().clamp(0.0, (COLS - 1) as f32) as usize;
+    Some((page * PAGE_SIZE + row * COLS + col).min(child_count))
+}
+
 #[derive(Debug, Clone)]
 pub struct FolderChildInput<'a> {
     pub key: &'a str,
@@ -688,6 +721,31 @@ mod tests {
                 .map(|hit| &hit.target),
             Some(HitTarget::FolderChild { child, index: 9, .. }) if child == "id-9"
         ));
+    }
+
+    #[test]
+    fn empty_cell_drop_on_second_page_resolves_to_that_page() {
+        let panel = Rect::new(370.0, 44.0, 540.0, 712.0);
+        let grid_width = 3.0 * CELL_SIZE + 2.0 * CELL_GAP_X;
+        let grid_left = panel.center().x - grid_width * 0.5;
+        let second_row_center = Point::new(
+            grid_left + CELL_SIZE * 0.5,
+            panel.y + PANEL_PADDING_TOP + CELL_SIZE * 0.5 + CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y,
+        );
+        assert_eq!(
+            child_drop_index(panel, second_row_center, 1, 12, 1.0),
+            Some(12)
+        );
+        assert_eq!(
+            child_drop_index(
+                panel,
+                Point::new(panel.center().x, panel.y + 12.0),
+                1,
+                12,
+                1.0
+            ),
+            None
+        );
     }
 
     #[test]

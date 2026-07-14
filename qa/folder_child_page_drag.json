@@ -39,7 +39,7 @@
     { "at_ms": 650, "type": "move", "target": { "kind": "folder_child", "index": 0 } },
     { "at_ms": 700, "type": "pointer_down" },
     { "at_ms": 1250, "type": "move", "target": { "kind": "folder_panel", "x": 0.96, "y": 0.52 } },
-    { "at_ms": 1700, "type": "move", "target": { "kind": "folder_child", "index": 10 } },
+    { "at_ms": 1700, "type": "move", "target": { "kind": "folder_panel", "x": 0.50, "y": 0.36 } },
     { "at_ms": 1900, "type": "pointer_up" },
     { "at_ms": 2550, "type": "escape" }
   ]

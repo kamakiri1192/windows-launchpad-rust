@@ -42,6 +42,8 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 
 動画エンコーダーを必須依存にせず、CI では連番 PNG を画像差分や artifact として扱えます。
 
+連番QAは各キャプチャでGPU readbackを行うため、絶対的なGPU負荷やフレーム時間のベンチマークには使用しません。状態遷移、入力追従誤差、相対的なフレーム変化の確認に限定し、GPUパス別の性能分析は [GPU / フレームプロファイリング導入検討](PROFILING_EVALUATION.md) に従います。
+
 ## シナリオ形式
 
 シナリオ JSON は次の要素で構成します。
@@ -83,7 +85,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `qa/folder_child_exit.json`: 子アプリを長押ししたまま上端からパネル外へ出し、フォルダを閉じながら同じpointerのトップレベルドラッグへ引き継いで配置するまでを記録します。`folder_child_drag` から `top_level_drag` への切り替えと項目数・子数の変化を確認します。
 - `qa/folder_existing_drop.json`: トップレベルのアプリを既存フォルダへ重ね、既存フォルダを並べ替えで逃がさずにスプリングオープンし、子として追加されるまでを記録します。
 - `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして移動し、Liquid Glass面と小アイコンが消えず、共通中心を保つ一体のプレビューとして拡大・wiggle・追従することを確認します。
-- `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず縦方向の70%通過でライブ並べ替えが成立することを確認します。
+- `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず対象行へ縦方向に25%入った時点でライブ並べ替えが成立することを確認します。
 
 ## 安全性
 

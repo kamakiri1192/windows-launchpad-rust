@@ -85,7 +85,9 @@ pub struct Renderer {
     icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     modal_icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     modal_dragged_icon_instance: bool,
-    dragged_icon_instance: bool,
+    /// Number of trailing top-level icon instances belonging to the dragged
+    /// visual unit. Apps use one; a closed folder uses all preview miniatures.
+    dragged_icon_instance_count: u32,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
 

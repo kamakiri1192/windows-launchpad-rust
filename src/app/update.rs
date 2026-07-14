@@ -885,15 +885,7 @@ impl App {
             {
                 return;
             }
-            let mut reordered = false;
-            if let Some(crate::ui_model::hit::HitTarget::FolderChild { child, .. }) =
-                self.folder_hit_target(x, y)
-            {
-                if let Some(drag) = self.folders.child_drag.as_mut() {
-                    reordered = drag
-                        .preview_reorder_to(&crate::domain::app_id::AppId::from_normalized(child));
-                }
-            }
+            let (_, reordered) = self.reorder_folder_child_drag_at(x, y);
             if reordered {
                 self.relayout();
             }
@@ -914,6 +906,48 @@ impl App {
             crate::ui_model::geometry::Point::new(x, y),
             self.folders.page,
             layout.page_count,
+            self.scale_factor,
+        )
+    }
+
+    /// Update the held child's preview order for either an occupied child cell
+    /// or an empty 3x3 cell on the current page. Returns `(valid, changed)` so
+    /// release can distinguish a real empty-cell drop from panel chrome.
+    fn reorder_folder_child_drag_at(&mut self, x: f32, y: f32) -> (bool, bool) {
+        let target_child = match self.folder_hit_target(x, y) {
+            Some(crate::ui_model::hit::HitTarget::FolderChild { child, .. }) => {
+                Some(crate::domain::app_id::AppId::from_normalized(child))
+            }
+            _ => None,
+        };
+        let empty_index = target_child
+            .is_none()
+            .then(|| self.folder_child_empty_drop_index(x, y))
+            .flatten();
+        let Some(drag) = self.folders.child_drag.as_mut() else {
+            return (false, false);
+        };
+        if let Some(target) = target_child {
+            (true, drag.preview_reorder_to(&target))
+        } else if let Some(index) = empty_index {
+            (true, drag.preview_reorder(index))
+        } else {
+            (false, false)
+        }
+    }
+
+    fn folder_child_empty_drop_index(&self, x: f32, y: f32) -> Option<usize> {
+        let layout = self.folder_layout.as_ref()?;
+        let child_count = self
+            .folders
+            .child_drag
+            .as_ref()
+            .map(|drag| drag.preview_order.len())?;
+        crate::layout::folder_panel::child_drop_index(
+            layout.target_panel_rect,
+            crate::ui_model::geometry::Point::new(x, y),
+            self.folders.page,
+            child_count,
             self.scale_factor,
         )
     }
@@ -1020,10 +1054,15 @@ impl App {
             self.request_redraw();
             return;
         }
-        if let Some(drag) = self.folders.child_drag.clone() {
-            let hit = self.folder_hit_target(x, y);
+        if self.folders.child_drag.is_some() {
+            let (valid_folder_drop, reordered) = self.reorder_folder_child_drag_at(x, y);
+            let drag = self
+                .folders
+                .child_drag
+                .clone()
+                .expect("child drag was checked above");
             let mut changed = false;
-            if matches!(hit, Some(HitTarget::FolderChild { .. })) {
+            if valid_folder_drop {
                 if let Some(folder) = self.launcher_state.folders.get_mut(&drag.folder_id) {
                     if folder.children != drag.preview_order {
                         folder.children = drag.preview_order;
@@ -1048,6 +1087,8 @@ impl App {
                 if !self.launcher_state.folders.contains_key(&drag.folder_id) {
                     self.folders.close();
                 }
+                self.relayout();
+            } else if reordered {
                 self.relayout();
             }
             self.folders.clear_child_pointer();

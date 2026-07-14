@@ -235,6 +235,7 @@ impl LiquidGlassRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scroll_x: f32,
+        time: f32,
     ) {
         if !self.params.enabled || self.grid_overlay_shape_count == 0 {
             return;
@@ -248,7 +249,7 @@ impl LiquidGlassRenderer {
             height,
             scroll_x,
             self.grid_overlay_shape_count,
-            0.0,
+            time,
         );
         queue.write_buffer(
             &self.grid_overlay_uniform_buffer,
