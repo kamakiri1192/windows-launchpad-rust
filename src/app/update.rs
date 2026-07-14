@@ -345,10 +345,17 @@ impl App {
         if self.drag_item.is_some() {
             self.drag_x = self.pointer_phys_x;
             self.drag_y = self.pointer_phys_y;
-            // A stable app/folder hover is reserved for folder formation. Plain
-            // cell movement keeps the existing live top-level reorder.
-            if self.folder_hover_candidate_at_pointer().is_none() {
+            let hover_candidate = self.folder_hover_candidate_at_pointer();
+            let hover_ready = self.folders.hover.as_ref().is_some_and(|hover| {
+                hover_candidate.as_ref() == Some(&hover.target) && hover.ready()
+            });
+            if hover_candidate.is_none() {
                 self.folders.update_hover(None, 0.0);
+            }
+            if crate::features::folders::top_level_reorder_allowed(
+                hover_candidate.as_ref(),
+                hover_ready,
+            ) {
                 self.live_reorder();
             }
             self.maybe_autoscroll_edit_drag();
@@ -375,6 +382,23 @@ impl App {
         let Some(drag_pos) = visible.iter().position(|item| item == &drag_item) else {
             return;
         };
+        if let Some(target) = visible.get(target_idx) {
+            if target != &drag_item {
+                let crossed = self
+                    .launcher_item_rect(&drag_item)
+                    .zip(self.launcher_item_rect(target))
+                    .is_some_and(|(source, target)| {
+                        crate::layout::edit_mode::reorder_crossed_target(
+                            source,
+                            target,
+                            crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y),
+                        )
+                    });
+                if !crossed {
+                    return;
+                }
+            }
+        }
         let Some(insert_idx) =
             crate::layout::edit_mode::reorder_insert_index(visible.len(), drag_pos, target_idx)
         else {
@@ -716,6 +740,11 @@ impl App {
             self.commit_folder_rename();
         }
         match target {
+            Some(HitTarget::FolderChildBadge { child, .. }) if self.editing => {
+                let app_id = crate::domain::app_id::AppId::from_normalized(child);
+                self.folders.clear_child_pointer();
+                self.hide_app(&app_id);
+            }
             Some(HitTarget::FolderTitle { .. }) => {
                 if self.editing {
                     let id = self.folders.active.clone();
@@ -891,7 +920,18 @@ impl App {
                 }
             }
         }
-        self.folders.page_press = None;
+        let page_press = self.folders.page_press.take();
+        if self.editing
+            && page_press
+                .as_ref()
+                .is_some_and(|press| !press.moved_past_slop(x, y))
+            && matches!(
+                self.folder_hit_target(x, y),
+                Some(HitTarget::FolderPanel { .. })
+            )
+        {
+            self.exit_edit_mode();
+        }
     }
 
     fn settle_folder_page(&mut self, page: usize) {

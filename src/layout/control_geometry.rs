@@ -56,6 +56,18 @@ pub const BOTTOM_MARGIN: f32 = 30.0;
 /// Caret blink cycle length (seconds). ~1.07s is the classic text-edit blink.
 pub const CARET_BLINK_PERIOD: f32 = 1.07;
 
+/// Shared text-caret visibility used by both the search field and folder
+/// rename editor. Keeping one phase curve prevents the two editors from
+/// feeling like unrelated controls.
+pub fn caret_blink_opacity(phase: f32) -> f32 {
+    let phase = phase.rem_euclid(CARET_BLINK_PERIOD);
+    if phase < CARET_BLINK_PERIOD * 0.56 {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 // ---- state / visual enums ---------------------------------------------------
 
 /// Coarse logical state used for hit-testing and event routing.
@@ -639,6 +651,14 @@ mod tests {
             },
             0.0,
         )
+    }
+
+    #[test]
+    fn shared_caret_blink_has_visible_and_hidden_phases() {
+        assert_eq!(caret_blink_opacity(0.0), 1.0);
+        assert_eq!(caret_blink_opacity(CARET_BLINK_PERIOD * 0.55), 1.0);
+        assert_eq!(caret_blink_opacity(CARET_BLINK_PERIOD * 0.75), 0.0);
+        assert_eq!(caret_blink_opacity(CARET_BLINK_PERIOD), 1.0);
     }
 
     #[test]

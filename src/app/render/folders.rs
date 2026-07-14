@@ -373,6 +373,8 @@ impl App {
                 let total_width = text.measure_text_weighted(&visible_spec, weight);
                 let prefix_width = text.measure_text_weighted(&prefix_spec, weight);
                 let caret_x = title_view.rect.center().x - total_width * 0.5 + prefix_width;
+                let caret_opacity =
+                    crate::layout::control_geometry::caret_blink_opacity(self.control.caret_phase);
                 if let Some(batch) = model
                     .result
                     .render
@@ -387,7 +389,7 @@ impl App {
                             title_view.rect.center().y,
                         ),
                         extent: 10.0 * self.scale_factor,
-                        opacity: 0.95,
+                        opacity: 0.95 * caret_opacity,
                         scene_blur: 0.0,
                         stroke: 1.0 * self.scale_factor,
                         corner_radius: 1.0 * self.scale_factor,

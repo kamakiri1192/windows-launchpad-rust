@@ -552,10 +552,5 @@ fn caret_visibility(control: &bottom_control::BottomControl) -> f32 {
     if !matches!(control.mode, bottom_control::Mode::Field) {
         return 1.0;
     }
-    let phase = control.caret_phase % 1.06;
-    if phase < 0.6 {
-        1.0
-    } else {
-        0.0
-    }
+    crate::layout::control_geometry::caret_blink_opacity(control.caret_phase)
 }

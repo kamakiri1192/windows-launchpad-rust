@@ -291,6 +291,35 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 z: 125,
             });
         }
+        if input.editing && !dragged && title_alpha > 0.001 {
+            let radius = crate::layout::grid::edit_badge_radius_for_tile_size(rect.width);
+            let inset = radius * crate::layout::edit_mode::BADGE_CENTER_INSET_FRAC;
+            let center = Point::new(rect.x + inset, rect.y + inset);
+            modal_ink.push(InkView {
+                id: UiId::folder_child_badge(input.folder_key, child.key),
+                center,
+                extent: radius * 1.05,
+                opacity: 0.88 * title_alpha,
+                scene_blur: 0.0,
+                stroke: radius * 1.05,
+                corner_radius: radius * 1.05,
+                color: Color::rgba(0.24, 0.25, 0.28, 1.0),
+                kind: ControlKind::RowBackground,
+                z: 142,
+            });
+            modal_ink.push(InkView {
+                id: UiId::folder_child_badge(input.folder_key, child.key),
+                center,
+                extent: radius * 0.78,
+                opacity: 0.96 * title_alpha,
+                scene_blur: 0.0,
+                stroke: (radius * 0.13).max(1.4 * scale),
+                corner_radius: 0.0,
+                color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                kind: ControlKind::CloseButton,
+                z: 143,
+            });
+        }
     }
     if let Some(tile) = dragged_tile {
         modal_tiles.push(tile);
@@ -358,6 +387,32 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                     HitTarget::folder_child(input.folder_key, child.key, global_index),
                     140,
                 ));
+                if input.editing && input.dragged_child_key != Some(child.key) {
+                    let radius = crate::layout::grid::edit_badge_radius_for_tile_size(rect.width);
+                    let inset = radius * crate::layout::edit_mode::BADGE_CENTER_INSET_FRAC;
+                    let hit_radius = radius + 6.0 * scale;
+                    let center = Point::new(rect.x + inset, rect.y + inset);
+                    if let Some(badge_rect) = intersect_rect(
+                        Rect::new(
+                            center.x - hit_radius,
+                            center.y - hit_radius,
+                            hit_radius * 2.0,
+                            hit_radius * 2.0,
+                        ),
+                        target,
+                    ) {
+                        hits.push(HitRegion::new(
+                            UiId::folder_child_badge(input.folder_key, child.key),
+                            badge_rect,
+                            HitTarget::folder_child_badge(
+                                input.folder_key,
+                                child.key,
+                                global_index,
+                            ),
+                            150,
+                        ));
+                    }
+                }
             }
         }
         if page_count > 1 {
@@ -752,6 +807,34 @@ mod tests {
             wiggle_phase: 1.25,
             dragged_child_key: None,
         });
+        let radius =
+            crate::layout::grid::edit_badge_radius_for_tile_size(value.child_rects[0].width);
+        let inset = radius * crate::layout::edit_mode::BADGE_CENTER_INSET_FRAC;
+        let badge_point = Point::new(
+            value.child_rects[0].x + inset,
+            value.child_rects[0].y + inset,
+        );
+        assert!(matches!(
+            value
+                .result
+                .hits
+                .hit_test(badge_point)
+                .map(|hit| &hit.target),
+            Some(HitTarget::FolderChildBadge { child, index: 0, .. }) if child == "id-0"
+        ));
+        let badge_id = UiId::folder_child_badge("folder-0", "id-0");
+        let badge_ink_count = value
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Modal)
+            .unwrap()
+            .views
+            .iter()
+            .filter(|view| view.id == badge_id)
+            .count();
+        assert_eq!(badge_ink_count, 2, "badge disk and close glyph");
         let tiles = value.result.render.modal_tiles.unwrap();
         assert!(tiles
             .iter()

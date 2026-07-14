@@ -16,10 +16,14 @@ const MOTION_EPS: f32 = 0.001;
 const MAX_STEP: f32 = 1.0 / 120.0;
 const CHILD_DRAG_SLOP: f32 = 8.0;
 
-/// Live top-level reordering pauses while the pointer resolves to another
-/// stable item so the folder hover timer can reach its threshold.
-pub fn top_level_reorder_allowed(hover_candidate: Option<&LauncherItem>) -> bool {
-    hover_candidate.is_none()
+/// A completed folder dwell owns the drop. Before the dwell completes, normal
+/// reordering may still win after the pointer crosses the target's far-side
+/// threshold; the layout layer enforces that geometric threshold.
+pub fn top_level_reorder_allowed(
+    hover_candidate: Option<&LauncherItem>,
+    hover_ready: bool,
+) -> bool {
+    hover_candidate.is_none() || !hover_ready
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -517,9 +521,10 @@ mod tests {
     fn stable_folder_hover_suspends_normal_top_level_reorder() {
         let app_target = LauncherItem::App(app("target"));
         let folder_target = LauncherItem::Folder(FolderId::generate(1));
-        assert!(!top_level_reorder_allowed(Some(&app_target)));
-        assert!(!top_level_reorder_allowed(Some(&folder_target)));
-        assert!(top_level_reorder_allowed(None));
+        assert!(top_level_reorder_allowed(Some(&app_target), false));
+        assert!(top_level_reorder_allowed(Some(&folder_target), false));
+        assert!(!top_level_reorder_allowed(Some(&app_target), true));
+        assert!(top_level_reorder_allowed(None, false));
     }
 
     #[test]

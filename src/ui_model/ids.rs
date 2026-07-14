@@ -38,6 +38,14 @@ impl UiId {
         ))
     }
 
+    pub fn folder_child_badge(folder: impl AsRef<str>, child: impl AsRef<str>) -> Self {
+        Self::new(format!(
+            "folder-child-badge:{}:{}",
+            folder.as_ref(),
+            child.as_ref()
+        ))
+    }
+
     pub fn folder_page(key: impl AsRef<str>, page: usize) -> Self {
         Self::new(format!("folder-page:{}:{page}", key.as_ref()))
     }

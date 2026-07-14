@@ -56,9 +56,16 @@ impl App {
         // resolve to the dragged item itself and continuously reset the
         // app-on-app / app-on-folder hover timer.
         let hover_candidate = self.folder_hover_candidate_at_pointer();
+        let hover_ready =
+            self.folders.hover.as_ref().is_some_and(|hover| {
+                hover_candidate.as_ref() == Some(&hover.target) && hover.ready()
+            });
         if self.editing
             && self.drag_item.is_some()
-            && crate::features::folders::top_level_reorder_allowed(hover_candidate.as_ref())
+            && crate::features::folders::top_level_reorder_allowed(
+                hover_candidate.as_ref(),
+                hover_ready,
+            )
         {
             self.live_reorder();
         }

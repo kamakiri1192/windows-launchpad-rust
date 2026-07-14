@@ -20,6 +20,11 @@ pub enum HitTarget {
         child: String,
         index: usize,
     },
+    FolderChildBadge {
+        folder: String,
+        child: String,
+        index: usize,
+    },
     FolderPagePrevious {
         key: String,
     },
@@ -62,6 +67,18 @@ impl HitTarget {
 
     pub fn folder_child(folder: impl Into<String>, child: impl Into<String>, index: usize) -> Self {
         Self::FolderChild {
+            folder: folder.into(),
+            child: child.into(),
+            index,
+        }
+    }
+
+    pub fn folder_child_badge(
+        folder: impl Into<String>,
+        child: impl Into<String>,
+        index: usize,
+    ) -> Self {
+        Self::FolderChildBadge {
             folder: folder.into(),
             child: child.into(),
             index,
