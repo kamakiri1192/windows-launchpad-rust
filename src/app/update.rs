@@ -346,6 +346,7 @@ impl App {
         if self.drag_item.is_some() {
             self.drag_x = self.pointer_phys_x;
             self.drag_y = self.pointer_phys_y;
+            self.refresh_dragged_folder_glass_position();
             let hover_candidate = self.folder_hover_candidate_at_pointer();
             let hover_ready = self.folders.hover.as_ref().is_some_and(|hover| {
                 hover_candidate.as_ref() == Some(&hover.target) && hover.ready()

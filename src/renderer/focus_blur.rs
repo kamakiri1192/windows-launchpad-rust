@@ -246,11 +246,27 @@ impl FocusBlurRenderer {
     }
 
     /// Run a strong three-level Dual-Kawase blur over the completed lower scene.
-    pub(super) fn blur(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        for i in 0..3 {
+    pub(super) fn blur(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        profiler: &mut super::gpu_profile::GpuProfilerState,
+    ) {
+        const DOWN_LABELS: [&str; 3] = [
+            "focus_blur_downsample_1",
+            "focus_blur_downsample_2",
+            "focus_blur_downsample_3",
+        ];
+        const UP_LABELS: [&str; 3] = [
+            "focus_blur_upsample_1",
+            "focus_blur_upsample_2",
+            "focus_blur_upsample_3",
+        ];
+        for (i, label) in DOWN_LABELS.into_iter().enumerate() {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("focus blur downsample encoder"),
             });
+            let profile_scope = profiler.begin(label, &mut encoder);
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("focus blur downsample pass"),
@@ -272,9 +288,11 @@ impl FocusBlurRenderer {
                 pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
                 pass.draw(0..3, 0..1);
             }
+            profiler.end(&mut encoder, profile_scope);
+            profiler.resolve(&mut encoder);
             queue.submit(std::iter::once(encoder.finish()));
         }
-        for j in 0..3 {
+        for (j, label) in UP_LABELS.into_iter().enumerate() {
             let destination = if j == 2 {
                 &self.blur_view
             } else {
@@ -283,6 +301,7 @@ impl FocusBlurRenderer {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("focus blur upsample encoder"),
             });
+            let profile_scope = profiler.begin(label, &mut encoder);
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("focus blur upsample pass"),
@@ -304,6 +323,8 @@ impl FocusBlurRenderer {
                 pass.set_bind_group(0, &self.blur_up_bind_groups[j], &[]);
                 pass.draw(0..3, 0..1);
             }
+            profiler.end(&mut encoder, profile_scope);
+            profiler.resolve(&mut encoder);
             queue.submit(std::iter::once(encoder.finish()));
         }
     }

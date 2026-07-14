@@ -32,7 +32,9 @@
   "actions": [
     { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
     { "at_ms": 100, "type": "pointer_down" },
-    { "at_ms": 950, "type": "move", "target": { "kind": "point", "x": 760.0, "y": 520.0 } },
+    { "at_ms": 950, "type": "move", "target": { "kind": "point", "x": 440.0, "y": 360.0 } },
+    { "at_ms": 1100, "type": "move", "target": { "kind": "point", "x": 600.0, "y": 440.0 } },
+    { "at_ms": 1250, "type": "move", "target": { "kind": "point", "x": 760.0, "y": 520.0 } },
     { "at_ms": 1450, "type": "pointer_up" },
     { "at_ms": 2000, "type": "escape" }
   ]

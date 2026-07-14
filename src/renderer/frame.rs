@@ -92,6 +92,7 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
+        let profile_scope = self.gpu_profiler.begin("lower_scene_clear", &mut encoder);
         {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lower scene clear pass"),
@@ -116,7 +117,9 @@ impl Renderer {
             });
             drop(pass);
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        let profile_scope = self.gpu_profiler.begin("base_liquid_glass", &mut encoder);
         self.liquid_glass.render(
             &self.device,
             &self.queue,
@@ -125,6 +128,7 @@ impl Renderer {
             args.scroll_x,
             args.defer_backdrop_capture,
         );
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
         let instance_count = self.instance_buffer.len();
         let icon_instance_count = self.icon_instance_buffer.len();
@@ -138,6 +142,7 @@ impl Renderer {
         let drag_icon_active = dragged_icon_count > 0;
         let normal_icon_count = icon_instance_count - dragged_icon_count;
 
+        let profile_scope = self.gpu_profiler.begin("grid_tile_fill", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tile fill pass"),
@@ -167,7 +172,9 @@ impl Renderer {
                 pass.draw(0..6, 0..normal_tile_count);
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        let profile_scope = self.gpu_profiler.begin("folder_grid_glass", &mut encoder);
         self.liquid_glass.render_grid_overlay(
             &self.queue,
             &mut encoder,
@@ -175,7 +182,9 @@ impl Renderer {
             args.scroll_x,
             args.time,
         );
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        let profile_scope = self.gpu_profiler.begin("grid_icons_text", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("grid icon and text pass"),
@@ -216,6 +225,7 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Edit badges sit above the normal grid but below the lifted dragged
         // icon. The bottom control remains a later, screen-fixed overlay.
@@ -233,6 +243,7 @@ impl Renderer {
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
             }),
         );
+        let profile_scope = self.gpu_profiler.begin("edit_badge_glass", &mut encoder);
         self.liquid_glass.render_badges(
             &self.queue,
             &mut encoder,
@@ -240,6 +251,8 @@ impl Renderer {
             args.scroll_x,
             args.time,
         );
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+        let profile_scope = self.gpu_profiler.begin("edit_badge_ink", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("edit badge foreground pass"),
@@ -266,7 +279,11 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        let profile_scope = self
+            .gpu_profiler
+            .begin("top_level_drag_overlay", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("drag overlay pass"),
@@ -305,10 +322,16 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        let profile_scope = self
+            .gpu_profiler
+            .begin("control_liquid_glass", &mut encoder);
         self.liquid_glass
             .render_control(&self.queue, &mut encoder, scene_view);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        let profile_scope = self.gpu_profiler.begin("control_content", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("control overlay pass"),
@@ -352,24 +375,32 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Finish the complete lower scene before any blur pass samples it.
         // The pyramid uses separate submissions because wgpu/D3D12 cannot
         // read and write successive levels inside one texture usage scope.
+        self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
         if focus_blur_params.strength > 0.001 {
-            self.focus_blur.blur(&self.device, &self.queue);
+            self.focus_blur
+                .blur(&self.device, &self.queue, &mut self.gpu_profiler);
         }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("modal and focus encoder"),
             });
+        let profile_scope = self
+            .gpu_profiler
+            .begin("focus_blur_composite", &mut encoder);
         self.focus_blur
             .composite(&self.queue, &mut encoder, &view, focus_blur_params);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Generic modal focus tint. The lower-scene blur has already replaced
         // sharp grid content inside the same rounded geometry.
+        let profile_scope = self.gpu_profiler.begin("focus_veil_tint", &mut encoder);
         if self.backdrop_instance_buffer.len() > 0 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("modal backdrop pass"),
@@ -394,13 +425,17 @@ impl Renderer {
                 pass.draw(0..6, 0..self.backdrop_instance_buffer.len());
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Generic dynamic modal Liquid Glass surface.
+        let profile_scope = self.gpu_profiler.begin("modal_liquid_glass", &mut encoder);
         self.liquid_glass
             .render_settings_panel(&self.queue, &mut encoder, &view);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Generic fixed modal content, plus settings-specific content, on top
         // of the modal glass.
+        let profile_scope = self.gpu_profiler.begin("modal_content", &mut encoder);
         if self.modal_tile_instance_buffer.len() > 0
             || self.modal_icon_instance_buffer.len() > 0
             || self.modal_instance_buffer.len() > 0
@@ -584,8 +619,11 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.gpu_profiler.finish_frame(&self.queue);
 
         // Optional QA self-capture: copy the surface texture to a host-readable
         // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.

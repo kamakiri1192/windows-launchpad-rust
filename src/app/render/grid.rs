@@ -295,6 +295,26 @@ impl App {
         })
     }
 
+    /// Keep the CPU-authored Liquid Glass surface in lockstep with the
+    /// pointer-driven miniature icons. The icons follow `drag_pos` in their
+    /// vertex shader, while glass geometry is stored in the render model, so
+    /// pointer moves that do not trigger a reorder must update this one surface
+    /// without forcing a full relayout.
+    pub(crate) fn refresh_dragged_folder_glass_position(&mut self) {
+        let Some(surface) = self.dragged_folder_glass_surface() else {
+            return;
+        };
+        let Some(batch) = self
+            .render_model
+            .glass
+            .iter_mut()
+            .find(|batch| batch.layer == GlassLayer::GridOverlay)
+        else {
+            return;
+        };
+        upsert_glass_surface(&mut batch.surfaces, surface);
+    }
+
     pub(crate) fn refresh_interaction_glass(&mut self) {
         self.interaction_glass = self.build_interaction_glass();
     }
@@ -420,6 +440,14 @@ fn suppress_folder_preview_icons(icons: &mut Vec<IconView>, folder_key: &str) {
     icons.retain(|icon| !preview_ids.contains(&icon.id));
 }
 
+fn upsert_glass_surface(surfaces: &mut Vec<GlassSurface>, surface: GlassSurface) {
+    if let Some(current) = surfaces.iter_mut().find(|current| current.id == surface.id) {
+        *current = surface;
+    } else {
+        surfaces.push(surface);
+    }
+}
+
 fn align_glass_to_tiles(surfaces: &mut [GlassSurface], tiles: &[TileView]) {
     for surface in surfaces
         .iter_mut()
@@ -529,6 +557,23 @@ mod tests {
 
         let app = LauncherItem::App(AppId::from_normalized("app"));
         assert_eq!(launcher_item_tile_flags(&app), 0);
+    }
+
+    #[test]
+    fn dragged_folder_glass_move_replaces_the_surface_without_duplicating_it() {
+        let id = UiId::backdrop("dragged-folder-glass");
+        let surface = |x| GlassSurface {
+            id: id.clone(),
+            rect: Rect::new(x, 20.0, 100.0, 100.0),
+            radius: 19.0,
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::Control,
+            z: 22,
+        };
+        let mut surfaces = vec![surface(10.0)];
+        upsert_glass_surface(&mut surfaces, surface(240.0));
+        assert_eq!(surfaces.len(), 1);
+        assert_eq!(surfaces[0].rect.x, 240.0);
     }
 
     #[test]

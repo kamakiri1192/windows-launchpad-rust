@@ -74,10 +74,12 @@ impl Renderer {
             .await
             .map_err(|e| format!("no suitable GPU adapter: {e}"))?;
 
+        let required_features =
+            super::gpu_profile::GpuProfilerState::required_features(adapter.features());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("launchpad device"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 // `downlevel_defaults()` caps the max texture dimension at
                 // 2048, which high-DPI windows easily exceed (e.g. a 150%
                 // scale 1920x1080 window becomes 2880x1620). Use the full
@@ -436,6 +438,7 @@ impl Renderer {
         );
         let focus_blur =
             FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
+        let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
         // Small viewport-only uniform shared by the control shape + text
@@ -592,6 +595,7 @@ impl Renderer {
             surface_format,
             liquid_glass,
             focus_blur,
+            gpu_profiler,
             text_pipeline,
             text_instance_buffer: InstanceBuffer::new("text instance buffer"),
             atlas_texture,

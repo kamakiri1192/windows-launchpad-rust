@@ -25,6 +25,7 @@ pub(crate) mod controls;
 mod counters;
 mod focus_blur;
 mod frame;
+mod gpu_profile;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
 mod icons;
@@ -70,6 +71,7 @@ pub struct Renderer {
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
+    gpu_profiler: gpu_profile::GpuProfilerState,
 
     // -- Text rendering -------------------------------------------------
     text_pipeline: RenderPipeline,
