@@ -42,7 +42,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 
 動画エンコーダーを必須依存にせず、CI では連番 PNG を画像差分や artifact として扱えます。
 
-連番QAは各キャプチャでGPU readbackを行うため、絶対的なGPU負荷やフレーム時間のベンチマークには使用しません。状態遷移、入力追従誤差、相対的なフレーム変化の確認に限定し、GPUパス別の性能分析は [GPU / フレームプロファイリング導入検討](PROFILING_EVALUATION.md) に従います。
+連番QAは各キャプチャでGPU readbackを行うため、絶対的なGPU負荷やフレーム時間のベンチマークには使用しません。状態遷移、入力追従誤差、相対的なフレーム変化の確認に限定し、CPU/GPUの外形監視とGPUパス別の性能分析は [GPU / CPU パフォーマンス計測ガイド](PROFILING_EVALUATION.md) に従います。
 
 ## シナリオ形式
 
