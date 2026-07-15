@@ -171,6 +171,23 @@ pub enum ReleaseAction {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FolderCursorLeftIntent {
+    None,
+    ClearPointer,
+    ExitEditMode,
+}
+
+fn folder_cursor_left_intent(editing: bool, folder_gesture_active: bool) -> FolderCursorLeftIntent {
+    if !folder_gesture_active {
+        FolderCursorLeftIntent::None
+    } else if editing {
+        FolderCursorLeftIntent::ExitEditMode
+    } else {
+        FolderCursorLeftIntent::ClearPointer
+    }
+}
+
 /// Classify a keyboard event into a [`KeyAction`], mirroring the historical
 /// `WindowEvent::KeyboardInput` precedence exactly:
 ///
@@ -744,7 +761,34 @@ impl App {
         if dragging {
             self.handle_drag_end();
         }
-        if self.editing && self.drag_item.is_some() {
+        let folder_gesture_active = self.folders.child_exit_preview.is_some()
+            || self.folders.child_drag.is_some()
+            || self.folders.pressed_child.is_some();
+        let folder_intent = folder_cursor_left_intent(self.editing, folder_gesture_active);
+        let folder_gesture_handled = folder_intent != FolderCursorLeftIntent::None;
+        match folder_intent {
+            FolderCursorLeftIntent::ExitEditMode => {
+                if self.cancel_folder_child_exit_preview() {
+                    self.drag_item = None;
+                }
+                self.folders.clear_child_pointer();
+                self.exit_edit_mode();
+            }
+            FolderCursorLeftIntent::ClearPointer => {
+                let cancelled_preview = self.cancel_folder_child_exit_preview();
+                if cancelled_preview {
+                    self.drag_item = None;
+                }
+                self.folders.clear_child_pointer();
+                if cancelled_preview {
+                    self.relayout();
+                } else {
+                    self.request_redraw();
+                }
+            }
+            FolderCursorLeftIntent::None => {}
+        }
+        if !folder_gesture_handled && self.editing && self.drag_item.is_some() {
             self.commit_reorder();
             self.drag_item = None;
             if self.folders.hover_opened.is_some() {
@@ -752,11 +796,6 @@ impl App {
             }
             self.folders.hover = None;
             self.relayout();
-        }
-        if self.folders.child_drag.is_some() || self.folders.pressed_child.is_some() {
-            self.folders.clear_child_pointer();
-            self.editing = false;
-            self.request_redraw();
         }
         self.pending_press = None;
         self.pressed_on_control = false;
@@ -890,6 +929,26 @@ mod tests {
     fn esc_with_nothing_open_hides_launcher() {
         let action = kb_action(false, false, false, Some(KeyCode::Escape));
         assert_eq!(action, KeyAction::HideLauncher);
+    }
+
+    #[test]
+    fn cursor_left_routes_active_folder_gesture_through_edit_exit() {
+        assert_eq!(
+            folder_cursor_left_intent(true, true),
+            FolderCursorLeftIntent::ExitEditMode
+        );
+    }
+
+    #[test]
+    fn cursor_left_only_clears_a_non_editing_folder_press() {
+        assert_eq!(
+            folder_cursor_left_intent(false, true),
+            FolderCursorLeftIntent::ClearPointer
+        );
+        assert_eq!(
+            folder_cursor_left_intent(true, false),
+            FolderCursorLeftIntent::None
+        );
     }
 
     #[test]
