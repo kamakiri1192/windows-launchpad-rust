@@ -131,6 +131,12 @@ fn tile_instance(view: &TileView, index: usize) -> TileInstance {
     }
 }
 
+fn has_trailing_drag_tile(instances: &[TileInstance]) -> bool {
+    instances.last().is_some_and(|instance| {
+        instance.extra[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
+    })
+}
+
 fn icon_instance(view: &IconView) -> Option<IconInstance> {
     let IconSource::AtlasUv(uv) = view.source else {
         return None;
@@ -250,6 +256,7 @@ impl Renderer {
                 .enumerate()
                 .map(|(index, view)| tile_instance(view, index))
                 .collect();
+            self.top_level_dragged_tile_instance = has_trailing_drag_tile(&instances);
             set_instances(
                 &self.device,
                 &self.queue,
@@ -291,9 +298,7 @@ impl Renderer {
                 .enumerate()
                 .map(|(index, view)| tile_instance(view, index))
                 .collect();
-            self.modal_dragged_tile_instance = instances.last().is_some_and(|instance| {
-                instance.extra[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
-            });
+            self.modal_dragged_tile_instance = has_trailing_drag_tile(&instances);
             self.prepare_modal_edit_badges(
                 &instances,
                 self.modal_clip_rect
@@ -589,5 +594,26 @@ mod tests {
             [0.1, 0.2, 0.3, 0.4]
         );
         assert_eq!(packed.color, [0.5, 0.6, 0.7, 0.8]);
+    }
+
+    #[test]
+    fn top_level_drag_lane_requires_a_trailing_drag_tile() {
+        let ordinary = TileInstance {
+            x: 0.0,
+            y: 0.0,
+            size: 84.0,
+            radius: 19.0,
+            r: 0.2,
+            g: 0.3,
+            b: 0.4,
+            icon_index: 0.0,
+            extra: [0.0; 4],
+        };
+        let mut dragged = ordinary;
+        dragged.extra[3] = crate::ui_model::grid::TileAnim::FLAG_DRAG as f32;
+
+        assert!(!has_trailing_drag_tile(&[]));
+        assert!(!has_trailing_drag_tile(&[ordinary]));
+        assert!(has_trailing_drag_tile(&[ordinary, dragged]));
     }
 }

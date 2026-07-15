@@ -588,6 +588,7 @@ impl Renderer {
             pipeline,
             decorated: false,
             instance_buffer: InstanceBuffer::new("instance buffer"),
+            top_level_dragged_tile_instance: false,
             modal_tile_instance_buffer: InstanceBuffer::new("modal tile instance buffer"),
             modal_dragged_tile_instance: false,
             uniform_buffer,

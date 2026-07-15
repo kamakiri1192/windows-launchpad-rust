@@ -61,6 +61,10 @@ pub struct Renderer {
     decorated: bool,
     /// Static per-tile instance data (capacity-managed; see `resources`).
     instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
+    /// Whether the trailing top-level tile belongs to the lifted drag lane.
+    /// A modal folder-child drag also sets the global drag uniform, but must
+    /// not withhold an unrelated top-level tile from the normal pass.
+    top_level_dragged_tile_instance: bool,
     modal_tile_instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
     modal_dragged_tile_instance: bool,
     /// Per-frame uniform data (viewport + scroll).

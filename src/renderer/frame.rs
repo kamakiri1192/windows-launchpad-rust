@@ -133,8 +133,8 @@ impl Renderer {
 
         let instance_count = self.instance_buffer.len();
         let icon_instance_count = self.icon_instance_buffer.len();
-        let drag_active = args.drag_active > 0.5 && instance_count > 0;
-        let normal_tile_count = if drag_active {
+        let top_level_drag_active = self.top_level_dragged_tile_instance && instance_count > 0;
+        let normal_tile_count = if top_level_drag_active {
             instance_count - 1
         } else {
             instance_count
@@ -310,7 +310,7 @@ impl Renderer {
                 multiview_mask: None,
             });
 
-            if drag_active {
+            if top_level_drag_active {
                 let stride = std::mem::size_of::<TileInstance>() as wgpu::BufferAddress;
                 let offset = stride * normal_tile_count as wgpu::BufferAddress;
                 pass.set_pipeline(&self.pipeline);
