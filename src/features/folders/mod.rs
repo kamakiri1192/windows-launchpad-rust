@@ -335,6 +335,7 @@ impl ChildDrag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildExitPreview {
     pub source_folder: FolderId,
+    app_id: AppId,
     launcher_state: LauncherState,
 }
 
@@ -345,6 +346,7 @@ impl ChildExitPreview {
             .move_child_to_top_level(&drag.folder_id, &drag.app_id, insert_index)
             .then(|| Self {
                 source_folder: drag.folder_id.clone(),
+                app_id: drag.app_id.clone(),
                 launcher_state,
             })
     }
@@ -357,8 +359,29 @@ impl ChildExitPreview {
         &mut self.launcher_state
     }
 
-    pub fn into_launcher_state(self) -> LauncherState {
-        self.launcher_state
+    /// Apply the previewed transaction to the latest durable state. Work on a
+    /// clone so a failed commit leaves the target untouched, and reorder only
+    /// the preview's known items so discovery updates that arrived during the
+    /// drag retain their slots.
+    pub fn commit_into(self, target: &mut LauncherState) -> bool {
+        let mut staged = target.clone();
+        let source_item = LauncherItem::Folder(self.source_folder.clone());
+        let insert_index = staged
+            .items
+            .iter()
+            .position(|item| item == &source_item)
+            .unwrap_or(staged.items.len());
+        if !staged.move_child_to_top_level(&self.source_folder, &self.app_id, insert_index) {
+            return false;
+        }
+
+        let preview_order = self.launcher_state.items;
+        if !preview_order.iter().all(|item| staged.items.contains(item)) {
+            return false;
+        }
+        staged.reorder_visible_items(&preview_order, preview_order.clone());
+        *target = staged;
+        true
     }
 }
 
@@ -737,6 +760,37 @@ mod tests {
                 .get(&drag.folder_id)
                 .unwrap()
                 .children,
+            vec![app("b"), app("c")]
+        );
+    }
+
+    #[test]
+    fn child_exit_commit_preserves_items_added_after_preview_started() {
+        let folder_id = FolderId::generate(0);
+        let mut durable = LauncherState::new();
+        let mut folder = crate::domain::folders::Folder::new(folder_id.clone(), "Folder");
+        folder.children = vec![app("a"), app("b"), app("c")];
+        durable.items.push(LauncherItem::Folder(folder_id.clone()));
+        durable.items.push(LauncherItem::App(app("existing")));
+        durable.folders.insert(folder_id.clone(), folder);
+        let drag = ChildDrag {
+            folder_id,
+            app_id: app("a"),
+            origin_index: 0,
+            preview_order: vec![app("a"), app("b"), app("c")],
+        };
+        let preview = ChildExitPreview::begin(&durable, &drag, 0).expect("valid child exit");
+        durable
+            .items
+            .push(LauncherItem::App(app("discovered-late")));
+
+        assert!(preview.commit_into(&mut durable));
+        assert!(durable
+            .items
+            .contains(&LauncherItem::App(app("discovered-late"))));
+        assert!(durable.items.contains(&LauncherItem::App(app("a"))));
+        assert_eq!(
+            durable.folders.get(&drag.folder_id).unwrap().children,
             vec![app("b"), app("c")]
         );
     }

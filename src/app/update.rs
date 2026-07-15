@@ -676,7 +676,12 @@ impl App {
     }
 
     pub(crate) fn commit_edit_drop(&mut self) {
-        self.commit_folder_child_exit_preview();
+        if self.folders.child_exit_preview.is_some() && !self.commit_folder_child_exit_preview() {
+            self.drag_item = None;
+            self.folders.hover = None;
+            self.relayout();
+            return;
+        }
         let drag = self.drag_item.clone();
         let hover = self.folders.hover.clone();
         let current_hover_target = self.folder_hover_candidate_at_pointer();
@@ -1057,8 +1062,13 @@ impl App {
         let Some(preview) = self.folders.take_child_exit_preview() else {
             return false;
         };
-        self.launcher_state = preview.into_launcher_state();
-        true
+        let source_folder = preview.source_folder.clone();
+        if preview.commit_into(&mut self.launcher_state) {
+            true
+        } else {
+            self.folders.open(source_folder);
+            false
+        }
     }
 
     pub(crate) fn cancel_folder_child_exit_preview(&mut self) -> bool {
