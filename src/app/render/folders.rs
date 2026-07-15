@@ -94,6 +94,13 @@ impl App {
                 .as_ref()
                 .filter(|drag| drag.folder_id == folder_id)
                 .map(|drag| drag.preview_order.clone())
+                .or_else(|| {
+                    self.folders
+                        .child_exit_preview
+                        .as_ref()
+                        .filter(|preview| preview.source_folder == folder_id)
+                        .map(|preview| preview.source_children_without_dragged(&folder.children))
+                })
                 .unwrap_or_else(|| folder.children.clone());
             let dragged_key = self
                 .folders

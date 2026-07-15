@@ -359,6 +359,14 @@ impl ChildExitPreview {
         &mut self.launcher_state
     }
 
+    pub fn source_children_without_dragged(&self, children: &[AppId]) -> Vec<AppId> {
+        children
+            .iter()
+            .filter(|child| *child != &self.app_id)
+            .cloned()
+            .collect()
+    }
+
     /// Apply the previewed transaction to the latest durable state. Work on a
     /// clone so a failed commit leaves the target untouched, and reorder only
     /// the preview's known items so discovery updates that arrived during the
@@ -760,6 +768,10 @@ mod tests {
                 .get(&drag.folder_id)
                 .unwrap()
                 .children,
+            vec![app("b"), app("c")]
+        );
+        assert_eq!(
+            preview.source_children_without_dragged(&[app("a"), app("b"), app("c")]),
             vec![app("b"), app("c")]
         );
     }
