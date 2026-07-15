@@ -10,6 +10,17 @@ const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[test]
+fn blur_downsample_preserves_constant_color_energy() {
+    const NORMALIZATION: f32 = 1.0 / 8.0;
+    let constant_output = (4.0 * 0.5 + 4.0 * 1.0 + 4.0 * 0.25 + 1.0) * NORMALIZATION;
+    assert!((constant_output - 1.0).abs() < f32::EPSILON);
+
+    let shader = include_str!("../assets/shaders/liquid_glass_blur_downsample.wgsl");
+    assert!(shader.contains("const KERNEL_NORMALIZATION: f32 = 1.0 / 8.0;"));
+    assert_eq!(shader.matches("KERNEL_NORMALIZATION").count(), 5);
+}
+
 const TILE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32, 4 => Float32x4];
 const TILE_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
     array_stride: 48,
