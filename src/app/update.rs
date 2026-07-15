@@ -287,6 +287,9 @@ impl App {
         if !self.editing {
             return;
         }
+        if self.cancel_folder_child_exit_preview() {
+            self.drag_item = None;
+        }
         let mut state = self.edit_mode_state();
         // If a drag was in flight, finalize it as a drop at the current cell.
         let commit_commands = if state.drag_item.is_some() {
@@ -519,7 +522,13 @@ impl App {
         else {
             return;
         };
-        self.launcher_state.reorder_visible_items(&visible, order);
+        if let Some(preview) = self.folders.child_exit_preview.as_mut() {
+            preview
+                .launcher_state_mut()
+                .reorder_visible_items(&visible, order);
+        } else {
+            self.launcher_state.reorder_visible_items(&visible, order);
+        }
         self.relayout();
     }
 
@@ -667,6 +676,7 @@ impl App {
     }
 
     pub(crate) fn commit_edit_drop(&mut self) {
+        self.commit_folder_child_exit_preview();
         let drag = self.drag_item.clone();
         let hover = self.folders.hover.clone();
         let current_hover_target = self.folder_hover_candidate_at_pointer();
@@ -1024,12 +1034,14 @@ impl App {
             .iter()
             .position(|item| item == &source_item)
             .unwrap_or(self.launcher_state.items.len());
-        if !self
-            .launcher_state
-            .move_child_to_top_level(&drag.folder_id, &drag.app_id, insert_index)
-        {
+        let Some(preview) = crate::features::folders::ChildExitPreview::begin(
+            &self.launcher_state,
+            &drag,
+            insert_index,
+        ) else {
             return false;
-        }
+        };
+        self.folders.child_exit_preview = Some(preview);
 
         self.drag_item = Some(LauncherItem::App(drag.app_id));
         self.drag_x = self.pointer_phys_x;
@@ -1038,6 +1050,22 @@ impl App {
         self.folders.hover = None;
         self.relayout();
         self.request_redraw();
+        true
+    }
+
+    fn commit_folder_child_exit_preview(&mut self) -> bool {
+        let Some(preview) = self.folders.take_child_exit_preview() else {
+            return false;
+        };
+        self.launcher_state = preview.into_launcher_state();
+        true
+    }
+
+    pub(crate) fn cancel_folder_child_exit_preview(&mut self) -> bool {
+        let Some(preview) = self.folders.take_child_exit_preview() else {
+            return false;
+        };
+        self.folders.open(preview.source_folder);
         true
     }
 

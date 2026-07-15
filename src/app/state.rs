@@ -561,12 +561,12 @@ impl App {
     /// Apps not currently discovered are skipped at the render step (no record),
     /// but their position in `items` is retained for re-detection.
     fn ordered_visible_candidate_ids(&self, include_hidden: bool) -> Vec<AppId> {
-        let mut ids: Vec<AppId> = self
-            .launcher_state
+        let launcher_state = self.presentation_launcher_state();
+        let mut ids: Vec<AppId> = launcher_state
             .items
             .iter()
             .filter_map(LauncherItem::as_app_id)
-            .filter(|id| include_hidden || !self.launcher_state.is_hidden(id))
+            .filter(|id| include_hidden || !launcher_state.is_hidden(id))
             .cloned()
             .collect();
         if include_hidden {
@@ -575,8 +575,7 @@ impl App {
             // present, sorted by display name (matching the legacy registry.apps()
             // iteration order for the hidden tail).
             let present: std::collections::HashSet<AppId> = ids.iter().cloned().collect();
-            let mut hidden_extra: Vec<AppId> = self
-                .launcher_state
+            let mut hidden_extra: Vec<AppId> = launcher_state
                 .hidden_apps
                 .iter()
                 .filter(|id| !present.contains(*id))
@@ -625,13 +624,14 @@ impl App {
     /// with a query it intentionally returns flat discovered app results.
     pub(crate) fn grid_items_owned(&self) -> Vec<OwnedGridItem> {
         let query = self.visible_search_query();
+        let launcher_state = self.presentation_launcher_state();
         if !query.trim().is_empty() {
             let include_hidden = self.settings.search_includes_hidden;
             return self
                 .registry
                 .apps()
                 .iter()
-                .filter(|record| include_hidden || !self.launcher_state.is_hidden(&record.app_id))
+                .filter(|record| include_hidden || !launcher_state.is_hidden(&record.app_id))
                 .filter(|record| Self::matches_search(&record.name, &query))
                 .map(|record| {
                     let item = LauncherItem::App(record.app_id.clone());
@@ -646,7 +646,7 @@ impl App {
                 .collect();
         }
 
-        self.launcher_state
+        launcher_state
             .items
             .iter()
             .filter_map(|item| match item {
@@ -661,13 +661,13 @@ impl App {
                     })
                 }
                 LauncherItem::Folder(folder_id) => {
-                    let folder = self.launcher_state.folders.get(folder_id)?;
+                    let folder = launcher_state.folders.get(folder_id)?;
                     let preview_uvs = folder
                         .children
                         .iter()
                         .take(9)
                         .map(|child| {
-                            (!self.launcher_state.is_hidden(child))
+                            (!launcher_state.is_hidden(child))
                                 .then(|| self.registry.get(child).and_then(|record| record.uv))
                                 .flatten()
                         })
@@ -689,6 +689,13 @@ impl App {
             .into_iter()
             .map(|entry| entry.item)
             .collect()
+    }
+
+    pub(crate) fn presentation_launcher_state(&self) -> &LauncherState {
+        self.folders
+            .child_exit_preview
+            .as_ref()
+            .map_or(&self.launcher_state, |preview| preview.launcher_state())
     }
 
     pub(crate) fn visible_app_ids(&self) -> Vec<AppId> {

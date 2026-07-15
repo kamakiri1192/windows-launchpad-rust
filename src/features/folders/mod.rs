@@ -6,6 +6,7 @@
 use crate::domain::app_id::AppId;
 use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
+use crate::domain::launcher_state::LauncherState;
 use crate::ui_model::geometry::{Point, Rect};
 use std::time::Instant;
 
@@ -328,6 +329,39 @@ impl ChildDrag {
     }
 }
 
+/// Transactional top-level presentation created when a held child leaves its
+/// folder. The durable launcher state remains untouched until pointer release;
+/// cancelling the gesture simply discards this clone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildExitPreview {
+    pub source_folder: FolderId,
+    launcher_state: LauncherState,
+}
+
+impl ChildExitPreview {
+    pub fn begin(source: &LauncherState, drag: &ChildDrag, insert_index: usize) -> Option<Self> {
+        let mut launcher_state = source.clone();
+        launcher_state
+            .move_child_to_top_level(&drag.folder_id, &drag.app_id, insert_index)
+            .then(|| Self {
+                source_folder: drag.folder_id.clone(),
+                launcher_state,
+            })
+    }
+
+    pub fn launcher_state(&self) -> &LauncherState {
+        &self.launcher_state
+    }
+
+    pub fn launcher_state_mut(&mut self) -> &mut LauncherState {
+        &mut self.launcher_state
+    }
+
+    pub fn into_launcher_state(self) -> LauncherState {
+        self.launcher_state
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FolderFeatureState {
     pub active: Option<FolderId>,
@@ -343,6 +377,7 @@ pub struct FolderFeatureState {
     pub pressed_child: Option<PressedChild>,
     pub page_press: Option<PagePress>,
     pub child_drag: Option<ChildDrag>,
+    pub child_exit_preview: Option<ChildExitPreview>,
     pub child_page_hover: Option<ChildPageHover>,
     /// A completed edge page change stays latched until the pointer returns to
     /// the neutral center, preventing one hold from racing through all pages.
@@ -510,6 +545,10 @@ impl FolderFeatureState {
         self.child_page_hover = None;
         self.child_page_latched = false;
     }
+
+    pub fn take_child_exit_preview(&mut self) -> Option<ChildExitPreview> {
+        self.child_exit_preview.take()
+    }
 }
 
 #[cfg(test)]
@@ -666,6 +705,40 @@ mod tests {
         assert!(drag.preview_reorder(2));
         assert_eq!(drag.preview_order, vec![app("b"), app("c"), app("a")]);
         assert_eq!(original, vec![app("a"), app("b"), app("c")]);
+    }
+
+    #[test]
+    fn child_exit_preview_does_not_mutate_durable_state_before_commit() {
+        let folder_id = FolderId::generate(0);
+        let mut source = LauncherState::new();
+        let mut folder = crate::domain::folders::Folder::new(folder_id.clone(), "Folder");
+        folder.children = vec![app("a"), app("b"), app("c")];
+        source.items.push(LauncherItem::Folder(folder_id.clone()));
+        source.folders.insert(folder_id.clone(), folder);
+        let durable_before = source.clone();
+        let drag = ChildDrag {
+            folder_id,
+            app_id: app("a"),
+            origin_index: 0,
+            preview_order: vec![app("a"), app("b"), app("c")],
+        };
+
+        let preview = ChildExitPreview::begin(&source, &drag, 0).expect("valid child exit");
+
+        assert_eq!(source, durable_before);
+        assert_eq!(
+            preview.launcher_state().items.first(),
+            Some(&LauncherItem::App(app("a")))
+        );
+        assert_eq!(
+            preview
+                .launcher_state()
+                .folders
+                .get(&drag.folder_id)
+                .unwrap()
+                .children,
+            vec![app("b"), app("c")]
+        );
     }
 
     #[test]
