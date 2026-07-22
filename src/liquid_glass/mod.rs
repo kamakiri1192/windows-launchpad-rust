@@ -10,6 +10,9 @@ pub mod geometry;
 pub mod params;
 pub mod renderer;
 
+#[cfg(target_os = "macos")]
+pub mod macos_capture;
+
 #[cfg(windows)]
 pub mod windows_capture;
 

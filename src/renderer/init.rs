@@ -683,7 +683,13 @@ impl Renderer {
     }
 
     pub fn notify_window_moved(&mut self) {
-        self.liquid_glass.notify_window_moved();
+        if let Ok(position) = self.window.outer_position() {
+            self.liquid_glass.notify_window_moved(
+                position.x,
+                position.y,
+                self.window.scale_factor(),
+            );
+        }
     }
 }
 
@@ -768,11 +774,22 @@ fn create_backdrop_capture(
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = event_proxy;
+        match crate::liquid_glass::macos_capture::create_monitor_capture(window) {
+            Ok(capture) => capture,
+            Err(error) => Box::new(FallbackCapture::new(format!(
+                "ScreenCaptureKit initialization failed: {error}"
+            ))),
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (window, event_proxy);
         Box::new(FallbackCapture::new(
-            "Windows.Graphics.Capture is only available on Windows",
+            "desktop backdrop capture is unavailable on this platform",
         ))
     }
 }

@@ -677,7 +677,7 @@ impl BackdropCapture for WindowsGraphicsCapture {
         }
     }
 
-    fn on_window_moved(&mut self) {
+    fn on_window_moved(&mut self, _x: i32, _y: i32, _scale_factor: f64) {
         use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 
         let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };

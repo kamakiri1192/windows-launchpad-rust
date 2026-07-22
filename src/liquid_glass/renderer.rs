@@ -1057,8 +1057,8 @@ impl LiquidGlassRenderer {
         }
     }
 
-    pub fn notify_window_moved(&mut self) {
-        self.capture.on_window_moved();
+    pub fn notify_window_moved(&mut self, x: i32, y: i32, scale_factor: f64) {
+        self.capture.on_window_moved(x, y, scale_factor);
         self.last_capture_at = None;
     }
 

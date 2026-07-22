@@ -59,6 +59,7 @@ global-hotkey = "0.7.0"
 icns = "0.3.1"
 plist = "1.7.0"
 rusqlite = "0.32"
+screencapturekit = { version = "8.0.1", features = ["macos_14_0"] }
 tray-icon = { version = "0.21.2", default-features = false }
 
 [target.'cfg(windows)'.build-dependencies]

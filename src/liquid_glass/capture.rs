@@ -14,7 +14,7 @@ impl CaptureStatus {
 
 pub trait BackdropCapture {
     fn status(&self) -> CaptureStatus;
-    fn on_window_moved(&mut self) {}
+    fn on_window_moved(&mut self, _x: i32, _y: i32, _scale_factor: f64) {}
     fn latest_frame_texture(
         &mut self,
         _device: &wgpu::Device,

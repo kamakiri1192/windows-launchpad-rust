@@ -402,6 +402,9 @@ impl App {
             }
             AppAction::ScaleFactorChanged { scale_factor } => {
                 self.scale_factor = scale_factor as f32;
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.notify_window_moved();
+                }
                 self.relayout();
                 self.execute_command(AppCommand::RequestRedraw);
             }
