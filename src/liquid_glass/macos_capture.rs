@@ -313,8 +313,8 @@ mod tests {
 
     #[test]
     fn renderer_poll_does_not_wait_for_slow_capture() {
-        let (request_tx, request_rx) = mpsc::sync_channel(1);
-        let (outcome_tx, outcome_rx) = mpsc::sync_channel(1);
+        let (request_tx, request_rx) = mpsc::sync_channel::<CaptureGeometry>(1);
+        let (outcome_tx, outcome_rx) = mpsc::sync_channel::<CaptureOutcome>(1);
         let producer = thread::spawn(move || {
             let request = request_rx.recv().expect("capture request");
             thread::sleep(Duration::from_millis(100));
