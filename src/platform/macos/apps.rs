@@ -20,8 +20,9 @@ const MAX_SCAN_DEPTH: usize = 6;
 /// or system copy with the same identifier.
 pub fn scan_applications() -> BTreeMap<AppId, SnapshotEntry> {
     let mut applications = BTreeMap::new();
+    let preferred_languages = preferred_languages();
     for root in application_roots() {
-        scan_root(&root, &mut applications);
+        scan_root(&root, &preferred_languages, &mut applications);
     }
     applications
 }
@@ -39,7 +40,11 @@ fn application_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn scan_root(root: &Path, applications: &mut BTreeMap<AppId, SnapshotEntry>) {
+fn scan_root(
+    root: &Path,
+    preferred_languages: &[String],
+    applications: &mut BTreeMap<AppId, SnapshotEntry>,
+) {
     let mut pending = VecDeque::from([(root.to_path_buf(), 0usize)]);
     while let Some((directory, depth)) = pending.pop_front() {
         let Ok(children) = std::fs::read_dir(&directory) else {
@@ -54,7 +59,7 @@ fn scan_root(root: &Path, applications: &mut BTreeMap<AppId, SnapshotEntry>) {
                 continue;
             }
             if path.extension().is_some_and(|ext| ext == "app") {
-                if let Some(entry) = snapshot_entry(&path) {
+                if let Some(entry) = snapshot_entry(&path, preferred_languages) {
                     applications.entry(entry.app_id.clone()).or_insert(entry);
                 }
             } else if depth < MAX_SCAN_DEPTH {
@@ -64,7 +69,7 @@ fn scan_root(root: &Path, applications: &mut BTreeMap<AppId, SnapshotEntry>) {
     }
 }
 
-fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
+fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<SnapshotEntry> {
     let (metadata_bundle, info_path) = locate_metadata_bundle(bundle_path)?;
     let info = Value::from_file(&info_path).ok()?;
     let dictionary = info.as_dictionary()?;
@@ -75,6 +80,7 @@ fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
     }
 
     let name = ios_store_name(bundle_path)
+        .or_else(|| localized_bundle_name(&metadata_bundle, preferred_languages))
         .or_else(|| dictionary_string(dictionary, "CFBundleDisplayName").map(str::to_owned))
         .or_else(|| dictionary_string(dictionary, "CFBundleName").map(str::to_owned))
         .or_else(|| {
@@ -107,6 +113,91 @@ fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
         icon_index: 0,
+    })
+}
+
+fn preferred_languages() -> Vec<String> {
+    use objc2_foundation::NSLocale;
+
+    NSLocale::preferredLanguages()
+        .iter()
+        .map(|language| language.to_string())
+        .collect()
+}
+
+fn localized_bundle_name(bundle_path: &Path, preferred_languages: &[String]) -> Option<String> {
+    localized_loctable_value(bundle_path, preferred_languages, "CFBundleDisplayName")
+        .or_else(|| localized_loctable_value(bundle_path, preferred_languages, "CFBundleName"))
+        .or_else(|| localized_info_value(bundle_path, "CFBundleDisplayName"))
+        .or_else(|| localized_info_value(bundle_path, "CFBundleName"))
+}
+
+/// Newer system apps store localized Info.plist values in a binary
+/// `InfoPlist.loctable`. Foundation does not expose those translations when
+/// inspecting another app bundle from this process, so resolve the table using
+/// the same ordered language preferences supplied by `NSLocale`.
+fn localized_loctable_value(
+    bundle_path: &Path,
+    preferred_languages: &[String],
+    key: &str,
+) -> Option<String> {
+    let resources = bundle_path.join("Contents/Resources");
+    let table = Value::from_file(resources.join("InfoPlist.loctable")).ok()?;
+    let localizations = table.as_dictionary()?;
+    for preferred in preferred_languages {
+        for candidate in localization_candidates(preferred) {
+            let Some(values) = dictionary_case_insensitive(localizations, &candidate)
+                .and_then(Value::as_dictionary)
+            else {
+                continue;
+            };
+            if let Some(value) = dictionary_string(values, key) {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn localization_candidates(language: &str) -> Vec<String> {
+    let normalized = language.replace('-', "_");
+    let mut candidates = vec![normalized.clone()];
+    let parts: Vec<&str> = normalized.split('_').collect();
+    if parts
+        .first()
+        .is_some_and(|part| part.eq_ignore_ascii_case("zh"))
+    {
+        if parts.iter().any(|part| part.eq_ignore_ascii_case("Hans")) {
+            candidates.push("zh_CN".to_owned());
+        } else if parts.iter().any(|part| part.eq_ignore_ascii_case("Hant")) {
+            candidates.push("zh_TW".to_owned());
+        }
+    }
+    if parts.len() > 1 {
+        candidates.push(parts[0].to_owned());
+    }
+    candidates.dedup();
+    candidates
+}
+
+fn dictionary_case_insensitive<'a>(dictionary: &'a Dictionary, key: &str) -> Option<&'a Value> {
+    dictionary
+        .iter()
+        .find_map(|(candidate, value)| candidate.eq_ignore_ascii_case(key).then_some(value))
+}
+
+fn localized_info_value(bundle_path: &Path, key: &str) -> Option<String> {
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::{NSBundle, NSString};
+
+    autoreleasepool(|_| {
+        let path = NSString::from_str(&bundle_path.to_string_lossy());
+        let bundle = NSBundle::bundleWithPath(&path)?;
+        let key = NSString::from_str(key);
+        bundle
+            .objectForInfoDictionaryKey(&key)?
+            .downcast_ref::<NSString>()
+            .map(ToString::to_string)
     })
 }
 
@@ -290,6 +381,7 @@ mod tests {
         let mut applications = BTreeMap::new();
         scan_root(
             Path::new("/definitely-not-a-real-app-directory"),
+            &["ja-JP".to_owned()],
             &mut applications,
         );
         assert!(applications.is_empty());
@@ -323,13 +415,67 @@ mod tests {
             .to_file_xml(outer.join("Wrapper/iTunesMetadata.plist"))
             .unwrap();
 
-        let entry = snapshot_entry(&outer).expect("wrapped iOS app should be discovered");
+        let entry = snapshot_entry(&outer, &["ja-JP".to_owned()])
+            .expect("wrapped iOS app should be discovered");
         assert_eq!(entry.app_id.as_str(), "mac:com.example.game");
         assert_eq!(entry.name, "ローカライズ名");
         assert_eq!(entry.link_path, outer.to_string_lossy());
         assert_eq!(entry.target_path, inner.join("Game").to_string_lossy());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loctable_uses_os_language_and_falls_back_to_base_language() {
+        let root = temporary_directory("localized-name");
+        let bundle = root.join("Calendar.app");
+        let resources = bundle.join("Contents/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+
+        let mut japanese = Dictionary::new();
+        japanese.insert(
+            "CFBundleDisplayName".into(),
+            Value::String("カレンダー".into()),
+        );
+        let mut english = Dictionary::new();
+        english.insert(
+            "CFBundleDisplayName".into(),
+            Value::String("Calendar".into()),
+        );
+        let mut table = Dictionary::new();
+        table.insert("ja".into(), Value::Dictionary(japanese));
+        table.insert("en".into(), Value::Dictionary(english));
+        Value::Dictionary(table)
+            .to_file_binary(resources.join("InfoPlist.loctable"))
+            .unwrap();
+
+        assert_eq!(
+            localized_loctable_value(&bundle, &["ja-JP".to_owned()], "CFBundleDisplayName"),
+            Some("カレンダー".to_owned())
+        );
+        assert_eq!(
+            localized_loctable_value(&bundle, &["en-US".to_owned()], "CFBundleDisplayName"),
+            Some("Calendar".to_owned())
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn system_calendar_uses_current_os_localization() {
+        let bundle = Path::new("/System/Applications/Calendar.app");
+        if !bundle.is_dir() {
+            return;
+        }
+        let languages = preferred_languages();
+        let expected = localized_bundle_name(bundle, &languages)
+            .expect("Calendar should expose a localized display name");
+        let entry = snapshot_entry(bundle, &languages).expect("Calendar should be discovered");
+        eprintln!(
+            "preferred_languages={languages:?} localized_calendar={}",
+            entry.name
+        );
+        assert_eq!(entry.name, expected);
     }
 
     #[test]

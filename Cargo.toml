@@ -70,9 +70,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGImage"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSBundle",
     "NSData",
     "NSDictionary",
     "NSGeometry",
+    "NSLocale",
     "NSObject",
     "NSString",
     "std",
