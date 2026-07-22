@@ -151,7 +151,7 @@ impl App {
             .iter()
             .enumerate()
             .filter_map(|(index, app_id)| {
-                if self.launcher_state.is_hidden(app_id) {
+                if self.launcher_state.is_hidden(app_id) || !self.settings.shows_app(app_id) {
                     return None;
                 }
                 let record = self.registry.get(app_id)?;

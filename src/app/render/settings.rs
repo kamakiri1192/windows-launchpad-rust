@@ -36,6 +36,7 @@ impl App {
                 category: settings_category_id(self.settings_category),
                 sort_order: sort_order_id(self.settings.sort_order),
                 frequent_apps_enabled: self.settings.frequent_apps_enabled,
+                show_steam_apps: self.settings.show_steam_apps,
                 search_includes_hidden: self.settings.search_includes_hidden,
                 hidden_count,
                 progress: self.settings_panel_progress,
@@ -204,6 +205,8 @@ fn settings_panel_copy<'a>(
         sort_label: "並び順",
         frequent_apps_label: "よく使うアプリ",
         frequent_apps_detail: "ホーム画面に表示するための準備設定",
+        steam_apps_label: "Steamアプリを表示",
+        steam_apps_detail: "インストール済みのSteamゲームとアプリを一覧に表示します",
         hidden_apps_label: "非表示アプリ",
         hidden_count_label,
         search_hidden_label: "検索時に非表示アプリを含める",
@@ -232,6 +235,9 @@ pub(crate) fn settings_press_target_from_layout_hit(
         }
         layout::settings_panel::SettingsPanelHit::FrequentToggle => {
             crate::app::state::SettingsPressTarget::FrequentToggle
+        }
+        layout::settings_panel::SettingsPanelHit::SteamToggle => {
+            crate::app::state::SettingsPressTarget::SteamToggle
         }
         layout::settings_panel::SettingsPanelHit::SearchHiddenToggle => {
             crate::app::state::SettingsPressTarget::SearchHiddenToggle
@@ -475,7 +481,7 @@ fn build_settings_panel_instances(
                 row_h,
                 scale,
                 instances,
-                2,
+                3,
             );
             toggle_instances(
                 [
@@ -486,9 +492,18 @@ fn build_settings_panel_instances(
                 scale,
                 instances,
             );
+            toggle_instances(
+                [
+                    content_right - 28.0 * scale,
+                    first_top + SETTINGS_ROW_STEP * 2.0 * scale + row_h * 0.5,
+                ],
+                settings.show_steam_apps,
+                scale,
+                instances,
+            );
             instances.push(control_icon(
                 content_right - 14.0 * scale,
-                first_top + SETTINGS_ROW_STEP * 2.0 * scale + row_h * 0.5,
+                first_top + SETTINGS_ROW_STEP * 3.0 * scale + row_h * 0.5,
                 9.0 * scale,
                 ControlKind::Chevron,
                 SETTINGS_MUTED,

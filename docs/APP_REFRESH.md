@@ -41,6 +41,10 @@ roots plus all Steam library manifests and resolves shortcut/icon metadata. It
 reads mtimes — but does **not** touch Shell/GDI for pixels. A scan is cheap
 enough to repeat periodically.
 
+Steam discovery remains active when the user disables **Show Steam apps** in
+Settings. The display filter hides Steam entries from both the grid and search,
+while keeping the latest registry state ready for an immediate toggle back on.
+
 ## Diffing
 
 Comparing two snapshots is pure logic in `app_diff::diff_snapshots`:

@@ -43,6 +43,11 @@ impl AppId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Whether this id identifies an app discovered from a Steam manifest.
+    pub fn is_steam(&self) -> bool {
+        self.0.starts_with("steam:")
+    }
 }
 
 impl fmt::Display for AppId {
@@ -156,5 +161,11 @@ mod tests {
         let mut v = vec![b.clone(), a.clone()];
         v.sort();
         assert_eq!(v, vec![a, b]);
+    }
+
+    #[test]
+    fn recognizes_steam_ids() {
+        assert!(AppId::from_normalized("steam:620").is_steam());
+        assert!(!AppId::from_normalized("c:/apps/steam.lnk").is_steam());
     }
 }

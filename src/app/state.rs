@@ -86,6 +86,7 @@ pub enum SettingsPressTarget {
     Category(SettingsCategory),
     Sort(SortOrder),
     FrequentToggle,
+    SteamToggle,
     SearchHiddenToggle,
     ResetCache,
     ResetSettings,
@@ -567,6 +568,7 @@ impl App {
             .iter()
             .filter_map(LauncherItem::as_app_id)
             .filter(|id| include_hidden || !launcher_state.is_hidden(id))
+            .filter(|id| self.settings.shows_app(id))
             .cloned()
             .collect();
         if include_hidden {
@@ -580,6 +582,7 @@ impl App {
                 .iter()
                 .filter(|id| !present.contains(*id))
                 .filter(|id| self.registry.get(id).is_some())
+                .filter(|id| self.settings.shows_app(id))
                 .cloned()
                 .collect();
             hidden_extra.sort_by(|a, b| {
@@ -632,6 +635,7 @@ impl App {
                 .apps()
                 .iter()
                 .filter(|record| include_hidden || !launcher_state.is_hidden(&record.app_id))
+                .filter(|record| self.settings.shows_app(&record.app_id))
                 .filter(|record| Self::matches_search(&record.name, &query))
                 .map(|record| {
                     let item = LauncherItem::App(record.app_id.clone());
@@ -651,6 +655,9 @@ impl App {
             .iter()
             .filter_map(|item| match item {
                 LauncherItem::App(id) => {
+                    if !self.settings.shows_app(id) {
+                        return None;
+                    }
                     let record = self.registry.get(id)?;
                     Some(OwnedGridItem {
                         item: item.clone(),
@@ -662,9 +669,18 @@ impl App {
                 }
                 LauncherItem::Folder(folder_id) => {
                     let folder = launcher_state.folders.get(folder_id)?;
+                    if !folder.children.is_empty()
+                        && folder
+                            .children
+                            .iter()
+                            .all(|child| !self.settings.shows_app(child))
+                    {
+                        return None;
+                    }
                     let preview_uvs = folder
                         .children
                         .iter()
+                        .filter(|child| self.settings.shows_app(child))
                         .take(9)
                         .map(|child| {
                             (!launcher_state.is_hidden(child))
