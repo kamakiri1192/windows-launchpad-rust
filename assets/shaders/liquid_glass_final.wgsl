@@ -16,7 +16,7 @@ struct GlassUniforms {
     debug_flags: u32,
     time: f32,
     material_strength: f32,
-    material_blur_spread: f32,
+    pad1: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
@@ -71,40 +71,11 @@ fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
     return textureSample(blur_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
-fn sample_prominent_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
-    let texel = vec2<f32>(1.0) / max(u.viewport, vec2<f32>(1.0));
-    let spread = max(u.material_blur_spread, 0.0);
-    let axis_x = vec2<f32>(spread, 0.0) * texel;
-    let axis_y = vec2<f32>(0.0, spread) * texel;
-    let diagonal = vec2<f32>(spread * 0.7071068) * texel;
-
-    let center = sample_blurred_backdrop(screen_uv) * 0.20;
-    let axes = (
-        sample_blurred_backdrop(screen_uv + axis_x)
-        + sample_blurred_backdrop(screen_uv - axis_x)
-        + sample_blurred_backdrop(screen_uv + axis_y)
-        + sample_blurred_backdrop(screen_uv - axis_y)
-    ) * 0.12;
-    let diagonals = (
-        sample_blurred_backdrop(screen_uv + diagonal)
-        + sample_blurred_backdrop(screen_uv + vec2<f32>(diagonal.x, -diagonal.y))
-        + sample_blurred_backdrop(screen_uv + vec2<f32>(-diagonal.x, diagonal.y))
-        + sample_blurred_backdrop(screen_uv - diagonal)
-    ) * 0.08;
-
-    return center + axes + diagonals;
-}
-
 fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     if has_flag(7u) || u.blur_radius < 0.5 {
         return sample_backdrop(uv);
     }
-    let blurred = sample_blurred_backdrop(uv);
-    if u.material_blur_spread < 0.5 {
-        return blurred;
-    }
-    let prominent = sample_prominent_blurred_backdrop(uv);
-    return mix(blurred, prominent, clamp(u.material_strength, 0.0, 1.0));
+    return sample_blurred_backdrop(uv);
 }
 
 // Detail samples normally preserve the sharp capture for lensing and rim
@@ -113,11 +84,11 @@ fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
 // material blur while the prominent material is active.
 fn sample_material_detail_backdrop(uv: vec2<f32>) -> vec4<f32> {
     let sharp = sample_backdrop(uv);
-    if has_flag(7u) || u.blur_radius < 0.5 || u.material_blur_spread < 0.5 {
+    if has_flag(7u) || u.blur_radius < 0.5 {
         return sharp;
     }
-    let prominent = sample_prominent_blurred_backdrop(uv);
-    return mix(sharp, prominent, clamp(u.material_strength, 0.0, 1.0));
+    let blurred = sample_blurred_backdrop(uv);
+    return mix(sharp, blurred, clamp(u.material_strength, 0.0, 1.0));
 }
 
 fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
