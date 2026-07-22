@@ -21,6 +21,7 @@ use super::controls::ControlUniforms;
 use super::counters::BufferCounters;
 use super::focus_blur::FocusBlurRenderer;
 use super::frame_clip;
+use super::presentation::PresentationRenderer;
 use super::resources::InstanceBuffer;
 use super::tiles::Uniforms;
 use super::Renderer;
@@ -457,6 +458,13 @@ impl Renderer {
         );
         let focus_blur =
             FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
+        let presentation = PresentationRenderer::new(
+            &device,
+            surface_format,
+            config.width,
+            config.height,
+            presentation_requires_straight_alpha(alpha_mode, qa_headless),
+        );
         let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
@@ -616,6 +624,7 @@ impl Renderer {
             surface_format,
             liquid_glass,
             focus_blur,
+            presentation,
             gpu_profiler,
             text_pipeline,
             text_instance_buffer: InstanceBuffer::new("text instance buffer"),
@@ -684,6 +693,8 @@ impl Renderer {
             self.config.height,
         );
         self.focus_blur
+            .resize(&self.device, self.config.width, self.config.height);
+        self.presentation
             .resize(&self.device, self.config.width, self.config.height);
     }
 
@@ -776,6 +787,10 @@ fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
     selected
 }
 
+fn presentation_requires_straight_alpha(alpha_mode: CompositeAlphaMode, qa_headless: bool) -> bool {
+    qa_headless || alpha_mode == CompositeAlphaMode::PostMultiplied
+}
+
 fn create_backdrop_capture(
     window: &winit::window::Window,
     event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
@@ -857,5 +872,21 @@ mod present_mode_tests {
             select_present_mode(&[PresentMode::Mailbox, PresentMode::Fifo]),
             PresentMode::Fifo
         );
+    }
+
+    #[test]
+    fn postmultiplied_surface_and_png_qa_require_straight_output() {
+        assert!(presentation_requires_straight_alpha(
+            CompositeAlphaMode::PostMultiplied,
+            false,
+        ));
+        assert!(presentation_requires_straight_alpha(
+            CompositeAlphaMode::Auto,
+            true,
+        ));
+        assert!(!presentation_requires_straight_alpha(
+            CompositeAlphaMode::PreMultiplied,
+            false,
+        ));
     }
 }

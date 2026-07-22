@@ -139,6 +139,18 @@ L1（1/2）
 スワップチェーンへ戻すときにY座標を一度だけ反転します。この反転を削除すると、
 ランチャーの下層シーンが上下逆に表示されます。
 
+## 最終RGBAと透過
+
+タイル、アイコン、Liquid Glass、Focus Veilを含む内部合成は、透明境界で暗い縁を
+作らないようpremultiplied RGBAで行います。macOSで利用可能な
+`CompositeAlphaMode::PostMultiplied` とPNGはstraight RGBAを期待するため、完成した
+フレームを `src/renderer/presentation.rs` の専用テクスチャへ描き、最終フルスクリーン
+パスでRGBだけをalphaで割ってからsurfaceまたはQA PNGへ出力します。alpha自体は
+変更しません。
+
+この変換を省くと、premultipliedのRGBへプラットフォームやPNGビューアがalphaを
+もう一度掛けるため、実際のalpha値よりも暗く、透過が強いように見えます。
+
 ## 調整するときの基準
 
 ### ブラーを強くしたい場合

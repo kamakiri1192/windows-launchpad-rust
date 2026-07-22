@@ -94,9 +94,10 @@ impl Renderer {
             eprintln!("renderer has neither a surface nor an offscreen target");
             return;
         };
-        let view = frame
+        let output_view = frame
             .texture()
             .create_view(&TextureViewDescriptor::default());
+        let view = self.presentation.create_view();
         let prominent_surface = self
             .prepared_model
             .glass
@@ -684,6 +685,25 @@ impl Renderer {
 
         self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Internal blending is premultiplied. Resolve the completed frame to
+        // the alpha representation required by the platform surface (or PNG
+        // QA) only after every visual layer has been composited.
+        let mut presentation_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("presentation resolve encoder"),
+                });
+        let profile_scope = self
+            .gpu_profiler
+            .begin("presentation_resolve", &mut presentation_encoder);
+        self.presentation
+            .encode(&mut presentation_encoder, &output_view);
+        self.gpu_profiler
+            .end(&mut presentation_encoder, profile_scope);
+        self.gpu_profiler.resolve(&mut presentation_encoder);
+        self.queue
+            .submit(std::iter::once(presentation_encoder.finish()));
         self.gpu_profiler.finish_frame(&self.queue);
 
         // Optional QA self-capture: copy the surface texture to a host-readable
