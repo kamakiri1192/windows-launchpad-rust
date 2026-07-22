@@ -2,7 +2,7 @@
 
 use screencapturekit::cg::CGRect;
 use screencapturekit::prelude::*;
-use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
+use screencapturekit::screenshot_manager::SCScreenshotManager;
 use winit::platform::macos::MonitorHandleExtMacOS;
 
 use super::capture::{BackdropCapture, CaptureStatus};
@@ -48,13 +48,13 @@ pub fn create_monitor_capture(
     let current_application = applications
         .iter()
         .find(|application| application.process_id() == std::process::id() as i32);
-    let filter_builder = SCContentFilter::create().with_display(display);
+    let filter_builder = SCContentFilter::builder().display(display);
     let filter = if let Some(application) = current_application {
         filter_builder
-            .with_excluding_applications(&[application], &[])
+            .exclude_applications(&[application], &[])
             .build()
     } else {
-        filter_builder.with_excluding_windows(&[]).build()
+        filter_builder.exclude_windows(&[]).build()
     };
 
     let size = window.inner_size();
