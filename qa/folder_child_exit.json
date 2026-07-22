@@ -1,0 +1,38 @@
+{
+  "name": "folder-child-exit",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 2600,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-exit-0", "name": "Move Me" },
+      { "id": "qa-exit-1", "name": "Folder Two" },
+      { "id": "qa-exit-2", "name": "Folder Three" },
+      { "id": "qa-exit-3", "name": "Folder Four" },
+      { "id": "qa-exit-4", "name": "Top Level A" },
+      { "id": "qa-exit-5", "name": "Top Level B" }
+    ],
+    "folders": [
+      {
+        "id": "qa-exit-folder",
+        "name": "Drag Outside",
+        "children": ["qa-exit-0", "qa-exit-1", "qa-exit-2", "qa-exit-3"]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-exit-folder" },
+      { "kind": "app", "id": "qa-exit-4" },
+      { "kind": "app", "id": "qa-exit-5" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "open_folder", "id": "qa-exit-folder" },
+    { "at_ms": 650, "type": "move", "target": { "kind": "folder_child", "index": 0 } },
+    { "at_ms": 700, "type": "pointer_down" },
+    { "at_ms": 1250, "type": "move", "target": { "kind": "point", "x": 1040.0, "y": 60.0 } },
+    { "at_ms": 1450, "type": "move", "target": { "kind": "grid_item_point", "index": 3, "x": 0.80, "y": 0.50 } },
+    { "at_ms": 1650, "type": "pointer_up" },
+    { "at_ms": 2350, "type": "escape" }
+  ]
+}

@@ -14,6 +14,7 @@
 use crate::domain::app_diff::AppDiff;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
+use crate::domain::launcher_item::LauncherItem;
 
 use crate::domain::settings::SettingsCategory;
 
@@ -99,7 +100,7 @@ pub enum AppCommand {
     /// `editing = value`.
     SetEditing(bool),
     /// `drag_app = value`.
-    SetDragApp(Option<AppId>),
+    SetDragItem(Option<LauncherItem>),
     /// `drag_x` / `drag_y` = the pointer.
     SetDragPos(f32, f32),
     /// `wiggle_phase = 0.0`.

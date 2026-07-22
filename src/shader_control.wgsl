@@ -26,6 +26,7 @@ struct Uniforms {
 //   2 = caret (vertical bar)
 //   3 = close button (×)
 //   4 = edit badge close glyph (scroll-coupled, frame-masked)
+//   9 = modal edit badge close glyph (fixed, not frame-masked)
 //   5 = settings gear (ring + radial teeth)
 //   6 = rounded rectangle
 //   7 = check mark
@@ -70,9 +71,10 @@ fn vs_main(
     let extent = element_extent(kind.x, params);
 
     var element_center = center;
-    // Only the edit-badge glyph (kind 4) scrolls with the tiles. The gear
-    // (kind 5) is a frame-independent control and must not move with scroll.
-    if kind.x > 3.5 && kind.x < 4.5 {
+    // Both badge kinds share the tile's GPU wiggle. Only the top-level badge
+    // (kind 4) receives main-page scroll; modal folder badges (kind 9) already
+    // carry their folder-page position in screen coordinates.
+    if (kind.x > 3.5 && kind.x < 4.5) || kind.x > 8.5 {
         let t = u.viewport_scroll.w + kind.w;
         let rot = sin(t * 8.0) * 0.06;
         let dy = abs(sin(t * 8.0)) * 2.0;
@@ -84,7 +86,9 @@ fn vs_main(
             rel.x * cosr - rel.y * sinr,
             rel.x * sinr + rel.y * cosr - dy,
         );
-        element_center.x = element_center.x + u.viewport_scroll.z;
+        if kind.x < 4.5 {
+            element_center.x = element_center.x + u.viewport_scroll.z;
+        }
     }
     let world = vec2<f32>(element_center.x + c.x * extent, element_center.y - c.y * extent);
     let local = vec2<f32>(c.x * extent, -c.y * extent);
@@ -204,7 +208,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p + b1, 2.0 * b1, w);
         let d2 = sd_segment(p + b2, 2.0 * b2, w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
-    } else if kind < 4.5 {
+    } else if kind < 4.5 || kind > 8.5 {
         // Edit badge: the glass disk is rendered by Liquid Glass; this pass
         // only paints the iOS-style close glyph.
         let r = in.params.x;

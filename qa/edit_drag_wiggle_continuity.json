@@ -1,0 +1,48 @@
+{
+  "name": "edit-drag-wiggle-continuity",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 2700,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-wiggle-mini-0", "name": "Mini One" },
+      { "id": "qa-wiggle-mini-1", "name": "Mini Two" },
+      { "id": "qa-wiggle-mini-2", "name": "Mini Three" },
+      { "id": "qa-wiggle-mini-3", "name": "Mini Four" },
+      { "id": "qa-wiggle-app-a", "name": "App A" },
+      { "id": "qa-wiggle-app-b", "name": "App B" }
+    ],
+    "folders": [
+      {
+        "id": "qa-wiggle-folder",
+        "name": "Phase Folder",
+        "children": [
+          "qa-wiggle-mini-0", "qa-wiggle-mini-1",
+          "qa-wiggle-mini-2", "qa-wiggle-mini-3"
+        ]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-wiggle-folder" },
+      { "kind": "app", "id": "qa-wiggle-app-a" },
+      { "kind": "app", "id": "qa-wiggle-app-b" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 2 } },
+    { "at_ms": 100, "type": "pointer_down" },
+    { "at_ms": 700, "type": "pointer_up" },
+
+    { "at_ms": 1050, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 1100, "type": "pointer_down" },
+    { "at_ms": 1300, "type": "move", "target": { "kind": "point", "x": 430.0, "y": 350.0 } },
+    { "at_ms": 1450, "type": "pointer_up" },
+
+    { "at_ms": 1850, "type": "move", "target": { "kind": "grid_item", "index": 1 } },
+    { "at_ms": 1900, "type": "pointer_down" },
+    { "at_ms": 2100, "type": "move", "target": { "kind": "point", "x": 650.0, "y": 430.0 } },
+    { "at_ms": 2250, "type": "pointer_up" },
+    { "at_ms": 2450, "type": "escape" }
+  ]
+}

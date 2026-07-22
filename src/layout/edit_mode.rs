@@ -33,6 +33,7 @@
 //! that boundary rather than duplicating the gear geometry.
 
 use crate::layout::grid::GridLayout;
+use crate::ui_model::geometry::{Point, Rect};
 
 /// Configured (pre-gutter-clamp) width of the edit-mode edge-autoscroll zone,
 /// in 100% DPI design px. Matches the historical `EDIT_EDGE_SCROLL_ZONE`
@@ -44,6 +45,56 @@ pub const EDGE_ZONE_FLOOR: f32 = 24.0;
 /// Cap for the configured zone, as a fraction of the page-frame panel width.
 /// Matches the historical `.min(panel_w * 0.25)` clamp.
 pub const EDGE_ZONE_PANEL_FRAC: f32 = 0.25;
+/// How far through a destination tile the pointer must travel before ordinary
+/// reordering wins over the folder-merge hover. This is intentionally a
+/// public tuning constant: 0.70 means the dragged app must cross 70% of the
+/// target from its entry side, avoiding the old midpoint swap while keeping
+/// rapid passes responsive.
+pub const FOLDER_REORDER_CROSS_FRACTION: f32 = 0.70;
+/// Different-row moves should react shortly after the pointer enters the new
+/// row. The horizontal 70% threshold protects deliberate same-row overlap,
+/// but applying it to row acquisition makes vertical movement feel sticky.
+pub const ROW_REORDER_ENTRY_FRACTION: f32 = 0.25;
+
+pub fn folder_merge_intent(tile: Rect, pointer: Point) -> bool {
+    pointer.x.is_finite()
+        && pointer.y.is_finite()
+        && tile.width > 0.0
+        && tile.height > 0.0
+        && tile.contains(pointer)
+}
+
+/// Whether a drag has crossed far enough through `target` to reorder it.
+/// A different grid row always selects vertical travel, even when the target
+/// is several columns away. Same-row movement uses horizontal travel. Holding
+/// anywhere before this threshold leaves the stable target available for the
+/// timed Liquid Glass folder merge.
+pub fn reorder_crossed_target(source: Rect, target: Rect, pointer: Point) -> bool {
+    if !pointer.x.is_finite()
+        || !pointer.y.is_finite()
+        || source.width <= 0.0
+        || source.height <= 0.0
+        || target.width <= 0.0
+        || target.height <= 0.0
+        || !target.contains(pointer)
+    {
+        return false;
+    }
+    let delta_x = target.center().x - source.center().x;
+    let delta_y = target.center().y - source.center().y;
+    let different_row = delta_y.abs() >= target.height * 0.5;
+    if !different_row {
+        if delta_x >= 0.0 {
+            pointer.x >= target.x + target.width * FOLDER_REORDER_CROSS_FRACTION
+        } else {
+            pointer.x <= target.x + target.width * (1.0 - FOLDER_REORDER_CROSS_FRACTION)
+        }
+    } else if delta_y >= 0.0 {
+        pointer.y >= target.y + target.height * ROW_REORDER_ENTRY_FRACTION
+    } else {
+        pointer.y <= target.y + target.height * (1.0 - ROW_REORDER_ENTRY_FRACTION)
+    }
+}
 
 /// Edit badge geometry for one tile, produced from the same calculation the
 /// renderer's badge source uses. `base_center` is the badge center before the
@@ -252,6 +303,87 @@ mod tests {
 
     fn layout() -> GridLayout {
         GridLayout::default().centered(1280.0)
+    }
+
+    #[test]
+    fn folder_merge_starts_across_the_full_target_tile() {
+        let tile = Rect::new(100.0, 200.0, 100.0, 100.0);
+        assert!(folder_merge_intent(tile, Point::new(150.0, 250.0)));
+        assert!(folder_merge_intent(tile, Point::new(105.0, 250.0)));
+        assert!(folder_merge_intent(tile, Point::new(150.0, 205.0)));
+        assert!(!folder_merge_intent(tile, Point::new(99.0, 250.0)));
+    }
+
+    #[test]
+    fn reorder_waits_until_seventy_percent_through_the_target() {
+        let source = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let right = Rect::new(120.0, 0.0, 100.0, 100.0);
+        assert!(!reorder_crossed_target(
+            source,
+            right,
+            Point::new(189.0, 50.0)
+        ));
+        assert!(reorder_crossed_target(
+            source,
+            right,
+            Point::new(190.0, 50.0)
+        ));
+
+        let left = Rect::new(-120.0, 0.0, 100.0, 100.0);
+        assert!(!reorder_crossed_target(
+            source,
+            left,
+            Point::new(-89.0, 50.0)
+        ));
+        assert!(reorder_crossed_target(
+            source,
+            left,
+            Point::new(-90.0, 50.0)
+        ));
+    }
+
+    #[test]
+    fn reorder_uses_vertical_crossing_for_a_different_row_even_when_far_diagonal() {
+        let source = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let lower_far_right = Rect::new(300.0, 120.0, 100.0, 100.0);
+        assert!(!reorder_crossed_target(
+            source,
+            lower_far_right,
+            Point::new(320.0, 144.0),
+        ));
+        assert!(reorder_crossed_target(
+            source,
+            lower_far_right,
+            Point::new(320.0, 145.0),
+        ));
+    }
+
+    #[test]
+    fn different_row_reorders_after_twenty_five_percent_entry_from_either_direction() {
+        let source = Rect::new(0.0, 120.0, 100.0, 100.0);
+        let above = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert!(!reorder_crossed_target(
+            source,
+            above,
+            Point::new(50.0, 76.0),
+        ));
+        assert!(reorder_crossed_target(
+            source,
+            above,
+            Point::new(50.0, 75.0),
+        ));
+    }
+
+    #[test]
+    fn folder_merge_rejects_invalid_geometry_and_pointer() {
+        assert!(!folder_merge_intent(
+            Rect::new(0.0, 0.0, 0.0, 84.0),
+            Point::new(0.0, 0.0)
+        ));
+        assert!(!folder_merge_intent(
+            Rect::new(0.0, 0.0, 84.0, 84.0),
+            Point::new(f32::NAN, 20.0)
+        ));
     }
 
     // ---- badge geometry / hit ------------------------------------------------

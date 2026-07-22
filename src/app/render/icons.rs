@@ -116,20 +116,22 @@ impl App {
     /// Rebuild the icon-instance buffer from the current registry + layout and
     /// push it to the GPU. Called whenever any app's UV may have changed.
     pub(crate) fn rebuild_icon_instances(&mut self) {
-        let owned = self.grid_apps_owned();
-        let apps: Vec<grid::GridApp<'_>> = owned
+        let owned = self.grid_items_owned();
+        let items: Vec<grid::GridItem<'_>> = owned
             .iter()
-            .map(|(id, name, uv)| grid::GridApp {
-                id: id.as_str(),
-                name: name.as_str(),
-                uv: *uv,
+            .map(|entry| grid::GridItem {
+                key: entry.key.as_str(),
+                name: entry.name.as_str(),
+                uv: entry.uv,
+                preview_uvs: &entry.preview_uvs,
             })
             .collect();
         let (w, _h) = self.viewport_phys();
-        let visible_ids = self.visible_app_ids();
-        let anim = self.edit_anim(&visible_ids);
-        let mut icon_instances = self.layout.build_icon_instances(w as f32, &apps, &anim);
-        self.apply_spring_positions(&visible_ids, &mut icon_instances);
+        let visible_items = self.visible_launcher_items();
+        let anim = self.edit_anim(&visible_items);
+        let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
+        self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
+        self.suppress_active_folder_grid_icons(&mut icon_instances);
         self.render_model.icons = Some(icon_instances);
     }
 

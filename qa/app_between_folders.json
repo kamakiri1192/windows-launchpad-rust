@@ -1,0 +1,40 @@
+{
+  "name": "app-between-folders",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 1800,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-between-left-a", "name": "Left One" },
+      { "id": "qa-between-left-b", "name": "Left Two" },
+      { "id": "qa-between-right-a", "name": "Right One" },
+      { "id": "qa-between-right-b", "name": "Right Two" },
+      { "id": "qa-between-dragged", "name": "Insert Me" }
+    ],
+    "folders": [
+      {
+        "id": "qa-between-left-folder",
+        "name": "Left Folder",
+        "children": ["qa-between-left-a", "qa-between-left-b"]
+      },
+      {
+        "id": "qa-between-right-folder",
+        "name": "Right Folder",
+        "children": ["qa-between-right-a", "qa-between-right-b"]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-between-left-folder" },
+      { "kind": "folder", "id": "qa-between-right-folder" },
+      { "kind": "app", "id": "qa-between-dragged" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 2 } },
+    { "at_ms": 100, "type": "pointer_down" },
+    { "at_ms": 750, "type": "move", "target": { "kind": "grid_item_point", "index": 1, "x": 0.29, "y": 0.50 } },
+    { "at_ms": 1050, "type": "pointer_up" },
+    { "at_ms": 1450, "type": "escape" }
+  ]
+}

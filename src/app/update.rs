@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::debug_log;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
+use crate::domain::launcher_item::LauncherItem;
 use crate::domain::settings::{Settings, SortOrder};
 use crate::scroll::Phase;
 use crate::workers::icon_worker::IconResult;
@@ -154,18 +155,18 @@ impl App {
         let x = self.pointer_phys_x;
         let y = self.pointer_phys_y;
         let hit = self.grid_hit_at_pointer(x, y);
-        let app_index = hit.app_index();
-        let app_id = app_index.and_then(|idx| self.visible_app_ids().get(idx).cloned());
+        let item_index = hit.app_index();
+        let item = item_index.and_then(|idx| self.visible_launcher_items().get(idx).cloned());
         let outside_glass = hit.is_outside_frame();
         debug_log!(
-            "edit-press: pending x={x:.1} y={y:.1} app_index={app_index:?} outside_glass={outside_glass}"
+            "edit-press: pending x={x:.1} y={y:.1} item_index={item_index:?} outside_glass={outside_glass}"
         );
         self.pending_press = Some(PendingPress {
             start: now,
             x,
             y,
-            app_index,
-            app_id,
+            item_index,
+            item,
             outside_glass,
         });
         self.request_redraw();
@@ -184,8 +185,10 @@ impl App {
         }
         self.persist_launcher_state();
         // Drop any in-flight drag of the just-hidden app.
-        if self.drag_app.as_ref() == Some(id) {
-            self.drag_app = None;
+        if self.drag_item.as_ref()
+            == Some(&crate::domain::launcher_item::LauncherItem::App(id.clone()))
+        {
+            self.drag_item = None;
         }
         self.relayout();
         self.request_redraw();
@@ -223,6 +226,9 @@ impl App {
     /// `main.rs` (it also drives launch/passthrough/scroll-drag; Phase 5 moves
     /// it to the app shell).
     pub(crate) fn maybe_long_press_into_edit(&mut self, now: Instant) -> bool {
+        if !self.visible_search_query().trim().is_empty() || self.folders.is_active() {
+            return false;
+        }
         let Some(p) = self.pending_press.as_ref() else {
             return false;
         };
@@ -240,8 +246,8 @@ impl App {
             return false;
         }
         // Enter edit mode and immediately lift the pressed app into a drag.
-        let app_index = p.app_index;
-        self.enter_edit_mode(app_index);
+        let item_index = p.item_index;
+        self.enter_edit_mode(item_index);
         true
     }
 
@@ -261,7 +267,7 @@ impl App {
             self.pointer_phys_x,
             self.pointer_phys_y,
         );
-        let visible = self.visible_app_ids();
+        let visible = self.visible_launcher_items();
         let commands = crate::features::edit_mode::enter(&mut state, app_index, &visible, pointer);
         self.sync_edit_mode_state(&state);
         self.execute_edit_mode_commands(commands);
@@ -281,9 +287,12 @@ impl App {
         if !self.editing {
             return;
         }
+        if self.cancel_folder_child_exit_preview() {
+            self.drag_item = None;
+        }
         let mut state = self.edit_mode_state();
         // If a drag was in flight, finalize it as a drop at the current cell.
-        let commit_commands = if state.drag_app.is_some() {
+        let commit_commands = if state.drag_item.is_some() {
             self.live_reorder();
             crate::features::edit_mode::commit_drag(&state)
         } else {
@@ -297,6 +306,11 @@ impl App {
     /// Open the settings overlay. Dismisses edit mode and the search field so
     /// they cannot be interacted with underneath the panel.
     pub(crate) fn open_settings(&mut self) {
+        if self.folders.is_active() {
+            self.folders = crate::features::folders::FolderFeatureState::default();
+            self.folder_scroller = None;
+            self.folder_layout = None;
+        }
         if self.editing {
             self.exit_edit_mode();
         }
@@ -332,12 +346,23 @@ impl App {
 
     /// Update the dragged tile's follow position during an edit-mode move.
     pub(crate) fn handle_edit_drag_move(&mut self) {
-        if self.drag_app.is_some() {
+        if self.drag_item.is_some() {
             self.drag_x = self.pointer_phys_x;
             self.drag_y = self.pointer_phys_y;
-            // Live reorder: move the dragged app to the cell under the pointer
-            // so other icons shift around it.
-            self.live_reorder();
+            self.refresh_dragged_folder_glass_position();
+            let hover_candidate = self.folder_hover_candidate_at_pointer();
+            let hover_ready = self.folders.hover.as_ref().is_some_and(|hover| {
+                hover_candidate.as_ref() == Some(&hover.target) && hover.ready()
+            });
+            if hover_candidate.is_none() {
+                self.folders.update_hover(None, 0.0);
+            }
+            if crate::features::folders::top_level_reorder_allowed(
+                hover_candidate.as_ref(),
+                hover_ready,
+            ) {
+                self.live_reorder();
+            }
             self.maybe_autoscroll_edit_drag();
             self.request_redraw();
         }
@@ -352,16 +377,44 @@ impl App {
     /// `registry.set_order` + relayout side effect. Reorder is keyed by stable
     /// `AppId`, not positional index.
     pub(crate) fn live_reorder(&mut self) {
-        let Some(drag_id) = self.drag_app.clone() else {
+        let Some(drag_item) = self.drag_item.clone() else {
             return;
         };
         let Some(target_idx) = self.edit_drop_index_at_pointer(self.drag_x, self.drag_y) else {
             return;
         };
-        let visible = self.visible_app_ids();
-        let Some(drag_pos) = visible.iter().position(|id| id == &drag_id) else {
+        let visible = self.visible_launcher_items();
+        let Some(drag_pos) = visible.iter().position(|item| item == &drag_item) else {
             return;
         };
+        if let Some(target) = visible.get(target_idx) {
+            if target != &drag_item {
+                // Reorder intent is based on stable grid slots, not the
+                // in-flight spring positions. A spring can sit between rows
+                // after the previous swap; using it as the source made the
+                // dominant-axis test change frame-to-frame and caused vertical
+                // moves to intermittently stop responding.
+                let viewport_w = self.viewport_phys().0 as f32;
+                let scroll_x = self.scroller.as_ref().map_or(0.0, |s| s.position);
+                let slot_rect = |index: usize| {
+                    let (x, y) = self.layout.tile_position(viewport_w, index);
+                    crate::ui_model::geometry::Rect::new(
+                        x + scroll_x,
+                        y,
+                        self.layout.tile_size,
+                        self.layout.tile_size,
+                    )
+                };
+                let crossed = crate::layout::edit_mode::reorder_crossed_target(
+                    slot_rect(drag_pos),
+                    slot_rect(target_idx),
+                    crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y),
+                );
+                if !crossed {
+                    return;
+                }
+            }
+        }
         let Some(insert_idx) =
             crate::layout::edit_mode::reorder_insert_index(visible.len(), drag_pos, target_idx)
         else {
@@ -370,7 +423,7 @@ impl App {
         debug_log!(
             "edit-reorder: moving drag_pos={drag_pos} target_idx={target_idx} insert_idx={insert_idx}"
         );
-        self.reorder_by_index(&drag_id, insert_idx);
+        self.reorder_by_index(&drag_item, insert_idx);
     }
 
     /// Start a one-page autoscroll if the lifted edit-mode icon is held near a
@@ -384,7 +437,7 @@ impl App {
     /// calls `settle_to_page`. The gutter clamp keeps the rightmost tile
     /// columns reachable as drop targets while the icon is held in the gutter.
     pub(crate) fn maybe_autoscroll_edit_drag(&mut self) -> bool {
-        if !self.editing || self.drag_app.is_none() {
+        if !self.editing || self.drag_item.is_none() {
             return false;
         }
 
@@ -458,15 +511,24 @@ impl App {
     /// keeps the historical concatenated visible-then-hidden semantics by
     /// feeding the current hidden ids as the hidden tail, then applying the
     /// result to the launcher state's app items.
-    pub(crate) fn reorder_by_index(&mut self, drag_id: &AppId, insert_idx: usize) {
-        let visible = self.visible_app_ids();
-        let hidden: Vec<AppId> = self.launcher_state.hidden_apps.iter().cloned().collect();
+    pub(crate) fn reorder_by_index(
+        &mut self,
+        drag_item: &crate::domain::launcher_item::LauncherItem,
+        insert_idx: usize,
+    ) {
+        let visible = self.visible_launcher_items();
         let Some(order) =
-            crate::features::edit_mode::apply_reorder(&visible, &hidden, drag_id, insert_idx)
+            crate::features::edit_mode::apply_item_reorder(&visible, drag_item, insert_idx)
         else {
             return;
         };
-        self.launcher_state.reorder_app_items(order);
+        if let Some(preview) = self.folders.child_exit_preview.as_mut() {
+            preview
+                .launcher_state_mut()
+                .reorder_visible_items(&visible, order);
+        } else {
+            self.launcher_state.reorder_visible_items(&visible, order);
+        }
         self.relayout();
     }
 
@@ -498,7 +560,7 @@ impl App {
     fn edit_mode_state(&self) -> crate::features::edit_mode::EditModeState {
         crate::features::edit_mode::EditModeState {
             editing: self.editing,
-            drag_app: self.drag_app.clone(),
+            drag_item: self.drag_item.clone(),
             drag_x: self.drag_x,
             drag_y: self.drag_y,
             wiggle_phase: self.wiggle_phase,
@@ -519,7 +581,7 @@ impl App {
     /// the pointer-follow path (`SetDragPos`) and are not mutated by
     /// `enter`/`exit`.
     fn sync_edit_mode_state(&mut self, state: &crate::features::edit_mode::EditModeState) {
-        self.drag_app = state.drag_app.clone();
+        self.drag_item = state.drag_item.clone();
         self.wiggle_phase = state.wiggle_phase;
     }
 
@@ -576,5 +638,546 @@ impl App {
                 // the release stayed on the capsule.
             }
         }
+    }
+}
+
+impl App {
+    pub(crate) fn folder_hover_candidate_at_pointer(
+        &self,
+    ) -> Option<crate::domain::launcher_item::LauncherItem> {
+        let drag = self.drag_item.as_ref()?;
+        if !matches!(drag, crate::domain::launcher_item::LauncherItem::App(_)) {
+            return None;
+        }
+        if let (Some(folder_id), Some(layout)) = (
+            self.folders.hover_opened.as_ref(),
+            self.folder_layout.as_ref(),
+        ) {
+            let pointer = crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y);
+            if layout.current_panel_rect.contains(pointer) {
+                return Some(crate::domain::launcher_item::LauncherItem::Folder(
+                    folder_id.clone(),
+                ));
+            }
+        }
+        let index = self
+            .grid_hit_at_pointer(self.drag_x, self.drag_y)
+            .app_index()?;
+        let target = self.visible_launcher_items().get(index)?.clone();
+        if target == *drag {
+            return None;
+        }
+        let tile = self.launcher_item_rect(&target)?;
+        crate::layout::edit_mode::folder_merge_intent(
+            tile,
+            crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y),
+        )
+        .then_some(target)
+    }
+
+    pub(crate) fn commit_edit_drop(&mut self) {
+        if self.folders.child_exit_preview.is_some() && !self.commit_folder_child_exit_preview() {
+            self.drag_item = None;
+            self.folders.hover = None;
+            self.relayout();
+            return;
+        }
+        let drag = self.drag_item.clone();
+        let hover = self.folders.hover.clone();
+        let current_hover_target = self.folder_hover_candidate_at_pointer();
+        let mut changed = false;
+        let mut opened = None;
+        if let (Some(crate::domain::launcher_item::LauncherItem::App(dragged)), Some(hover)) =
+            (drag.as_ref(), hover.as_ref())
+        {
+            if hover.ready() && current_hover_target.as_ref() == Some(&hover.target) {
+                match &hover.target {
+                    crate::domain::launcher_item::LauncherItem::App(target) => {
+                        if let Some(id) =
+                            self.launcher_state
+                                .create_folder_from_apps(target, dragged, "フォルダ")
+                        {
+                            changed = true;
+                            opened = Some((id, Some(hover.panel_progress())));
+                        }
+                    }
+                    crate::domain::launcher_item::LauncherItem::Folder(folder_id) => {
+                        changed = self
+                            .launcher_state
+                            .move_top_level_app_into_folder(dragged, folder_id);
+                        if changed {
+                            opened = Some((folder_id.clone(), None));
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.settings.sort_order = crate::domain::settings::SortOrder::Manual;
+            self.persist_settings();
+            self.persist_launcher_state();
+            self.folders.hover = None;
+            self.folders.hover_opened = None;
+            if let Some((id, inherited_progress)) = opened {
+                self.folders.open(id);
+                if let Some(progress) = inherited_progress {
+                    self.folders.motion.progress = progress;
+                }
+            }
+        } else {
+            if self.folders.hover_opened.is_some() {
+                self.folders.close();
+            }
+            self.folders.hover = None;
+            self.commit_reorder();
+        }
+    }
+
+    pub(crate) fn commit_folder_rename(&mut self) {
+        let Some(folder_id) = self.folders.active.clone() else {
+            self.folders.cancel_rename();
+            return;
+        };
+        let Some(name) = self.folders.finish_rename() else {
+            return;
+        };
+        if let Some(folder) = self.launcher_state.folders.get_mut(&folder_id) {
+            if folder.name != name {
+                folder.name = name;
+                self.launcher_state.customized = true;
+                self.persist_launcher_state();
+                self.relayout();
+            }
+        }
+        self.request_redraw();
+    }
+
+    fn folder_hit_target(&self, x: f32, y: f32) -> Option<crate::ui_model::hit::HitTarget> {
+        self.folder_layout
+            .as_ref()?
+            .result
+            .hits
+            .hit_test(crate::ui_model::geometry::Point::new(x, y))
+            .map(|hit| hit.target.clone())
+    }
+
+    pub(crate) fn handle_folder_pointer_press(&mut self, x: f32, y: f32) {
+        use crate::ui_model::hit::HitTarget;
+        let target = self.folder_hit_target(x, y);
+        if self.folders.rename.is_some() && !matches!(target, Some(HitTarget::FolderTitle { .. })) {
+            self.commit_folder_rename();
+        }
+        match target {
+            Some(HitTarget::FolderChildBadge { child, .. }) if self.editing => {
+                let app_id = crate::domain::app_id::AppId::from_normalized(child);
+                self.folders.clear_child_pointer();
+                self.hide_app(&app_id);
+            }
+            Some(HitTarget::FolderTitle { .. }) => {
+                if self.editing {
+                    let id = self.folders.active.clone();
+                    if let Some(id) = id.as_ref() {
+                        if let Some(folder) = self.launcher_state.folders.get(id) {
+                            self.folders.begin_rename(folder.name.clone());
+                        }
+                    }
+                }
+            }
+            Some(HitTarget::FolderChild { child, index, .. }) => {
+                let app_id = crate::domain::app_id::AppId::from_normalized(child);
+                let domain_index = self
+                    .folders
+                    .active
+                    .as_ref()
+                    .and_then(|folder_id| self.launcher_state.folders.get(folder_id))
+                    .and_then(|folder| folder.children.iter().position(|id| id == &app_id))
+                    .unwrap_or(index);
+                self.folders
+                    .begin_child_press(app_id, domain_index, Instant::now(), x, y);
+                if !self.editing {
+                    self.folders.begin_page_press(x, y);
+                }
+            }
+            Some(HitTarget::FolderPagePrevious { .. }) => {
+                self.settle_folder_page(self.folders.page.saturating_sub(1));
+            }
+            Some(HitTarget::FolderPageNext { .. }) => {
+                if let Some(layout) = &self.folder_layout {
+                    self.settle_folder_page((self.folders.page + 1).min(layout.page_count - 1));
+                }
+            }
+            Some(HitTarget::FolderPanel { .. }) => self.folders.begin_page_press(x, y),
+            Some(HitTarget::Backdrop { .. }) | None => self.close_folder(),
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Enter folder edit mode and lift the child held by the current press in
+    /// one transition. This mirrors the top-level long-press path and prevents
+    /// the same press from being reclassified as a folder page swipe.
+    pub(crate) fn begin_folder_child_edit_drag_if_ready(&mut self, now: Instant) -> bool {
+        if self.editing
+            || !self
+                .folders
+                .pressed_child
+                .as_ref()
+                .is_some_and(|press| press.held_long_enough(now))
+        {
+            return false;
+        }
+        let Some(folder_id) = self.folders.active.clone() else {
+            return false;
+        };
+        let children = self
+            .launcher_state
+            .folders
+            .get(&folder_id)
+            .map(|folder| folder.children.clone())
+            .unwrap_or_default();
+
+        self.enter_edit_mode(None);
+        if !self.folders.begin_child_drag_from_press(&children) {
+            return false;
+        }
+        self.drag_x = self.pointer_phys_x;
+        self.drag_y = self.pointer_phys_y;
+        self.relayout();
+        self.request_redraw();
+        true
+    }
+
+    pub(crate) fn handle_folder_pointer_move(&mut self, x: f32, y: f32) {
+        self.folder_pointer_move_serial = self.folder_pointer_move_serial.wrapping_add(1);
+        self.begin_folder_child_edit_drag_if_ready(Instant::now());
+        let Some(folder_id) = self.folders.active.clone() else {
+            return;
+        };
+        let children = self
+            .launcher_state
+            .folders
+            .get(&folder_id)
+            .map(|folder| folder.children.clone())
+            .unwrap_or_default();
+        if self
+            .folder_scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging)
+        {
+            if let Some(scroller) = self.folder_scroller.as_mut() {
+                scroller.drag_move(x);
+            }
+            self.update_folder_page_from_scroll();
+            self.relayout();
+            self.request_redraw();
+            return;
+        }
+        let page_drag_start = self
+            .folders
+            .page_press
+            .as_ref()
+            .filter(|press| press.moved_past_slop(x, y))
+            .filter(|_| !self.editing || self.folders.pressed_child.is_none())
+            .map(|press| press.start_x);
+        if let (Some(start_x), Some(scroller)) = (page_drag_start, self.folder_scroller.as_mut()) {
+            scroller.drag_start(start_x);
+            scroller.drag_move(x);
+            self.folders.pressed_child = None;
+            self.folders.page_press = None;
+            self.update_folder_page_from_scroll();
+            self.relayout();
+            self.request_redraw();
+            return;
+        }
+        if self.editing {
+            self.folders.maybe_begin_child_drag(&children, x, y);
+        }
+        if self.folders.child_drag.is_some() {
+            self.drag_x = x;
+            self.drag_y = y;
+            let boundary_intent = self.folder_child_boundary_intent(x, y);
+            if boundary_intent == crate::features::folders::ChildDragBoundaryIntent::Exit
+                && self.promote_folder_child_drag_to_top_level()
+            {
+                return;
+            }
+            let (_, reordered) = self.reorder_folder_child_drag_at(x, y);
+            if reordered {
+                self.relayout();
+            }
+            self.request_redraw();
+        }
+    }
+
+    fn folder_child_boundary_intent(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> crate::features::folders::ChildDragBoundaryIntent {
+        let Some(layout) = self.folder_layout.as_ref() else {
+            return crate::features::folders::ChildDragBoundaryIntent::Stay;
+        };
+        crate::features::folders::child_drag_boundary_intent(
+            layout.current_panel_rect,
+            crate::ui_model::geometry::Point::new(x, y),
+            self.folders.page,
+            layout.page_count,
+            self.scale_factor,
+        )
+    }
+
+    /// Update the held child's preview order for either an occupied child cell
+    /// or an empty 3x3 cell on the current page. Returns `(valid, changed)` so
+    /// release can distinguish a real empty-cell drop from panel chrome.
+    fn reorder_folder_child_drag_at(&mut self, x: f32, y: f32) -> (bool, bool) {
+        let target_child = match self.folder_hit_target(x, y) {
+            Some(crate::ui_model::hit::HitTarget::FolderChild { child, .. }) => {
+                Some(crate::domain::app_id::AppId::from_normalized(child))
+            }
+            _ => None,
+        };
+        let empty_index = target_child
+            .is_none()
+            .then(|| self.folder_child_empty_drop_index(x, y))
+            .flatten();
+        let Some(drag) = self.folders.child_drag.as_mut() else {
+            return (false, false);
+        };
+        if let Some(target) = target_child {
+            (true, drag.preview_reorder_to(&target))
+        } else if let Some(index) = empty_index {
+            (true, drag.preview_reorder(index))
+        } else {
+            (false, false)
+        }
+    }
+
+    fn folder_child_empty_drop_index(&self, x: f32, y: f32) -> Option<usize> {
+        let layout = self.folder_layout.as_ref()?;
+        let child_count = self
+            .folders
+            .child_drag
+            .as_ref()
+            .map(|drag| drag.preview_order.len())?;
+        crate::layout::folder_panel::child_drop_index(
+            layout.target_panel_rect,
+            crate::ui_model::geometry::Point::new(x, y),
+            self.folders.page,
+            child_count,
+            self.scale_factor,
+        )
+    }
+
+    /// Advance the held-child side-edge dwell. A completed dwell glides one
+    /// folder page and latches until the pointer returns to the panel center.
+    /// Top/bottom exits are handled immediately by the pointer-move path.
+    pub(crate) fn tick_folder_child_page_hover(&mut self, dt: f32) -> bool {
+        if self.folders.child_drag.is_none() {
+            self.folders.child_page_hover = None;
+            self.folders.child_page_latched = false;
+            return false;
+        }
+        let Some(layout) = self.folder_layout.as_ref() else {
+            return false;
+        };
+        let panel = layout.current_panel_rect;
+        let pointer = crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y);
+        let in_page_edge =
+            crate::features::folders::child_drag_in_page_edge(panel, pointer, self.scale_factor);
+        match self.folder_child_boundary_intent(self.drag_x, self.drag_y) {
+            crate::features::folders::ChildDragBoundaryIntent::Page(target)
+                if !self.folders.child_page_latched =>
+            {
+                match self.folders.child_page_hover.as_mut() {
+                    Some(hover) if hover.target == target => {
+                        hover.elapsed += dt.max(0.0);
+                    }
+                    _ => {
+                        self.folders.child_page_hover =
+                            Some(crate::features::folders::ChildPageHover {
+                                target,
+                                elapsed: dt.max(0.0),
+                            });
+                    }
+                }
+                let ready = self.folders.child_page_hover.as_ref().is_some_and(|hover| {
+                    hover.elapsed >= crate::features::folders::CHILD_PAGE_EDGE_DWELL
+                });
+                let can_settle = self
+                    .folder_scroller
+                    .as_ref()
+                    .is_some_and(|scroller| scroller.phase == Phase::Idle);
+                if ready && can_settle {
+                    self.folders.child_page_hover = None;
+                    self.folders.child_page_latched = true;
+                    self.settle_folder_page(target);
+                    return true;
+                }
+            }
+            _ => {
+                self.folders.child_page_hover = None;
+                if !in_page_edge {
+                    self.folders.child_page_latched = false;
+                }
+            }
+        }
+        false
+    }
+
+    /// Move a lifted folder child into the top-level model as soon as the
+    /// pointer leaves the folder glass, then continue the same held gesture as
+    /// the ordinary main-grid edit drag. The initial insertion is the source
+    /// folder's slot; subsequent pointer moves can live-reorder it normally.
+    fn promote_folder_child_drag_to_top_level(&mut self) -> bool {
+        let Some(drag) = self.folders.child_drag.clone() else {
+            return false;
+        };
+        let source_item = LauncherItem::Folder(drag.folder_id.clone());
+        let insert_index = self
+            .launcher_state
+            .items
+            .iter()
+            .position(|item| item == &source_item)
+            .unwrap_or(self.launcher_state.items.len());
+        let Some(preview) = crate::features::folders::ChildExitPreview::begin(
+            &self.launcher_state,
+            &drag,
+            insert_index,
+        ) else {
+            return false;
+        };
+        self.folders.child_exit_preview = Some(preview);
+
+        self.drag_item = Some(LauncherItem::App(drag.app_id));
+        self.drag_x = self.pointer_phys_x;
+        self.drag_y = self.pointer_phys_y;
+        self.folders.close();
+        self.folders.hover = None;
+        self.relayout();
+        self.request_redraw();
+        true
+    }
+
+    fn commit_folder_child_exit_preview(&mut self) -> bool {
+        let Some(preview) = self.folders.take_child_exit_preview() else {
+            return false;
+        };
+        let source_folder = preview.source_folder.clone();
+        if preview.commit_into(&mut self.launcher_state) {
+            true
+        } else {
+            self.folders.open(source_folder);
+            false
+        }
+    }
+
+    pub(crate) fn cancel_folder_child_exit_preview(&mut self) -> bool {
+        let Some(preview) = self.folders.take_child_exit_preview() else {
+            return false;
+        };
+        self.folders.open(preview.source_folder);
+        true
+    }
+
+    pub(crate) fn handle_folder_pointer_release(&mut self, x: f32, y: f32) {
+        use crate::ui_model::hit::HitTarget;
+        if self
+            .folder_scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging)
+        {
+            if let Some(scroller) = self.folder_scroller.as_mut() {
+                scroller.drag_end();
+            }
+            self.folders.clear_child_pointer();
+            self.request_redraw();
+            return;
+        }
+        if self.folders.child_drag.is_some() {
+            let (valid_folder_drop, reordered) = self.reorder_folder_child_drag_at(x, y);
+            let drag = self
+                .folders
+                .child_drag
+                .clone()
+                .expect("child drag was checked above");
+            let mut changed = false;
+            if valid_folder_drop {
+                if let Some(folder) = self.launcher_state.folders.get_mut(&drag.folder_id) {
+                    if folder.children != drag.preview_order {
+                        folder.children = drag.preview_order;
+                        changed = true;
+                    }
+                }
+            } else if self.folder_child_boundary_intent(x, y)
+                == crate::features::folders::ChildDragBoundaryIntent::Exit
+            {
+                self.pointer_phys_x = x;
+                self.pointer_phys_y = y;
+                if self.promote_folder_child_drag_to_top_level() {
+                    self.commit_edit_drop();
+                    self.drag_item = None;
+                    self.relayout();
+                    self.request_redraw();
+                    return;
+                }
+            }
+            if changed {
+                self.persist_launcher_state();
+                if !self.launcher_state.folders.contains_key(&drag.folder_id) {
+                    self.folders.close();
+                }
+                self.relayout();
+            } else if reordered {
+                self.relayout();
+            }
+            self.folders.clear_child_pointer();
+            self.request_redraw();
+            return;
+        }
+
+        let pressed = self.folders.pressed_child.take();
+        if let (Some(pressed), Some(HitTarget::FolderChild { child, .. })) =
+            (pressed, self.folder_hit_target(x, y))
+        {
+            if !self.editing && pressed.is_click(x, y) && pressed.app_id.as_str() == child {
+                if let Some(info) = self.registry.launch_info(&pressed.app_id) {
+                    self.execute_command(crate::app::event::AppCommand::LaunchApp(info));
+                }
+            }
+        }
+        let page_press = self.folders.page_press.take();
+        if self.editing
+            && page_press
+                .as_ref()
+                .is_some_and(|press| !press.moved_past_slop(x, y))
+            && matches!(
+                self.folder_hit_target(x, y),
+                Some(HitTarget::FolderPanel { .. })
+            )
+        {
+            self.exit_edit_mode();
+        }
+    }
+
+    fn settle_folder_page(&mut self, page: usize) {
+        if let Some(scroller) = self.folder_scroller.as_mut() {
+            scroller.settle_to_page(page);
+        } else {
+            self.folders.page = page;
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn update_folder_page_from_scroll(&mut self) {
+        let Some(layout) = self.folder_layout.as_ref() else {
+            return;
+        };
+        let Some(scroller) = self.folder_scroller.as_ref() else {
+            return;
+        };
+        let extent = layout.target_panel_rect.width.max(1.0);
+        self.folders.page = ((-scroller.position / extent).round() as isize)
+            .clamp(0, layout.page_count.saturating_sub(1) as isize)
+            as usize;
     }
 }

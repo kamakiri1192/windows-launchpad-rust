@@ -31,6 +31,7 @@ mod state;
 pub use state::{EditModeState, PointerSnapshot, PressSnapshot};
 
 use crate::domain::app_id::AppId;
+use crate::domain::launcher_item::LauncherItem;
 use crate::layout::grid::GridHit;
 use std::time::{Duration, Instant};
 
@@ -119,7 +120,7 @@ pub enum EditModeCommand {
     /// `editing = value`. The first transition logs "edit-mode: entered/exited".
     SetEditing(bool),
     /// `drag_app = value`. `None` clears an in-flight drag.
-    SetDragApp(Option<AppId>),
+    SetDragItem(Option<LauncherItem>),
     /// `drag_x` / `drag_y` = the pointer (the lifted tile follows the pointer).
     SetDragPos(f32, f32),
     /// `wiggle_phase = 0.0` (reset on entry so the wiggle starts fresh).
@@ -168,12 +169,15 @@ pub enum EditModeCommand {
 /// `visible_ids` is the current visible stream; `app_index` is the visible
 /// index the long-press started over (may be `None` for an empty long-press,
 /// in which case no app is lifted).
-pub fn enter(
+pub fn enter<T>(
     state: &mut EditModeState,
     app_index: Option<usize>,
-    visible_ids: &[AppId],
+    visible_items: &[T],
     pointer: PointerSnapshot,
-) -> Vec<EditModeCommand> {
+) -> Vec<EditModeCommand>
+where
+    T: Clone + Into<LauncherItem>,
+{
     state.editing = true;
     state.pending_press = false;
     state.wiggle_phase = 0.0;
@@ -184,11 +188,11 @@ pub fn enter(
         EditModeCommand::CancelScroll,
     ];
     if let Some(idx) = app_index {
-        if let Some(id) = visible_ids.get(idx).cloned() {
-            state.drag_app = Some(id.clone());
+        if let Some(item) = visible_items.get(idx).cloned().map(Into::into) {
+            state.drag_item = Some(item.clone());
             state.drag_x = pointer.x;
             state.drag_y = pointer.y;
-            cmds.push(EditModeCommand::SetDragApp(Some(id)));
+            cmds.push(EditModeCommand::SetDragItem(Some(item)));
             cmds.push(EditModeCommand::SetDragPos(pointer.x, pointer.y));
         }
     }
@@ -216,14 +220,14 @@ pub fn exit(
     commit_commands: Vec<EditModeCommand>,
 ) -> Vec<EditModeCommand> {
     let mut cmds = Vec::new();
-    if state.drag_app.is_some() {
+    if state.drag_item.is_some() {
         cmds.extend(commit_commands);
     }
     state.editing = false;
-    state.drag_app = None;
+    state.drag_item = None;
     state.pending_press = false;
     cmds.push(EditModeCommand::SetEditing(false));
-    cmds.push(EditModeCommand::SetDragApp(None));
+    cmds.push(EditModeCommand::SetDragItem(None));
     cmds.push(EditModeCommand::ClearPendingPress);
     cmds.push(EditModeCommand::Relayout);
     cmds.push(EditModeCommand::RequestRedraw);
@@ -232,20 +236,23 @@ pub fn exit(
 
 /// Start dragging the visible app at `visible_index`. Mirrors the edit-mode
 /// press branch's drag-start path.
-pub fn start_drag(
+pub fn start_drag<T>(
     state: &mut EditModeState,
-    visible_ids: &[AppId],
+    visible_items: &[T],
     visible_index: usize,
     pointer: PointerSnapshot,
-) -> Vec<EditModeCommand> {
-    let Some(id) = visible_ids.get(visible_index).cloned() else {
+) -> Vec<EditModeCommand>
+where
+    T: Clone + Into<LauncherItem>,
+{
+    let Some(item) = visible_items.get(visible_index).cloned().map(Into::into) else {
         return Vec::new();
     };
-    state.drag_app = Some(id.clone());
+    state.drag_item = Some(item.clone());
     state.drag_x = pointer.x;
     state.drag_y = pointer.y;
     vec![
-        EditModeCommand::SetDragApp(Some(id)),
+        EditModeCommand::SetDragItem(Some(item)),
         EditModeCommand::SetDragPos(pointer.x, pointer.y),
         EditModeCommand::Relayout,
         EditModeCommand::RequestRedraw,
@@ -273,7 +280,7 @@ pub fn drag_move(state: &mut EditModeState, pointer: PointerSnapshot) -> Vec<Edi
 pub fn commit_drag(state: &EditModeState) -> Vec<EditModeCommand> {
     // If there is no drag, commit is a no-op (the boundary may still need to
     // clear drag_app via `exit`).
-    if state.drag_app.is_none() {
+    if state.drag_item.is_none() {
         return Vec::new();
     }
     vec![
@@ -292,20 +299,32 @@ pub fn commit_drag(state: &EditModeState) -> Vec<EditModeCommand> {
 /// `hidden_ids` (the historical `reorder_by_index` early-returned in that case).
 /// Otherwise returns the new order and whether a reorder actually happened (the
 /// order differs from `visible + hidden`).
+pub fn apply_item_reorder(
+    visible_items: &[LauncherItem],
+    drag_item: &LauncherItem,
+    insert_idx: usize,
+) -> Option<Vec<LauncherItem>> {
+    let mut order = visible_items.to_vec();
+    let drag_pos = order.iter().position(|item| item == drag_item)?;
+    let item = order.remove(drag_pos);
+    order.insert(insert_idx.min(order.len()), item);
+    Some(order)
+}
+
+/// Backward-compatible app-only reorder helper retained for the deterministic
+/// Phase 4 tests and callers that explicitly operate on an app stream.
 pub fn apply_reorder(
     visible_ids: &[AppId],
     hidden_ids: &[AppId],
     drag_id: &AppId,
     insert_idx: usize,
 ) -> Option<Vec<AppId>> {
-    // Build the current order: visible stream, then hidden apps (preserved but
-    // never repositioned visibly). This matches the historical chain().
     let mut order: Vec<AppId> = visible_ids
         .iter()
         .chain(hidden_ids.iter())
         .cloned()
         .collect();
-    let drag_pos = order.iter().position(|i| i == drag_id)?;
+    let drag_pos = order.iter().position(|id| id == drag_id)?;
     let id = order.remove(drag_pos);
     order.insert(insert_idx.min(order.len()), id);
     Some(order)

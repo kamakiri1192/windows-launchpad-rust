@@ -2,11 +2,17 @@
 
 use super::*;
 use crate::domain::app_id::AppId;
+use crate::domain::folders::FolderId;
+use crate::domain::launcher_item::LauncherItem;
 use crate::layout::grid::GridHit;
 use std::time::{Duration, Instant};
 
 fn app(id: &str) -> AppId {
     AppId::from_normalized(id.to_string())
+}
+
+fn item(id: &str) -> LauncherItem {
+    LauncherItem::App(app(id))
 }
 
 fn ptr(x: f32, y: f32) -> PointerSnapshot {
@@ -142,7 +148,7 @@ fn enter_with_app_lifts_into_drag_and_resets_state() {
     assert!(state.editing);
     assert!(!state.pending_press);
     assert!((state.wiggle_phase - 0.0).abs() < 1e-6);
-    assert_eq!(state.drag_app, Some(app("b")));
+    assert_eq!(state.drag_item, Some(item("b")));
     assert!((state.drag_x - 200.0).abs() < 1e-6);
     assert!((state.drag_y - 300.0).abs() < 1e-6);
     // Must cancel scroll, clear pending press, reset wiggle, lift, relayout, redraw.
@@ -150,7 +156,7 @@ fn enter_with_app_lifts_into_drag_and_resets_state() {
     assert!(cmds.contains(&EditModeCommand::ClearPendingPress));
     assert!(cmds.contains(&EditModeCommand::ResetWigglePhase));
     assert!(cmds.contains(&EditModeCommand::SetEditing(true)));
-    assert!(cmds.contains(&EditModeCommand::SetDragApp(Some(app("b")))));
+    assert!(cmds.contains(&EditModeCommand::SetDragItem(Some(item("b")))));
     assert!(cmds.contains(&EditModeCommand::Relayout));
     assert!(cmds.contains(&EditModeCommand::RequestRedraw));
 }
@@ -161,11 +167,11 @@ fn enter_with_empty_long_press_does_not_lift() {
     let visible = vec![app("a"), app("b")];
     let cmds = enter(&mut state, None, &visible, ptr(50.0, 50.0));
     assert!(state.editing);
-    assert_eq!(state.drag_app, None);
+    assert_eq!(state.drag_item, None);
     // No SetDragApp command.
     assert!(!cmds
         .iter()
-        .any(|c| matches!(c, EditModeCommand::SetDragApp(Some(_)))));
+        .any(|c| matches!(c, EditModeCommand::SetDragItem(Some(_)))));
 }
 
 #[test]
@@ -174,17 +180,17 @@ fn enter_with_out_of_range_index_does_not_lift() {
     let visible = vec![app("a")];
     let cmds = enter(&mut state, Some(5), &visible, ptr(50.0, 50.0));
     assert!(state.editing);
-    assert_eq!(state.drag_app, None);
+    assert_eq!(state.drag_item, None);
     assert!(!cmds
         .iter()
-        .any(|c| matches!(c, EditModeCommand::SetDragApp(Some(_)))));
+        .any(|c| matches!(c, EditModeCommand::SetDragItem(Some(_)))));
 }
 
 #[test]
 fn exit_commits_drag_then_clears_state() {
     let mut state = EditModeState {
         editing: true,
-        drag_app: Some(app("b")),
+        drag_item: Some(item("b")),
         drag_x: 1.0,
         drag_y: 2.0,
         wiggle_phase: 0.5,
@@ -193,7 +199,7 @@ fn exit_commits_drag_then_clears_state() {
     let commit = commit_drag(&state);
     let cmds = exit(&mut state, commit);
     assert!(!state.editing);
-    assert_eq!(state.drag_app, None);
+    assert_eq!(state.drag_item, None);
     assert!(!state.pending_press);
     // Commit commands ran first (SetSortManual + persist).
     let commit_idx = cmds
@@ -208,7 +214,7 @@ fn exit_commits_drag_then_clears_state() {
         commit_idx < exit_idx,
         "commit must run before the exit clear"
     );
-    assert!(cmds.contains(&EditModeCommand::SetDragApp(None)));
+    assert!(cmds.contains(&EditModeCommand::SetDragItem(None)));
     assert!(cmds.contains(&EditModeCommand::PersistUserOrder));
     assert!(cmds.contains(&EditModeCommand::PersistSettings));
     assert!(cmds.contains(&EditModeCommand::Relayout));
@@ -218,7 +224,7 @@ fn exit_commits_drag_then_clears_state() {
 fn exit_without_drag_skips_commit() {
     let mut state = EditModeState {
         editing: true,
-        drag_app: None,
+        drag_item: None,
         ..EditModeState::default()
     };
     let cmds = exit(&mut state, Vec::new());
@@ -233,9 +239,9 @@ fn start_drag_lifts_visible_app() {
     let mut state = EditModeState::new();
     let visible = vec![app("a"), app("b"), app("c")];
     let cmds = start_drag(&mut state, &visible, 2, ptr(400.0, 500.0));
-    assert_eq!(state.drag_app, Some(app("c")));
+    assert_eq!(state.drag_item, Some(item("c")));
     assert!((state.drag_x - 400.0).abs() < 1e-6);
-    assert!(cmds.contains(&EditModeCommand::SetDragApp(Some(app("c")))));
+    assert!(cmds.contains(&EditModeCommand::SetDragItem(Some(item("c")))));
 }
 
 #[test]
@@ -244,14 +250,14 @@ fn start_drag_out_of_range_is_noop() {
     let visible = vec![app("a")];
     let cmds = start_drag(&mut state, &visible, 9, ptr(0.0, 0.0));
     assert!(cmds.is_empty());
-    assert_eq!(state.drag_app, None);
+    assert_eq!(state.drag_item, None);
 }
 
 #[test]
 fn drag_move_updates_follow_position() {
     let mut state = EditModeState {
         editing: true,
-        drag_app: Some(app("a")),
+        drag_item: Some(item("a")),
         ..EditModeState::default()
     };
     let cmds = drag_move(&mut state, ptr(123.0, 456.0));
@@ -264,7 +270,7 @@ fn drag_move_updates_follow_position() {
 #[test]
 fn commit_drag_only_persists_when_drag_in_flight() {
     let with_drag = EditModeState {
-        drag_app: Some(app("a")),
+        drag_item: Some(item("a")),
         ..EditModeState::default()
     };
     let without_drag = EditModeState::default();
@@ -308,6 +314,18 @@ fn apply_reorder_drag_id_not_present_returns_none() {
 }
 
 #[test]
+fn apply_item_reorder_inserts_app_between_adjacent_folders() {
+    let left = LauncherItem::Folder(FolderId::generate(1));
+    let right = LauncherItem::Folder(FolderId::generate(2));
+    let dragged = item("dragged");
+    let visible = vec![left.clone(), right.clone(), dragged.clone()];
+
+    let order = apply_item_reorder(&visible, &dragged, 1).unwrap();
+
+    assert_eq!(order, vec![left, dragged, right]);
+}
+
+#[test]
 fn hidden_order_after_hide_moves_id_to_tail() {
     let order = vec![app("a"), app("b"), app("c")];
     let new_order = hidden_order_after_hide(&order, &app("b"));
@@ -330,7 +348,7 @@ fn commit_drag_emits_set_sort_manual_before_persist() {
     // both settings and user order. The feature ordering keeps SetSortManual
     // first so the app boundary can apply it before persisting settings.
     let state = EditModeState {
-        drag_app: Some(app("a")),
+        drag_item: Some(item("a")),
         ..EditModeState::default()
     };
     let cmds = commit_drag(&state);
@@ -353,7 +371,7 @@ fn commit_drag_emits_set_sort_manual_before_persist() {
 #[test]
 fn commit_drag_emits_both_persist_commands() {
     let state = EditModeState {
-        drag_app: Some(app("a")),
+        drag_item: Some(item("a")),
         ..EditModeState::default()
     };
     let cmds = commit_drag(&state);

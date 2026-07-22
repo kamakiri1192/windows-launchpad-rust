@@ -23,7 +23,9 @@
 mod badges;
 pub(crate) mod controls;
 mod counters;
+mod focus_blur;
 mod frame;
+mod gpu_profile;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
 mod icons;
@@ -59,6 +61,12 @@ pub struct Renderer {
     decorated: bool,
     /// Static per-tile instance data (capacity-managed; see `resources`).
     instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
+    /// Whether the trailing top-level tile belongs to the lifted drag lane.
+    /// A modal folder-child drag also sets the global drag uniform, but must
+    /// not withhold an unrelated top-level tile from the normal pass.
+    top_level_dragged_tile_instance: bool,
+    modal_tile_instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
+    modal_dragged_tile_instance: bool,
     /// Per-frame uniform data (viewport + scroll).
     uniform_buffer: Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -66,6 +74,8 @@ pub struct Renderer {
     #[allow(dead_code)]
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
+    focus_blur: focus_blur::FocusBlurRenderer,
+    gpu_profiler: gpu_profile::GpuProfilerState,
 
     // -- Text rendering -------------------------------------------------
     text_pipeline: RenderPipeline,
@@ -79,7 +89,11 @@ pub struct Renderer {
     // -- Icon rendering -------------------------------------------------
     icon_pipeline: RenderPipeline,
     icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
-    dragged_icon_instance: bool,
+    modal_icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
+    modal_dragged_icon_instance: bool,
+    /// Number of trailing top-level icon instances belonging to the dragged
+    /// visual unit. Apps use one; a closed folder uses all preview miniatures.
+    dragged_icon_instance_count: u32,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
 
@@ -87,6 +101,11 @@ pub struct Renderer {
     // Fixed page-frame geometry in physical px, fed to the tile/icon/text
     // shaders so they clip to the frame's rounded rect. `(cx, cy, hw, hh, r)`.
     frame_clip: (f32, f32, f32, f32, f32),
+    /// Rectangular GPU scissor for generic modal content. It follows the
+    /// highest-z modal glass surface so paged folder children cannot leak
+    /// outside their panel while sliding.
+    modal_clip_rect: Option<crate::ui_model::geometry::Rect>,
+    modal_clip_radius: f32,
 
     // -- Bottom control overlays --------------------------------------
     // The control's glass capsule is drawn by the Liquid Glass pass (it's a
@@ -97,6 +116,7 @@ pub struct Renderer {
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
     control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    backdrop_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
     /// overlay pass alongside the bottom-control ink.
     gear_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
@@ -104,6 +124,10 @@ pub struct Renderer {
     badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
     badge_mark_scratch: Vec<crate::renderer::controls::ControlInstance>,
     badge_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    modal_badge_sources: Vec<EditBadgeSource>,
+    modal_badge_shape_scratch: Vec<crate::liquid_glass::geometry::GlassShape>,
+    modal_badge_mark_scratch: Vec<crate::renderer::controls::ControlInstance>,
+    modal_badge_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
@@ -111,6 +135,8 @@ pub struct Renderer {
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
     settings_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
+    modal_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    modal_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Last prepared neutral scene, updated lane-by-lane only when changed.
     prepared_model: crate::ui_model::render_model::RenderModel,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.
