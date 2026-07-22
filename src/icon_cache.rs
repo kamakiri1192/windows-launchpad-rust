@@ -41,7 +41,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// v2: invalidates icons cached during the IShellItemImageFactory-primary
 /// experiment (which produced blank icons for Blender/Discord). Bumping forces
 /// a full re-extraction with the restored main image-list strategy.
-pub const EXTRACTION_VERSION: u32 = 2;
+/// v3: replaces Steam's 32px client icons with high-resolution DisplayIcon or
+/// library-logo sources where available.
+pub const EXTRACTION_VERSION: u32 = 3;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).

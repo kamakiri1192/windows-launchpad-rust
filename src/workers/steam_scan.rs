@@ -8,6 +8,13 @@ use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 use crate::icons::extract;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SteamManifest {
+    app_id: String,
+    name: String,
+    install_dir: String,
+}
+
 /// Scan every configured Steam library for installed app manifests.
 pub fn scan_steam_apps() -> Vec<SnapshotEntry> {
     let Some(steam_root) = find_steam_root() else {
@@ -36,26 +43,26 @@ pub fn scan_steam_apps() -> Vec<SnapshotEntry> {
             let Ok(text) = fs::read_to_string(&manifest_path) else {
                 continue;
             };
-            let Some((app_id, name)) = parse_app_manifest(&text) else {
+            let Some(manifest) = parse_app_manifest(&text) else {
                 continue;
             };
             // Steam installs this shared runtime as an app manifest, but it is
             // not user-launchable and Steam itself hides it from the library.
-            if app_id == "228980" {
+            if manifest.app_id == "228980" {
                 continue;
             }
-            if !seen_app_ids.insert(app_id.clone()) {
+            if !seen_app_ids.insert(manifest.app_id.clone()) {
                 continue;
             }
 
-            let icon_path = find_library_icon(&steam_root, &app_id)
+            let icon_path = find_steam_icon(&steam_root, &library, &manifest)
                 .unwrap_or_else(|| steam_root.join("steam.exe"));
             let manifest_mtime = extract::file_mtime(&manifest_path);
             let icon_mtime = extract::file_mtime(&icon_path);
             entries.push(SnapshotEntry {
-                app_id: AppId::from_normalized(format!("steam:{app_id}")),
-                name,
-                link_path: format!("steam://rungameid/{app_id}"),
+                app_id: AppId::from_normalized(format!("steam:{}", manifest.app_id)),
+                name: manifest.name,
+                link_path: format!("steam://rungameid/{}", manifest.app_id),
                 link_mtime: manifest_mtime,
                 target_path: manifest_path.to_string_lossy().into_owned(),
                 target_mtime: icon_mtime,
@@ -75,10 +82,7 @@ fn find_steam_root() -> Option<PathBuf> {
 }
 
 fn registry_steam_root() -> Option<PathBuf> {
-    use windows::core::PCWSTR;
-    use windows::Win32::System::Registry::{
-        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
-    };
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
     let candidates = [
         (HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
@@ -90,41 +94,8 @@ fn registry_steam_root() -> Option<PathBuf> {
         (HKEY_LOCAL_MACHINE, r"Software\Valve\Steam", "InstallPath"),
     ];
     for (hive, key, value) in candidates {
-        let key = wide_null(key);
-        let value = wide_null(value);
-        let mut bytes = 0u32;
-        let first = unsafe {
-            RegGetValueW(
-                hive,
-                PCWSTR(key.as_ptr()),
-                PCWSTR(value.as_ptr()),
-                RRF_RT_REG_SZ,
-                None,
-                None,
-                Some(&mut bytes),
-            )
-        };
-        if !first.is_ok() || bytes < 2 {
-            continue;
-        }
-        let mut buffer = vec![0u16; (bytes as usize / 2) + 1];
-        let second = unsafe {
-            RegGetValueW(
-                hive,
-                PCWSTR(key.as_ptr()),
-                PCWSTR(value.as_ptr()),
-                RRF_RT_REG_SZ,
-                None,
-                Some(buffer.as_mut_ptr().cast()),
-                Some(&mut bytes),
-            )
-        };
-        if second.is_ok() {
-            let len = buffer
-                .iter()
-                .position(|&ch| ch == 0)
-                .unwrap_or(buffer.len());
-            let path = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
+        if let Some(value) = read_registry_string(hive, key, value) {
+            let path = PathBuf::from(value);
             if !path.as_os_str().is_empty() {
                 return Some(path);
             }
@@ -158,7 +129,7 @@ fn parse_library_paths(text: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-fn parse_app_manifest(text: &str) -> Option<(String, String)> {
+fn parse_app_manifest(text: &str) -> Option<SteamManifest> {
     let tokens = quoted_tokens(text);
     let value = |wanted: &str| {
         tokens.windows(2).find_map(|pair| {
@@ -169,8 +140,13 @@ fn parse_app_manifest(text: &str) -> Option<(String, String)> {
     };
     let app_id = value("appid")?;
     let name = value("name")?;
+    let install_dir = value("installdir").unwrap_or_default();
     if app_id.chars().all(|ch| ch.is_ascii_digit()) && !name.trim().is_empty() {
-        Some((app_id, name))
+        Some(SteamManifest {
+            app_id,
+            name,
+            install_dir,
+        })
     } else {
         None
     }
@@ -201,7 +177,185 @@ fn quoted_tokens(text: &str) -> Vec<String> {
     out
 }
 
-fn find_library_icon(steam_root: &Path, app_id: &str) -> Option<PathBuf> {
+fn find_steam_icon(steam_root: &Path, library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
+    let display_icon = find_uninstall_display_icon(&manifest.app_id);
+    if display_icon
+        .as_deref()
+        .is_some_and(icon_source_is_high_resolution)
+    {
+        return display_icon;
+    }
+
+    if let Some(logo) = find_high_resolution_logo(steam_root, &manifest.app_id) {
+        return Some(logo);
+    }
+
+    if let Some(executable) = find_matching_root_executable(library, manifest) {
+        return Some(executable);
+    }
+
+    display_icon.or_else(|| find_small_client_icon(steam_root, &manifest.app_id))
+}
+
+fn find_uninstall_display_icon(app_id: &str) -> Option<PathBuf> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    let subkeys = [
+        format!(
+            r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Steam App {app_id}"
+        ),
+        format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Steam App {app_id}"),
+    ];
+    for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        for subkey in &subkeys {
+            let Some(raw) = read_registry_string(hive, subkey, "DisplayIcon") else {
+                continue;
+            };
+            let path = parse_display_icon_path(&raw);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn read_registry_string(
+    hive: windows::Win32::System::Registry::HKEY,
+    key: &str,
+    value: &str,
+) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+
+    let key = wide_null(key);
+    let value = wide_null(value);
+    let mut bytes = 0u32;
+    unsafe {
+        RegGetValueW(
+            hive,
+            PCWSTR(key.as_ptr()),
+            PCWSTR(value.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut bytes),
+        )
+    }
+    .ok()
+    .ok()?;
+    if bytes < 2 {
+        return None;
+    }
+
+    let mut buffer = vec![0u16; (bytes as usize / 2) + 1];
+    unsafe {
+        RegGetValueW(
+            hive,
+            PCWSTR(key.as_ptr()),
+            PCWSTR(value.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+    }
+    .ok()
+    .ok()?;
+    let len = buffer
+        .iter()
+        .position(|&ch| ch == 0)
+        .unwrap_or(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..len]))
+}
+
+fn parse_display_icon_path(value: &str) -> PathBuf {
+    let value = value.trim();
+    let path = if let Some(quoted) = value.strip_prefix('"') {
+        quoted.split_once('"').map_or(quoted, |(path, _)| path)
+    } else if let Some((path, index)) = value.rsplit_once(',') {
+        if index.trim().parse::<i32>().is_ok() {
+            path.trim()
+        } else {
+            value
+        }
+    } else {
+        value
+    };
+    PathBuf::from(path)
+}
+
+fn icon_source_is_high_resolution(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "exe" | "dll") {
+        return true;
+    }
+    image::image_dimensions(path)
+        .map(|(width, height)| width.max(height) >= crate::icons::normalize::TARGET)
+        .unwrap_or(false)
+}
+
+fn find_high_resolution_logo(steam_root: &Path, app_id: &str) -> Option<PathBuf> {
+    let cache = steam_root.join("appcache").join("librarycache");
+    let app_cache = cache.join(app_id);
+    for name in ["logo.png", "logo.jpg", "logo.jpeg"] {
+        let candidate = app_cache.join(name);
+        if candidate.is_file() && icon_source_is_high_resolution(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn find_matching_root_executable(library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
+    if manifest.install_dir.is_empty() {
+        return None;
+    }
+    let install_root = library
+        .join("steamapps")
+        .join("common")
+        .join(&manifest.install_dir);
+    let wanted_name = normalized_executable_name(&manifest.name);
+    let wanted_dir = normalized_executable_name(&manifest.install_dir);
+    if wanted_name.is_empty() && wanted_dir.is_empty() {
+        return None;
+    }
+    let mut candidates: Vec<PathBuf> = fs::read_dir(install_root)
+        .ok()?
+        .flatten()
+        .map(|item| item.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        })
+        .filter(|path| {
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(normalized_executable_name)
+                .unwrap_or_default();
+            stem == wanted_name || stem == wanted_dir
+        })
+        .collect();
+    candidates.sort();
+    candidates.into_iter().next()
+}
+
+fn normalized_executable_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn find_small_client_icon(steam_root: &Path, app_id: &str) -> Option<PathBuf> {
     let cache = steam_root.join("appcache").join("librarycache");
     for extension in ["jpg", "png", "jpeg"] {
         let candidate = cache.join(format!("{app_id}_icon.{extension}"));
@@ -212,36 +366,18 @@ fn find_library_icon(steam_root: &Path, app_id: &str) -> Option<PathBuf> {
 
     let app_cache = cache.join(app_id);
     let items = fs::read_dir(app_cache).ok()?;
-    let mut candidates: Vec<(u8, PathBuf)> = items
+    let mut candidates: Vec<PathBuf> = items
         .flatten()
         .filter_map(|item| {
             let path = item.path();
-            if !path.is_file() || !is_image(&path) {
+            if !path.is_file() || !is_image(&path) || !looks_like_content_hash(&path) {
                 return None;
             }
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_ascii_lowercase();
-            // Modern Steam stores the client icon under its content hash, so a
-            // plain hash filename is preferable to the named cover artwork.
-            let rank = if name.contains("icon") || looks_like_content_hash(&path) {
-                0
-            } else if name.contains("logo") {
-                1
-            } else if name.contains("library_600x900") {
-                2
-            } else if name.contains("header") {
-                3
-            } else {
-                4
-            };
-            Some((rank, path))
+            Some(path)
         })
         .collect();
-    candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    candidates.into_iter().next().map(|(_, path)| path)
+    candidates.sort();
+    candidates.into_iter().next()
 }
 
 fn is_app_manifest(path: &Path) -> bool {
@@ -315,10 +451,14 @@ mod tests {
 
     #[test]
     fn parses_app_manifest_name_and_id() {
-        let text = r#""AppState" { "appid" "620" "name" "Portal 2" }"#;
+        let text = r#""AppState" { "appid" "620" "name" "Portal 2" "installdir" "Portal 2" }"#;
         assert_eq!(
             parse_app_manifest(text),
-            Some(("620".to_string(), "Portal 2".to_string()))
+            Some(SteamManifest {
+                app_id: "620".to_string(),
+                name: "Portal 2".to_string(),
+                install_dir: "Portal 2".to_string(),
+            })
         );
     }
 
@@ -326,5 +466,26 @@ mod tests {
     fn rejects_non_numeric_app_id() {
         let text = r#""AppState" { "appid" "oops" "name" "Broken" }"#;
         assert_eq!(parse_app_manifest(text), None);
+    }
+
+    #[test]
+    fn parses_quoted_and_indexed_display_icon_paths() {
+        assert_eq!(
+            parse_display_icon_path(r#""C:\Steam\game.ico",0"#),
+            PathBuf::from(r"C:\Steam\game.ico")
+        );
+        assert_eq!(
+            parse_display_icon_path(r"C:\Steam\game.exe,-1"),
+            PathBuf::from(r"C:\Steam\game.exe")
+        );
+    }
+
+    #[test]
+    fn normalizes_names_for_strong_executable_matching() {
+        assert_eq!(normalized_executable_name("Desktop Mate"), "desktopmate");
+        assert_eq!(
+            normalized_executable_name("XSOverlay_Beta"),
+            "xsoverlaybeta"
+        );
     }
 }
