@@ -424,7 +424,12 @@ impl App {
                 self.handle_focus(focused);
             }
             AppAction::BackdropFrameArrived => {
-                self.execute_command(AppCommand::RequestRedraw);
+                // A final capture can complete just after the launcher hides.
+                // Do not let that event restart a render/capture loop for an
+                // invisible window; summon() requests a fresh frame on show.
+                if self.visible {
+                    self.execute_command(AppCommand::RequestRedraw);
+                }
             }
             AppAction::DrainInbox => {
                 if !self.qa_enabled() {
