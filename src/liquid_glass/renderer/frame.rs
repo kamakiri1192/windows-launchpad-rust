@@ -216,17 +216,17 @@ impl LiquidGlassRenderer {
         ) && !self.debug.disable_blur
             && self.params.blur_radius >= 0.5;
 
-        // Reuse the pyramid textures only after the normal backdrop blur has
-        // finished. The first downsample reads the full-resolution normal blur
-        // instead of the raw capture; the last upsample writes a separate
-        // prominent texture consumed only by the settings panel.
+        // The settings pass owns a completely separate pyramid. Its first
+        // downsample reads the full-resolution normal blur instead of the raw
+        // capture, and its last upsample writes a prominent texture consumed
+        // only by the settings panel. No normal page-glass resource is mutated.
         let mut prominent_blur_commands = Vec::with_capacity(PROMINENT_CAPTURE_BLUR_LEVELS * 2);
         for i in 0..if refreshed_prominent_blur {
             PROMINENT_CAPTURE_BLUR_LEVELS
         } else {
             0
         } {
-            let dst = &self.blur_levels[i].1;
+            let dst = &self.prominent_blur_levels[i].1;
             let label = format!("prominent capture blur downsample L{i}->L{}", i + 1);
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some(label.as_str()),
@@ -262,7 +262,7 @@ impl LiquidGlassRenderer {
             let dst = if j == PROMINENT_CAPTURE_BLUR_LEVELS - 1 {
                 &self.prominent_blur_view
             } else {
-                &self.blur_levels[PROMINENT_CAPTURE_BLUR_LEVELS - 2 - j].1
+                &self.prominent_blur_levels[PROMINENT_CAPTURE_BLUR_LEVELS - 2 - j].1
             };
             let bind_idx = 3 - PROMINENT_CAPTURE_BLUR_LEVELS + j;
             let label = format!(
@@ -291,7 +291,7 @@ impl LiquidGlassRenderer {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&self.blur_upsample_pipeline);
-                pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
+                pass.set_bind_group(0, &self.prominent_blur_up_bind_groups[bind_idx], &[]);
                 pass.draw(0..3, 0..1);
             }
             prominent_blur_commands.push(enc.finish());

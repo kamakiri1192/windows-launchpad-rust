@@ -227,6 +227,9 @@ pub struct LiquidGlassRenderer {
     prominent_blur_view: wgpu::TextureView,
     /// Pyramids L1=1/2, L2=1/4, L3=1/8 (src for downsample, dst for upsample).
     blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
+    /// Dedicated settings-only pyramid. Keeping it separate prevents the
+    /// prominent pass from mutating resources used by the normal page glass.
+    prominent_blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
     sampler: wgpu::Sampler,
     geometry_pipeline: wgpu::RenderPipeline,
     badge_geometry_pipeline: wgpu::RenderPipeline,
@@ -240,9 +243,10 @@ pub struct LiquidGlassRenderer {
     /// Downsample bind groups: index i reads level i (level 0 == backdrop) and
     /// writes blur_levels[i]. Recreated when the backdrop source view changes.
     blur_down_bind_groups: [wgpu::BindGroup; 3],
-    /// Second-pass downsample chain. Its first source is `blur_view` rather
-    /// than the raw desktop capture; later levels reuse the normal pyramid.
+    /// Settings-only downsample chain. Its first source is `blur_view` rather
+    /// than the raw desktop capture; later levels stay in the dedicated pyramid.
     prominent_blur_down_bind_groups: [wgpu::BindGroup; 3],
+    prominent_blur_up_bind_groups: [wgpu::BindGroup; 3],
     /// Upsample bind groups: index i reads blur_levels[i+1] and writes
     /// blur_levels[i] (or the full-res blur texture for i == 2).
     blur_up_bind_groups: [wgpu::BindGroup; 3],
@@ -525,6 +529,11 @@ impl LiquidGlassRenderer {
             create_blur_texture_raw(device, width, height, 2, "blur level 2"),
             create_blur_texture_raw(device, width, height, 3, "blur level 3"),
         ];
+        let prominent_blur_levels = [
+            create_blur_texture_raw(device, width, height, 1, "prominent blur level 1"),
+            create_blur_texture_raw(device, width, height, 2, "prominent blur level 2"),
+            create_blur_texture_raw(device, width, height, 3, "prominent blur level 3"),
+        ];
         upload_initial_backdrop(queue, &backdrop_texture, width, height);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -696,14 +705,15 @@ impl LiquidGlassRenderer {
             &blur_view,
             &sampler,
         );
-        let (prominent_blur_down_bind_groups, _) = create_blur_pyramid_bind_groups(
-            device,
-            &blur_bind_group_layout,
-            &blur_view,
-            &blur_levels,
-            &prominent_blur_view,
-            &sampler,
-        );
+        let (prominent_blur_down_bind_groups, prominent_blur_up_bind_groups) =
+            create_blur_pyramid_bind_groups(
+                device,
+                &blur_bind_group_layout,
+                &blur_view,
+                &prominent_blur_levels,
+                &prominent_blur_view,
+                &sampler,
+            );
 
         let geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("liquid glass geometry shader"),
@@ -920,6 +930,7 @@ impl LiquidGlassRenderer {
             prominent_blur_texture,
             prominent_blur_view,
             blur_levels,
+            prominent_blur_levels,
             sampler,
             geometry_pipeline,
             badge_geometry_pipeline,
@@ -932,6 +943,7 @@ impl LiquidGlassRenderer {
             geometry_bind_group,
             blur_down_bind_groups,
             prominent_blur_down_bind_groups,
+            prominent_blur_up_bind_groups,
             blur_up_bind_groups,
             final_bind_group,
             grid_overlay_final_bind_group,
@@ -975,6 +987,11 @@ impl LiquidGlassRenderer {
             create_blur_texture_raw(device, width, height, 2, "blur level 2"),
             create_blur_texture_raw(device, width, height, 3, "blur level 3"),
         ];
+        let prominent_blur_levels = [
+            create_blur_texture_raw(device, width, height, 1, "prominent blur level 1"),
+            create_blur_texture_raw(device, width, height, 2, "prominent blur level 2"),
+            create_blur_texture_raw(device, width, height, 3, "prominent blur level 3"),
+        ];
         upload_initial_backdrop(queue, &backdrop_texture, width, height);
 
         self.geometry_texture = geometry_texture;
@@ -992,6 +1009,7 @@ impl LiquidGlassRenderer {
         self.prominent_blur_texture = prominent_blur_texture;
         self.prominent_blur_view = prominent_blur_view;
         self.blur_levels = blur_levels;
+        self.prominent_blur_levels = prominent_blur_levels;
         self.texture_size = (width, height);
         self.blur_dirty = true;
         self.prominent_blur_dirty = true;
@@ -1006,15 +1024,16 @@ impl LiquidGlassRenderer {
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
-        let (prominent_down, _) = create_blur_pyramid_bind_groups(
+        let (prominent_down, prominent_up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
             &self.blur_view,
-            &self.blur_levels,
+            &self.prominent_blur_levels,
             &self.prominent_blur_view,
             &self.sampler,
         );
         self.prominent_blur_down_bind_groups = prominent_down;
+        self.prominent_blur_up_bind_groups = prominent_up;
         let backdrop_view = self.backdrop_view.clone();
         self.rebuild_final_bind_groups(device, &backdrop_view);
     }
@@ -1032,15 +1051,16 @@ impl LiquidGlassRenderer {
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
-        let (prominent_down, _) = create_blur_pyramid_bind_groups(
+        let (prominent_down, prominent_up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
             &self.blur_view,
-            &self.blur_levels,
+            &self.prominent_blur_levels,
             &self.prominent_blur_view,
             &self.sampler,
         );
         self.prominent_blur_down_bind_groups = prominent_down;
+        self.prominent_blur_up_bind_groups = prominent_up;
         self.rebuild_final_bind_groups(device, view);
     }
 
@@ -1193,6 +1213,29 @@ impl LiquidGlassRenderer {
                 create_blur_texture_raw(device, frame.width, frame.height, 2, "blur level 2"),
                 create_blur_texture_raw(device, frame.width, frame.height, 3, "blur level 3"),
             ];
+            let prominent_blur_levels = [
+                create_blur_texture_raw(
+                    device,
+                    frame.width,
+                    frame.height,
+                    1,
+                    "prominent blur level 1",
+                ),
+                create_blur_texture_raw(
+                    device,
+                    frame.width,
+                    frame.height,
+                    2,
+                    "prominent blur level 2",
+                ),
+                create_blur_texture_raw(
+                    device,
+                    frame.width,
+                    frame.height,
+                    3,
+                    "prominent blur level 3",
+                ),
+            ];
             self.backdrop_texture = backdrop_texture;
             self.backdrop_view = backdrop_view;
             self.blur_texture = blur_texture;
@@ -1200,6 +1243,7 @@ impl LiquidGlassRenderer {
             self.prominent_blur_texture = prominent_blur_texture;
             self.prominent_blur_view = prominent_blur_view;
             self.blur_levels = blur_levels;
+            self.prominent_blur_levels = prominent_blur_levels;
             self.prominent_blur_dirty = true;
         }
         self.backdrop_mapping = next_mapping;
@@ -1258,11 +1302,17 @@ impl LiquidGlassRenderer {
                     create_blur_texture_raw(device, width, height, 2, "blur level 2"),
                     create_blur_texture_raw(device, width, height, 3, "blur level 3"),
                 ];
+                let prominent_blur_levels = [
+                    create_blur_texture_raw(device, width, height, 1, "prominent blur level 1"),
+                    create_blur_texture_raw(device, width, height, 2, "prominent blur level 2"),
+                    create_blur_texture_raw(device, width, height, 3, "prominent blur level 3"),
+                ];
                 self.blur_texture = blur_texture;
                 self.blur_view = blur_view;
                 self.prominent_blur_texture = prominent_blur_texture;
                 self.prominent_blur_view = prominent_blur_view;
                 self.blur_levels = blur_levels;
+                self.prominent_blur_levels = prominent_blur_levels;
                 self.prominent_blur_dirty = true;
             }
             self.bind_backdrop_view(device, &gpu_view);
