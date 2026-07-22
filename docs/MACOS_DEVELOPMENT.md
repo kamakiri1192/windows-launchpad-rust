@@ -140,3 +140,16 @@ Pull request labels start opt-in macOS artifact workflows:
 The visual artifact verifies rendering without foreground or Screen Recording
 access. It does not replace interactive testing of ScreenCaptureKit permission,
 the global shortcut, menu-bar actions, or multi-monitor behavior.
+
+## Release artifacts
+
+Publishing a GitHub Release runs `release-assets.yml` for both supported
+platforms. In addition to the Windows x86-64 ZIP, the workflow builds an Apple
+Silicon `Launchpad.app` for macOS 14+, bundles the Swift runtime libraries,
+ad-hoc signs the complete bundle, and attaches a `macos-arm64.zip` asset to the
+release. The release tag is copied into `CFBundleShortVersionString` when it is
+a version-like tag such as `v0.1.0`.
+
+The macOS release is not Developer ID signed or notarized. A downloaded build
+may therefore require removing quarantine as described in its bundled
+`BUILD_INFO.txt` until signing credentials are configured in GitHub Actions.
