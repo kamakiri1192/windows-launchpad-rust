@@ -24,6 +24,11 @@ fn configure_macos_swift_runtime() {
         return;
     }
 
+    // Review artifacts bundle Swift libraries inside Launchpad.app. Keep the
+    // executable relocatable instead of relying only on the build machine's
+    // selected Xcode toolchain.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+
     let Ok(output) = std::process::Command::new("xcrun")
         .args(["--find", "swift"])
         .output()

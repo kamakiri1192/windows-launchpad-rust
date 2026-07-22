@@ -1,0 +1,186 @@
+name: PR macOS Artifacts
+
+on:
+  pull_request:
+    types:
+      - synchronize
+      - labeled
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-macos-artifacts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+  TARGET: aarch64-apple-darwin
+  BIN_NAME: launchpad-windows
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+jobs:
+  binary:
+    name: Build macOS review application
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'build:macos-binary'
+          ) ||
+          (
+            github.event.action == 'synchronize' &&
+            contains(github.event.pull_request.labels.*.name, 'build:macos-binary')
+          )
+        )
+      )
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target "$TARGET"
+          rustup default "$RUST_VERSION"
+
+      - name: Cache Cargo registry and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-review-release-${{ env.TARGET }}
+
+      - name: Build release application
+        run: cargo build --release --locked --target "$TARGET" --bin "$BIN_NAME"
+
+      - name: Package application bundle
+        id: package
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          short_sha="${PR_HEAD_SHA:0:7}"
+          if [[ "$PR_NUMBER" == "manual" ]]; then
+            artifact_name="$BIN_NAME-manual-$short_sha-macos-arm64"
+          else
+            artifact_name="$BIN_NAME-pr-$PR_NUMBER-$short_sha-macos-arm64"
+          fi
+
+          app_dir="dist/$artifact_name/Launchpad.app"
+          contents="$app_dir/Contents"
+          mkdir -p "$contents/MacOS" "$contents/Frameworks" "$contents/Resources"
+          cp "target/$TARGET/release/$BIN_NAME" "$contents/MacOS/$BIN_NAME"
+          cp assets/macos/Info.plist "$contents/Info.plist"
+
+          cat > "$contents/Resources/BUILD_INFO.txt" <<EOF
+          Repository: $GITHUB_REPOSITORY
+          Workflow: $GITHUB_WORKFLOW
+          PR: $PR_NUMBER
+          Commit: $PR_HEAD_SHA
+          Target: $TARGET
+          Built at UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Purpose: PR review artifact. Not an official release.
+
+          This application is ad-hoc signed. If Gatekeeper retains the
+          downloaded artifact quarantine, run:
+            xattr -dr com.apple.quarantine Launchpad.app
+          EOF
+
+          xcrun swift-stdlib-tool \
+            --copy \
+            --scan-executable "$contents/MacOS/$BIN_NAME" \
+            --destination "$contents/Frameworks" \
+            --platform macosx \
+            --strip-bitcode
+
+          find "$contents/Frameworks" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
+          codesign --force --deep --sign - "$app_dir"
+          codesign --verify --deep --strict "$app_dir"
+
+          archive="dist/$artifact_name.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$archive"
+          test -s "$archive"
+
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review application
+        id: upload_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Add artifact link to step summary
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## macOS review application
+
+          - Artifact: [$ARTIFACT_NAME]($ARTIFACT_URL)
+          - Platform: macOS 14+, Apple Silicon
+          - Packaging: ad-hoc signed Launchpad.app with Swift runtime libraries
+          - Retention: 7 days
+          - Purpose: PR review artifact. Not an official release.
+          EOF
+
+      - name: Comment artifact link on PR
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MARKER: '<!-- pr-macos-binary-artifact -->'
+        with:
+          script: |
+            const marker = process.env.MARKER;
+            const artifactName = process.env.ARTIFACT_NAME;
+            const artifactUrl = process.env.ARTIFACT_URL;
+            const shortSha = process.env.PR_HEAD_SHA.slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const downloadUrl = artifactUrl || runUrl;
+            const body = [
+              marker,
+              '✅ macOS review application has been built.',
+              '',
+              `- Artifact: [${artifactName}](${downloadUrl})`,
+              `- Workflow run: [PR macOS Artifacts](${runUrl})`,
+              `- Commit: \`${shortSha}\``,
+              '- Platform: macOS 14+, Apple Silicon',
+              '- Retention: 7 days',
+              '',
+              'This is an ad-hoc signed temporary review artifact, not an official release.',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
