@@ -5,7 +5,9 @@ use crate::app::state::App;
 use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::layout::folder_panel::{self, FolderChildInput, FolderPanelInput};
-use crate::renderer::text_engine::{CenteredLineSpec, GlyphQuad, Label, TextRenderer};
+use crate::renderer::text_engine::{
+    CenteredLineSpec, GlyphQuad, Label, TextRenderer, UI_FONT_FAMILY,
+};
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::grid::TileAnim;
 use crate::ui_model::ids::UiId;
@@ -346,7 +348,7 @@ impl App {
                         text: &fitted,
                         font_size: view.style.size,
                         line_height,
-                        family: "Yu Gothic UI",
+                        family: UI_FONT_FAMILY,
                         color: [
                             view.style.color.r,
                             view.style.color.g,
@@ -376,7 +378,7 @@ impl App {
                     text: &visible,
                     font_size: title_view.style.size,
                     line_height,
-                    family: "Yu Gothic UI",
+                    family: UI_FONT_FAMILY,
                     color: [1.0; 4],
                     center: (0.0, 0.0),
                     scale_factor: self.scale_factor,
@@ -385,7 +387,7 @@ impl App {
                     text: &caret_prefix,
                     font_size: title_view.style.size,
                     line_height,
-                    family: "Yu Gothic UI",
+                    family: UI_FONT_FAMILY,
                     color: [1.0; 4],
                     center: (0.0, 0.0),
                     scale_factor: self.scale_factor,
@@ -600,7 +602,7 @@ fn fit_centered_text(
                 text,
                 font_size,
                 line_height,
-                family: "Yu Gothic UI",
+                family: UI_FONT_FAMILY,
                 color: [1.0; 4],
                 center: (0.0, 0.0),
                 scale_factor,

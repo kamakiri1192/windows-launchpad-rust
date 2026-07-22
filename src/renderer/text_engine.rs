@@ -144,21 +144,26 @@ const ATLAS_W: u32 = 1024;
 const ATLAS_H: u32 = 1024;
 /// 1px padding between glyphs to avoid bleeding at UV edges.
 const PAD: u32 = 1;
-const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
+#[cfg(target_os = "macos")]
+pub const UI_FONT_FAMILY: &str = ".SF NS";
+#[cfg(not(target_os = "macos"))]
+pub const UI_FONT_FAMILY: &str = "Yu Gothic UI";
 const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
 const LABEL_LAYOUT_CACHE_CAPACITY: usize = 4096;
-/// Soft, layered shadow in logical px: (x offset, y offset, alpha).
+/// Strong, soft-edged shadow in logical px: (x offset, y offset, alpha).
+/// Shared by app labels, folder labels, and the open-folder title.
 const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
-    (0.0, 1.0, 0.30),
-    (0.0, 2.0, 0.14),
-    (-0.7, 1.2, 0.10),
-    (0.7, 1.2, 0.10),
+    (0.0, 1.0, 0.48),
+    (0.0, 2.0, 0.26),
+    (-0.8, 1.3, 0.18),
+    (0.8, 1.3, 0.18),
+    (0.0, 3.0, 0.12),
 ];
 
 impl TextRenderer {
     pub fn new() -> Self {
-        let font_system = FontSystem::new();
+        let font_system = platform_font_system();
         let swash = SwashCache::new();
         let atlas = vec![0u8; (ATLAS_W * ATLAS_H * 4) as usize];
         Self {
@@ -355,7 +360,7 @@ impl TextRenderer {
     fn layout_phase(&mut self, labels: &[Label], scale_factor: f32) -> Vec<PlacedGlyph> {
         let metrics = Metrics::new(LABEL_FONT_SIZE, LABEL_LINE_HEIGHT);
         let attrs = Attrs::new()
-            .family(Family::Name(LABEL_FONT_FAMILY))
+            .family(Family::Name(UI_FONT_FAMILY))
             .color(Color::rgba(255, 255, 255, 255));
 
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
@@ -566,6 +571,55 @@ impl TextRenderer {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn platform_font_system() -> FontSystem {
+    let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
+    macos_font_system_for_locale(&locale)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_font_system_for_locale(locale: &str) -> FontSystem {
+    let mut db = cosmic_text::fontdb::Database::new();
+    db.load_system_fonts();
+    db.set_sans_serif_family(UI_FONT_FAMILY);
+    db.set_serif_family("New York");
+    db.set_monospace_family("Menlo");
+
+    FontSystem::new_with_locale_and_db(macos_fallback_locale(locale), db)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_font_system() -> FontSystem {
+    FontSystem::new()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_fallback_locale(locale: &str) -> String {
+    let normalized = locale.replace('_', "-");
+    let mut subtags = normalized.split('-');
+    match subtags
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "ja" => "ja".to_owned(),
+        "ko" => "ko".to_owned(),
+        "zh" => {
+            let region = subtags.find_map(|subtag| {
+                let upper = subtag.to_ascii_uppercase();
+                matches!(upper.as_str(), "HK" | "TW").then_some(upper)
+            });
+            match region.as_deref() {
+                Some("HK") => "zh-HK".to_owned(),
+                Some("TW") => "zh-TW".to_owned(),
+                _ => "zh-CN".to_owned(),
+            }
+        }
+        _ => normalized,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,5 +660,39 @@ mod tests {
             assert!((after.x - before.x - 120.0).abs() < 0.01);
             assert!((after.y - before.y).abs() < 0.01);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_locale_uses_region_appropriate_han_fallback() {
+        assert_eq!(macos_fallback_locale("ja-JP"), "ja");
+        assert_eq!(macos_fallback_locale("ja_JP"), "ja");
+        assert_eq!(macos_fallback_locale("ko-KR"), "ko");
+        assert_eq!(macos_fallback_locale("zh-Hant-TW"), "zh-TW");
+        assert_eq!(macos_fallback_locale("zh-Hant-HK"), "zh-HK");
+        assert_eq!(macos_fallback_locale("zh-Hans-CN"), "zh-CN");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_japanese_text_uses_hiragino_instead_of_simplified_chinese() {
+        let mut font_system = macos_font_system_for_locale("ja-JP");
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(24.0, 30.0));
+        buffer.set_text(
+            "制作とコミュニケーション",
+            &Attrs::new().family(Family::Name(UI_FONT_FAMILY)),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+
+        let family_names: Vec<_> = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .filter_map(|glyph| font_system.db().face(glyph.font_id))
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()))
+            .collect();
+        assert!(family_names.contains(&"Hiragino Sans"));
+        assert!(!family_names.contains(&"PingFang SC"));
     }
 }

@@ -259,7 +259,7 @@ pub(crate) fn settings_press_target_from_layout_hit(
 
 const SETTINGS_TITLE: &str = "設定";
 /// Title font for the settings panel.
-const SETTINGS_TITLE_FONT: &str = "Yu Gothic UI";
+const SETTINGS_TITLE_FONT: &str = text::UI_FONT_FAMILY;
 const SETTINGS_SIDEBAR_W: f32 = 210.0;
 const SETTINGS_SIDEBAR_TOP: f32 = 78.0;
 const SETTINGS_SIDEBAR_ROW_H: f32 = 38.0;

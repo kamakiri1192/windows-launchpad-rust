@@ -406,7 +406,7 @@ fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometr
     }
 }
 
-const QUERY_LABEL_FONT: &str = "Yu Gothic UI";
+const QUERY_LABEL_FONT: &str = text::UI_FONT_FAMILY;
 const QUERY_LABEL_SIZE: f32 = 13.0;
 const QUERY_LABEL_LINE: f32 = 18.0;
 const DONE_LABEL: &str = "完了";
