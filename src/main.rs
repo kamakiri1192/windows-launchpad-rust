@@ -169,7 +169,7 @@ fn main() {
 
     // File-backed debug logger. Opt-in via LAUNCHPAD_DEBUG env var so the
     // release build is silent by default; when on it writes to
-    // %LOCALAPPDATA%\Launchpad\debug.log (visible even with no console).
+    // the platform-native diagnostic directory (visible even with no console).
     debug_logger::init();
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();

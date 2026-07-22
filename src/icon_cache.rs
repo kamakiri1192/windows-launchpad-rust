@@ -7,8 +7,8 @@
 //! or *invalid* (mtime/icon-location/schema/extraction-version changed) get
 //! re-extracted by the worker.
 //!
-//! Storage location: `%LOCALAPPDATA%\Launchpad\cache.sqlite3`. Falls back to a
-//! `launchpad-windows/cache.sqlite3` next to the exe if `LOCALAPPDATA` is unset.
+//! Storage location: `%LOCALAPPDATA%\Launchpad\cache.sqlite3` on Windows and
+//! `~/Library/Application Support/Launchpad/cache.sqlite3` on macOS.
 //!
 //! Resilience:
 //!   - If the DB file is corrupt / the schema can't be opened, we delete it and
@@ -554,16 +554,10 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Resolve `%LOCALAPPDATA%\Launchpad\cache.sqlite3`, or a fallback next to the
-/// current exe. Kept pub(crate) so docs/tests can reference the same path.
+/// Resolve the platform-native persistent database path. Kept pub(crate) so
+/// docs/tests can reference the same path.
 pub(crate) fn default_db_path() -> PathBuf {
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local).join("Launchpad").join("cache.sqlite3");
-    }
-    let mut p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    p.pop();
-    p.push("launchpad-cache.sqlite3");
-    p
+    crate::platform::paths::app_data_dir().join("cache.sqlite3")
 }
 
 #[cfg(test)]
@@ -746,10 +740,12 @@ mod tests {
     }
 
     #[test]
-    fn default_db_path_under_localappdata_when_set() {
-        // In CI / test envs LOCALAPPDATA is usually set; just assert it's sane.
+    fn default_db_path_uses_platform_data_directory() {
         let p = default_db_path();
-        assert!(p.to_string_lossy().ends_with("cache.sqlite3"));
+        assert_eq!(
+            p,
+            crate::platform::paths::app_data_dir().join("cache.sqlite3")
+        );
     }
 
     #[test]
