@@ -29,11 +29,17 @@ def verify(root: Path) -> None:
     if not manifests:
         fail(f"expected at least one manifest below {root}")
 
+    scenarios: set[str] = set()
     for manifest_path in manifests:
-        verify_manifest(manifest_path)
+        scenarios.add(verify_manifest(manifest_path))
+
+    expected = {"folder-interactions", "folder-creation"}
+    missing = expected - scenarios
+    if missing:
+        fail(f"missing required scenarios: {', '.join(sorted(missing))}")
 
 
-def verify_manifest(manifest_path: Path) -> None:
+def verify_manifest(manifest_path: Path) -> str:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("completed") is not True:
         fail("scenario did not complete")
@@ -59,6 +65,8 @@ def verify_manifest(manifest_path: Path) -> None:
         fail(f"expected at least 3 visually distinct frames, found {len(hashes)}")
 
     scenario = manifest.get("scenario")
+    if not isinstance(scenario, str) or not scenario:
+        fail(f"{manifest_path} has no scenario name")
     required_states = {"folder open": any(frame.get("folder_open") for frame in frames)}
     if scenario == "folder-interactions":
         required_states["second folder page"] = any(
@@ -88,6 +96,7 @@ def verify_manifest(manifest_path: Path) -> None:
         f"visual QA verified ({scenario}): {len(frames)} frames, "
         f"{len(hashes)} distinct images, viewport {viewport[0]}x{viewport[1]}"
     )
+    return scenario
 
 
 def main() -> None:

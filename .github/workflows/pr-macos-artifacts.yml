@@ -243,7 +243,7 @@ jobs:
           WGPU_BACKEND: metal
         run: |
           set -euo pipefail
-          rm -rf target/qa-sequences target/qa-home
+          rm -rf target/qa-sequences target/qa-home target/qa-artifacts
           mkdir -p target/qa-sequences target/qa-home target/qa-artifacts
           for scenario in folder_interactions folder_creation; do
             HOME="${{ github.workspace }}/target/qa-home/$scenario" \
@@ -259,9 +259,11 @@ jobs:
         if: always()
         run: |
           mkdir -p target/qa-artifacts
-          if [[ -d "target/qa-home/Library/Logs/Launchpad" ]]; then
-            cp -R target/qa-home/Library/Logs/Launchpad target/qa-artifacts/Launchpad-logs
-          fi
+          find target/qa-home -type d -path '*/Library/Logs/Launchpad' -print0 |
+            while IFS= read -r -d '' log_dir; do
+              scenario="$(basename "$(dirname "$(dirname "$(dirname "$log_dir")")")")"
+              cp -R "$log_dir" "target/qa-artifacts/Launchpad-logs-$scenario"
+            done
           find target/qa-sequences -name manifest.json -print \
             > target/qa-artifacts/manifests.txt || true
 
@@ -288,7 +290,7 @@ jobs:
 
           - Artifact: [$ARTIFACT_NAME]($ARTIFACT_URL)
           - Contents: deterministic GPU-captured PNG sequence, manifest, and logs
-          - Scenario: folder interactions at 1280x800 / 30 fps
+          - Scenarios: folder interactions and folder creation at 1280x800 / 30 fps
           - Retention: 7 days
 
           This validates the application render path. ScreenCaptureKit permission,
