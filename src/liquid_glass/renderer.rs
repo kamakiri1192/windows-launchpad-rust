@@ -62,6 +62,7 @@ struct RenderStats {
     captured_frames: u32,
     blurred_frames: u32,
     geometry_frames: u32,
+    geometry_shapes: u64,
     capture_time: Duration,
     upload_time: Duration,
     render_time: Duration,
@@ -75,6 +76,7 @@ impl RenderStats {
             captured_frames: 0,
             blurred_frames: 0,
             geometry_frames: 0,
+            geometry_shapes: 0,
             capture_time: Duration::ZERO,
             upload_time: Duration::ZERO,
             render_time: Duration::ZERO,
@@ -85,7 +87,7 @@ impl RenderStats {
         &mut self,
         captured: bool,
         blurred: bool,
-        geometry_refreshed: bool,
+        geometry_shape_count: Option<u32>,
         capture_time: Duration,
         upload_time: Duration,
         render_time: Duration,
@@ -99,8 +101,9 @@ impl RenderStats {
         if blurred {
             self.blurred_frames += 1;
         }
-        if geometry_refreshed {
+        if let Some(geometry_shape_count) = geometry_shape_count {
             self.geometry_frames += 1;
+            self.geometry_shapes += u64::from(geometry_shape_count);
         }
         self.render_time += render_time;
 
@@ -126,8 +129,13 @@ impl RenderStats {
         } else {
             100.0 * (1.0 - self.geometry_frames as f32 / self.frames as f32)
         };
+        let avg_geometry_shapes = if self.geometry_frames == 0 {
+            0.0
+        } else {
+            self.geometry_shapes as f32 / self.geometry_frames as f32
+        };
         eprintln!(
-            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} blur_fps={blur_fps:.1} blur_reuse={blur_reuse:.0}% geometry_fps={geometry_fps:.1} geometry_reuse={geometry_reuse:.0}% render_ms={avg_render_ms:.2}"
+            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} blur_fps={blur_fps:.1} blur_reuse={blur_reuse:.0}% geometry_fps={geometry_fps:.1} geometry_reuse={geometry_reuse:.0}% geometry_shapes={avg_geometry_shapes:.1} render_ms={avg_render_ms:.2}"
         );
 
         *self = Self::new();
@@ -189,6 +197,11 @@ pub struct LiquidGlassRenderer {
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
+    /// Base shapes that can affect the fixed page frame at the current scroll
+    /// position. Off-frame pages are culled on the CPU before the full-screen
+    /// SDF shader sees them.
+    active_base_shapes: Vec<GlassShape>,
+    base_shape_scratch: Vec<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
     overlay_geometry_texture: wgpu::Texture,
@@ -259,6 +272,56 @@ fn intersect_bounds(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
         a[3].min(b[3]),
     ];
     (intersection[0] < intersection[2] && intersection[1] < intersection[3]).then_some(intersection)
+}
+
+fn base_shape_may_affect_frame(
+    shape: GlassShape,
+    scroll_x: f32,
+    frame: GlassShape,
+    smooth_union_radius: f32,
+) -> bool {
+    if !shape.is_scrolling() {
+        return true;
+    }
+    let bounds = shape.screen_bounds(scroll_x);
+    let margin = smooth_union_radius.max(0.0);
+    let influence_bounds = [
+        bounds[0] - margin,
+        bounds[1] - margin,
+        bounds[2] + margin,
+        bounds[3] + margin,
+    ];
+    if intersect_bounds(influence_bounds, frame.screen_bounds(0.0)).is_none() {
+        return false;
+    }
+
+    // A scrolling rounded rect that remains at least `blend` inside the fixed
+    // frame cannot change the smooth union: the frame's signed distance is
+    // already smaller everywhere. Testing the expanded AABB is conservative
+    // around rounded corners and guarantees the whole blend neighborhood is
+    // contained before the shape is discarded.
+    !bounds_inside_rounded_rect(influence_bounds, frame)
+}
+
+fn bounds_inside_rounded_rect(bounds: [f32; 4], shape: GlassShape) -> bool {
+    [
+        [bounds[0], bounds[1]],
+        [bounds[2], bounds[1]],
+        [bounds[0], bounds[3]],
+        [bounds[2], bounds[3]],
+    ]
+    .into_iter()
+    .all(|point| rounded_rect_sdf(point, shape) <= 0.0)
+}
+
+fn rounded_rect_sdf(point: [f32; 2], shape: GlassShape) -> f32 {
+    let half = [shape.size[0] * 0.5, shape.size[1] * 0.5];
+    let radius = shape.radius.min(half[0]).min(half[1]);
+    let q = [
+        (point[0] - shape.center[0]).abs() - half[0] + radius,
+        (point[1] - shape.center[1]).abs() - half[1] + radius,
+    ];
+    q[0].max(q[1]).min(0.0) + q[0].max(0.0).hypot(q[1].max(0.0)) - radius
 }
 
 fn capture_region_for_shapes(
@@ -387,6 +450,8 @@ impl LiquidGlassRenderer {
             create_uniform_buffer(device, "liquid glass settings panel uniforms", &uniforms);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
+        let active_base_shapes = shapes.clone();
+        let base_shape_scratch = Vec::with_capacity(shapes.len());
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
         let shape_capacity = shapes.len().max(1);
@@ -765,6 +830,8 @@ impl LiquidGlassRenderer {
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
             base_shapes: shapes,
+            active_base_shapes,
+            base_shape_scratch,
             geometry_texture,
             geometry_view,
             overlay_geometry_texture,
@@ -1116,6 +1183,9 @@ impl LiquidGlassRenderer {
         }
         self.base_shapes.clear();
         self.base_shapes.extend_from_slice(shapes);
+        self.active_base_shapes.clear();
+        self.active_base_shapes.extend_from_slice(shapes);
+        self.base_shape_scratch.clear();
         self.shape_count = self.base_shapes.len() as u32;
         if self.base_shapes.len() > self.shape_capacity {
             self.shape_capacity = next_shape_capacity(self.shape_capacity, self.base_shapes.len());
@@ -1136,6 +1206,43 @@ impl LiquidGlassRenderer {
                 &self.shape_buffer,
                 0,
                 bytemuck::cast_slice(&self.base_shapes),
+            );
+        }
+        self.last_geometry_key = None;
+    }
+
+    fn refresh_active_base_shapes(&mut self, queue: &wgpu::Queue, scroll_x: f32) {
+        let frame = self
+            .base_shapes
+            .iter()
+            .find(|shape| shape.is_frame())
+            .copied()
+            .unwrap_or_else(|| {
+                GlassShape::fixed_rounded_rect(
+                    [
+                        self.texture_size.0 as f32 * 0.5,
+                        self.texture_size.1 as f32 * 0.5,
+                    ],
+                    [self.texture_size.0 as f32, self.texture_size.1 as f32],
+                    0.0,
+                )
+            });
+        self.base_shape_scratch.clear();
+        let smooth_union_radius = self.params.blend;
+        self.base_shape_scratch
+            .extend(self.base_shapes.iter().copied().filter(|shape| {
+                base_shape_may_affect_frame(*shape, scroll_x, frame, smooth_union_radius)
+            }));
+        if self.base_shape_scratch == self.active_base_shapes {
+            return;
+        }
+        std::mem::swap(&mut self.base_shape_scratch, &mut self.active_base_shapes);
+        self.shape_count = self.active_base_shapes.len() as u32;
+        if !self.active_base_shapes.is_empty() {
+            queue.write_buffer(
+                &self.shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.active_base_shapes),
             );
         }
         self.last_geometry_key = None;
@@ -1469,8 +1576,17 @@ impl LiquidGlassRenderer {
 
     fn geometry_key(&self, scroll_x: f32) -> GeometryKey {
         let (width, height) = self.texture_size;
+        let scroll_x = if self
+            .active_base_shapes
+            .iter()
+            .any(|shape| shape.is_scrolling())
+        {
+            (scroll_x * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
         GeometryKey {
-            scroll_x: (scroll_x * 10.0).round() / 10.0,
+            scroll_x,
             thickness: self.params.thickness,
             refractive_index: self.params.refractive_index,
             blend: self.params.blend,
@@ -1595,9 +1711,21 @@ fn premultiplied_blend() -> wgpu::BlendState {
 #[cfg(test)]
 mod shape_capacity_tests {
     use super::{
-        capture_region_for_shapes, next_shape_capacity, should_refresh_blur, CaptureRegion,
-        GlassShape, GlassUniforms,
+        base_shape_may_affect_frame, capture_region_for_shapes, next_shape_capacity,
+        should_refresh_blur, CaptureRegion, GlassShape, GlassUniforms,
     };
+
+    fn test_scene_sdf(shapes: &[GlassShape], scroll_x: f32, point: [f32; 2], blend: f32) -> f32 {
+        shapes.iter().fold(1.0e6, |distance, shape| {
+            let mut resolved = *shape;
+            if resolved.is_scrolling() {
+                resolved.center[0] += scroll_x;
+            }
+            let shape_distance = super::rounded_rect_sdf(point, resolved);
+            let e = (blend - (distance - shape_distance).abs()).max(0.0);
+            distance.min(shape_distance) - e * e * 0.25 / blend
+        })
+    }
 
     #[test]
     fn shape_capacity_grows_only_past_current_capacity() {
@@ -1617,6 +1745,67 @@ mod shape_capacity_tests {
         assert!(should_refresh_blur(true, false));
         assert!(should_refresh_blur(false, true));
         assert!(!should_refresh_blur(false, false));
+    }
+
+    #[test]
+    fn base_shape_culling_keeps_only_shapes_with_smooth_union_influence() {
+        let frame = GlassShape::fixed_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0);
+        let just_outside = GlassShape::rounded_rect([850.0, 350.0], [100.0, 100.0], 30.0);
+        let far_page = GlassShape::rounded_rect([1_200.0, 350.0], [100.0, 100.0], 30.0);
+        let swallowed = GlassShape::rounded_rect([500.0, 350.0], [100.0, 100.0], 30.0);
+        let fixed_control = GlassShape::control_rounded_rect([1_200.0, 700.0], [100.0, 40.0], 20.0);
+
+        assert!(base_shape_may_affect_frame(just_outside, 0.0, frame, 26.0));
+        assert!(!base_shape_may_affect_frame(far_page, 0.0, frame, 26.0));
+        assert!(!base_shape_may_affect_frame(swallowed, 0.0, frame, 26.0));
+        assert!(base_shape_may_affect_frame(fixed_control, 0.0, frame, 26.0));
+    }
+
+    #[test]
+    fn base_shape_culling_preserves_retina_grid_sdf_during_scroll() {
+        let layout = crate::grid::GridLayout::for_app_count(177)
+            .with_scale_factor(2.0)
+            .centered(2_560.0);
+        let (center_x, center_y, width, height) = layout.frame_panel_rect(2_560.0);
+        let frame = GlassShape::fixed_rounded_rect(
+            [center_x, center_y],
+            [width, height],
+            layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
+        );
+        let mut shapes = vec![frame];
+        for index in 0..177 {
+            let (x, y) = layout.tile_position(2_560.0, index);
+            let halo = layout.tile_size + layout.scaled(18.0);
+            shapes.push(GlassShape::rounded_rect(
+                [x + layout.tile_size * 0.5, y + layout.tile_size * 0.5],
+                [halo, halo],
+                layout.scaled(28.0),
+            ));
+        }
+
+        let page = layout.page_width(2_560.0);
+        for scroll_x in [0.0, -page * 0.25, -page * 0.5, -page * 0.75, -page] {
+            let active: Vec<_> = shapes
+                .iter()
+                .copied()
+                .filter(|shape| base_shape_may_affect_frame(*shape, scroll_x, frame, 26.0))
+                .collect();
+            for y in (0..1_602).step_by(24) {
+                for x in (0..2_560).step_by(24) {
+                    let point = [x as f32 + 0.5, y as f32 + 0.5];
+                    if super::rounded_rect_sdf(point, frame) >= 0.0 {
+                        continue;
+                    }
+                    let full = test_scene_sdf(&shapes, scroll_x, point, 26.0);
+                    let culled = test_scene_sdf(&active, scroll_x, point, 26.0);
+                    assert!(
+                        (full - culled).abs() < 0.001,
+                        "SDF changed at scroll={scroll_x} point={point:?}: full={full} culled={culled} active={}",
+                        active.len()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

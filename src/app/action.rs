@@ -854,6 +854,7 @@ impl App {
             || long_press_pending
             || folder_long_press_pending
             || self.qa_capture_due(now)
+            || self.profile_scroll.is_some()
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening

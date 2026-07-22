@@ -26,11 +26,23 @@ impl App {
     pub(crate) fn tick_frame(&mut self) {
         let now = Instant::now();
         let vp = self.viewport_phys();
+        let profile_scroll_position = self.profile_scroll.as_ref().and_then(|profile| {
+            profile.position(
+                now,
+                self.layout.page_width(vp.0.max(1) as f32),
+                self.layout.page_count,
+            )
+        });
         let scroll_x;
         let dragging;
         if let Some(s) = self.scroller.as_mut() {
             dragging = s.phase == Phase::Dragging;
             s.tick(now);
+            if let Some(position) = profile_scroll_position {
+                s.position = position;
+                s.velocity = 0.0;
+                s.phase = Phase::Idle;
+            }
             scroll_x = s.position;
         } else {
             return;
@@ -213,6 +225,7 @@ impl App {
             || folder_child_page_started
             || folder_scroller_animating
             || self.editing
+            || self.profile_scroll.is_some()
         {
             self.request_redraw();
         }

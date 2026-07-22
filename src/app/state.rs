@@ -145,6 +145,40 @@ pub(crate) struct OwnedGridItem {
     pub preview_uvs: Vec<Option<crate::icons::UvRect>>,
 }
 
+/// Deterministic, opt-in scroll workload used by the performance harness.
+/// Only the scroller position is synthesized; rendering, backdrop capture,
+/// presentation, and frame pacing stay on their production paths.
+pub(crate) struct ProfileScroll {
+    started_at: Instant,
+}
+
+impl ProfileScroll {
+    fn from_env() -> Option<Self> {
+        (std::env::var_os("LAUNCHPAD_PROFILE_SCROLL").as_deref() == Some(std::ffi::OsStr::new("1")))
+            .then(|| {
+                eprintln!("profile scroll workload: enabled (3 second page round trip)");
+                Self {
+                    started_at: Instant::now(),
+                }
+            })
+    }
+
+    pub(crate) fn position(
+        &self,
+        now: Instant,
+        page_extent: f32,
+        page_count: usize,
+    ) -> Option<f32> {
+        if page_count < 2 || !page_extent.is_finite() || page_extent <= 0.0 {
+            return None;
+        }
+        let seconds = now.duration_since(self.started_at).as_secs_f32();
+        let phase = seconds * std::f32::consts::TAU / 3.0;
+        let page_progress = (1.0 - phase.cos()) * 0.5;
+        Some(-page_extent * page_progress)
+    }
+}
+
 /// Owns the renderer (which owns the window) plus all app/icon state.
 pub struct App {
     pub event_proxy: EventLoopProxy<UserEvent>,
@@ -155,6 +189,7 @@ pub struct App {
     pub render_model: crate::ui_model::render_model::RenderModel,
     pub timer: StartupTimer,
     pub qa_runner: Option<crate::qa::QaRunner>,
+    pub(crate) profile_scroll: Option<ProfileScroll>,
 
     // ---- app + icon state ----
     pub registry: AppRegistry,
@@ -300,6 +335,7 @@ impl App {
             render_model: crate::ui_model::render_model::RenderModel::new(),
             timer,
             qa_runner: crate::qa::QaRunner::from_env(),
+            profile_scroll: ProfileScroll::from_env(),
             registry: AppRegistry::new(),
             launcher_state: LauncherState::new(),
             atlas: IconAtlas::new(64),
@@ -799,9 +835,9 @@ impl App {
 
 #[cfg(test)]
 mod pending_press_tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
-    use super::{PendingPress, CLICK_SLOP_PHYS};
+    use super::{PendingPress, ProfileScroll, CLICK_SLOP_PHYS};
     use crate::domain::app_id::AppId;
 
     fn press(
@@ -866,5 +902,29 @@ mod pending_press_tests {
         let press = press(None, None, false);
 
         assert!(!press.is_outside_glass_click(102.0, 101.0));
+    }
+
+    #[test]
+    fn profile_scroll_traverses_one_page_and_returns_over_three_seconds() {
+        let started_at = Instant::now();
+        let profile = ProfileScroll { started_at };
+
+        assert_eq!(profile.position(started_at, 1_000.0, 1), None);
+        assert_eq!(profile.position(started_at, 1_000.0, 2), Some(0.0));
+        assert!(
+            (profile
+                .position(started_at + Duration::from_millis(1_500), 1_000.0, 2)
+                .unwrap()
+                + 1_000.0)
+                .abs()
+                < 0.01
+        );
+        assert!(
+            profile
+                .position(started_at + Duration::from_secs(3), 1_000.0, 2)
+                .unwrap()
+                .abs()
+                < 0.01
+        );
     }
 }

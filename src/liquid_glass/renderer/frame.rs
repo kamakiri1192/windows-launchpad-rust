@@ -12,7 +12,12 @@ impl LiquidGlassRenderer {
         scroll_x: f32,
         defer_backdrop_capture: bool,
     ) {
-        if !self.params.enabled || self.shape_count == 0 {
+        if !self.params.enabled || self.base_shapes.is_empty() {
+            return;
+        }
+
+        self.refresh_active_base_shapes(queue, scroll_x);
+        if self.shape_count == 0 {
             return;
         }
 
@@ -248,7 +253,7 @@ impl LiquidGlassRenderer {
         self.stats.record(
             captured,
             refreshed_blur,
-            refreshed_geometry,
+            refreshed_geometry.then_some(self.shape_count),
             capture_time,
             upload_time,
             render_started.elapsed(),

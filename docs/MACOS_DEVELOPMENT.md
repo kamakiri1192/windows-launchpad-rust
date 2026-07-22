@@ -40,7 +40,11 @@ Liquid Glass geometry is independent of backdrop pixels. The expensive base
 SDF for the page and tile halos therefore has its own cached texture, while
 controls, badges, drag visuals, and panels share a separate transient geometry
 texture. A changing video backdrop refreshes capture, blur, and final
-compositing every frame without recalculating the static base SDF.
+compositing every frame without recalculating the static base SDF. During a
+page scroll, the CPU submits only tile shapes whose smooth-union neighborhood
+intersects the fixed frame boundary. Shapes outside the frame and shapes fully
+contained far enough inside it cannot change the SDF and are excluded without
+reducing backdrop cadence.
 
 Periodic stderr lines separate capture cost from render-thread cost:
 
@@ -50,7 +54,8 @@ Periodic stderr lines separate capture cost from render-thread cost:
   dimension scale, target refresh rate, and pixel reduction versus a physical
   full-window capture.
 - `liquid glass stats` reports render-thread polling/GPU-copy time, blur refresh
-  rate, and the refresh/reuse rates for cached blur and base geometry.
+  rate, the refresh/reuse rates for cached blur and base geometry, and the
+  average number of base shapes evaluated by refreshed geometry passes.
 
 The default global shortcut is Option+Space. Set `LAUNCHPAD_HOTKEY` before
 launching to use another `global-hotkey` key string, for example
@@ -73,6 +78,13 @@ scripts/profile_macos.sh live
 # separate because detailed GPU instrumentation can perturb frame pacing.
 scripts/profile_macos.sh gpu
 
+# Continuous page scrolling with the production release renderer. Capture and
+# presentation remain at their normal cadence.
+scripts/profile_macos.sh scroll
+
+# The same scroll workload with per-pass GPU timestamps enabled.
+scripts/profile_macos.sh scroll-gpu
+
 # A/B control: retain the ROI but capture it at physical 1:1 resolution.
 CAPTURE_SCALE=1 scripts/profile_macos.sh live
 
@@ -87,7 +99,7 @@ scenario list. Live mode waits eight seconds for discovery and icon work, then
 summons the resident process before starting its samples. Set `SKIP_BUILD=1` to
 reuse a binary already built for the selected mode. Each run creates a new
 `target/macos-profile-*` directory containing hardware/toolchain metadata, raw
-logs, GPU JSON/Chrome trace files for `qa`/`gpu`, process samples for live
+logs, GPU JSON/Chrome trace files for `qa`/`gpu`/`scroll-gpu`, process samples for live
 window runs, and
 `summary.md` / `summary.json`. `CAPTURE_SCALE` overrides the automatic
 display-scale-derived dimension ratio (clamped to 0.25–1.0); use `1` for a
@@ -99,11 +111,12 @@ discovery, icon extraction, and initial pipeline setup do not distort the live
 capture/render rates.
 
 The QA mode includes PNG readback and is intended for repeatable comparisons,
-not absolute full-screen throughput. `live` and `gpu` sample macOS `ps` CPU
+not absolute full-screen throughput. `live`, `gpu`, `scroll`, and `scroll-gpu` sample macOS `ps` CPU
 (where 100% means one fully occupied CPU core) and resident memory once per
 second. `live` is the representative performance result; `gpu` is for locating
 expensive render passes. The periodic capture/render logs remain the source for
-ScreenCaptureKit, IOSurface copy, blur-refresh, and blur-reuse costs.
+ScreenCaptureKit, IOSurface copy, blur-refresh, geometry shape count, and
+blur-reuse costs.
 
 GPU timestamp results can occasionally arrive with an invalid negative or
 wrapped duration on Metal. Non-finite, negative, and implausible durations over
