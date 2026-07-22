@@ -651,7 +651,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -660,6 +660,7 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        uniforms.material_strength = self.settings_panel_material_strength;
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,

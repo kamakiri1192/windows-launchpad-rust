@@ -401,7 +401,7 @@ pub fn build_with_copy(
             id: UiId::settings_panel(),
             rect: scaled_rect_around_center(&layout, visual_scale),
             radius: layout.radius * visual_scale,
-            material: GlassMaterial::Regular,
+            material: GlassMaterial::Prominent,
             behavior: GlassBehavior::Control,
             z: Z_PANEL,
         }],
@@ -1284,6 +1284,21 @@ mod tests {
         assert_eq!(veil.corner_radius, 54.0);
         assert!((veil.opacity - crate::layout::focus_veil::OPACITY * 0.5).abs() < 0.001);
         assert!((veil.scene_blur - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn settings_panel_uses_prominent_glass_material() {
+        let model = build(input(SettingsCategoryId::Apps));
+        let panel = &model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .expect("settings modal glass")
+            .surfaces[0];
+
+        assert_eq!(panel.material, GlassMaterial::Prominent);
     }
 
     #[test]

@@ -35,7 +35,8 @@ pub(super) struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    _pad: [f32; 3],
+    material_strength: f32,
+    _pad: [f32; 2],
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
 }
@@ -195,6 +196,7 @@ pub struct LiquidGlassRenderer {
     control_shapes: Vec<GlassShape>,
     settings_panel_shapes: Vec<GlassShape>,
     settings_panel_shape_count: u32,
+    settings_panel_material_strength: f32,
     settings_panel_shape_capacity: usize,
     settings_panel_shape_buffer: wgpu::Buffer,
     settings_panel_geometry_bind_group: wgpu::BindGroup,
@@ -865,6 +867,7 @@ impl LiquidGlassRenderer {
             control_shapes: Vec::new(),
             settings_panel_shapes: Vec::new(),
             settings_panel_shape_count: 0,
+            settings_panel_material_strength: 0.0,
             settings_panel_shape_capacity: 1,
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
@@ -1415,13 +1418,18 @@ impl LiquidGlassRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         shapes: &[GlassShape],
+        material_strength: f32,
     ) {
-        if self.settings_panel_shapes.as_slice() == shapes {
+        let material_strength = material_strength.clamp(0.0, 1.0);
+        if self.settings_panel_shapes.as_slice() == shapes
+            && self.settings_panel_material_strength == material_strength
+        {
             return;
         }
         self.settings_panel_shapes.clear();
         self.settings_panel_shapes.extend_from_slice(shapes);
         self.settings_panel_shape_count = self.settings_panel_shapes.len() as u32;
+        self.settings_panel_material_strength = material_strength;
         if self.settings_panel_shapes.len() > self.settings_panel_shape_capacity {
             self.settings_panel_shape_capacity = next_shape_capacity(
                 self.settings_panel_shape_capacity,
@@ -1737,7 +1745,8 @@ fn uniforms_from_params(
         shape_count,
         debug_flags: debug.flags(),
         time,
-        _pad: [0.0; 3],
+        material_strength: 0.0,
+        _pad: [0.0; 2],
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }

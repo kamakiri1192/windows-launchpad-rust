@@ -15,7 +15,7 @@ struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    pad0: f32,
+    material_strength: f32,
     pad1: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
@@ -92,6 +92,18 @@ fn luminance(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
 }
 
+fn material_sharp_mix() -> f32 {
+    return mix(0.12, 0.02, clamp(u.material_strength, 0.0, 1.0));
+}
+
+fn material_saturation() -> f32 {
+    return mix(u.saturation, 1.05, clamp(u.material_strength, 0.0, 1.0));
+}
+
+fn material_tint_mix() -> f32 {
+    return mix(0.55, 0.66, clamp(u.material_strength, 0.0, 1.0));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;
@@ -129,13 +141,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
         let sharp_color = sample_backdrop(screen_uv);
-        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, 0.12);
+        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, material_sharp_mix());
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
-        interior_rgb = mix(interior_rgb, interior_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
+        interior_rgb = mix(
+            interior_rgb,
+            interior_rgb * adaptive_tint + adaptive_tint * 0.045,
+            material_tint_mix(),
+        );
         interior_rgb = u.glass_color.rgb * u.glass_color.a
             + interior_rgb * (1.0 - u.glass_color.a);
-        interior_rgb = apply_saturation(interior_rgb, u.saturation);
+        interior_rgb = apply_saturation(interior_rgb, material_saturation());
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92);
         return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
@@ -163,15 +179,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
     let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
-    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, 0.12);
+    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, material_sharp_mix());
     final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * 0.22);
 
     let bg_luma = luminance(final_rgb);
     let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
-    final_rgb = mix(final_rgb, final_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
+    final_rgb = mix(
+        final_rgb,
+        final_rgb * adaptive_tint + adaptive_tint * 0.045,
+        material_tint_mix(),
+    );
     final_rgb = u.glass_color.rgb * u.glass_color.a
         + final_rgb * (1.0 - u.glass_color.a);
-    final_rgb = apply_saturation(final_rgb, u.saturation);
+    final_rgb = apply_saturation(final_rgb, material_saturation());
 
     if !has_flag(6u) {
         let thickness_scale = clamp(40.0 / max(u.thickness, 1.0), 1.0, 4.0);
