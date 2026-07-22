@@ -10,7 +10,7 @@ use plist::{Dictionary, Value};
 
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
-use crate::icons::normalize::DecodedIcon;
+use crate::icons::normalize::{DecodedIcon, TARGET};
 
 const MAX_SCAN_DEPTH: usize = 6;
 
@@ -148,6 +148,17 @@ fn file_mtime(path: &Path) -> u64 {
 
 /// Decode the highest-resolution usable icon exposed by an app bundle.
 pub fn extract_icon(bundle_path: &Path, icon_location: &str) -> Option<DecodedIcon> {
+    // Ask Launch Services first. This is the same icon resolution path Finder
+    // uses, so it handles asset-catalog-only system apps (for example
+    // Calendar), custom file icons, and ICNS encodings our portable decoder
+    // does not support. The icon worker calls this off the UI thread;
+    // `NSWorkspace::iconForFile` is explicitly documented as thread-safe.
+    if let Some(icon) = extract_workspace_icon(bundle_path) {
+        return Some(icon);
+    }
+
+    // Retain the direct decoder as a best-effort fallback for unusual bundles
+    // where Launch Services cannot produce a bitmap representation.
     let icon_path = if icon_location.is_empty() {
         let info = Value::from_file(bundle_path.join("Contents/Info.plist")).ok()?;
         resolve_icon_path(bundle_path, info.as_dictionary()?)?
@@ -176,6 +187,52 @@ pub fn extract_icon(bundle_path: &Path, icon_location: &str) -> Option<DecodedIc
     })
 }
 
+fn extract_workspace_icon(bundle_path: &Path) -> Option<DecodedIcon> {
+    use objc2::rc::autoreleasepool;
+    use objc2::runtime::AnyObject;
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSWorkspace,
+    };
+    use objc2_core_graphics::CGImage;
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+
+    autoreleasepool(|_| {
+        let path = NSString::from_str(&bundle_path.to_string_lossy());
+        let image = NSWorkspace::sharedWorkspace().iconForFile(&path);
+
+        // A 64-point proposal normally selects a 128-pixel representation on
+        // Retina displays. If it does not, retry at 128 points so normalization
+        // never has to upscale the native icon.
+        let mut proposed = NSRect::new(
+            NSPoint::ZERO,
+            NSSize::new((TARGET / 2) as f64, (TARGET / 2) as f64),
+        );
+        let mut cg_image =
+            unsafe { image.CGImageForProposedRect_context_hints(&mut proposed, None, None)? };
+        if CGImage::width(Some(&cg_image)) < TARGET as usize
+            || CGImage::height(Some(&cg_image)) < TARGET as usize
+        {
+            proposed.size = NSSize::new(TARGET as f64, TARGET as f64);
+            cg_image =
+                unsafe { image.CGImageForProposedRect_context_hints(&mut proposed, None, None)? };
+        }
+
+        let bitmap = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg_image);
+        let properties: objc2::rc::Retained<NSDictionary<NSBitmapImageRepPropertyKey, AnyObject>> =
+            NSDictionary::new();
+        let png = unsafe {
+            bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)?
+        };
+        // `png` is immutable and retained for the whole decode call, so the
+        // borrowed NSData bytes stay valid and avoid one allocation per app.
+        let png_bytes = unsafe { png.as_bytes_unchecked() };
+        image::load_from_memory(png_bytes)
+            .ok()
+            .map(DecodedIcon::from_dynamic)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +245,22 @@ mod tests {
             &mut applications,
         );
         assert!(applications.is_empty());
+    }
+
+    #[test]
+    fn workspace_extracts_a_nonempty_system_app_icon() {
+        let bundle = [
+            Path::new("/System/Applications/Calendar.app"),
+            Path::new("/System/Library/CoreServices/Finder.app"),
+        ]
+        .into_iter()
+        .find(|path| path.is_dir())
+        .expect("macOS system app bundle should exist");
+
+        let icon = extract_workspace_icon(bundle).expect("workspace icon should decode");
+        assert!(icon.w >= TARGET);
+        assert!(icon.h >= TARGET);
+        assert_eq!(icon.rgba.len(), (icon.w * icon.h * 4) as usize);
+        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0));
     }
 }

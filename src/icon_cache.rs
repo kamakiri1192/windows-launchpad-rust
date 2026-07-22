@@ -44,6 +44,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// v3: replaces Steam's 32px client icons with high-resolution local sources.
 /// v4: removes wide Steam library logos and extracts square executable icons
 /// at 256px before normalizing them into the launcher atlas.
+/// v5: resolves macOS app icons through Launch Services so asset catalogs and
+/// modern ICNS encodings render consistently with Finder.
+#[cfg(target_os = "macos")]
+pub const EXTRACTION_VERSION: u32 = 5;
+#[cfg(not(target_os = "macos"))]
 pub const EXTRACTION_VERSION: u32 = 4;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates

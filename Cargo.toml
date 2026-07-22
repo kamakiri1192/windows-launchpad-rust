@@ -58,7 +58,25 @@ windows = { version = "0.62", features = [
 global-hotkey = "0.7.0"
 icns = "0.3.1"
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSResponder"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSWorkspace",
+    "objc2-core-graphics",
+] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGImage"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+    "std",
+] }
 plist = "1.7.0"
 rusqlite = "0.32"
 # 1.3.0's Swift bridge links macOS 26-only screenshot classes when built with
