@@ -87,6 +87,7 @@ impl LiquidGlassRenderer {
         }
 
         let blur_levels = self.blur_level_count();
+        let refreshed_blur = should_refresh_blur(self.blur_dirty, captured);
 
         // Each blur pass runs in its OWN command encoder. wgpu groups all
         // passes in a single encoder into one "usage scope", and a texture
@@ -98,7 +99,7 @@ impl LiquidGlassRenderer {
 
         // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
         // backdrop for i==0 else levels[i-1], and writes levels[i].
-        for i in 0..blur_levels {
+        for i in 0..if refreshed_blur { blur_levels } else { 0 } {
             let dst = &self.blur_levels[i].1;
             let label = format!("liquid glass blur downsample L{i}->L{}", i + 1);
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -132,7 +133,7 @@ impl LiquidGlassRenderer {
         // up pass j reads levels[k-1-j] (bind index 3-k+j in the fixed
         // [L3,L2,L1] bind array) and writes levels[k-2-j], or the full-res
         // blur texture for the final hop (j == k-1).
-        for j in 0..blur_levels {
+        for j in 0..if refreshed_blur { blur_levels } else { 0 } {
             let dst = if j == blur_levels - 1 {
                 &self.blur_view
             } else {
@@ -169,6 +170,9 @@ impl LiquidGlassRenderer {
                 pass.draw(0..3, 0..1);
             }
             queue.submit(std::iter::once(enc.finish()));
+        }
+        if refreshed_blur {
+            self.blur_dirty = false;
         }
 
         let geometry_key = self.geometry_key(scroll_x);
@@ -220,6 +224,7 @@ impl LiquidGlassRenderer {
         let _ = device;
         self.stats.record(
             captured,
+            refreshed_blur,
             capture_time,
             upload_time,
             render_started.elapsed(),

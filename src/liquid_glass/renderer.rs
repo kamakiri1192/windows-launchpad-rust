@@ -40,6 +40,7 @@ struct RenderStats {
     last_report_at: Instant,
     frames: u32,
     captured_frames: u32,
+    blurred_frames: u32,
     capture_time: Duration,
     upload_time: Duration,
     render_time: Duration,
@@ -51,6 +52,7 @@ impl RenderStats {
             last_report_at: Instant::now(),
             frames: 0,
             captured_frames: 0,
+            blurred_frames: 0,
             capture_time: Duration::ZERO,
             upload_time: Duration::ZERO,
             render_time: Duration::ZERO,
@@ -60,6 +62,7 @@ impl RenderStats {
     fn record(
         &mut self,
         captured: bool,
+        blurred: bool,
         capture_time: Duration,
         upload_time: Duration,
         render_time: Duration,
@@ -70,6 +73,9 @@ impl RenderStats {
             self.capture_time += capture_time;
             self.upload_time += upload_time;
         }
+        if blurred {
+            self.blurred_frames += 1;
+        }
         self.render_time += render_time;
 
         let elapsed = self.last_report_at.elapsed();
@@ -79,11 +85,17 @@ impl RenderStats {
 
         let seconds = elapsed.as_secs_f32().max(0.001);
         let capture_fps = self.captured_frames as f32 / seconds;
+        let blur_fps = self.blurred_frames as f32 / seconds;
+        let blur_reuse = if self.frames == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - self.blurred_frames as f32 / self.frames as f32)
+        };
         let avg_capture_ms = avg_ms(self.capture_time, self.captured_frames);
         let avg_upload_ms = avg_ms(self.upload_time, self.captured_frames);
         let avg_render_ms = avg_ms(self.render_time, self.frames);
         eprintln!(
-            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} render_ms={avg_render_ms:.2}"
+            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} blur_fps={blur_fps:.1} blur_reuse={blur_reuse:.0}% render_ms={avg_render_ms:.2}"
         );
 
         *self = Self::new();
@@ -184,6 +196,10 @@ pub struct LiquidGlassRenderer {
     control_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
     last_capture_at: Option<Instant>,
+    /// The blur pyramid depends on the captured backdrop, not on foreground
+    /// animation. Rebuild it only when that backdrop (or blur parameters)
+    /// changes instead of re-blurring identical pixels every render frame.
+    blur_dirty: bool,
     last_geometry_key: Option<GeometryKey>,
     stats: RenderStats,
 }
@@ -640,6 +656,7 @@ impl LiquidGlassRenderer {
             control_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
             last_capture_at: None,
+            blur_dirty: true,
             last_geometry_key: None,
             stats: RenderStats::new(),
         }
@@ -673,6 +690,7 @@ impl LiquidGlassRenderer {
         self.blur_view = blur_view;
         self.blur_levels = blur_levels;
         self.texture_size = (width, height);
+        self.blur_dirty = true;
         self.last_geometry_key = None;
         let (down, up) = create_blur_pyramid_bind_groups(
             device,
@@ -1100,6 +1118,8 @@ impl LiquidGlassRenderer {
             _ => return false,
         }
 
+        self.blur_dirty = true;
+
         eprintln!(
             "liquid glass params: enabled={} thickness={:.1} ri={:.2} chroma={:.3} blur={:.1} saturation={:.2} debug_flags={:#010b}",
             self.params.enabled,
@@ -1155,9 +1175,13 @@ impl LiquidGlassRenderer {
 
 fn log_capture_status(status: &CaptureStatus) {
     match status {
-        CaptureStatus::Ready => eprintln!("liquid glass capture: Windows.Graphics.Capture ready"),
+        CaptureStatus::Ready => eprintln!("liquid glass capture: platform backdrop ready"),
         CaptureStatus::Fallback { reason } => eprintln!("liquid glass capture fallback: {reason}"),
     }
+}
+
+fn should_refresh_blur(dirty: bool, captured: bool) -> bool {
+    dirty || captured
 }
 
 fn uniforms_from_params(
@@ -1232,7 +1256,7 @@ fn premultiplied_blend() -> wgpu::BlendState {
 
 #[cfg(test)]
 mod shape_capacity_tests {
-    use super::{next_shape_capacity, GlassUniforms};
+    use super::{next_shape_capacity, should_refresh_blur, GlassUniforms};
 
     #[test]
     fn shape_capacity_grows_only_past_current_capacity() {
@@ -1245,5 +1269,12 @@ mod shape_capacity_tests {
     fn glass_uniform_layout_matches_wgsl() {
         assert_eq!(std::mem::size_of::<GlassUniforms>(), 96);
         assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
+    }
+
+    #[test]
+    fn backdrop_blur_is_reused_until_capture_changes() {
+        assert!(should_refresh_blur(true, false));
+        assert!(should_refresh_blur(false, true));
+        assert!(!should_refresh_blur(false, false));
     }
 }

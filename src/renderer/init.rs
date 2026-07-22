@@ -805,8 +805,7 @@ fn create_backdrop_capture(
 
     #[cfg(target_os = "macos")]
     {
-        let _ = event_proxy;
-        match crate::liquid_glass::macos_capture::create_monitor_capture(window) {
+        match crate::liquid_glass::macos_capture::create_monitor_capture(window, event_proxy) {
             Ok(capture) => capture,
             Err(error) => Box::new(FallbackCapture::new(format!(
                 "ScreenCaptureKit initialization failed: {error}"
