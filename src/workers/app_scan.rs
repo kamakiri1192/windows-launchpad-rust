@@ -11,6 +11,7 @@
 //! pure and lives in [`crate::domain::app_diff`].
 
 use std::collections::BTreeMap;
+#[cfg(windows)]
 use std::path::Path;
 
 use crate::domain::app_diff::SnapshotEntry;

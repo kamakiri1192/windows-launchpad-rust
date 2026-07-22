@@ -29,6 +29,7 @@ use winit::window::{Window, WindowId};
 
 use crate::debug_log;
 use crate::grid;
+#[cfg(windows)]
 use crate::liquid_glass;
 use crate::renderer::text_engine as text;
 use crate::renderer::Renderer;
