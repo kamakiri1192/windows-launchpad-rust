@@ -226,10 +226,15 @@ fn process_one(
 }
 
 fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::macos::apps::extract_icon(&req.link_path, &req.icon_location)
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = req;
-        return None;
+        None
     }
 
     #[cfg(windows)]

@@ -27,9 +27,14 @@ use crate::workers::steam_scan::scan_steam_apps;
 /// `.lnk` can't blank the whole grid. The map is keyed by stable `AppId` so two
 /// scans of the same set compare equal regardless of iteration order.
 pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        return BTreeMap::new();
+        crate::platform::macos::apps::scan_applications()
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        BTreeMap::new()
     }
 
     #[cfg(windows)]
