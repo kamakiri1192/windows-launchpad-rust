@@ -228,6 +228,18 @@ fn process_one(
 fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
     #[cfg(target_os = "macos")]
     {
+        if req.link_path.to_string_lossy().starts_with("steam://") {
+            let icon_path = PathBuf::from(&req.icon_location);
+            if let Ok(bytes) = std::fs::read(&icon_path) {
+                if let Ok(image) = image::load_from_memory(&bytes) {
+                    return Some(DecodedIcon::from_dynamic(image));
+                }
+            }
+            if icon_path.extension().is_some_and(|ext| ext == "app") {
+                return crate::platform::macos::apps::extract_icon(&icon_path, "");
+            }
+            return None;
+        }
         crate::platform::macos::apps::extract_icon(&req.link_path, &req.icon_location)
     }
 

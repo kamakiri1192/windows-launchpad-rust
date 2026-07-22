@@ -18,7 +18,7 @@ use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 #[cfg(windows)]
 use crate::icons::extract::{self, enumerate_start_menu};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::workers::steam_scan::scan_steam_apps;
 
 /// Scan both Start Menu roots plus installed Steam apps and build a snapshot.
@@ -29,7 +29,11 @@ use crate::workers::steam_scan::scan_steam_apps;
 pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
     #[cfg(target_os = "macos")]
     {
-        crate::platform::macos::apps::scan_applications()
+        let mut out = crate::platform::macos::apps::scan_applications();
+        for entry in scan_steam_apps() {
+            out.insert(entry.app_id.clone(), entry);
+        }
+        out
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]

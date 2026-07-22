@@ -65,7 +65,7 @@ fn scan_root(root: &Path, applications: &mut BTreeMap<AppId, SnapshotEntry>) {
 }
 
 fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
-    let info_path = bundle_path.join("Contents/Info.plist");
+    let (metadata_bundle, info_path) = locate_metadata_bundle(bundle_path)?;
     let info = Value::from_file(&info_path).ok()?;
     let dictionary = info.as_dictionary()?;
 
@@ -74,9 +74,9 @@ fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
         return None;
     }
 
-    let name = dictionary_string(dictionary, "CFBundleDisplayName")
-        .or_else(|| dictionary_string(dictionary, "CFBundleName"))
-        .map(str::to_owned)
+    let name = ios_store_name(bundle_path)
+        .or_else(|| dictionary_string(dictionary, "CFBundleDisplayName").map(str::to_owned))
+        .or_else(|| dictionary_string(dictionary, "CFBundleName").map(str::to_owned))
         .or_else(|| {
             bundle_path
                 .file_stem()
@@ -85,10 +85,15 @@ fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
     let bundle_id = dictionary_string(dictionary, "CFBundleIdentifier");
     let app_id = AppId::from_macos_bundle(bundle_id, bundle_path);
 
-    let executable = dictionary_string(dictionary, "CFBundleExecutable")
-        .map(|name| bundle_path.join("Contents/MacOS").join(name));
+    let executable = dictionary_string(dictionary, "CFBundleExecutable").map(|name| {
+        if metadata_bundle == bundle_path {
+            bundle_path.join("Contents/MacOS").join(name)
+        } else {
+            metadata_bundle.join(name)
+        }
+    });
     let target_path = executable.as_deref().unwrap_or(bundle_path);
-    let icon_path = resolve_icon_path(bundle_path, dictionary);
+    let icon_path = resolve_icon_path(&metadata_bundle, dictionary);
 
     Some(SnapshotEntry {
         app_id,
@@ -105,6 +110,34 @@ fn snapshot_entry(bundle_path: &Path) -> Option<SnapshotEntry> {
     })
 }
 
+/// Return the bundle whose Info.plist describes the launchable application.
+/// macOS apps use `Contents/Info.plist`; iPhone/iPad apps installed on Apple
+/// silicon wrap their original iOS bundle below `Wrapper/*.app`.
+fn locate_metadata_bundle(bundle_path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mac_info = bundle_path.join("Contents/Info.plist");
+    if mac_info.is_file() {
+        return Some((bundle_path.to_path_buf(), mac_info));
+    }
+
+    let wrapper = bundle_path.join("Wrapper");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(wrapper)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "app"))
+        .filter(|path| path.join("Info.plist").is_file())
+        .collect();
+    candidates.sort();
+    let metadata_bundle = candidates.into_iter().next()?;
+    let info_path = metadata_bundle.join("Info.plist");
+    Some((metadata_bundle, info_path))
+}
+
+fn ios_store_name(bundle_path: &Path) -> Option<String> {
+    let metadata = Value::from_file(bundle_path.join("Wrapper/iTunesMetadata.plist")).ok()?;
+    dictionary_string(metadata.as_dictionary()?, "itemName").map(str::to_owned)
+}
+
 fn dictionary_string<'a>(dictionary: &'a Dictionary, key: &str) -> Option<&'a str> {
     dictionary.get(key)?.as_string()
 }
@@ -117,7 +150,11 @@ fn dictionary_bool(dictionary: &Dictionary, key: &str) -> bool {
 }
 
 fn resolve_icon_path(bundle_path: &Path, dictionary: &Dictionary) -> Option<PathBuf> {
-    let resources = bundle_path.join("Contents/Resources");
+    let resources = if bundle_path.join("Contents/Resources").is_dir() {
+        bundle_path.join("Contents/Resources")
+    } else {
+        bundle_path.to_path_buf()
+    };
     if let Some(icon_name) = dictionary_string(dictionary, "CFBundleIconFile") {
         let icon_name = if Path::new(icon_name).extension().is_some() {
             icon_name.to_owned()
@@ -237,6 +274,17 @@ fn extract_workspace_icon(bundle_path: &Path) -> Option<DecodedIcon> {
 mod tests {
     use super::*;
 
+    fn temporary_directory(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "launchpad-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
     #[test]
     fn missing_roots_produce_an_empty_snapshot() {
         let mut applications = BTreeMap::new();
@@ -245,6 +293,43 @@ mod tests {
             &mut applications,
         );
         assert!(applications.is_empty());
+    }
+
+    #[test]
+    fn ios_wrapper_bundle_uses_store_name_and_outer_launch_path() {
+        let root = temporary_directory("ios-bundle");
+        let outer = root.join("Localized Game.app");
+        let inner = outer.join("Wrapper/Game.app");
+        std::fs::create_dir_all(&inner).unwrap();
+
+        let mut info = Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            Value::String("com.example.game".into()),
+        );
+        info.insert(
+            "CFBundleDisplayName".into(),
+            Value::String("Internal Game".into()),
+        );
+        info.insert("CFBundleExecutable".into(), Value::String("Game".into()));
+        Value::Dictionary(info)
+            .to_file_xml(inner.join("Info.plist"))
+            .unwrap();
+        std::fs::write(inner.join("Game"), []).unwrap();
+
+        let mut store = Dictionary::new();
+        store.insert("itemName".into(), Value::String("ローカライズ名".into()));
+        Value::Dictionary(store)
+            .to_file_xml(outer.join("Wrapper/iTunesMetadata.plist"))
+            .unwrap();
+
+        let entry = snapshot_entry(&outer).expect("wrapped iOS app should be discovered");
+        assert_eq!(entry.app_id.as_str(), "mac:com.example.game");
+        assert_eq!(entry.name, "ローカライズ名");
+        assert_eq!(entry.link_path, outer.to_string_lossy());
+        assert_eq!(entry.target_path, inner.join("Game").to_string_lossy());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

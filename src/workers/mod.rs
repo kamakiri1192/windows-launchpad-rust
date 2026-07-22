@@ -16,5 +16,5 @@
 pub mod app_scan;
 pub mod icon_worker;
 pub mod refresh_watcher;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub mod steam_scan;
