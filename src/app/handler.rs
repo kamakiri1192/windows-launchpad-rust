@@ -15,8 +15,6 @@
 //! command executor" path. Side effects (hide, launch, passthrough, persist,
 //! reset) all flow through [`App::execute_command`].
 
-#[cfg(target_os = "macos")]
-use std::time::Duration;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
@@ -27,7 +25,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::platform::macos::WindowAttributesExtMacOS;
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowId, WindowLevel};
 
 use crate::debug_log;
 use crate::grid;
@@ -48,9 +46,6 @@ use super::state::{
 };
 
 use crate::{initial_window_position, load_window_icon};
-
-#[cfg(target_os = "macos")]
-const MACOS_BACKDROP_REDRAW_INTERVAL: Duration = Duration::from_millis(33);
 
 impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -100,6 +95,15 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_fullsize_content_view(true)
                 .with_has_shadow(false)
                 .with_accepts_first_mouse(true);
+            if std::env::var_os("LAUNCHPAD_PROFILE_KEEP_VISIBLE").as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+            {
+                // Keep performance runs genuinely visible even while the
+                // automation process samples logs in another app. Otherwise
+                // Core Animation throttles an occluded CAMetalLayer and the
+                // result measures window occlusion instead of rendering.
+                attrs = attrs.with_window_level(WindowLevel::AlwaysOnTop);
+            }
         }
         if let Some(viewport) = self.qa_runner.as_ref().map(|runner| runner.viewport()) {
             attrs = attrs
@@ -124,6 +128,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         let window = event_loop.create_window(attrs).expect("create window");
+        #[cfg(target_os = "macos")]
+        {
+            crate::platform::macos::integration::activate_application();
+            window.focus_window();
+        }
         #[cfg(windows)]
         {
             if std::env::var_os("LAUNCHPAD_ALLOW_SCREENSHOT").is_some() {
@@ -270,24 +279,9 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(deadline) = self.qa_next_deadline() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
         } else {
-            #[cfg(target_os = "macos")]
-            if self.visible {
-                // A ScreenCaptureKit result wakes the event loop, but that
-                // wakeup is not guaranteed to form a self-sustaining redraw
-                // chain after a hidden resident window is summoned. Keep the
-                // visible backdrop moving at the same 30 FPS ceiling used by
-                // the capture worker. Normal interaction/animation redraws
-                // can still happen sooner; hidden and QA windows remain idle.
-                let deadline = self
-                    .last_redraw
-                    .map(|redraw| redraw + MACOS_BACKDROP_REDRAW_INTERVAL)
-                    .unwrap_or(now);
-                if deadline <= now {
-                    self.request_redraw();
-                }
-                event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-                return;
-            }
+            // Persistent platform capture sends BackdropFrameArrived whenever
+            // the desktop content changes. Static desktops therefore stay
+            // idle, while video/animation drives redraws at the stream cadence.
             event_loop.set_control_flow(ControlFlow::Wait);
         }
     }

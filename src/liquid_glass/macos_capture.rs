@@ -1,20 +1,28 @@
-//! Asynchronous ScreenCaptureKit desktop backdrop for macOS 14 and later.
+//! Continuous ScreenCaptureKit backdrop capture for macOS 14 and later.
 
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use screencapturekit::cg::CGRect;
+use screencapturekit::cm::{CMTime, CVPixelBuffer};
 use screencapturekit::prelude::*;
-use screencapturekit::screenshot_manager::SCScreenshotManager;
 use winit::platform::macos::MonitorHandleExtMacOS;
 
 use crate::app::event::UserEvent;
 
-use super::capture::{BackdropCapture, CaptureRegion, CaptureStatus, CpuCaptureFrame};
+use super::capture::{
+    BackdropCapture, CaptureRegion, CaptureStatus, CpuCaptureFrame, EphemeralGpuCaptureFrame,
+    GpuCaptureFrame,
+};
 
-const MAX_CAPTURE_RATE: Duration = Duration::from_millis(33);
 const CAPTURE_SCALE_ENV: &str = "LAUNCHPAD_MACOS_CAPTURE_SCALE";
+const CAPTURE_QUEUE_DEPTH: u32 = 3;
+const DEFAULT_REFRESH_MILLIHERTZ: u32 = 60_000;
+const REGION_ALIGNMENT: u32 = 32;
+const REGION_HYSTERESIS: u32 = 16;
+const BGRA_PIXEL_FORMAT: u32 = u32::from_be_bytes(*b"BGRA");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CaptureGeometry {
@@ -63,69 +71,73 @@ impl CaptureGeometry {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CaptureControl {
+    geometry: CaptureGeometry,
+    active: bool,
+}
+
+struct StreamFrame {
+    geometry: CaptureGeometry,
+    pixel_buffer: CVPixelBuffer,
+}
+
 enum CaptureOutcome {
-    Frame {
-        geometry: CaptureGeometry,
-        frame: CpuCaptureFrame,
-    },
+    Frame(StreamFrame),
     Failed(String),
 }
 
-#[derive(Debug)]
-struct WorkerStats {
-    last_report_at: Instant,
-    frames: u32,
-    capture_time: Duration,
-    conversion_time: Duration,
+#[derive(Default)]
+struct SharedCaptureState {
+    configured_geometry: Option<CaptureGeometry>,
+    latest: Option<CaptureOutcome>,
 }
 
-impl WorkerStats {
+struct StreamStats {
+    last_report_at: Instant,
+    frames: u64,
+    replaced_frames: u64,
+}
+
+impl StreamStats {
     fn new() -> Self {
         Self {
             last_report_at: Instant::now(),
             frames: 0,
-            capture_time: Duration::ZERO,
-            conversion_time: Duration::ZERO,
+            replaced_frames: 0,
         }
     }
 
-    fn record(&mut self, capture_time: Duration, conversion_time: Duration) {
+    fn record(&mut self, replaced: bool) {
         self.frames += 1;
-        self.capture_time += capture_time;
-        self.conversion_time += conversion_time;
+        self.replaced_frames += u64::from(replaced);
 
         let elapsed = self.last_report_at.elapsed();
         if elapsed < Duration::from_secs(2) {
             return;
         }
-
-        let seconds = elapsed.as_secs_f32().max(0.001);
         eprintln!(
-            "macOS capture stats: capture_fps={:.1} capture_ms={:.2} rgba_copy_ms={:.2}",
-            self.frames as f32 / seconds,
-            avg_ms(self.capture_time, self.frames),
-            avg_ms(self.conversion_time, self.frames),
+            "macOS capture stats: stream_fps={:.1} latest_frame_replacements={} cpu_pixel_copies=0",
+            self.frames as f64 / elapsed.as_secs_f64().max(0.001),
+            self.replaced_frames,
         );
-        *self = Self::new();
+        self.last_report_at = Instant::now();
+        self.frames = 0;
+        self.replaced_frames = 0;
     }
 }
 
-fn avg_ms(total: Duration, count: u32) -> f32 {
-    if count == 0 {
-        0.0
-    } else {
-        total.as_secs_f32() * 1000.0 / count as f32
-    }
-}
-
-/// UI-thread endpoint for the ScreenCaptureKit worker. A render-frame poll is
-/// only a bounded-channel receive/send; the screenshot and ROI RGBA
-/// conversion always happen on `launchpad-macos-capture`.
+/// UI-thread endpoint for a persistent ScreenCaptureKit stream. Frame callbacks
+/// retain only the newest CVPixelBuffer; Metal imports its IOSurface without a
+/// CPU pixel conversion or upload.
 pub struct MacOsScreenCapture {
-    request_tx: SyncSender<CaptureGeometry>,
-    outcome_rx: Receiver<CaptureOutcome>,
+    control_tx: SyncSender<()>,
+    control: Arc<Mutex<CaptureControl>>,
+    shared: Arc<Mutex<SharedCaptureState>>,
     geometry: CaptureGeometry,
     scale_override: Option<f64>,
+    region_initialized: bool,
+    active: bool,
     fallback_reason: Option<String>,
 }
 
@@ -151,6 +163,10 @@ pub fn create_monitor_capture(
         .current_monitor()
         .ok_or_else(|| "window has no current monitor".to_owned())?;
     let display_id = monitor.native_id();
+    let refresh_millihertz = monitor
+        .refresh_rate_millihertz()
+        .unwrap_or(DEFAULT_REFRESH_MILLIHERTZ)
+        .max(1_000);
     let monitor_position = monitor.position();
     let window_position = window
         .outer_position()
@@ -194,107 +210,280 @@ pub fn create_monitor_capture(
         region: CaptureRegion::full(size.width, size.height),
         output_scale: output_scale(scale_factor, scale_override),
     };
-    let (request_tx, request_rx) = mpsc::sync_channel(1);
-    let (outcome_tx, outcome_rx) = mpsc::sync_channel(1);
+    let control = Arc::new(Mutex::new(CaptureControl {
+        geometry,
+        active: true,
+    }));
+    let shared = Arc::new(Mutex::new(SharedCaptureState::default()));
+    let (control_tx, control_rx) = mpsc::sync_channel(1);
+    let worker_control = Arc::clone(&control);
+    let worker_shared = Arc::clone(&shared);
     thread::Builder::new()
         .name("launchpad-macos-capture".to_owned())
-        .spawn(move || capture_worker(filter, request_rx, outcome_tx, event_proxy))
+        .spawn(move || {
+            capture_worker(
+                filter,
+                geometry,
+                refresh_millihertz,
+                control_rx,
+                worker_control,
+                worker_shared,
+                event_proxy,
+            )
+        })
         .map_err(|error| format!("could not start ScreenCaptureKit worker: {error}"))?;
 
     Ok(Box::new(MacOsScreenCapture {
-        request_tx,
-        outcome_rx,
+        control_tx,
+        control,
+        shared,
         geometry,
         scale_override,
+        region_initialized: false,
+        active: true,
         fallback_reason: None,
     }))
 }
 
 fn capture_worker(
     filter: SCContentFilter,
-    request_rx: Receiver<CaptureGeometry>,
-    outcome_tx: SyncSender<CaptureOutcome>,
+    initial_geometry: CaptureGeometry,
+    refresh_millihertz: u32,
+    control_rx: Receiver<()>,
+    control: Arc<Mutex<CaptureControl>>,
+    shared: Arc<Mutex<SharedCaptureState>>,
     event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
 ) {
     let mut configuration = SCStreamConfiguration::default();
     configuration.set_pixel_format(PixelFormat::BGRA);
     configuration.set_shows_cursor(false);
-    let mut configured_geometry = None;
-    let mut previous_capture_started: Option<Instant> = None;
-    let mut stats = WorkerStats::new();
+    configuration.set_queue_depth(CAPTURE_QUEUE_DEPTH);
+    configuration.set_minimum_frame_interval(&CMTime::new(
+        1_000,
+        refresh_millihertz.min(i32::MAX as u32) as i32,
+    ));
+    initial_geometry.configure(&mut configuration);
 
-    while let Ok(geometry) = request_rx.recv() {
-        if let Some(previous) = previous_capture_started {
-            let remaining = MAX_CAPTURE_RATE.saturating_sub(previous.elapsed());
-            if !remaining.is_zero() {
-                thread::sleep(remaining);
+    let callback_stats = Arc::new(Mutex::new(StreamStats::new()));
+    let callback_shared = Arc::clone(&shared);
+    let callback_proxy = event_proxy.clone();
+    let callback_stats_ref = Arc::clone(&callback_stats);
+    let mut stream = SCStream::new(&filter, &configuration);
+    let handler_id = stream.add_output_handler(
+        move |sample: CMSampleBuffer, output_type: SCStreamOutputType| {
+            if output_type != SCStreamOutputType::Screen
+                || sample
+                    .get_frame_status()
+                    .is_some_and(|status| !status.has_content())
+            {
+                return;
             }
-        }
-        previous_capture_started = Some(Instant::now());
-
-        if configured_geometry != Some(geometry) {
-            geometry.configure(&mut configuration);
-            configured_geometry = Some(geometry);
-            let (output_width, output_height) = geometry.output_size();
-            let full_pixels = u64::from(geometry.window_width) * u64::from(geometry.window_height);
-            let output_pixels = u64::from(output_width) * u64::from(output_height);
-            let reduction = if full_pixels == 0 {
-                0.0
-            } else {
-                100.0 * (1.0 - output_pixels as f64 / full_pixels as f64)
+            let Some(pixel_buffer) = sample.get_image_buffer() else {
+                return;
             };
-            eprintln!(
-                "macOS capture geometry: window={}x{} roi={},{} {}x{} output={}x{} scale={:.2} pixel_reduction={reduction:.1}%",
-                geometry.window_width,
-                geometry.window_height,
-                geometry.region.x,
-                geometry.region.y,
-                geometry.region.width,
-                geometry.region.height,
-                output_width,
-                output_height,
-                geometry.output_scale,
-            );
-        }
+            if pixel_buffer.pixel_format() != BGRA_PIXEL_FORMAT {
+                set_failure(
+                    &callback_shared,
+                    format!(
+                        "ScreenCaptureKit returned unsupported pixel format 0x{:08X}",
+                        pixel_buffer.pixel_format()
+                    ),
+                    &callback_proxy,
+                );
+                return;
+            }
 
-        let capture_started = Instant::now();
-        let image = SCScreenshotManager::capture_image(&filter, &configuration);
-        let capture_time = capture_started.elapsed();
-        let conversion_started = Instant::now();
-        let (output_width, output_height) = geometry.output_size();
-        let outcome = match image.and_then(|image| image.get_rgba_data()) {
-            Ok(pixels) if pixels.len() == output_width as usize * output_height as usize * 4 => {
-                CaptureOutcome::Frame {
-                    geometry,
-                    frame: CpuCaptureFrame {
-                        region: geometry.region,
-                        width: output_width,
-                        height: output_height,
-                        pixels,
-                    },
+            let replaced = {
+                let mut state = callback_shared.lock().unwrap();
+                let Some(geometry) = state.configured_geometry else {
+                    return;
+                };
+                let (width, height) = geometry.output_size();
+                if pixel_buffer.width() != width as usize
+                    || pixel_buffer.height() != height as usize
+                {
+                    return;
                 }
+                let replaced = matches!(state.latest, Some(CaptureOutcome::Frame(_)));
+                state.latest = Some(CaptureOutcome::Frame(StreamFrame {
+                    geometry,
+                    pixel_buffer,
+                }));
+                replaced
+            };
+            callback_stats_ref.lock().unwrap().record(replaced);
+            if !replaced {
+                let _ = callback_proxy.send_event(UserEvent::BackdropFrameArrived);
             }
-            Ok(pixels) => CaptureOutcome::Failed(format!(
-                "ScreenCaptureKit returned {} bytes for {}x{}",
-                pixels.len(),
-                output_width,
-                output_height
-            )),
-            Err(error) => {
-                CaptureOutcome::Failed(format!("ScreenCaptureKit capture failed: {error}"))
-            }
-        };
-        let conversion_time = conversion_started.elapsed();
-        stats.record(capture_time, conversion_time);
+        },
+        SCStreamOutputType::Screen,
+    );
+    let Some(handler_id) = handler_id else {
+        set_failure(
+            &shared,
+            "ScreenCaptureKit could not install the screen output handler".to_owned(),
+            &event_proxy,
+        );
+        return;
+    };
 
-        if outcome_tx.send(outcome).is_err() {
-            break;
+    shared.lock().unwrap().configured_geometry = Some(initial_geometry);
+    if let Err(error) = stream.start_capture() {
+        set_failure(
+            &shared,
+            format!("ScreenCaptureKit stream start failed: {error}"),
+            &event_proxy,
+        );
+        stream.remove_output_handler(handler_id, SCStreamOutputType::Screen);
+        return;
+    }
+    log_geometry(initial_geometry, refresh_millihertz);
+
+    let mut configured_geometry = initial_geometry;
+    let mut capturing = true;
+    while control_rx.recv().is_ok() {
+        let requested = *control.lock().unwrap();
+        if requested.geometry != configured_geometry {
+            requested.geometry.configure(&mut configuration);
+            match stream.update_configuration(&configuration) {
+                Ok(()) => {
+                    configured_geometry = requested.geometry;
+                    let mut state = shared.lock().unwrap();
+                    state.configured_geometry = Some(configured_geometry);
+                    state.latest = None;
+                    drop(state);
+                    log_geometry(configured_geometry, refresh_millihertz);
+                }
+                Err(error) => set_failure(
+                    &shared,
+                    format!("ScreenCaptureKit configuration update failed: {error}"),
+                    &event_proxy,
+                ),
+            }
         }
-        if event_proxy
-            .send_event(UserEvent::BackdropFrameArrived)
-            .is_err()
-        {
-            break;
+
+        if requested.active != capturing {
+            let result = if requested.active {
+                stream.start_capture()
+            } else {
+                stream.stop_capture()
+            };
+            match result {
+                Ok(()) => capturing = requested.active,
+                Err(error) => set_failure(
+                    &shared,
+                    format!("ScreenCaptureKit stream state change failed: {error}"),
+                    &event_proxy,
+                ),
+            }
+        }
+    }
+
+    if capturing {
+        let _ = stream.stop_capture();
+    }
+    stream.remove_output_handler(handler_id, SCStreamOutputType::Screen);
+}
+
+fn set_failure(
+    shared: &Arc<Mutex<SharedCaptureState>>,
+    reason: String,
+    event_proxy: &winit::event_loop::EventLoopProxy<UserEvent>,
+) {
+    shared.lock().unwrap().latest = Some(CaptureOutcome::Failed(reason));
+    let _ = event_proxy.send_event(UserEvent::BackdropFrameArrived);
+}
+
+fn log_geometry(geometry: CaptureGeometry, refresh_millihertz: u32) {
+    let (output_width, output_height) = geometry.output_size();
+    let full_pixels = u64::from(geometry.window_width) * u64::from(geometry.window_height);
+    let output_pixels = u64::from(output_width) * u64::from(output_height);
+    let reduction = if full_pixels == 0 {
+        0.0
+    } else {
+        100.0 * (1.0 - output_pixels as f64 / full_pixels as f64)
+    };
+    eprintln!(
+        "macOS capture geometry: window={}x{} roi={},{} {}x{} output={}x{} dimension_scale={:.2} target_hz={:.1} pixel_reduction={reduction:.1}%",
+        geometry.window_width,
+        geometry.window_height,
+        geometry.region.x,
+        geometry.region.y,
+        geometry.region.width,
+        geometry.region.height,
+        output_width,
+        output_height,
+        geometry.output_scale,
+        refresh_millihertz as f64 / 1_000.0,
+    );
+}
+
+fn contains(outer: CaptureRegion, inner: CaptureRegion) -> bool {
+    outer.x <= inner.x
+        && outer.y <= inner.y
+        && outer.x.saturating_add(outer.width) >= inner.x.saturating_add(inner.width)
+        && outer.y.saturating_add(outer.height) >= inner.y.saturating_add(inner.height)
+}
+
+fn padded_aligned_region(requested: CaptureRegion, width: u32, height: u32) -> CaptureRegion {
+    let requested = requested.clamped_to(width, height);
+    let align_down = |value: u32| value / REGION_ALIGNMENT * REGION_ALIGNMENT;
+    let align_up = |value: u32, limit: u32| {
+        value
+            .saturating_add(REGION_ALIGNMENT - 1)
+            .saturating_div(REGION_ALIGNMENT)
+            .saturating_mul(REGION_ALIGNMENT)
+            .min(limit)
+    };
+    let x = align_down(requested.x.saturating_sub(REGION_HYSTERESIS));
+    let y = align_down(requested.y.saturating_sub(REGION_HYSTERESIS));
+    let right = align_up(
+        requested
+            .x
+            .saturating_add(requested.width)
+            .saturating_add(REGION_HYSTERESIS),
+        width.max(1),
+    );
+    let bottom = align_up(
+        requested
+            .y
+            .saturating_add(requested.height)
+            .saturating_add(REGION_HYSTERESIS),
+        height.max(1),
+    );
+    CaptureRegion {
+        x,
+        y,
+        width: right.saturating_sub(x).max(1),
+        height: bottom.saturating_sub(y).max(1),
+    }
+    .clamped_to(width, height)
+}
+
+fn stabilize_region(
+    current: Option<CaptureRegion>,
+    requested: CaptureRegion,
+    width: u32,
+    height: u32,
+) -> CaptureRegion {
+    let requested = requested.clamped_to(width, height);
+    if let Some(current) = current {
+        if contains(current, requested) {
+            return current;
+        }
+    }
+    padded_aligned_region(requested, width, height)
+}
+
+impl MacOsScreenCapture {
+    fn publish_control(&self) {
+        *self.control.lock().unwrap() = CaptureControl {
+            geometry: self.geometry,
+            active: self.active,
+        };
+        match self.control_tx.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => {}
+            Err(TrySendError::Disconnected(())) => {}
         }
     }
 }
@@ -308,48 +497,76 @@ impl BackdropCapture for MacOsScreenCapture {
             })
     }
 
+    fn set_active(&mut self, active: bool) {
+        if self.active == active {
+            return;
+        }
+        self.active = active;
+        self.publish_control();
+    }
+
     fn on_window_moved(&mut self, x: i32, y: i32, scale_factor: f64) {
         self.geometry.window_x = x;
         self.geometry.window_y = y;
         self.geometry.scale_factor = scale_factor;
         self.geometry.output_scale = output_scale(scale_factor, self.scale_override);
+        self.publish_control();
     }
 
     fn set_capture_region(&mut self, region: CaptureRegion) {
-        self.geometry.region =
-            region.clamped_to(self.geometry.window_width, self.geometry.window_height);
+        let current = self.region_initialized.then_some(self.geometry.region);
+        let next = stabilize_region(
+            current,
+            region,
+            self.geometry.window_width,
+            self.geometry.window_height,
+        );
+        self.region_initialized = true;
+        if next != self.geometry.region {
+            self.geometry.region = next;
+            self.publish_control();
+        }
     }
 
-    fn latest_frame_rgba(&mut self, width: u32, height: u32) -> Option<CpuCaptureFrame> {
+    fn latest_frame_texture(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Option<GpuCaptureFrame> {
         if width == 0 || height == 0 {
             return None;
         }
-        self.geometry.window_width = width;
-        self.geometry.window_height = height;
-        self.geometry.region = self.geometry.region.clamped_to(width, height);
-
-        let outcome = match self.outcome_rx.try_recv() {
-            Ok(outcome) => Some(outcome),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.fallback_reason = Some("ScreenCaptureKit worker stopped".to_owned());
-                None
-            }
-        };
-
-        match self.request_tx.try_send(self.geometry) {
-            Ok(()) | Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => {
-                self.fallback_reason = Some("ScreenCaptureKit worker stopped".to_owned());
-            }
+        if self.geometry.window_width != width || self.geometry.window_height != height {
+            self.geometry.window_width = width;
+            self.geometry.window_height = height;
+            self.geometry.region = self.geometry.region.clamped_to(width, height);
+            self.region_initialized = false;
+            self.publish_control();
         }
 
+        let outcome = self.shared.lock().unwrap().latest.take();
         match outcome {
-            Some(CaptureOutcome::Frame { geometry, frame }) if geometry == self.geometry => {
-                self.fallback_reason = None;
-                Some(frame)
+            Some(CaptureOutcome::Frame(frame)) if frame.geometry == self.geometry => {
+                let (frame_width, frame_height) = frame.geometry.output_size();
+                match import_iosurface_texture(device, &frame.pixel_buffer) {
+                    Ok(texture) => {
+                        self.fallback_reason = None;
+                        Some(GpuCaptureFrame::Ephemeral(EphemeralGpuCaptureFrame {
+                            texture,
+                            region: frame.geometry.region,
+                            width: frame_width,
+                            height: frame_height,
+                            release_after_submit: Box::new(frame.pixel_buffer),
+                        }))
+                    }
+                    Err(reason) => {
+                        self.fallback_reason = Some(reason);
+                        None
+                    }
+                }
             }
-            Some(CaptureOutcome::Frame { .. }) => None,
+            Some(CaptureOutcome::Frame(_)) => None,
             Some(CaptureOutcome::Failed(reason)) => {
                 self.fallback_reason = Some(reason);
                 None
@@ -357,6 +574,78 @@ impl BackdropCapture for MacOsScreenCapture {
             None => None,
         }
     }
+
+    fn latest_frame_rgba(&mut self, _width: u32, _height: u32) -> Option<CpuCaptureFrame> {
+        None
+    }
+}
+
+fn import_iosurface_texture(
+    device: &wgpu::Device,
+    pixel_buffer: &CVPixelBuffer,
+) -> Result<wgpu::Texture, String> {
+    use objc2_io_surface::IOSurfaceRef;
+    use objc2_metal::{
+        MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+        MTLTextureUsage,
+    };
+    use wgpu::hal::api::Metal;
+
+    let surface = pixel_buffer
+        .get_io_surface()
+        .ok_or_else(|| "ScreenCaptureKit frame is not backed by an IOSurface".to_owned())?;
+    let width = pixel_buffer.width() as u32;
+    let height = pixel_buffer.height() as u32;
+    if width == 0 || height == 0 {
+        return Err("ScreenCaptureKit returned an empty IOSurface".to_owned());
+    }
+    let surface_ref = unsafe { &*surface.as_ptr().cast::<IOSurfaceRef>() };
+    let hal_device =
+        unsafe { device.as_hal::<Metal>() }.ok_or("wgpu device is not using the Metal backend")?;
+    let descriptor = unsafe {
+        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            MTLPixelFormat::BGRA8Unorm,
+            width as usize,
+            height as usize,
+            false,
+        )
+    };
+    descriptor.setStorageMode(MTLStorageMode::Shared);
+    descriptor.setUsage(MTLTextureUsage::ShaderRead);
+    let raw_texture = hal_device
+        .raw_device()
+        .newTextureWithDescriptor_iosurface_plane(&descriptor, surface_ref, 0)
+        .ok_or_else(|| "Metal could not create a texture from the capture IOSurface".to_owned())?;
+
+    let desc = wgpu::TextureDescriptor {
+        label: Some("liquid glass ScreenCaptureKit IOSurface"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    };
+    let hal_texture = unsafe {
+        <Metal as wgpu::hal::Api>::Device::texture_from_raw(
+            raw_texture,
+            desc.format,
+            MTLTextureType::Type2D,
+            1,
+            1,
+            wgpu::hal::CopyExtent {
+                width,
+                height,
+                depth: 1,
+            },
+        )
+    };
+    Ok(unsafe { device.create_texture_from_hal::<Metal>(hal_texture, &desc) })
 }
 
 #[cfg(test)]
@@ -370,60 +659,17 @@ mod tests {
             window_x: 0,
             window_y: 0,
             scale_factor: 2.0,
-            window_width: 4,
-            window_height: 4,
-            region: CaptureRegion::full(4, 4),
+            window_width: 800,
+            window_height: 600,
+            region: CaptureRegion::full(800, 600),
             output_scale: 0.5,
         }
     }
 
     #[test]
-    fn renderer_poll_does_not_wait_for_slow_capture() {
-        let (request_tx, request_rx) = mpsc::sync_channel::<CaptureGeometry>(1);
-        let (outcome_tx, outcome_rx) = mpsc::sync_channel::<CaptureOutcome>(1);
-        let producer = thread::spawn(move || {
-            let request = request_rx.recv().expect("capture request");
-            thread::sleep(Duration::from_millis(100));
-            let (width, height) = request.output_size();
-            outcome_tx
-                .send(CaptureOutcome::Frame {
-                    geometry: request,
-                    frame: CpuCaptureFrame {
-                        region: request.region,
-                        width,
-                        height,
-                        pixels: vec![0; width as usize * height as usize * 4],
-                    },
-                })
-                .expect("capture result");
-        });
-        let mut capture = MacOsScreenCapture {
-            request_tx,
-            outcome_rx,
-            geometry: geometry(),
-            scale_override: None,
-            fallback_reason: None,
-        };
-
-        let started = Instant::now();
-        assert!(capture.latest_frame_rgba(4, 4).is_none());
-        assert!(
-            started.elapsed() < Duration::from_millis(40),
-            "UI poll inherited worker capture latency"
-        );
-
-        producer.join().expect("producer thread");
-        let started = Instant::now();
-        let frame = capture.latest_frame_rgba(4, 4).unwrap();
-        assert_eq!((frame.width, frame.height), (2, 2));
-        assert_eq!(frame.pixels.len(), 16);
-        assert!(started.elapsed() < Duration::from_millis(40));
-    }
-
-    #[test]
-    fn retina_capture_uses_one_sample_per_logical_point() {
+    fn retina_default_halves_each_capture_dimension() {
         assert_eq!(output_scale(2.0, None), 0.5);
-        assert_eq!(geometry().output_size(), (2, 2));
+        assert_eq!(geometry().output_size(), (400, 300));
         assert_eq!(output_scale(2.0, Some(1.0)), 1.0);
     }
 
@@ -456,5 +702,54 @@ mod tests {
             (100, 50)
         );
         assert!(configuration.get_scales_to_fit());
+    }
+
+    #[test]
+    fn roi_hysteresis_avoids_reconfiguring_for_small_motion() {
+        let first = stabilize_region(
+            None,
+            CaptureRegion {
+                x: 300,
+                y: 200,
+                width: 200,
+                height: 120,
+            },
+            1_000,
+            800,
+        );
+        let nearby = stabilize_region(
+            Some(first),
+            CaptureRegion {
+                x: 320,
+                y: 220,
+                width: 200,
+                height: 120,
+            },
+            1_000,
+            800,
+        );
+        assert_eq!(nearby, first);
+
+        let distant = stabilize_region(
+            Some(first),
+            CaptureRegion {
+                x: 700,
+                y: 500,
+                width: 200,
+                height: 120,
+            },
+            1_000,
+            800,
+        );
+        assert_ne!(distant, first);
+        assert!(contains(
+            distant,
+            CaptureRegion {
+                x: 700,
+                y: 500,
+                width: 200,
+                height: 120,
+            }
+        ));
     }
 }

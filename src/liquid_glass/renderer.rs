@@ -5,7 +5,8 @@ mod resources;
 use resources::*;
 
 use super::capture::{
-    BackdropCapture, CaptureRegion, CaptureStatus, CpuCaptureFrame, GpuCaptureFrame,
+    BackdropCapture, CaptureRegion, CaptureStatus, CpuCaptureFrame, EphemeralGpuCaptureFrame,
+    GpuCaptureFrame,
 };
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
@@ -60,6 +61,7 @@ struct RenderStats {
     frames: u32,
     captured_frames: u32,
     blurred_frames: u32,
+    geometry_frames: u32,
     capture_time: Duration,
     upload_time: Duration,
     render_time: Duration,
@@ -72,6 +74,7 @@ impl RenderStats {
             frames: 0,
             captured_frames: 0,
             blurred_frames: 0,
+            geometry_frames: 0,
             capture_time: Duration::ZERO,
             upload_time: Duration::ZERO,
             render_time: Duration::ZERO,
@@ -82,6 +85,7 @@ impl RenderStats {
         &mut self,
         captured: bool,
         blurred: bool,
+        geometry_refreshed: bool,
         capture_time: Duration,
         upload_time: Duration,
         render_time: Duration,
@@ -95,6 +99,9 @@ impl RenderStats {
         if blurred {
             self.blurred_frames += 1;
         }
+        if geometry_refreshed {
+            self.geometry_frames += 1;
+        }
         self.render_time += render_time;
 
         let elapsed = self.last_report_at.elapsed();
@@ -105,6 +112,7 @@ impl RenderStats {
         let seconds = elapsed.as_secs_f32().max(0.001);
         let capture_fps = self.captured_frames as f32 / seconds;
         let blur_fps = self.blurred_frames as f32 / seconds;
+        let geometry_fps = self.geometry_frames as f32 / seconds;
         let blur_reuse = if self.frames == 0 {
             0.0
         } else {
@@ -113,8 +121,13 @@ impl RenderStats {
         let avg_capture_ms = avg_ms(self.capture_time, self.captured_frames);
         let avg_upload_ms = avg_ms(self.upload_time, self.captured_frames);
         let avg_render_ms = avg_ms(self.render_time, self.frames);
+        let geometry_reuse = if self.frames == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - self.geometry_frames as f32 / self.frames as f32)
+        };
         eprintln!(
-            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} blur_fps={blur_fps:.1} blur_reuse={blur_reuse:.0}% render_ms={avg_render_ms:.2}"
+            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} blur_fps={blur_fps:.1} blur_reuse={blur_reuse:.0}% geometry_fps={geometry_fps:.1} geometry_reuse={geometry_reuse:.0}% render_ms={avg_render_ms:.2}"
         );
 
         *self = Self::new();
@@ -178,11 +191,14 @@ pub struct LiquidGlassRenderer {
     base_shapes: Vec<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
+    overlay_geometry_texture: wgpu::Texture,
+    overlay_geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
     backdrop_mapping: BackdropMapping,
     gpu_backdrop_texture: Option<wgpu::Texture>,
     using_gpu_backdrop: bool,
+    gpu_backdrop_is_copy_target: bool,
     blur_texture: wgpu::Texture,
     blur_view: wgpu::TextureView,
     /// Pyramids L1=1/2, L2=1/4, L3=1/8 (src for downsample, dst for upsample).
@@ -405,6 +421,8 @@ impl LiquidGlassRenderer {
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
+        let (overlay_geometry_texture, overlay_geometry_view) =
+            create_overlay_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         // Final blur output is full-res: the final shader samples it without
         // any resolution-mismatch stretch.
@@ -522,7 +540,7 @@ impl LiquidGlassRenderer {
             &grid_overlay_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let drag_overlay_final_bind_group = create_final_bind_group(
@@ -531,7 +549,7 @@ impl LiquidGlassRenderer {
             &drag_overlay_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let badge_final_bind_group = create_final_bind_group(
@@ -540,7 +558,7 @@ impl LiquidGlassRenderer {
             &badge_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let modal_badge_final_bind_group = create_final_bind_group(
@@ -549,7 +567,7 @@ impl LiquidGlassRenderer {
             &modal_badge_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let control_final_bind_group = create_final_bind_group(
@@ -558,7 +576,7 @@ impl LiquidGlassRenderer {
             &control_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let settings_panel_final_bind_group = create_final_bind_group(
@@ -567,7 +585,7 @@ impl LiquidGlassRenderer {
             &settings_panel_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
@@ -749,11 +767,14 @@ impl LiquidGlassRenderer {
             base_shapes: shapes,
             geometry_texture,
             geometry_view,
+            overlay_geometry_texture,
+            overlay_geometry_view,
             backdrop_texture,
             backdrop_view,
             backdrop_mapping,
             gpu_backdrop_texture: None,
             using_gpu_backdrop: false,
+            gpu_backdrop_is_copy_target: false,
             blur_texture,
             blur_view,
             blur_levels,
@@ -796,6 +817,8 @@ impl LiquidGlassRenderer {
         }
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
+        let (overlay_geometry_texture, overlay_geometry_view) =
+            create_overlay_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
@@ -808,11 +831,14 @@ impl LiquidGlassRenderer {
 
         self.geometry_texture = geometry_texture;
         self.geometry_view = geometry_view;
+        self.overlay_geometry_texture = overlay_geometry_texture;
+        self.overlay_geometry_view = overlay_geometry_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
         self.backdrop_mapping = BackdropMapping::full(width, height);
         self.gpu_backdrop_texture = None;
         self.using_gpu_backdrop = false;
+        self.gpu_backdrop_is_copy_target = false;
         self.blur_texture = blur_texture;
         self.blur_view = blur_view;
         self.blur_levels = blur_levels;
@@ -869,7 +895,7 @@ impl LiquidGlassRenderer {
             &self.grid_overlay_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.drag_overlay_final_bind_group = create_final_bind_group(
@@ -878,7 +904,7 @@ impl LiquidGlassRenderer {
             &self.drag_overlay_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.badge_final_bind_group = create_final_bind_group(
@@ -887,7 +913,7 @@ impl LiquidGlassRenderer {
             &self.badge_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.modal_badge_final_bind_group = create_final_bind_group(
@@ -896,7 +922,7 @@ impl LiquidGlassRenderer {
             &self.modal_badge_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.control_final_bind_group = create_final_bind_group(
@@ -905,7 +931,7 @@ impl LiquidGlassRenderer {
             &self.control_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.settings_panel_final_bind_group = create_final_bind_group(
@@ -914,7 +940,7 @@ impl LiquidGlassRenderer {
             &self.settings_panel_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
     }
@@ -994,6 +1020,88 @@ impl LiquidGlassRenderer {
         }
         self.gpu_backdrop_texture = None;
         self.using_gpu_backdrop = false;
+        self.gpu_backdrop_is_copy_target = false;
+        true
+    }
+
+    fn copy_ephemeral_gpu_backdrop(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: EphemeralGpuCaptureFrame,
+    ) -> bool {
+        let EphemeralGpuCaptureFrame {
+            texture,
+            region,
+            width,
+            height,
+            release_after_submit,
+        } = frame;
+        let (viewport_width, viewport_height) = self.texture_size;
+        let region = region.clamped_to(viewport_width, viewport_height);
+        if width == 0 || height == 0 {
+            return false;
+        }
+
+        let next_mapping = BackdropMapping {
+            region,
+            texture_size: (width, height),
+        };
+        let texture_changed = self.backdrop_mapping.texture_size != next_mapping.texture_size;
+        let needs_copy_target = texture_changed
+            || !self.using_gpu_backdrop
+            || !self.gpu_backdrop_is_copy_target
+            || self.gpu_backdrop_texture.is_none();
+
+        if needs_copy_target {
+            let (gpu_texture, gpu_view) = create_gpu_backdrop_texture(device, width, height);
+            if texture_changed {
+                let (blur_texture, blur_view) =
+                    create_blur_texture_raw(device, width, height, 0, "blur texture");
+                let blur_levels = [
+                    create_blur_texture_raw(device, width, height, 1, "blur level 1"),
+                    create_blur_texture_raw(device, width, height, 2, "blur level 2"),
+                    create_blur_texture_raw(device, width, height, 3, "blur level 3"),
+                ];
+                self.blur_texture = blur_texture;
+                self.blur_view = blur_view;
+                self.blur_levels = blur_levels;
+            }
+            self.bind_backdrop_view(device, &gpu_view);
+            self.gpu_backdrop_texture = Some(gpu_texture);
+            self.gpu_backdrop_is_copy_target = true;
+            self.using_gpu_backdrop = true;
+            eprintln!("liquid glass capture path: IOSurface -> persistent GPU texture");
+        }
+        self.backdrop_mapping = next_mapping;
+
+        let Some(destination) = self.gpu_backdrop_texture.as_ref() else {
+            return false;
+        };
+        let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("liquid glass IOSurface copy encoder"),
+        });
+        copy_encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: destination,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(copy_encoder.finish()));
+        queue.on_submitted_work_done(move || drop(release_after_submit));
         true
     }
 
@@ -1279,6 +1387,13 @@ impl LiquidGlassRenderer {
         self.last_capture_at = None;
     }
 
+    pub fn set_capture_active(&mut self, active: bool) {
+        self.capture.set_active(active);
+        if active {
+            self.last_capture_at = None;
+        }
+    }
+
     pub fn handle_debug_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
         use winit::keyboard::KeyCode;
 
@@ -1333,10 +1448,23 @@ impl LiquidGlassRenderer {
     }
 
     fn should_capture(&self, defer_backdrop_capture: bool) -> bool {
-        if defer_backdrop_capture {
-            return self.last_capture_at.is_none();
+        #[cfg(target_os = "macos")]
+        {
+            // The macOS SCStream is continuous and non-blocking. Freezing its
+            // consumer during a drag makes video behind the launcher visibly
+            // jump when the gesture ends, so always take the newest frame.
+            let _ = defer_backdrop_capture;
+            true
         }
-        true
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if defer_backdrop_capture {
+                self.last_capture_at.is_none()
+            } else {
+                true
+            }
+        }
     }
 
     fn geometry_key(&self, scroll_x: f32) -> GeometryKey {

@@ -716,12 +716,17 @@ impl Renderer {
             );
         }
     }
+
+    pub fn set_backdrop_capture_active(&mut self, active: bool) {
+        self.liquid_glass.set_capture_active(active);
+    }
 }
 
-/// Use FIFO VSync for the continuously animated launcher surface. Mailbox
-/// replaces queued frames and allows the edit-mode redraw loop to run up to
-/// `maximum_frame_latency * monitor_hz` on DX12, which can saturate the GPU
-/// while most submitted frames are never displayed.
+/// Choose presentation pacing for the platform.
+///
+/// FIFO keeps both platforms synchronized with the compositor. Mailbox can
+/// let the edit-mode redraw loop saturate the GPU with frames that are never
+/// displayed, while Immediate may tear during fast page movement.
 fn select_present_mode(available: &[PresentMode]) -> PresentMode {
     let selected = if available.contains(&PresentMode::Fifo) {
         PresentMode::Fifo

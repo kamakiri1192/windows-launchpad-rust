@@ -14,13 +14,25 @@ runs="${RUNS:-3}"
 duration="${DURATION_SECONDS:-20}"
 warmup="${WARMUP_SECONDS:-8}"
 scenario_list="${SCENARIOS:-qa/folder_interactions.json qa/folder_creation.json}"
+if [[ -n "${ANIMATED_BACKDROP:-}" ]]; then
+  animated_backdrop="$ANIMATED_BACKDROP"
+elif [[ "$mode" == "live" || "$mode" == "gpu" ]]; then
+  animated_backdrop=1
+else
+  animated_backdrop=0
+fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output_dir="${OUTPUT_DIR:-target/macos-profile-$mode-$timestamp}"
 
 if [[ -n "${CAPTURE_SCALE:-}" ]]; then
   export LAUNCHPAD_MACOS_CAPTURE_SCALE="$CAPTURE_SCALE"
 fi
-capture_scale="${LAUNCHPAD_MACOS_CAPTURE_SCALE:-auto-logical-point}"
+capture_scale="${LAUNCHPAD_MACOS_CAPTURE_SCALE:-auto-from-display-scale}"
+
+if [[ "$animated_backdrop" != "0" && "$animated_backdrop" != "1" ]]; then
+  echo "ANIMATED_BACKDROP must be 0 or 1" >&2
+  exit 2
+fi
 
 if [[ -e "$output_dir" ]]; then
   echo "output already exists: $output_dir" >&2
@@ -36,12 +48,19 @@ output_dir="$(cd "$output_dir" && pwd)"
   echo "cargo=$(cargo --version)"
   echo "arch=$(uname -m)"
   echo "macos_capture_scale=$capture_scale"
+  echo "animated_backdrop=$animated_backdrop"
+  echo "warmup_seconds=$warmup"
+  echo "duration_seconds=$duration"
   sw_vers
   system_profiler SPHardwareDataType SPDisplaysDataType
 } > "$output_dir/environment.txt"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  cargo build --release --locked --features gpu-profile
+  if [[ "$mode" == "qa" || "$mode" == "gpu" ]]; then
+    cargo build --release --locked --features gpu-profile
+  else
+    cargo build --release --locked
+  fi
 fi
 
 binary="$repo_root/target/release/launchpad-windows"
@@ -75,27 +94,71 @@ PY
     done
     python3 scripts/verify_qa_artifact.py "$qa_output"
     ;;
-  live)
+  live|gpu)
     if pgrep -x launchpad-windows >/dev/null; then
       echo "another launchpad-windows process is running" >&2
       exit 1
     fi
+    pid=""
+    backdrop_pid=""
+    cleanup() {
+      if [[ -n "$pid" ]]; then
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+      if [[ -n "$backdrop_pid" ]]; then
+        kill -TERM "$backdrop_pid" 2>/dev/null || true
+      fi
+    }
+    trap cleanup EXIT INT TERM
+
+    if [[ "$animated_backdrop" == "1" ]]; then
+      backdrop_binary="$output_dir/macos-animated-backdrop"
+      xcrun swiftc -O scripts/macos_animated_backdrop.swift \
+        -o "$backdrop_binary" -framework AppKit
+      "$backdrop_binary" > "$output_dir/animated-backdrop.log" 2>&1 &
+      backdrop_pid=$!
+      sleep 1
+    fi
+
     mkdir -p "$output_dir/home"
-    HOME="$output_dir/home" \
-    LAUNCHPAD_DEBUG=1 \
-    LAUNCHPAD_GPU_PROFILE="$output_dir/live.json" \
-    WGPU_BACKEND=metal \
-    RUST_LOG=warn \
-      "$binary" > "$output_dir/live.log" 2>&1 &
+    if [[ "$mode" == "gpu" ]]; then
+      env \
+        HOME="$output_dir/home" \
+        LAUNCHPAD_DEBUG=1 \
+        LAUNCHPAD_PROFILE_KEEP_VISIBLE=1 \
+        LAUNCHPAD_GPU_PROFILE="$output_dir/gpu.json" \
+        WGPU_BACKEND=metal \
+        RUST_LOG=warn \
+        "$binary" > "$output_dir/$mode.log" 2>&1 &
+    else
+      env \
+        HOME="$output_dir/home" \
+        LAUNCHPAD_DEBUG=1 \
+        LAUNCHPAD_PROFILE_KEEP_VISIBLE=1 \
+        WGPU_BACKEND=metal \
+        RUST_LOG=warn \
+        "$binary" > "$output_dir/$mode.log" 2>&1 &
+    fi
     pid=$!
-    trap 'kill -TERM "$pid" 2>/dev/null || true' EXIT INT TERM
-    # The resident app intentionally hides when its first window loses focus.
-    # Let discovery/icon work settle, then launch the same binary again: the
-    # single-instance handoff summons the measured process through the same
-    # path used by the global shortcut/menu-bar action.
+    # Let discovery and icon work settle, then exercise the same single-
+    # instance summon path used by the menu-bar item and global shortcut.
     sleep "$warmup"
     HOME="$output_dir/home" "$binary" >/dev/null 2>&1 || true
     sleep 1
+    python3 - "$output_dir/$mode.log" "$output_dir/runtime-warmup-counts.json" <<'PY'
+import json, pathlib, sys
+
+log_path, output_path = map(pathlib.Path, sys.argv[1:])
+lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+counts = {
+    "macos_capture": sum("macOS capture stats:" in line for line in lines),
+    "liquid_glass": sum("liquid glass stats:" in line for line in lines),
+}
+output_path.write_text(
+    json.dumps({log_path.name: counts}, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
     echo "elapsed_seconds,cpu_percent,rss_kb" > "$output_dir/process.csv"
     started=$SECONDS
     while kill -0 "$pid" 2>/dev/null && (( SECONDS - started < duration )); do
@@ -107,10 +170,16 @@ PY
     done
     kill -TERM "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
+    pid=""
+    if [[ -n "$backdrop_pid" ]]; then
+      kill -TERM "$backdrop_pid" 2>/dev/null || true
+      wait "$backdrop_pid" 2>/dev/null || true
+      backdrop_pid=""
+    fi
     trap - EXIT INT TERM
     ;;
   *)
-    echo "usage: $0 [qa|live]" >&2
+    echo "usage: $0 [qa|live|gpu]" >&2
     exit 2
     ;;
 esac

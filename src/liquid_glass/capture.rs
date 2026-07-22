@@ -73,6 +73,7 @@ impl CaptureStatus {
 
 pub trait BackdropCapture {
     fn status(&self) -> CaptureStatus;
+    fn set_active(&mut self, _active: bool) {}
     fn on_window_moved(&mut self, _x: i32, _y: i32, _scale_factor: f64) {}
     fn set_capture_region(&mut self, _region: CaptureRegion) {}
     fn latest_frame_texture(
@@ -86,11 +87,25 @@ pub trait BackdropCapture {
     fn latest_frame_rgba(&mut self, width: u32, height: u32) -> Option<CpuCaptureFrame>;
 }
 
+pub struct EphemeralGpuCaptureFrame {
+    pub texture: wgpu::Texture,
+    pub region: CaptureRegion,
+    pub width: u32,
+    pub height: u32,
+    pub release_after_submit: Box<dyn Send>,
+}
+
 pub enum GpuCaptureFrame {
     New {
         texture: wgpu::Texture,
         view: wgpu::TextureView,
     },
+    /// A CPU-zero-copy platform surface whose pixels should be copied on the
+    /// GPU into a persistent renderer texture before `release_after_submit`
+    /// is dropped.
+    /// Keeping the platform frame alive until the GPU copy completes prevents
+    /// the capture pool from reusing its IOSurface while Metal is reading it.
+    Ephemeral(EphemeralGpuCaptureFrame),
     Updated,
 }
 

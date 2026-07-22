@@ -65,6 +65,21 @@ pub(super) fn create_geometry_texture(
     )
 }
 
+pub(super) fn create_overlay_geometry_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    create_texture(
+        device,
+        "liquid glass overlay geometry texture",
+        width,
+        height,
+        GEOMETRY_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
 pub(super) fn create_backdrop_texture(
     device: &wgpu::Device,
     width: u32,
@@ -76,6 +91,21 @@ pub(super) fn create_backdrop_texture(
         width,
         height,
         BACKDROP_FORMAT,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    )
+}
+
+pub(super) fn create_gpu_backdrop_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    create_texture(
+        device,
+        "liquid glass GPU backdrop texture",
+        width,
+        height,
+        wgpu::TextureFormat::Bgra8Unorm,
         wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
     )
 }

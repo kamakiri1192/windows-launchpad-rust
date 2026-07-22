@@ -28,16 +28,28 @@ impl LiquidGlassRenderer {
             let capture_started = Instant::now();
             if let Some(gpu_frame) = self.capture.latest_frame_texture(device, width, height) {
                 capture_time = capture_started.elapsed();
-                self.backdrop_mapping = BackdropMapping::full(width, height);
-                if let GpuCaptureFrame::New { texture, view } = gpu_frame {
-                    if !self.using_gpu_backdrop {
-                        eprintln!("liquid glass capture path: GPU shared texture");
+                match gpu_frame {
+                    GpuCaptureFrame::New { texture, view } => {
+                        self.backdrop_mapping = BackdropMapping::full(width, height);
+                        if !self.using_gpu_backdrop {
+                            eprintln!("liquid glass capture path: GPU shared texture");
+                        }
+                        self.bind_backdrop_view(device, &view);
+                        self.gpu_backdrop_texture = Some(texture);
+                        self.using_gpu_backdrop = true;
+                        self.gpu_backdrop_is_copy_target = false;
+                        captured = true;
                     }
-                    self.bind_backdrop_view(device, &view);
-                    self.gpu_backdrop_texture = Some(texture);
-                    self.using_gpu_backdrop = true;
+                    GpuCaptureFrame::Ephemeral(frame) => {
+                        let upload_started = Instant::now();
+                        captured = self.copy_ephemeral_gpu_backdrop(device, queue, frame);
+                        upload_time = upload_started.elapsed();
+                    }
+                    GpuCaptureFrame::Updated => {
+                        self.backdrop_mapping = BackdropMapping::full(width, height);
+                        captured = true;
+                    }
                 }
-                captured = true;
             } else if let Some(frame) = self.capture.latest_frame_rgba(width, height) {
                 capture_time = capture_started.elapsed();
                 let upload_started = Instant::now();
@@ -91,7 +103,9 @@ impl LiquidGlassRenderer {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let blur_levels = self.blur_level_count();
-        let refreshed_blur = should_refresh_blur(self.blur_dirty, captured);
+        let refreshed_blur = should_refresh_blur(self.blur_dirty, captured)
+            && !self.debug.disable_blur
+            && self.params.blur_radius >= 0.5;
 
         // Each blur pass runs in its OWN command encoder. wgpu groups all
         // passes in a single encoder into one "usage scope", and a texture
@@ -103,6 +117,7 @@ impl LiquidGlassRenderer {
 
         // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
         // backdrop for i==0 else levels[i-1], and writes levels[i].
+        let mut blur_commands = Vec::with_capacity(blur_levels * 2);
         for i in 0..if refreshed_blur { blur_levels } else { 0 } {
             let dst = &self.blur_levels[i].1;
             let label = format!("liquid glass blur downsample L{i}->L{}", i + 1);
@@ -130,7 +145,7 @@ impl LiquidGlassRenderer {
                 pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
                 pass.draw(0..3, 0..1);
             }
-            queue.submit(std::iter::once(enc.finish()));
+            blur_commands.push(enc.finish());
         }
 
         // Upsample: L(k-1) -> L(k-2) -> ... -> L1 -> full-res blur.
@@ -173,14 +188,18 @@ impl LiquidGlassRenderer {
                 pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
                 pass.draw(0..3, 0..1);
             }
-            queue.submit(std::iter::once(enc.finish()));
+            blur_commands.push(enc.finish());
+        }
+        if !blur_commands.is_empty() {
+            queue.submit(blur_commands);
         }
         if refreshed_blur {
             self.blur_dirty = false;
         }
 
         let geometry_key = self.geometry_key(scroll_x);
-        if self.last_geometry_key != Some(geometry_key) {
+        let refreshed_geometry = self.last_geometry_key != Some(geometry_key);
+        if refreshed_geometry {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -229,6 +248,7 @@ impl LiquidGlassRenderer {
         self.stats.record(
             captured,
             refreshed_blur,
+            refreshed_geometry,
             capture_time,
             upload_time,
             render_started.elapsed(),
@@ -270,7 +290,7 @@ impl LiquidGlassRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass grid overlay geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
+                    view: &self.overlay_geometry_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -309,8 +329,6 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.grid_overlay_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-
-        self.last_geometry_key = None;
     }
 
     /// Render the lifted folder's Liquid Glass after normal grid content and
@@ -348,7 +366,7 @@ impl LiquidGlassRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass drag overlay geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
+                    view: &self.overlay_geometry_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -387,8 +405,6 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.drag_overlay_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-
-        self.last_geometry_key = None;
     }
 
     pub fn render_badges(
@@ -419,7 +435,7 @@ impl LiquidGlassRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass badge geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
+                    view: &self.overlay_geometry_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -458,11 +474,6 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.badge_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-
-        // The badge pass reuses the main geometry texture, so force the base
-        // glass pass to repaint its mask next frame instead of reusing the
-        // now-overwritten badge mask.
-        self.last_geometry_key = None;
     }
 
     pub fn render_modal_badges(
@@ -496,7 +507,7 @@ impl LiquidGlassRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass modal badge geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
+                    view: &self.overlay_geometry_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -535,8 +546,6 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.modal_badge_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-
-        self.last_geometry_key = None;
     }
 
     pub fn render_control(
@@ -572,7 +581,7 @@ impl LiquidGlassRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass control geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
+                    view: &self.overlay_geometry_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -611,8 +620,6 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.control_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-
-        self.last_geometry_key = None;
     }
 
     /// Render the settings overlay panel glass. Drawn last (over everything),
@@ -650,7 +657,7 @@ impl LiquidGlassRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass settings panel geometry pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.geometry_view,
+                    view: &self.overlay_geometry_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -689,7 +696,5 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-
-        self.last_geometry_key = None;
     }
 }

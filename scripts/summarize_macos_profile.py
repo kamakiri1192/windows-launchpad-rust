@@ -17,7 +17,8 @@ METRIC_RE = re.compile(r"([a-z_]+)=(-?[0-9]+(?:\.[0-9]+)?)%?")
 CAPTURE_GEOMETRY_RE = re.compile(
     r"macOS capture geometry: window=(\d+)x(\d+) "
     r"roi=(\d+),(\d+) (\d+)x(\d+) output=(\d+)x(\d+) "
-    r"scale=([0-9.]+) pixel_reduction=([0-9.]+)%"
+    r"dimension_scale=([0-9.]+) target_hz=([0-9.]+) "
+    r"pixel_reduction=([0-9.]+)%"
 )
 
 
@@ -102,7 +103,18 @@ def load_runtime_metrics(directory: Path) -> dict[str, dict[str, float | int]]:
         "macos_capture": defaultdict(list),
         "liquid_glass": defaultdict(list),
     }
+    warmup_counts_path = directory / "runtime-warmup-counts.json"
+    warmup_counts = {}
+    if warmup_counts_path.is_file():
+        data = json.loads(warmup_counts_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            warmup_counts = data
+
     for path in sorted(directory.glob("*.log")):
+        skipped: dict[str, int] = defaultdict(int)
+        path_warmup = warmup_counts.get(path.name, {})
+        if not isinstance(path_warmup, dict):
+            path_warmup = {}
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             group = None
             if "macOS capture stats:" in line:
@@ -110,6 +122,10 @@ def load_runtime_metrics(directory: Path) -> dict[str, dict[str, float | int]]:
             elif "liquid glass stats:" in line:
                 group = "liquid_glass"
             if group is None:
+                continue
+            warmup_limit = path_warmup.get(group, 0)
+            if isinstance(warmup_limit, int) and skipped[group] < warmup_limit:
+                skipped[group] += 1
                 continue
             for key, raw in METRIC_RE.findall(line):
                 grouped[group][key].append(float(raw))
@@ -148,7 +164,8 @@ def load_capture_geometry(directory: Path) -> list[dict[str, float | int]]:
                 "output_width": integer_values[6],
                 "output_height": integer_values[7],
                 "scale": float(raw[8]),
-                "pixel_reduction_percent": float(raw[9]),
+                "target_hz": float(raw[9]),
+                "pixel_reduction_percent": float(raw[10]),
                 "observations": 0,
             }
             key = integer_values + (round(record["scale"] * 1000),)
@@ -188,8 +205,8 @@ def markdown(summary: dict[str, object]) -> str:
         lines += [
             "## Capture geometry",
             "",
-            "| Window | ROI | Output | scale | pixel reduction | observations |",
-            "|---|---|---|---:|---:|---:|",
+            "| Window | ROI | Output | dimension scale | target Hz | pixel reduction | observations |",
+            "|---|---|---|---:|---:|---:|---:|",
         ]
         for geometry in geometries:
             lines.append(
@@ -198,6 +215,7 @@ def markdown(summary: dict[str, object]) -> str:
                 f"{geometry['roi_width']}x{geometry['roi_height']} "
                 f"| {geometry['output_width']}x{geometry['output_height']} "
                 f"| {geometry['scale']:.2f} "
+                f"| {geometry['target_hz']:.1f} "
                 f"| {geometry['pixel_reduction_percent']:.1f}% "
                 f"| {geometry['observations']} |"
             )

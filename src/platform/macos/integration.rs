@@ -23,6 +23,20 @@ const MENU_SETTINGS: &str = "launchpad.settings";
 const MENU_QUIT: &str = "launchpad.quit";
 const SUMMON_MESSAGE: &[u8] = b"show";
 
+/// Make the accessory application active before asking its window to become
+/// key. `Window::focus_window` alone does not reliably activate an unbundled
+/// accessory process launched from a terminal or profiling harness.
+pub fn activate_application() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let Some(main_thread) = MainThreadMarker::new() else {
+        eprintln!("macos-integration: activation requested off the main thread");
+        return;
+    };
+    NSApplication::sharedApplication(main_thread).activate();
+}
+
 /// Owns the menu-bar item and registered global shortcut for the process.
 pub struct MacOsIntegration {
     hotkey_manager: Option<GlobalHotKeyManager>,

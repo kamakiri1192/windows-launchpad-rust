@@ -16,37 +16,41 @@ fallback instead of exiting. Restart the app after changing the permission.
 
 ## Backdrop performance diagnostics
 
-ScreenCaptureKit screenshots and their RGBA conversion run on the
-`launchpad-macos-capture` worker. The renderer unions the visible Liquid Glass
-shapes, expands that rectangle by the refraction/reflection/blur sampling
-radius, and requests one ROI rather than issuing several screenshots. The
-single request avoids multiplying ScreenCaptureKit's fixed capture latency.
+One persistent `SCStream` runs on `launchpad-macos-capture` at the display's
+refresh rate while the launcher is visible. There is no intentional 30 FPS or
+other timer-based update cap. The callback retains the newest complete frame;
+if the renderer is temporarily busy, a newer frame replaces the stale pending
+frame instead of building an unbounded queue. Hiding the launcher stops the
+stream, and summoning it starts the stream again.
 
-By default the output keeps one backdrop sample per logical point. A 2x Retina
-window therefore captures the ROI at 50% linear resolution. Liquid Glass
-already filters this backdrop, so this removes 75% of the output pixels before
-RGBA conversion/upload while retaining native logical resolution. The shader
-maps the smaller texture back to the physical ROI and the blur pyramid selects
-one fewer level to keep its physical blur radius stable.
+The renderer imports each frame's IOSurface as a Metal texture and performs a
+GPU-to-GPU copy into its persistent BGRA backdrop texture. It does not convert
+the frame to CPU RGBA pixels. The source CVPixelBuffer is released after the
+copy submission completes so ScreenCaptureKit can immediately reuse its
+bounded frame pool.
 
-The render thread only polls a bounded latest-frame channel, uploads a
-completed frame, and reuses the previous backdrop while capture is in flight.
-Capture requests are capped at about 30 FPS, and the GPU blur pyramid is
-rebuilt only when a new backdrop arrives.
+The capture rectangle is the union of the visible Liquid Glass shapes plus the
+maximum refraction, reflection, and blur sampling radius. It is aligned and
+given a small hysteresis margin so minor shape motion does not reconfigure the
+stream. By default, on a display scale of 2x, the capture texture's width and
+height are each 50% of the ROI's physical-pixel dimensions. That reduces its
+pixel count by 75%. The shader maps the texture back to the physical ROI.
 
-Two periodic stderr lines separate capture cost from render-thread cost:
+Liquid Glass geometry is independent of backdrop pixels. The expensive base
+SDF for the page and tile halos therefore has its own cached texture, while
+controls, badges, drag visuals, and panels share a separate transient geometry
+texture. A changing video backdrop refreshes capture, blur, and final
+compositing every frame without recalculating the static base SDF.
 
-- `macOS capture stats` reports ScreenCaptureKit latency and RGBA copy time on
-  the worker.
+Periodic stderr lines separate capture cost from render-thread cost:
+
+- `macOS capture stats` reports stream FPS, stale-frame replacements, and the
+  number of CPU pixel copies (normally zero).
 - `macOS capture geometry` reports the window, ROI, output resolution, linear
-  scale, and pixel reduction versus a physical full-window capture.
-- `liquid glass stats` reports render-thread polling/upload time, blur refresh
-  rate, and the percentage of frames that reused the cached blur.
-
-The `renderer_poll_does_not_wait_for_slow_capture` regression test simulates a
-100 ms capture and requires the render-thread poll to return within 40 ms. A
-large `capture_ms` in the worker log is therefore expected to reduce backdrop
-freshness rather than stall folder and drag animations.
+  dimension scale, target refresh rate, and pixel reduction versus a physical
+  full-window capture.
+- `liquid glass stats` reports render-thread polling/GPU-copy time, blur refresh
+  rate, and the refresh/reuse rates for cached blur and base geometry.
 
 The default global shortcut is Option+Space. Set `LAUNCHPAD_HOTKEY` before
 launching to use another `global-hotkey` key string, for example
@@ -61,12 +65,19 @@ run count, environment metadata, and summary format consistent:
 # Three deterministic 1280x800 runs of each required folder scenario.
 scripts/profile_macos.sh qa
 
-# Twenty seconds of the real window and ScreenCaptureKit backdrop. Interact
-# with the launcher while the command is running.
+# Twenty seconds of the real window and a 60 Hz animated backdrop, using the
+# ordinary release build and lightweight runtime/process metrics.
 scripts/profile_macos.sh live
+
+# Short, explicitly instrumented run for per-pass GPU timestamps. Keep this
+# separate because detailed GPU instrumentation can perturb frame pacing.
+scripts/profile_macos.sh gpu
 
 # A/B control: retain the ROI but capture it at physical 1:1 resolution.
 CAPTURE_SCALE=1 scripts/profile_macos.sh live
+
+# Measure a static real desktop instead of the animated fixture.
+ANIMATED_BACKDROP=0 scripts/profile_macos.sh live
 ```
 
 `RUNS`, `SCENARIOS` (a space-separated list), `DURATION_SECONDS`,
@@ -74,18 +85,25 @@ CAPTURE_SCALE=1 scripts/profile_macos.sh live
 requires both default folder scenarios, so include them when extending the
 scenario list. Live mode waits eight seconds for discovery and icon work, then
 summons the resident process before starting its samples. Set `SKIP_BUILD=1` to
-reuse an existing `gpu-profile` release binary. Each run creates a new
+reuse a binary already built for the selected mode. Each run creates a new
 `target/macos-profile-*` directory containing hardware/toolchain metadata, raw
-logs, GPU JSON/Chrome trace files, process samples for live runs, and
+logs, GPU JSON/Chrome trace files for `qa`/`gpu`, process samples for live
+window runs, and
 `summary.md` / `summary.json`. `CAPTURE_SCALE` overrides the automatic
-logical-point scale (clamped to 0.25–1.0); use `1` for a visual/performance A/B
-control rather than as the production default.
+display-scale-derived dimension ratio (clamped to 0.25–1.0); use `1` for a
+visual/performance A/B control rather than as the production default.
+
+The harness records how many periodic runtime-stat lines were emitted before
+the measurement window. The summarizer excludes those warmup lines, so app
+discovery, icon extraction, and initial pipeline setup do not distort the live
+capture/render rates.
 
 The QA mode includes PNG readback and is intended for repeatable comparisons,
-not absolute full-screen throughput. Live mode samples macOS `ps` CPU (where
-100% means one fully occupied logical CPU) and resident memory once per second.
-The periodic capture/render logs remain the source for ScreenCaptureKit,
-conversion, upload, blur-refresh, and blur-reuse costs.
+not absolute full-screen throughput. `live` and `gpu` sample macOS `ps` CPU
+(where 100% means one fully occupied CPU core) and resident memory once per
+second. `live` is the representative performance result; `gpu` is for locating
+expensive render passes. The periodic capture/render logs remain the source for
+ScreenCaptureKit, IOSurface copy, blur-refresh, and blur-reuse costs.
 
 GPU timestamp results can occasionally arrive with an invalid negative or
 wrapped duration on Metal. Non-finite, negative, and implausible durations over
