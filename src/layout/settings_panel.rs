@@ -9,6 +9,9 @@ use crate::ui_model::render_model::{
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
 
+#[cfg(target_os = "macos")]
+pub const TITLE_FONT: &str = ".SF NS";
+#[cfg(not(target_os = "macos"))]
 pub const TITLE_FONT: &str = "Yu Gothic UI";
 pub const TITLE_SIZE: f32 = 22.0;
 pub const TITLE_LINE: f32 = 26.0;

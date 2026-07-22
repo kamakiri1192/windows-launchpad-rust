@@ -1483,6 +1483,7 @@ dependencies = [
  "screencapturekit",
  "serde",
  "serde_json",
+ "sys-locale",
  "tray-icon",
  "wgpu",
  "wgpu-profiler",
