@@ -20,7 +20,7 @@ use crate::icons::normalize::{DecodedIcon, TARGET};
 use crate::ui_model::geometry::Point;
 
 pub const SCENARIO_ENV: &str = "LAUNCHPAD_QA_SCENARIO";
-pub const VISIBLE_ENV: &str = "LAUNCHPAD_QA_VISIBLE";
+pub const HEADLESS_ENV: &str = "LAUNCHPAD_QA_HEADLESS";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QaScenario {

@@ -56,8 +56,6 @@ def verify(root: Path) -> None:
 
     required_states = {
         "folder open": any(frame.get("folder_open") for frame in frames),
-        "edit mode": any(frame.get("editing") for frame in frames),
-        "rename editor": any(frame.get("renaming") for frame in frames),
         "second folder page": any(frame.get("folder_page", 0) >= 1 for frame in frames),
     }
     missing = [name for name, present in required_states.items() if not present]

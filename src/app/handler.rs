@@ -97,14 +97,10 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_accepts_first_mouse(true);
         }
         if let Some(viewport) = self.qa_runner.as_ref().map(|runner| runner.viewport()) {
-            // A Metal surface cannot be created from a window that starts out
-            // hidden on GitHub's macOS runner. The opt-in visible mode is only
-            // used by the isolated CI VM; local deterministic QA stays hidden.
-            let qa_visible = std::env::var_os(crate::qa::VISIBLE_ENV).is_some();
             attrs = attrs
-                .with_visible(qa_visible)
+                .with_visible(false)
                 .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
-            self.visible = qa_visible;
+            self.visible = false;
         }
 
         if let Some(icon) = load_window_icon() {
