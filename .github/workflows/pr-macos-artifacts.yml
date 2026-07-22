@@ -239,14 +239,18 @@ jobs:
           HOME: ${{ github.workspace }}/target/qa-home
           LAUNCHPAD_DEBUG: "1"
           LAUNCHPAD_QA_HEADLESS: "1"
-          LAUNCHPAD_QA_SCENARIO: ${{ github.workspace }}/qa/folder_interactions.json
           RUST_LOG: warn
           WGPU_BACKEND: metal
         run: |
           set -euo pipefail
           rm -rf target/qa-sequences target/qa-home
           mkdir -p target/qa-sequences target/qa-home target/qa-artifacts
-          "target/$TARGET/release/$BIN_NAME" > target/qa-artifacts/application.log 2>&1
+          for scenario in folder_interactions folder_creation; do
+            HOME="${{ github.workspace }}/target/qa-home/$scenario" \
+            LAUNCHPAD_QA_SCENARIO="${{ github.workspace }}/qa/$scenario.json" \
+              "target/$TARGET/release/$BIN_NAME" \
+              > "target/qa-artifacts/$scenario.log" 2>&1
+          done
 
       - name: Verify captured frames
         run: python3 scripts/verify_qa_artifact.py target/qa-sequences

@@ -26,10 +26,14 @@ def png_size(path: Path) -> tuple[int, int]:
 
 def verify(root: Path) -> None:
     manifests = sorted(root.glob("*/manifest.json"))
-    if len(manifests) != 1:
-        fail(f"expected exactly one manifest below {root}, found {len(manifests)}")
+    if not manifests:
+        fail(f"expected at least one manifest below {root}")
 
-    manifest_path = manifests[0]
+    for manifest_path in manifests:
+        verify_manifest(manifest_path)
+
+
+def verify_manifest(manifest_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("completed") is not True:
         fail("scenario did not complete")
@@ -54,16 +58,34 @@ def verify(root: Path) -> None:
     if len(hashes) < 3:
         fail(f"expected at least 3 visually distinct frames, found {len(hashes)}")
 
-    required_states = {
-        "folder open": any(frame.get("folder_open") for frame in frames),
-        "second folder page": any(frame.get("folder_page", 0) >= 1 for frame in frames),
-    }
+    scenario = manifest.get("scenario")
+    required_states = {"folder open": any(frame.get("folder_open") for frame in frames)}
+    if scenario == "folder-interactions":
+        required_states["second folder page"] = any(
+            frame.get("folder_page", 0) >= 1 for frame in frames
+        )
+    elif scenario == "folder-creation":
+        required_states.update(
+            {
+                "two apps merged into folder": any(
+                    frame.get("active_folder_child_count") == 2 for frame in frames
+                ),
+                "top-level items compacted": any(
+                    frame.get("top_level_item_count") == 3 for frame in frames
+                ),
+                "later apps remain visible in model": any(
+                    frame.get("folder_open")
+                    and frame.get("top_level_item_count") == 3
+                    for frame in frames
+                ),
+            }
+        )
     missing = [name for name, present in required_states.items() if not present]
     if missing:
         fail(f"scenario never reached: {', '.join(missing)}")
 
     print(
-        f"visual QA verified: {len(frames)} frames, "
+        f"visual QA verified ({scenario}): {len(frames)} frames, "
         f"{len(hashes)} distinct images, viewport {viewport[0]}x{viewport[1]}"
     )
 
