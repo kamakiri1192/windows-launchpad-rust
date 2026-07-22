@@ -224,7 +224,7 @@ target/
 - `finished_frames`: 非同期回収まで完了したフレーム数
 - `window_samples_per_scope`: scope ごとの保持上限。現在は240
 - `samples`: その scope の集計に使ったサンプル数
-- `invalid_samples`: Metal などで終了timestampが開始timestampより前になったため除外したサンプル数
+- `invalid_samples`: Metal などで負値、非有限値、または60秒超の明白なwrap値になったため除外したサンプル数
 - `p50_ms`: 通常時に近い中央値
 - `p95_ms`: 遅い側5%付近。継続的な引っかかりの比較に使う
 - `max_ms`: 最大値。単発異常の手掛かりだが、1回だけで原因と断定しない

@@ -68,9 +68,10 @@ not absolute full-screen throughput. Live mode samples macOS `ps` CPU (where
 The periodic capture/render logs remain the source for ScreenCaptureKit,
 conversion, upload, blur-refresh, and blur-reuse costs.
 
-GPU timestamp results can occasionally arrive with an invalid negative duration
-on Metal. Those samples are excluded from percentiles and reported separately
-as `invalid_samples`; a run with a high invalid count should be repeated rather
+GPU timestamp results can occasionally arrive with an invalid negative or
+wrapped duration on Metal. Non-finite, negative, and implausible durations over
+60 seconds are excluded from percentiles and reported separately as
+`invalid_samples`; a run with a high invalid count should be repeated rather
 than treated as authoritative.
 
 ## Pull request artifacts

@@ -15,6 +15,7 @@ mod enabled {
 
     const PROFILE_ENV: &str = "LAUNCHPAD_GPU_PROFILE";
     const MAX_SAMPLES_PER_SCOPE: usize = 240;
+    const MAX_VALID_SCOPE_MILLISECONDS: f64 = 60_000.0;
 
     pub(crate) struct GpuScope(Option<GpuProfilerQuery>);
 
@@ -26,7 +27,9 @@ mod enabled {
 
     impl ScopeSamples {
         fn record(&mut self, milliseconds: f64) {
-            if milliseconds.is_finite() && milliseconds >= 0.0 {
+            if milliseconds.is_finite()
+                && (0.0..=MAX_VALID_SCOPE_MILLISECONDS).contains(&milliseconds)
+            {
                 self.milliseconds.push_back(milliseconds);
                 if self.milliseconds.len() > MAX_SAMPLES_PER_SCOPE {
                     self.milliseconds.pop_front();
@@ -246,12 +249,13 @@ mod enabled {
             samples.record(0.25);
             samples.record(-1.0);
             samples.record(f64::NAN);
+            samples.record(MAX_VALID_SCOPE_MILLISECONDS + 1.0);
 
             assert_eq!(
                 samples.milliseconds.iter().copied().collect::<Vec<_>>(),
                 [0.25]
             );
-            assert_eq!(samples.invalid_samples, 2);
+            assert_eq!(samples.invalid_samples, 3);
         }
 
         #[test]
