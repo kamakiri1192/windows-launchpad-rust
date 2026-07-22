@@ -172,7 +172,7 @@ fn process_one(
 ) -> Result<DecodedIcon, String> {
     // (1) Extraction: Shell/GDI/COM → raw RGBA. This is the expensive part.
     let extract_start = std::time::Instant::now();
-    let raw = extract::extract_icon_from_lnk(&req.link_path).ok_or_else(|| {
+    let raw = extract_request_icon(req).ok_or_else(|| {
         format!(
             "no icon for app_id={} path={}",
             req.app_id,
@@ -221,4 +221,17 @@ fn process_one(
     }
 
     Ok(image)
+}
+
+fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
+    if req.link_path.to_string_lossy().starts_with("steam://") {
+        let icon_path = PathBuf::from(&req.icon_location);
+        if let Ok(bytes) = std::fs::read(&icon_path) {
+            if let Ok(image) = image::load_from_memory(&bytes) {
+                return Some(DecodedIcon::from_dynamic(image));
+            }
+        }
+        return extract::extract_icon_from_path(&icon_path);
+    }
+    extract::extract_icon_from_lnk(&req.link_path)
 }

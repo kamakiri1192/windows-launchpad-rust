@@ -1,4 +1,4 @@
-//! Launch Start Menu shortcuts selected from the grid.
+//! Launch Start Menu shortcuts and protocol URLs selected from the grid.
 
 use std::path::Path;
 

@@ -22,7 +22,7 @@ that drives re-extraction.
 
 ## Snapshot model
 
-The source of truth for "what's in the Start Menu" is a snapshot:
+The source of truth for discovered Start Menu and Steam apps is a snapshot:
 
 ```text
 BTreeMap<AppId, SnapshotEntry>
@@ -31,15 +31,19 @@ BTreeMap<AppId, SnapshotEntry>
 where `SnapshotEntry` (`app_diff::SnapshotEntry`) carries the fields that matter
 for both identity and cache invalidation:
 
-- `app_id` (normalized `.lnk` path — see `app_id.rs`)
+- `app_id` (normalized `.lnk` path or stable `steam:<appid>` id)
 - `name`, `link_path`
 - `link_mtime`, `target_path`, `target_mtime`
 - `icon_location`, `icon_index`
 
 Snapshots are taken by `app_scan::scan_start_menu`, which walks both Start Menu
-roots (per-user + all-users), resolves each `.lnk`'s target + icon location, and
+roots plus all Steam library manifests and resolves shortcut/icon metadata. It
 reads mtimes — but does **not** touch Shell/GDI for pixels. A scan is cheap
 enough to repeat periodically.
+
+Steam discovery remains active when the user disables **Show Steam apps** in
+Settings. The display filter hides Steam entries from both the grid and search,
+while keeping the latest registry state ready for an immediate toggle back on.
 
 ## Diffing
 

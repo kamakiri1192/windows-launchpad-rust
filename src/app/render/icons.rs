@@ -400,6 +400,7 @@ impl App {
                 }
             }
             let _ = self.cache.forget(id);
+            self.snapshot.remove(id);
         }
 
         // Merge the added/updated entries into a mini-snapshot so we can reuse

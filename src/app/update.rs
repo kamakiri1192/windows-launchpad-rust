@@ -54,6 +54,13 @@ impl App {
                 self.persist_settings();
                 self.request_redraw();
             }
+            SettingsPressTarget::SteamToggle => {
+                self.settings.show_steam_apps = !self.settings.show_steam_apps;
+                self.persist_settings();
+                self.close_folder();
+                self.relayout();
+                self.request_redraw();
+            }
             SettingsPressTarget::SearchHiddenToggle => {
                 self.settings.search_includes_hidden = !self.settings.search_includes_hidden;
                 self.persist_settings();

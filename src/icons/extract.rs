@@ -42,7 +42,9 @@ use windows::Win32::UI::Shell::{
     KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON, SHGFI_SYSICONINDEX,
     SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
 };
-use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
+};
 
 use super::DecodedIcon;
 
@@ -142,6 +144,52 @@ pub fn extract_icon_from_lnk(lnk: &Path) -> Option<DecodedIcon> {
     let hicon = get_path_hicon(resolved_target.as_deref().unwrap_or(lnk))?;
     let _guard = IconGuard(hicon);
     hicon_to_rgba(hicon)
+}
+
+/// Extract the shell icon associated with an arbitrary file path. Used by
+/// non-shortcut launch sources (currently Steam) as a fallback.
+pub fn extract_icon_from_path(path: &Path) -> Option<DecodedIcon> {
+    let hicon = extract_executable_hicon(path).or_else(|| get_path_hicon(path))?;
+    let _guard = IconGuard(hicon);
+    hicon_to_rgba(hicon)
+}
+
+/// Extract the first embedded executable icon at 256px, ready to be downscaled
+/// into the launcher atlas. The Shell image list can omit unregistered game
+/// executables; `PrivateExtractIconsW` reads the PE resources directly.
+fn extract_executable_hicon(path: &Path) -> Option<HICON> {
+    const SOURCE_ICON_SIZE: i32 = 256;
+
+    let is_executable = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("dll")
+        });
+    if !is_executable {
+        return None;
+    }
+
+    let wide = path_to_wide(path)?;
+    if wide.len() > 260 {
+        return None;
+    }
+    let mut filename = [0u16; 260];
+    filename[..wide.len()].copy_from_slice(&wide);
+    let mut icons = [HICON::default(); 1];
+    let mut icon_id = 0u32;
+    let count = unsafe {
+        PrivateExtractIconsW(
+            &filename,
+            0,
+            SOURCE_ICON_SIZE,
+            SOURCE_ICON_SIZE,
+            Some(&mut icons),
+            Some(&mut icon_id),
+            0,
+        )
+    };
+    (count != 0 && count != u32::MAX && !icons[0].is_invalid()).then_some(icons[0])
 }
 
 // ---- shortcut target resolution ----------------------------------------

@@ -24,6 +24,12 @@ pub struct Settings {
     pub sort_order: SortOrder,
     pub frequent_apps_enabled: bool,
     pub search_includes_hidden: bool,
+    #[serde(default = "default_show_steam_apps")]
+    pub show_steam_apps: bool,
+}
+
+const fn default_show_steam_apps() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -32,7 +38,14 @@ impl Default for Settings {
             sort_order: SortOrder::Name,
             frequent_apps_enabled: false,
             search_includes_hidden: false,
+            show_steam_apps: true,
         }
+    }
+}
+
+impl Settings {
+    pub fn shows_app(&self, app_id: &crate::domain::app_id::AppId) -> bool {
+        self.show_steam_apps || !app_id.is_steam()
     }
 }
 
@@ -67,6 +80,7 @@ mod tests {
         assert_eq!(s.sort_order, SortOrder::Name);
         assert!(!s.frequent_apps_enabled);
         assert!(!s.search_includes_hidden);
+        assert!(s.show_steam_apps);
     }
 
     #[test]
@@ -75,9 +89,33 @@ mod tests {
             sort_order: SortOrder::Frequent,
             frequent_apps_enabled: true,
             search_includes_hidden: true,
+            show_steam_apps: false,
         };
         let bytes = serde_json::to_vec(&s).unwrap();
         let decoded: Settings = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(decoded, s);
+    }
+
+    #[test]
+    fn older_json_defaults_steam_apps_to_visible() {
+        let json = br#"{
+            "sort_order":"Name",
+            "frequent_apps_enabled":false,
+            "search_includes_hidden":false
+        }"#;
+        let decoded: Settings = serde_json::from_slice(json).unwrap();
+        assert!(decoded.show_steam_apps);
+    }
+
+    #[test]
+    fn steam_visibility_only_filters_steam_ids() {
+        let mut settings = Settings::default();
+        let steam = crate::domain::app_id::AppId::from_normalized("steam:620");
+        let regular = crate::domain::app_id::AppId::from_normalized("c:/portal 2.lnk");
+
+        assert!(settings.shows_app(&steam));
+        settings.show_steam_apps = false;
+        assert!(!settings.shows_app(&steam));
+        assert!(settings.shows_app(&regular));
     }
 }

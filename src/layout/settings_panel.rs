@@ -99,6 +99,7 @@ pub enum SettingsPanelHit {
     Category(SettingsCategoryId),
     Sort(SortOrderId),
     FrequentToggle,
+    SteamToggle,
     SearchHiddenToggle,
     ResetCache,
     ResetSettings,
@@ -115,6 +116,7 @@ impl SettingsPanelHit {
             Self::Category(category) => HitTarget::settings_category(category.key()),
             Self::Sort(order) => HitTarget::settings_sort_option(order.key()),
             Self::FrequentToggle => HitTarget::settings_toggle("frequent-apps"),
+            Self::SteamToggle => HitTarget::settings_toggle("steam-apps"),
             Self::SearchHiddenToggle => HitTarget::settings_toggle("search-hidden"),
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
@@ -185,6 +187,7 @@ pub struct SettingsPanelInput {
     pub category: SettingsCategoryId,
     pub sort_order: SortOrderId,
     pub frequent_apps_enabled: bool,
+    pub show_steam_apps: bool,
     pub search_includes_hidden: bool,
     pub hidden_count: usize,
     pub progress: f32,
@@ -198,6 +201,8 @@ pub struct SettingsPanelCopy<'a> {
     pub sort_label: &'a str,
     pub frequent_apps_label: &'a str,
     pub frequent_apps_detail: &'a str,
+    pub steam_apps_label: &'a str,
+    pub steam_apps_detail: &'a str,
     pub hidden_apps_label: &'a str,
     pub hidden_count_label: &'a str,
     pub search_hidden_label: &'a str,
@@ -312,6 +317,10 @@ pub fn hit_test(
             }
             let hidden_top = first_top + ROW_STEP * 2.0 * scale;
             if point_in_row(point, content_left, hidden_top, row_w, row_h) {
+                return SettingsPanelHit::SteamToggle;
+            }
+            let hidden_top = first_top + ROW_STEP * 3.0 * scale;
+            if point_in_row(point, content_left, hidden_top, row_w, row_h) {
                 return SettingsPanelHit::Inside;
             }
         }
@@ -354,6 +363,8 @@ pub fn build(input: SettingsPanelInput) -> SettingsPanelModel {
         sort_label: "Sort",
         frequent_apps_label: "Frequent apps",
         frequent_apps_detail: "Show frequently used apps on the home screen.",
+        steam_apps_label: "Steam apps",
+        steam_apps_detail: "Show installed Steam games and applications.",
         hidden_apps_label: "Hidden apps",
         hidden_count_label: &hidden_count_label,
         search_hidden_label: "Include hidden apps in search",
@@ -645,7 +656,33 @@ fn push_text_views(
                 TextAlign::Start,
             );
 
-            let hidden_y = first_top + ROW_STEP * 2.0 * scale + row_h * 0.5;
+            let steam_y = first_top + ROW_STEP * 2.0 * scale + row_h * 0.5;
+            push_text(
+                render,
+                "steam-apps-label",
+                copy.steam_apps_label,
+                content_left + 16.0 * scale,
+                steam_y,
+                LABEL_SIZE,
+                LABEL_LINE * scale,
+                INK,
+                TextRole::SettingsRow,
+                TextAlign::Start,
+            );
+            push_text(
+                render,
+                "steam-apps-detail",
+                copy.steam_apps_detail,
+                content_left + 16.0 * scale,
+                steam_y + 16.0 * scale,
+                DETAIL_SIZE,
+                DETAIL_LINE * scale,
+                MUTED,
+                TextRole::SettingsDetail,
+                TextAlign::Start,
+            );
+
+            let hidden_y = first_top + ROW_STEP * 3.0 * scale + row_h * 0.5;
             push_text(
                 render,
                 "hidden-apps-label",
@@ -863,6 +900,17 @@ fn push_hit_regions(
                 SettingsPanelHit::FrequentToggle.target(),
                 Z_CONTROL + 1,
             ));
+            hits.push(HitRegion::rect_inclusive(
+                UiId::settings_row("toggle-steam-apps"),
+                Rect::new(
+                    content_left,
+                    first_top + ROW_STEP * 2.0 * scale,
+                    row_w,
+                    row_h,
+                ),
+                SettingsPanelHit::SteamToggle.target(),
+                Z_CONTROL + 1,
+            ));
         }
         SettingsCategoryId::Search => {
             hits.push(HitRegion::rect_inclusive(
@@ -945,6 +993,8 @@ mod tests {
             sort_label: "Sort",
             frequent_apps_label: "Frequent apps",
             frequent_apps_detail: "Frequent detail",
+            steam_apps_label: "Steam apps",
+            steam_apps_detail: "Steam detail",
             hidden_apps_label: "Hidden apps",
             hidden_count_label,
             search_hidden_label: "Search hidden",
@@ -965,6 +1015,7 @@ mod tests {
             category,
             sort_order: SortOrderId::Name,
             frequent_apps_enabled: false,
+            show_steam_apps: true,
             search_includes_hidden: false,
             hidden_count: 0,
             progress: 1.0,
@@ -1015,7 +1066,10 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Apps,
-                Point::new(layout.cx, layout.cy)
+                Point::new(
+                    layout.content_left(1.0) + 10.0,
+                    layout.first_row_top(1.0) + ROW_STEP * 3.0 + ROW_H * 0.5
+                )
             ),
             SettingsPanelHit::Inside
         );
@@ -1114,6 +1168,7 @@ mod tests {
         let content_left = layout.content_left(1.0);
         let segment_y = layout.first_row_top(1.0) + 44.0 + SEGMENT_H * 0.5;
         let frequent_y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
+        let steam_y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
 
         assert_eq!(
             hit_test(
@@ -1132,6 +1187,15 @@ mod tests {
                 Point::new(content_left + 10.0, frequent_y)
             ),
             SettingsPanelHit::FrequentToggle
+        );
+        assert_eq!(
+            hit_test(
+                &layout,
+                1.0,
+                SettingsCategoryId::Apps,
+                Point::new(content_left + 10.0, steam_y)
+            ),
+            SettingsPanelHit::SteamToggle
         );
     }
 
@@ -1248,6 +1312,7 @@ mod tests {
                 category: SettingsCategoryId::Apps,
                 sort_order: SortOrderId::Manual,
                 frequent_apps_enabled: false,
+                show_steam_apps: true,
                 search_includes_hidden: false,
                 hidden_count: 3,
                 progress: 1.0,
