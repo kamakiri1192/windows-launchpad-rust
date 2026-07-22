@@ -117,6 +117,15 @@ fn material_tint_mix() -> f32 {
     return mix(0.55, 0.66, clamp(u.material_strength, 0.0, 1.0));
 }
 
+// PostMultiplied presentation requires the final pass to expose straight RGB.
+// That is correct for the window as a whole, but the large prominent settings
+// sheet then reads too optically thin over bright desktop content. Restore the
+// denser frosted-sheet response only for that material; regular page glass and
+// the Focus Veil remain byte-for-byte on the normal path.
+fn material_frost_attenuation(alpha: f32) -> f32 {
+    return mix(1.0, clamp(alpha, 0.0, 1.0), clamp(u.material_strength, 0.0, 1.0));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;
@@ -171,7 +180,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         interior_rgb = apply_saturation(interior_rgb, material_saturation());
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92);
-        return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
+        let frost = material_frost_attenuation(interior_alpha);
+        return vec4<f32>(interior_rgb * interior_alpha * frost, interior_alpha);
     }
 
     let refract_uv = screen_uv + displacement * inv_viewport;
@@ -258,8 +268,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5), 0.0, 0.92);
 
     if has_flag(4u) {
-        return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
+        let frost = material_frost_attenuation(glass_alpha);
+        return vec4<f32>(final_rgb * glass_alpha * frost, glass_alpha);
     }
 
-    return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
+    let frost = material_frost_attenuation(glass_alpha);
+    return vec4<f32>(final_rgb * glass_alpha * frost, glass_alpha);
 }
