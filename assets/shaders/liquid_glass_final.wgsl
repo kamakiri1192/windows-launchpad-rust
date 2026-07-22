@@ -93,7 +93,7 @@ fn luminance(rgb: vec3<f32>) -> f32 {
 }
 
 fn material_sharp_mix() -> f32 {
-    return mix(0.12, 0.02, clamp(u.material_strength, 0.0, 1.0));
+    return mix(0.12, 0.0, clamp(u.material_strength, 0.0, 1.0));
 }
 
 fn material_saturation() -> f32 {

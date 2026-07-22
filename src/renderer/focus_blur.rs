@@ -14,6 +14,19 @@ pub(super) struct FocusBlurUniforms {
     viewport_mix_radius: [f32; 4],
     /// (center x, center y, half width, half height)
     frame: [f32; 4],
+    /// (center x, center y, half width, half height)
+    prominent_frame: [f32; 4],
+    /// (corner radius, strength, blur spread in pixels, unused)
+    prominent_params: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ProminentBlurParams {
+    pub center: [f32; 2],
+    pub half_size: [f32; 2],
+    pub radius: f32,
+    pub strength: f32,
+    pub spread: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -23,6 +36,7 @@ pub(super) struct FocusBlurParams {
     pub half_size: [f32; 2],
     pub radius: f32,
     pub strength: f32,
+    pub prominent: Option<ProminentBlurParams>,
 }
 
 pub(super) struct FocusBlurRenderer {
@@ -336,6 +350,13 @@ impl FocusBlurRenderer {
         target: &wgpu::TextureView,
         params: FocusBlurParams,
     ) {
+        let prominent = params.prominent.unwrap_or(ProminentBlurParams {
+            center: [0.0; 2],
+            half_size: [0.0; 2],
+            radius: 0.0,
+            strength: 0.0,
+            spread: 0.0,
+        });
         let uniforms = FocusBlurUniforms {
             viewport_mix_radius: [
                 params.viewport.0.max(1) as f32,
@@ -348,6 +369,18 @@ impl FocusBlurRenderer {
                 params.center[1],
                 params.half_size[0].max(0.0),
                 params.half_size[1].max(0.0),
+            ],
+            prominent_frame: [
+                prominent.center[0],
+                prominent.center[1],
+                prominent.half_size[0].max(0.0),
+                prominent.half_size[1].max(0.0),
+            ],
+            prominent_params: [
+                prominent.radius.max(0.0),
+                prominent.strength.clamp(0.0, 1.0),
+                prominent.spread.max(0.0),
+                0.0,
             ],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -550,6 +583,6 @@ mod tests {
 
     #[test]
     fn focus_blur_uniform_layout_matches_wgsl() {
-        assert_eq!(std::mem::size_of::<FocusBlurUniforms>(), 32);
+        assert_eq!(std::mem::size_of::<FocusBlurUniforms>(), 64);
     }
 }

@@ -5,6 +5,8 @@
 struct FocusBlurUniforms {
     viewport_mix_radius: vec4<f32>,
     frame: vec4<f32>,
+    prominent_frame: vec4<f32>,
+    prominent_params: vec4<f32>,
 };
 @group(0) @binding(3) var<uniform> uniforms: FocusBlurUniforms;
 
@@ -35,6 +37,29 @@ fn rounded_rect_distance(point: vec2<f32>, center: vec2<f32>, half_size: vec2<f3
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - safe_radius;
 }
 
+fn sample_prominent_blur(uv: vec2<f32>, viewport: vec2<f32>, spread: f32) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / max(viewport, vec2<f32>(1.0));
+    let axis_x = vec2<f32>(spread, 0.0) * texel;
+    let axis_y = vec2<f32>(0.0, spread) * texel;
+    let diagonal = vec2<f32>(spread * 0.7071068) * texel;
+
+    let center = textureSampleLevel(blurred_scene, scene_sampler, uv, 0.0) * 0.20;
+    let axes = (
+        textureSampleLevel(blurred_scene, scene_sampler, uv + axis_x, 0.0)
+        + textureSampleLevel(blurred_scene, scene_sampler, uv - axis_x, 0.0)
+        + textureSampleLevel(blurred_scene, scene_sampler, uv + axis_y, 0.0)
+        + textureSampleLevel(blurred_scene, scene_sampler, uv - axis_y, 0.0)
+    ) * 0.12;
+    let diagonals = (
+        textureSampleLevel(blurred_scene, scene_sampler, uv + diagonal, 0.0)
+        + textureSampleLevel(blurred_scene, scene_sampler, uv + vec2<f32>(diagonal.x, -diagonal.y), 0.0)
+        + textureSampleLevel(blurred_scene, scene_sampler, uv + vec2<f32>(-diagonal.x, diagonal.y), 0.0)
+        + textureSampleLevel(blurred_scene, scene_sampler, uv - diagonal, 0.0)
+    ) * 0.08;
+
+    return center + axes + diagonals;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sharp = textureSample(sharp_scene, scene_sampler, in.uv);
@@ -52,5 +77,25 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // This avoids smearing the transparent surround into the rounded boundary.
     let inner_mask = smoothstep(0.0, 12.0, -distance);
     let blur_mix = clamp(uniforms.viewport_mix_radius.z, 0.0, 1.0) * inner_mask;
-    return mix(sharp, blurred, blur_mix);
+
+    let prominent_distance = rounded_rect_distance(
+        point,
+        uniforms.prominent_frame.xy,
+        uniforms.prominent_frame.zw,
+        uniforms.prominent_params.x,
+    );
+    let prominent_mask = smoothstep(0.0, 12.0, -prominent_distance)
+        * clamp(uniforms.prominent_params.y, 0.0, 1.0)
+        * inner_mask;
+    var focused_blur = blurred;
+    if prominent_mask > 0.001 {
+        let stronger_blur = sample_prominent_blur(
+            in.uv,
+            viewport,
+            uniforms.prominent_params.z,
+        );
+        focused_blur = mix(blurred, stronger_blur, prominent_mask);
+    }
+
+    return mix(sharp, focused_blur, blur_mix);
 }
