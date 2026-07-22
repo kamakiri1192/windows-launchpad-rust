@@ -12,7 +12,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-macos-artifacts-${{ github.event.pull_request.number || github.ref }}
+  group: pr-macos-artifacts-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name || github.event.action || 'manual' }}
   cancel-in-progress: true
 
 env:
@@ -167,6 +167,158 @@ jobs:
               '- Retention: 7 days',
               '',
               'This is an ad-hoc signed temporary review artifact, not an official release.',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  visual-qa:
+    name: Run macOS visual QA
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'qa:macos-visual'
+          ) ||
+          (
+            github.event.action == 'synchronize' &&
+            contains(github.event.pull_request.labels.*.name, 'qa:macos-visual')
+          )
+        )
+      )
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target "$TARGET"
+          rustup default "$RUST_VERSION"
+
+      - name: Cache Cargo registry and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-visual-qa-${{ env.TARGET }}
+
+      - name: Prepare artifact metadata
+        id: metadata
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          short_sha="${PR_HEAD_SHA:0:7}"
+          echo "artifact_name=$BIN_NAME-pr-$PR_NUMBER-$short_sha-macos-visual-qa" >> "$GITHUB_OUTPUT"
+
+      - name: Build visual QA application
+        run: cargo build --release --locked --target "$TARGET" --bin "$BIN_NAME"
+
+      - name: Run deterministic GPU visual QA
+        env:
+          HOME: ${{ github.workspace }}/target/qa-home
+          LAUNCHPAD_DEBUG: "1"
+          LAUNCHPAD_QA_SCENARIO: ${{ github.workspace }}/qa/folder_interactions.json
+          RUST_LOG: warn
+          WGPU_BACKEND: metal
+        run: |
+          set -euo pipefail
+          rm -rf target/qa-sequences target/qa-home
+          mkdir -p target/qa-sequences target/qa-home target/qa-artifacts
+          "target/$TARGET/release/$BIN_NAME" > target/qa-artifacts/application.log 2>&1
+
+      - name: Verify captured frames
+        run: python3 scripts/verify_qa_artifact.py target/qa-sequences
+
+      - name: Collect diagnostic logs
+        if: always()
+        run: |
+          mkdir -p target/qa-artifacts
+          if [[ -d "target/qa-home/Library/Logs/Launchpad" ]]; then
+            cp -R target/qa-home/Library/Logs/Launchpad target/qa-artifacts/Launchpad-logs
+          fi
+          find target/qa-sequences -name manifest.json -print \
+            > target/qa-artifacts/manifests.txt || true
+
+      - name: Upload visual QA artifact
+        if: always()
+        id: upload_qa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_name }}
+          path: |
+            target/qa-sequences
+            target/qa-artifacts
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Add visual QA link to step summary
+        if: always()
+        env:
+          ARTIFACT_NAME: ${{ steps.metadata.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.upload_qa.outputs.artifact-url }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## macOS visual QA
+
+          - Artifact: [$ARTIFACT_NAME]($ARTIFACT_URL)
+          - Contents: deterministic GPU-captured PNG sequence, manifest, and logs
+          - Scenario: folder interactions at 1280x800 / 30 fps
+          - Retention: 7 days
+
+          This validates the application render path. ScreenCaptureKit permission,
+          global shortcut, menu-bar interaction, and multi-monitor behavior still
+          require an interactive Mac.
+          EOF
+
+      - name: Comment visual QA link on PR
+        if: github.event_name == 'pull_request' && always()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_NAME: ${{ steps.metadata.outputs.artifact_name }}
+          ARTIFACT_URL: ${{ steps.upload_qa.outputs.artifact-url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+          MARKER: '<!-- pr-macos-visual-qa-artifact -->'
+        with:
+          script: |
+            const marker = process.env.MARKER;
+            const artifactName = process.env.ARTIFACT_NAME || 'macOS visual QA diagnostics';
+            const artifactUrl = process.env.ARTIFACT_URL;
+            const shortSha = process.env.PR_HEAD_SHA.slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const downloadUrl = artifactUrl || runUrl;
+            const succeeded = process.env.JOB_STATUS === 'success';
+            const body = [
+              marker,
+              `${succeeded ? '✅' : '❌'} macOS visual QA ${succeeded ? 'passed' : 'failed'}.`,
+              '',
+              `- Artifact: [${artifactName}](${downloadUrl})`,
+              `- Workflow run: [PR macOS Artifacts](${runUrl})`,
+              `- Commit: \`${shortSha}\``,
+              '- Contents: GPU-captured PNG sequence, manifest, and logs',
+              '- Retention: 7 days',
             ].join('\n');
 
             const { owner, repo } = context.repo;

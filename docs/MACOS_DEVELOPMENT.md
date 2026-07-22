@@ -17,3 +17,17 @@ fallback instead of exiting. Restart the app after changing the permission.
 The default global shortcut is Option+Space. Set `LAUNCHPAD_HOTKEY` before
 launching to use another `global-hotkey` key string, for example
 `shift+alt+Space`.
+
+## Pull request artifacts
+
+Pull request labels start opt-in macOS artifact workflows:
+
+- `build:macos-binary` builds an ad-hoc signed Apple Silicon `Launchpad.app`,
+  bundles its Swift runtime libraries, and uploads a ZIP for seven days.
+- `qa:macos-visual` runs the deterministic folder-interaction scenario through
+  the production GPU render path and uploads the PNG sequence, manifest, and
+  logs for seven days.
+
+The visual artifact verifies rendering without foreground or Screen Recording
+access. It does not replace interactive testing of ScreenCaptureKit permission,
+the global shortcut, menu-bar actions, or multi-monitor behavior.
