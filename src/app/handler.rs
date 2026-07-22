@@ -25,7 +25,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::platform::macos::WindowAttributesExtMacOS;
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
-use winit::window::{Window, WindowId, WindowLevel};
+#[cfg(target_os = "macos")]
+use winit::window::WindowLevel;
+use winit::window::{Window, WindowId};
 
 use crate::debug_log;
 use crate::grid;
