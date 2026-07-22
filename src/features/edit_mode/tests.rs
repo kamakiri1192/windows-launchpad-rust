@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::domain::app_id::AppId;
+use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::layout::grid::GridHit;
 use std::time::{Duration, Instant};
@@ -310,6 +311,18 @@ fn apply_reorder_preserves_hidden_after_visible() {
 fn apply_reorder_drag_id_not_present_returns_none() {
     let visible = vec![app("a"), app("b")];
     assert!(apply_reorder(&visible, &[], &app("zzz"), 0).is_none());
+}
+
+#[test]
+fn apply_item_reorder_inserts_app_between_adjacent_folders() {
+    let left = LauncherItem::Folder(FolderId::generate(1));
+    let right = LauncherItem::Folder(FolderId::generate(2));
+    let dragged = item("dragged");
+    let visible = vec![left.clone(), right.clone(), dragged.clone()];
+
+    let order = apply_item_reorder(&visible, &dragged, 1).unwrap();
+
+    assert_eq!(order, vec![left, dragged, right]);
 }
 
 #[test]

@@ -92,11 +92,13 @@ pub fn top_level_reorder_allowed(
 ) -> bool {
     match hover_candidate {
         None => true,
-        Some(LauncherItem::App(_)) => !hover_ready,
-        // Existing folders own their full target tile immediately. Reordering
-        // a folder underneath the pointer while its spring-open dwell is
-        // running makes the target jump and intermittently resets the hover.
-        Some(LauncherItem::Folder(_)) => false,
+        // Apps and existing folders use the same intent split: holding over
+        // the target until the dwell completes owns the drop, while crossing
+        // its far-side threshold first remains an ordinary reorder. Treating
+        // a folder as merge-only made its entire tile unavailable as an
+        // insertion path, leaving only the narrow inter-tile gap when two
+        // folders were adjacent.
+        Some(_) => !hover_ready,
     }
 }
 
@@ -689,13 +691,15 @@ mod tests {
     }
 
     #[test]
-    fn stable_folder_hover_suspends_normal_top_level_reorder() {
+    fn folder_target_allows_reorder_until_hover_dwell_completes() {
         let app_target = LauncherItem::App(app("target"));
         let folder_target = LauncherItem::Folder(FolderId::generate(1));
         assert!(top_level_reorder_allowed(Some(&app_target), false));
-        assert!(!top_level_reorder_allowed(Some(&folder_target), false));
+        assert!(top_level_reorder_allowed(Some(&folder_target), false));
         assert!(!top_level_reorder_allowed(Some(&app_target), true));
+        assert!(!top_level_reorder_allowed(Some(&folder_target), true));
         assert!(top_level_reorder_allowed(None, false));
+        assert!(top_level_reorder_allowed(None, true));
     }
 
     #[test]
