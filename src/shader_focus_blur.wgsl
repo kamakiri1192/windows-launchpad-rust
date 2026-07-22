@@ -78,6 +78,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let inner_mask = smoothstep(0.0, 12.0, -distance);
     let blur_mix = clamp(uniforms.viewport_mix_radius.z, 0.0, 1.0) * inner_mask;
 
+    // Keep the generic Glass Focus Veil unchanged. The stronger kernel belongs
+    // only to the prominent settings panel's rounded interior.
     let prominent_distance = rounded_rect_distance(
         point,
         uniforms.prominent_frame.xy,

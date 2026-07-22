@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// Additional radius, in physical screen pixels, used when the prominent
+/// settings material samples the captured desktop backdrop.
+const SETTINGS_CAPTURE_BLUR_SPREAD: f32 = 40.0;
+
 impl LiquidGlassRenderer {
     pub fn render(
         &mut self,
@@ -661,6 +665,8 @@ impl LiquidGlassRenderer {
             self.backdrop_mapping,
         );
         uniforms.material_strength = self.settings_panel_material_strength;
+        uniforms.material_blur_spread =
+            SETTINGS_CAPTURE_BLUR_SPREAD * self.settings_panel_material_strength;
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,

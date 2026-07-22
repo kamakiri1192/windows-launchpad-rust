@@ -16,7 +16,7 @@ struct GlassUniforms {
     debug_flags: u32,
     time: f32,
     material_strength: f32,
-    pad1: f32,
+    material_blur_spread: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
@@ -71,11 +71,53 @@ fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
     return textureSample(blur_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
+fn sample_prominent_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / max(u.viewport, vec2<f32>(1.0));
+    let spread = max(u.material_blur_spread, 0.0);
+    let axis_x = vec2<f32>(spread, 0.0) * texel;
+    let axis_y = vec2<f32>(0.0, spread) * texel;
+    let diagonal = vec2<f32>(spread * 0.7071068) * texel;
+
+    let center = sample_blurred_backdrop(screen_uv) * 0.20;
+    let axes = (
+        sample_blurred_backdrop(screen_uv + axis_x)
+        + sample_blurred_backdrop(screen_uv - axis_x)
+        + sample_blurred_backdrop(screen_uv + axis_y)
+        + sample_blurred_backdrop(screen_uv - axis_y)
+    ) * 0.12;
+    let diagonals = (
+        sample_blurred_backdrop(screen_uv + diagonal)
+        + sample_blurred_backdrop(screen_uv + vec2<f32>(diagonal.x, -diagonal.y))
+        + sample_blurred_backdrop(screen_uv + vec2<f32>(-diagonal.x, diagonal.y))
+        + sample_blurred_backdrop(screen_uv - diagonal)
+    ) * 0.08;
+
+    return center + axes + diagonals;
+}
+
 fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     if has_flag(7u) || u.blur_radius < 0.5 {
         return sample_backdrop(uv);
     }
-    return sample_blurred_backdrop(uv);
+    let blurred = sample_blurred_backdrop(uv);
+    if u.material_blur_spread < 0.5 {
+        return blurred;
+    }
+    let prominent = sample_prominent_blurred_backdrop(uv);
+    return mix(blurred, prominent, clamp(u.material_strength, 0.0, 1.0));
+}
+
+// Detail samples normally preserve the sharp capture for lensing and rim
+// reflections. A prominent settings panel must not reintroduce that capture
+// after the page focus blur, so route every such sample through the same strong
+// material blur while the prominent material is active.
+fn sample_material_detail_backdrop(uv: vec2<f32>) -> vec4<f32> {
+    let sharp = sample_backdrop(uv);
+    if has_flag(7u) || u.blur_radius < 0.5 || u.material_blur_spread < 0.5 {
+        return sharp;
+    }
+    let prominent = sample_prominent_blurred_backdrop(uv);
+    return mix(sharp, prominent, clamp(u.material_strength, 0.0, 1.0));
 }
 
 fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
@@ -140,8 +182,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // reconstruction, and caustics across the large flat interior.
     if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
-        let sharp_color = sample_backdrop(screen_uv);
-        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, material_sharp_mix());
+        let sharp_mix = material_sharp_mix();
+        var interior_rgb = filtered_color.rgb;
+        if sharp_mix > 0.001 {
+            let sharp_color = sample_material_detail_backdrop(screen_uv);
+            interior_rgb = mix(interior_rgb, sharp_color.rgb, sharp_mix);
+        }
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
         interior_rgb = mix(
@@ -177,8 +223,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         refract_color = vec4<f32>(red, green_sample.g, blue, green_sample.a);
     }
 
-    let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
-    let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
+    let sharp_color = sample_material_detail_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
+    let reflection_color = sample_material_detail_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
     var final_rgb = mix(refract_color.rgb, sharp_color.rgb, material_sharp_mix());
     final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * 0.22);
 

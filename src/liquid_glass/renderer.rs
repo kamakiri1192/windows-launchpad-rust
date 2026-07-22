@@ -36,7 +36,8 @@ pub(super) struct GlassUniforms {
     debug_flags: u32,
     time: f32,
     material_strength: f32,
-    _pad: [f32; 2],
+    material_blur_spread: f32,
+    _pad: f32,
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
 }
@@ -1746,7 +1747,8 @@ fn uniforms_from_params(
         debug_flags: debug.flags(),
         time,
         material_strength: 0.0,
-        _pad: [0.0; 2],
+        material_blur_spread: 0.0,
+        _pad: 0.0,
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }

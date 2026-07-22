@@ -36,7 +36,10 @@ enum RenderFrame {
     Offscreen(wgpu::Texture),
 }
 
-const PROMINENT_FOCUS_BLUR_SPREAD: f32 = 20.0;
+/// Extra screen-space blur applied only inside the prominent settings panel.
+/// The underlying Dual-Kawase result is already soft; this wider kernel removes
+/// the remaining recognizable icon and label silhouettes behind the panel.
+const PROMINENT_FOCUS_BLUR_SPREAD: f32 = 32.0;
 
 impl RenderFrame {
     fn texture(&self) -> &wgpu::Texture {
