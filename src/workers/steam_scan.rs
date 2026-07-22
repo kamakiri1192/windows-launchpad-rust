@@ -178,20 +178,16 @@ fn quoted_tokens(text: &str) -> Vec<String> {
 }
 
 fn find_steam_icon(steam_root: &Path, library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
+    if let Some(executable) = find_matching_root_executable(library, manifest) {
+        return Some(executable);
+    }
+
     let display_icon = find_uninstall_display_icon(&manifest.app_id);
     if display_icon
         .as_deref()
         .is_some_and(icon_source_is_high_resolution)
     {
         return display_icon;
-    }
-
-    if let Some(logo) = find_high_resolution_logo(steam_root, &manifest.app_id) {
-        return Some(logo);
-    }
-
-    if let Some(executable) = find_matching_root_executable(library, manifest) {
-        return Some(executable);
     }
 
     display_icon.or_else(|| find_small_client_icon(steam_root, &manifest.app_id))
@@ -297,18 +293,6 @@ fn icon_source_is_high_resolution(path: &Path) -> bool {
     image::image_dimensions(path)
         .map(|(width, height)| width.max(height) >= crate::icons::normalize::TARGET)
         .unwrap_or(false)
-}
-
-fn find_high_resolution_logo(steam_root: &Path, app_id: &str) -> Option<PathBuf> {
-    let cache = steam_root.join("appcache").join("librarycache");
-    let app_cache = cache.join(app_id);
-    for name in ["logo.png", "logo.jpg", "logo.jpeg"] {
-        let candidate = app_cache.join(name);
-        if candidate.is_file() && icon_source_is_high_resolution(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 fn find_matching_root_executable(library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
