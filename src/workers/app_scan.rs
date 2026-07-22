@@ -1,4 +1,4 @@
-//! Scan the Start Menu into a snapshot of [`SnapshotEntry`] records.
+//! Scan the Start Menu and Steam libraries into [`SnapshotEntry`] records.
 //!
 //! This is the *fast* side of icon loading: it walks the two Start Menu roots,
 //! resolves each `.lnk`'s target + icon location, and reads mtimes — but it
@@ -16,8 +16,9 @@ use std::path::Path;
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 use crate::icons::extract::{self, enumerate_start_menu};
+use crate::workers::steam_scan::scan_steam_apps;
 
-/// Scan both Start Menu roots and build a `BTreeMap<AppId, SnapshotEntry>`.
+/// Scan both Start Menu roots plus installed Steam apps and build a snapshot.
 ///
 /// Failures on individual shortcuts are logged and skipped; one unreadable
 /// `.lnk` can't blank the whole grid. The map is keyed by stable `AppId` so two
@@ -50,6 +51,20 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
         // Duplicate ids (same file via two roots) collapse; last one wins,
         // which is fine — they're the same shortcut.
         out.insert(app_id, entry);
+    }
+    for entry in scan_steam_apps() {
+        // Steam may also have created a Start Menu shortcut. Prefer the Steam
+        // manifest record because it has a stable app id and survives shortcut
+        // creation/removal. Only collapse an exact-name entry targeting Steam.
+        out.retain(|_, existing| {
+            !(existing.name.eq_ignore_ascii_case(&entry.name)
+                && existing
+                    .target_path
+                    .rsplit(['\\', '/'])
+                    .next()
+                    .is_some_and(|file| file.eq_ignore_ascii_case("steam.exe")))
+        });
+        out.insert(entry.app_id.clone(), entry);
     }
     out
 }

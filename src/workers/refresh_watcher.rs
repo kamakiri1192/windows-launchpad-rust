@@ -1,7 +1,7 @@
-//! Background Start Menu change watcher (Phase 4).
+//! Background discovered-app change watcher (Phase 4).
 //!
 //! Today this is a **polling** watcher: every `interval` it rescans the Start
-//! Menu and computes a diff against the previous snapshot, sending non-empty
+//! Menu and Steam libraries, then computes a diff, sending non-empty
 //! diffs to the UI. Polling is deliberately simple and robust (no
 //! `ReadDirectoryChangesW` edge cases around buffer sizing, junction loops, or
 //! overwritten-file notifications). The structure is isolated so a future

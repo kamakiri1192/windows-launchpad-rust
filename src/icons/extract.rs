@@ -144,6 +144,14 @@ pub fn extract_icon_from_lnk(lnk: &Path) -> Option<DecodedIcon> {
     hicon_to_rgba(hicon)
 }
 
+/// Extract the shell icon associated with an arbitrary file path. Used by
+/// non-shortcut launch sources (currently Steam) as a fallback.
+pub fn extract_icon_from_path(path: &Path) -> Option<DecodedIcon> {
+    let hicon = get_path_hicon(path)?;
+    let _guard = IconGuard(hicon);
+    hicon_to_rgba(hicon)
+}
+
 // ---- shortcut target resolution ----------------------------------------
 
 /// Resolve the target path of a `.lnk` via `IShellLinkW` + `IPersistFile`.
