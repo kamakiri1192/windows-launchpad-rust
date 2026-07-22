@@ -26,7 +26,9 @@ Pull request labels start opt-in macOS artifact workflows:
   bundles its Swift runtime libraries, and uploads a ZIP for seven days.
 - `qa:macos-visual` runs the deterministic folder-interaction scenario through
   the production GPU render path and uploads the PNG sequence, manifest, and
-  logs for seven days.
+  logs for seven days. The isolated runner sets `LAUNCHPAD_QA_VISIBLE=1`
+  because Metal requires the CI window to start visible; local QA remains
+  hidden by default.
 
 The visual artifact verifies rendering without foreground or Screen Recording
 access. It does not replace interactive testing of ScreenCaptureKit permission,

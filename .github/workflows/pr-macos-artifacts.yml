@@ -239,6 +239,7 @@ jobs:
           HOME: ${{ github.workspace }}/target/qa-home
           LAUNCHPAD_DEBUG: "1"
           LAUNCHPAD_QA_SCENARIO: ${{ github.workspace }}/qa/folder_interactions.json
+          LAUNCHPAD_QA_VISIBLE: "1"
           RUST_LOG: warn
           WGPU_BACKEND: metal
         run: |
