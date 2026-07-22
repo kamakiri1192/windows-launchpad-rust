@@ -24,7 +24,7 @@ static LOG_LOCK: Mutex<()> = Mutex::new(());
 
 /// Resolve the platform-native diagnostic log path.
 fn log_path() -> PathBuf {
-    crate::platform::paths::log_dir().join("debug.log")
+    crate::platform::paths::debug_log_path()
 }
 
 /// Open (or reset) the log file. Called once at startup. Truncates any prior

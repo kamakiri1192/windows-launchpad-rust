@@ -9,21 +9,9 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
-
 use super::extract::{self, ComScope};
 use super::normalize::{normalize, DecodedIcon};
-use super::{IconAtlas, UvRect};
-
-/// One launcher entry: display name, optional icon UV rect (in the atlas), and
-/// the on-disk `.lnk` path used to open the selected app.
-#[derive(Debug, Clone)]
-pub struct AppEntry {
-    pub name: String,
-    /// `None` when icon extraction failed → renderer shows the color tile.
-    pub uv: Option<UvRect>,
-    pub link_path: PathBuf,
-}
+use super::{AppEntry, IconAtlas};
 
 /// The output of [`load_all_icons`]: the packed atlas plus one `AppEntry` per
 /// discovered shortcut (icon-less entries included, for fallback rendering).

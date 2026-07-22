@@ -557,7 +557,7 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
 /// Resolve the platform-native persistent database path. Kept pub(crate) so
 /// docs/tests can reference the same path.
 pub(crate) fn default_db_path() -> PathBuf {
-    crate::platform::paths::app_data_dir().join("cache.sqlite3")
+    crate::platform::paths::cache_db_path()
 }
 
 #[cfg(test)]
@@ -740,12 +740,8 @@ mod tests {
     }
 
     #[test]
-    fn default_db_path_uses_platform_data_directory() {
-        let p = default_db_path();
-        assert_eq!(
-            p,
-            crate::platform::paths::app_data_dir().join("cache.sqlite3")
-        );
+    fn default_db_path_uses_platform_cache_path() {
+        assert_eq!(default_db_path(), crate::platform::paths::cache_db_path());
     }
 
     #[test]
