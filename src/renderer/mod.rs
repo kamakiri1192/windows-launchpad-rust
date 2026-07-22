@@ -38,7 +38,9 @@ pub(crate) mod tiles;
 
 use std::sync::Arc;
 
-use wgpu::{Buffer, Device, Queue, RenderPipeline, Surface, SurfaceConfiguration, TextureFormat};
+use wgpu::{
+    Buffer, Device, Queue, RenderPipeline, Surface, SurfaceConfiguration, Texture, TextureFormat,
+};
 
 use crate::layout::grid::GridLayout;
 use crate::liquid_glass::LiquidGlassRenderer;
@@ -54,7 +56,10 @@ pub struct Renderer {
     pub window: winit::window::Window,
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
-    pub surface: Surface<'static>,
+    pub surface: Option<Surface<'static>>,
+    /// Surface-free render target for deterministic QA on hosted macOS
+    /// runners, where the Actions service has no WindowServer surface.
+    qa_offscreen: Option<Texture>,
     pub config: SurfaceConfiguration,
     pipeline: RenderPipeline,
     /// Current decorations state (borderless by default, toggle with M).

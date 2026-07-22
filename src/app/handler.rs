@@ -21,11 +21,17 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
+#[cfg(target_os = "macos")]
+use winit::platform::macos::WindowAttributesExtMacOS;
+#[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
+#[cfg(target_os = "macos")]
+use winit::window::WindowLevel;
 use winit::window::{Window, WindowId};
 
 use crate::debug_log;
 use crate::grid;
+#[cfg(windows)]
 use crate::liquid_glass;
 use crate::renderer::text_engine as text;
 use crate::renderer::Renderer;
@@ -69,11 +75,6 @@ impl ApplicationHandler<UserEvent> for App {
         let mut attrs = Window::default_attributes()
             .with_title("Launchpad")
             .with_transparent(true)
-            // Drop the classic HWND back buffer (WS_EX_NOREDIRECTIONBITMAP) so
-            // the DWM composites only our DirectComposition swap chain. Without
-            // this, alpha=0 pixels are filled with the window's white
-            // background brush and transparency reads as solid white.
-            .with_no_redirection_bitmap(true)
             // Borderless: the glass tiles own the visuals, so we drop the OS
             // title bar / frame. Closing via Esc/Alt-F4.
             .with_decorations(false)
@@ -82,9 +83,38 @@ impl ApplicationHandler<UserEvent> for App {
                 INITIAL_WINDOW_HEIGHT,
             ))
             .with_min_inner_size(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+        #[cfg(windows)]
+        {
+            // Drop the classic HWND back buffer so DWM composites only the
+            // DirectComposition swap chain and preserves per-pixel alpha.
+            attrs = attrs.with_no_redirection_bitmap(true);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            attrs = attrs
+                .with_titlebar_hidden(true)
+                .with_titlebar_buttons_hidden(true)
+                .with_fullsize_content_view(true)
+                .with_has_shadow(false)
+                .with_accepts_first_mouse(true);
+            if std::env::var_os("LAUNCHPAD_PROFILE_KEEP_VISIBLE").as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+            {
+                // Keep performance runs genuinely visible even while the
+                // automation process samples logs in another app. Otherwise
+                // Core Animation throttles an occluded CAMetalLayer and the
+                // result measures window occlusion instead of rendering.
+                attrs = attrs.with_window_level(WindowLevel::AlwaysOnTop);
+            }
+        }
         if let Some(viewport) = self.qa_runner.as_ref().map(|runner| runner.viewport()) {
             attrs = attrs
                 .with_visible(false)
+                // The production minimum is expressed in logical points. On
+                // Retina displays it can exceed a physically-sized QA target
+                // (for example 480pt becomes 960px), silently changing the
+                // deterministic viewport.
+                .with_min_inner_size(PhysicalSize::new(1, 1))
                 .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
             self.visible = false;
         }
@@ -100,6 +130,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         let window = event_loop.create_window(attrs).expect("create window");
+        #[cfg(target_os = "macos")]
+        {
+            crate::platform::macos::integration::activate_application();
+            window.focus_window();
+        }
         #[cfg(windows)]
         {
             if std::env::var_os("LAUNCHPAD_ALLOW_SCREENSHOT").is_some() {
@@ -246,6 +281,9 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(deadline) = self.qa_next_deadline() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
         } else {
+            // Persistent platform capture sends BackdropFrameArrived whenever
+            // the desktop content changes. Static desktops therefore stay
+            // idle, while video/animation drives redraws at the stream cadence.
             event_loop.set_control_flow(ControlFlow::Wait);
         }
     }

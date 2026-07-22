@@ -30,6 +30,26 @@ use super::focus_blur::FocusBlurParams;
 use super::tiles::Uniforms;
 use super::{DrawArgs, Renderer};
 
+enum RenderFrame {
+    Surface(wgpu::SurfaceTexture),
+    Offscreen(wgpu::Texture),
+}
+
+impl RenderFrame {
+    fn texture(&self) -> &wgpu::Texture {
+        match self {
+            Self::Surface(frame) => &frame.texture,
+            Self::Offscreen(texture) => texture,
+        }
+    }
+
+    fn present(self) {
+        if let Self::Surface(frame) = self {
+            frame.present();
+        }
+    }
+}
+
 impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
@@ -50,21 +70,30 @@ impl Renderer {
             }),
         );
 
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                eprintln!("surface outdated/lost; skipping frame");
-                return;
+        let frame = if let Some(surface) = &self.surface {
+            match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(frame)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => RenderFrame::Surface(frame),
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    eprintln!("surface outdated/lost; skipping frame");
+                    return;
+                }
+                wgpu::CurrentSurfaceTexture::Timeout => return,
+                wgpu::CurrentSurfaceTexture::Occluded => return,
+                wgpu::CurrentSurfaceTexture::Validation => {
+                    eprintln!("surface validation error; skipping frame");
+                    return;
+                }
             }
-            wgpu::CurrentSurfaceTexture::Timeout => return,
-            wgpu::CurrentSurfaceTexture::Occluded => return,
-            wgpu::CurrentSurfaceTexture::Validation => {
-                eprintln!("surface validation error; skipping frame");
-                return;
-            }
+        } else if let Some(texture) = &self.qa_offscreen {
+            RenderFrame::Offscreen(texture.clone())
+        } else {
+            eprintln!("renderer has neither a surface nor an offscreen target");
+            return;
         };
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
+        let view = frame
+            .texture()
+            .create_view(&TextureViewDescriptor::default());
         let focus_blur_params = self
             .prepared_model
             .ink
@@ -636,7 +665,7 @@ impl Renderer {
         // Optional QA self-capture: copy the surface texture to a host-readable
         // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.
         if let Some(path) = self.qa_shot.take() {
-            self.save_frame_png(&frame.texture, path);
+            self.save_frame_png(frame.texture(), path);
         }
 
         frame.present();

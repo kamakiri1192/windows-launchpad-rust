@@ -402,6 +402,9 @@ impl App {
             }
             AppAction::ScaleFactorChanged { scale_factor } => {
                 self.scale_factor = scale_factor as f32;
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.notify_window_moved();
+                }
                 self.relayout();
                 self.execute_command(AppCommand::RequestRedraw);
             }
@@ -421,7 +424,12 @@ impl App {
                 self.handle_focus(focused);
             }
             AppAction::BackdropFrameArrived => {
-                self.execute_command(AppCommand::RequestRedraw);
+                // A final capture can complete just after the launcher hides.
+                // Do not let that event restart a render/capture loop for an
+                // invisible window; summon() requests a fresh frame on show.
+                if self.visible {
+                    self.execute_command(AppCommand::RequestRedraw);
+                }
             }
             AppAction::DrainInbox => {
                 if !self.qa_enabled() {
@@ -846,6 +854,7 @@ impl App {
             || long_press_pending
             || folder_long_press_pending
             || self.qa_capture_due(now)
+            || self.profile_scroll.is_some()
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening
@@ -869,6 +878,10 @@ impl App {
                 debug_log!("window_event: Focused(false) ignored (editing)");
             } else if self.settings_panel_active() || self.folders.is_active() {
                 debug_log!("window_event: Focused(false) ignored (settings open)");
+            } else if std::env::var_os("LAUNCHPAD_PROFILE_KEEP_VISIBLE").as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+            {
+                debug_log!("window_event: Focused(false) ignored (profile mode)");
             } else if in_grace {
                 debug_log!("window_event: Focused(false) ignored (within summon grace)");
             } else {

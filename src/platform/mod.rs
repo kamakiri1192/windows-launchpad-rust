@@ -1,9 +1,9 @@
-//! Windows-specific OS integration.
+//! Operating-system integration.
 //!
 //! Platform modules own OS-specific adapters: the global hotkey, tray menu,
 //! window show/hide behavior, app launch, and capture exclusion. They are the
-//! edge where Win32/Shell/COM calls live, behind narrow Rust APIs consumed by
-//! the app shell.
+//! edge where Win32/Shell/COM or macOS framework calls live, behind narrow
+//! Rust APIs consumed by the app shell.
 //!
 //! These modules are compiled into the binary target only (they depend on the
 //! `windows` crate and `winit`), not the library.
@@ -11,4 +11,8 @@
 #[cfg(windows)]
 pub mod windows;
 
+#[cfg(target_os = "macos")]
+pub mod macos;
+
 pub mod launch;
+pub mod paths;

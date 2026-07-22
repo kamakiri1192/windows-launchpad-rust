@@ -1,0 +1,72 @@
+{
+  "name": "folder-page-scroll",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 4300,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-folder-page-00", "name": "Adobe Premiere Pro 2026" },
+      { "id": "qa-folder-page-01", "name": "Folder Child 01" },
+      { "id": "qa-folder-page-02", "name": "Folder Child 02" },
+      { "id": "qa-folder-page-03", "name": "Folder Child 03" },
+      { "id": "qa-folder-page-04", "name": "Folder Child 04" },
+      { "id": "qa-folder-page-05", "name": "Folder Child 05" },
+      { "id": "qa-folder-page-06", "name": "Folder Child 06" },
+      { "id": "qa-folder-page-07", "name": "Folder Child 07" },
+      { "id": "qa-folder-page-08", "name": "Folder Child 08" },
+      { "id": "qa-folder-page-09", "name": "Folder Child 09" },
+      { "id": "qa-folder-page-10", "name": "Folder Child 10" },
+      { "id": "qa-folder-page-11", "name": "Folder Child 11" },
+      { "id": "qa-folder-page-12", "name": "Folder Child 12" },
+      { "id": "qa-folder-page-13", "name": "Folder Child 13" },
+      { "id": "qa-folder-page-14", "name": "Folder Child 14" },
+      { "id": "qa-folder-page-15", "name": "Folder Child 15" },
+      { "id": "qa-folder-page-16", "name": "Folder Child 16" },
+      { "id": "qa-folder-page-17", "name": "Folder Child 17" }
+    ],
+    "folders": [
+      {
+        "id": "qa-folder-page-folder",
+        "name": "Two Page Folder",
+        "children": [
+          "qa-folder-page-00", "qa-folder-page-01", "qa-folder-page-02",
+          "qa-folder-page-03", "qa-folder-page-04", "qa-folder-page-05",
+          "qa-folder-page-06", "qa-folder-page-07", "qa-folder-page-08",
+          "qa-folder-page-09", "qa-folder-page-10", "qa-folder-page-11",
+          "qa-folder-page-12", "qa-folder-page-13", "qa-folder-page-14",
+          "qa-folder-page-15", "qa-folder-page-16", "qa-folder-page-17"
+        ]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-folder-page-folder" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "open_folder", "id": "qa-folder-page-folder" },
+    { "at_ms": 650, "type": "move", "target": { "kind": "folder_panel", "x": 0.88, "y": 0.70 } },
+    { "at_ms": 700, "type": "pointer_down" },
+    { "at_ms": 800, "type": "move", "target": { "kind": "folder_panel", "x": 0.78, "y": 0.70 } },
+    { "at_ms": 816, "type": "move", "target": { "kind": "folder_panel", "x": 0.70, "y": 0.70 } },
+    { "at_ms": 832, "type": "move", "target": { "kind": "folder_panel", "x": 0.62, "y": 0.70 } },
+    { "at_ms": 848, "type": "move", "target": { "kind": "folder_panel", "x": 0.54, "y": 0.70 } },
+    { "at_ms": 864, "type": "move", "target": { "kind": "folder_panel", "x": 0.46, "y": 0.70 } },
+    { "at_ms": 880, "type": "move", "target": { "kind": "folder_panel", "x": 0.38, "y": 0.70 } },
+    { "at_ms": 896, "type": "move", "target": { "kind": "folder_panel", "x": 0.30, "y": 0.70 } },
+    { "at_ms": 912, "type": "move", "target": { "kind": "folder_panel", "x": 0.22, "y": 0.70 } },
+    { "at_ms": 940, "type": "pointer_up" },
+    { "at_ms": 2300, "type": "move", "target": { "kind": "folder_panel", "x": 0.12, "y": 0.70 } },
+    { "at_ms": 2350, "type": "pointer_down" },
+    { "at_ms": 2450, "type": "move", "target": { "kind": "folder_panel", "x": 0.22, "y": 0.70 } },
+    { "at_ms": 2466, "type": "move", "target": { "kind": "folder_panel", "x": 0.30, "y": 0.70 } },
+    { "at_ms": 2482, "type": "move", "target": { "kind": "folder_panel", "x": 0.38, "y": 0.70 } },
+    { "at_ms": 2498, "type": "move", "target": { "kind": "folder_panel", "x": 0.46, "y": 0.70 } },
+    { "at_ms": 2514, "type": "move", "target": { "kind": "folder_panel", "x": 0.54, "y": 0.70 } },
+    { "at_ms": 2530, "type": "move", "target": { "kind": "folder_panel", "x": 0.62, "y": 0.70 } },
+    { "at_ms": 2546, "type": "move", "target": { "kind": "folder_panel", "x": 0.70, "y": 0.70 } },
+    { "at_ms": 2562, "type": "move", "target": { "kind": "folder_panel", "x": 0.78, "y": 0.70 } },
+    { "at_ms": 2590, "type": "pointer_up" },
+    { "at_ms": 4000, "type": "escape" }
+  ]
+}

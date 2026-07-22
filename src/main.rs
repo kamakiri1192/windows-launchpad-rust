@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 // The startup/icon pipeline exposes a number of items that are part of its
 // public surface or reserved for near-term phases (the `Stale` icon state,
 // registry/cache inspectors, diff helpers, the `Mark` timing record, …). They
@@ -169,7 +169,7 @@ fn main() {
 
     // File-backed debug logger. Opt-in via LAUNCHPAD_DEBUG env var so the
     // release build is silent by default; when on it writes to
-    // %LOCALAPPDATA%\Launchpad\debug.log (visible even with no console).
+    // the platform-native diagnostic directory (visible even with no console).
     debug_logger::init();
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -195,11 +195,36 @@ fn main() {
     // Shared inbox for worker + watcher → UI.
     let inbox: Arc<Inbox> = Arc::new(Mutex::new(Vec::new()));
 
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
-        .build()
-        .expect("create event loop");
+    let mut event_loop_builder = EventLoop::<UserEvent>::with_user_event();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        event_loop_builder
+            .with_activation_policy(ActivationPolicy::Accessory)
+            .with_default_menu(false);
+    }
+    let event_loop = event_loop_builder.build().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
+
+    #[cfg(target_os = "macos")]
+    let mut _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some() {
+        None
+    } else {
+        match platform::macos::integration::SingleInstanceGuard::acquire() {
+            Ok(mut guard) => {
+                if let Err(error) = guard.start_listener(proxy.clone()) {
+                    eprintln!("single-instance listener: {error}");
+                }
+                Some(guard)
+            }
+            Err(error) if error.is_already_running() => return,
+            Err(error) => {
+                eprintln!("single-instance: {error}");
+                std::process::exit(1);
+            }
+        }
+    };
 
     // One merged channel: both background threads send `WorkerMessage`s here.
     let (merged_tx, merged_rx): (
@@ -232,11 +257,19 @@ fn main() {
     let os = (std::env::var_os(qa::SCENARIO_ENV).is_none())
         .then(|| platform::windows::OsIntegrationHandle::spawn(proxy.clone()));
 
+    #[cfg(target_os = "macos")]
+    let macos = (std::env::var_os(qa::SCENARIO_ENV).is_none())
+        .then(|| platform::macos::integration::MacOsIntegration::install(proxy.clone()));
+
     let mut app = App::new(proxy, timer, cache, inbox, worker);
     // Anchor the OS-integration thread for the whole process lifetime.
     #[cfg(windows)]
     {
         app._os = os;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        app._macos = macos;
     }
     // Restore the user's saved layout (drag-to-reorder + hidden apps) before the
     // first scan lands, so apps appear in the user's arrangement from frame one.

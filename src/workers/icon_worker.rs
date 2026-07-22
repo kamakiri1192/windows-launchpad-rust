@@ -18,6 +18,7 @@ use std::thread;
 
 use crate::domain::app_id::AppId;
 use crate::icon_cache::{self, CachedIcon, IconCache};
+#[cfg(windows)]
 use crate::icons::extract::{self, ComScope};
 use crate::icons::normalize::{normalize, DecodedIcon};
 use crate::startup_timer::{self, prefix};
@@ -77,6 +78,7 @@ pub fn spawn(cache: Arc<IconCache>, results: Sender<IconResult>) -> WorkerHandle
 
 fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender<IconResult>) {
     // COM lives for the whole thread. STA matches the shell's expectations.
+    #[cfg(windows)]
     let _com = ComScope::new();
     let timer = startup_timer::get();
 
@@ -224,14 +226,40 @@ fn process_one(
 }
 
 fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
-    if req.link_path.to_string_lossy().starts_with("steam://") {
-        let icon_path = PathBuf::from(&req.icon_location);
-        if let Ok(bytes) = std::fs::read(&icon_path) {
-            if let Ok(image) = image::load_from_memory(&bytes) {
-                return Some(DecodedIcon::from_dynamic(image));
+    #[cfg(target_os = "macos")]
+    {
+        if req.link_path.to_string_lossy().starts_with("steam://") {
+            let icon_path = PathBuf::from(&req.icon_location);
+            if let Ok(bytes) = std::fs::read(&icon_path) {
+                if let Ok(image) = image::load_from_memory(&bytes) {
+                    return Some(DecodedIcon::from_dynamic(image));
+                }
             }
+            if icon_path.extension().is_some_and(|ext| ext == "app") {
+                return crate::platform::macos::apps::extract_icon(&icon_path, "");
+            }
+            return None;
         }
-        return extract::extract_icon_from_path(&icon_path);
+        crate::platform::macos::apps::extract_icon(&req.link_path, &req.icon_location)
     }
-    extract::extract_icon_from_lnk(&req.link_path)
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = req;
+        None
+    }
+
+    #[cfg(windows)]
+    {
+        if req.link_path.to_string_lossy().starts_with("steam://") {
+            let icon_path = PathBuf::from(&req.icon_location);
+            if let Ok(bytes) = std::fs::read(&icon_path) {
+                if let Ok(image) = image::load_from_memory(&bytes) {
+                    return Some(DecodedIcon::from_dynamic(image));
+                }
+            }
+            return extract::extract_icon_from_path(&icon_path);
+        }
+        extract::extract_icon_from_lnk(&req.link_path)
+    }
 }

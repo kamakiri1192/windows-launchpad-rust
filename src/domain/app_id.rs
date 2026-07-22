@@ -39,6 +39,15 @@ impl AppId {
         Self(s.into())
     }
 
+    /// Build a stable macOS app id from its bundle identifier, falling back to
+    /// its case-preserving bundle path for malformed or legacy bundles.
+    pub fn from_macos_bundle(bundle_id: Option<&str>, bundle_path: &Path) -> Self {
+        match bundle_id.filter(|id| !id.trim().is_empty()) {
+            Some(bundle_id) => Self(format!("mac:{bundle_id}")),
+            None => Self(format!("mac-path:{}", bundle_path.to_string_lossy())),
+        }
+    }
+
     /// The normalized id string.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -47,6 +56,11 @@ impl AppId {
     /// Whether this id identifies an app discovered from a Steam manifest.
     pub fn is_steam(&self) -> bool {
         self.0.starts_with("steam:")
+    }
+
+    /// Whether this id identifies a macOS application bundle.
+    pub fn is_macos(&self) -> bool {
+        self.0.starts_with("mac:") || self.0.starts_with("mac-path:")
     }
 }
 
@@ -167,5 +181,20 @@ mod tests {
     fn recognizes_steam_ids() {
         assert!(AppId::from_normalized("steam:620").is_steam());
         assert!(!AppId::from_normalized("c:/apps/steam.lnk").is_steam());
+    }
+
+    #[test]
+    fn macos_bundle_id_wins_over_bundle_path() {
+        let a = AppId::from_macos_bundle(Some("com.example.App"), Path::new("/Applications/A.app"));
+        let b = AppId::from_macos_bundle(Some("com.example.App"), Path::new("/Other/A.app"));
+        assert_eq!(a, b);
+        assert_eq!(a.as_str(), "mac:com.example.App");
+        assert!(a.is_macos());
+    }
+
+    #[test]
+    fn macos_path_fallback_preserves_case() {
+        let id = AppId::from_macos_bundle(None, Path::new("/Applications/My App.app"));
+        assert_eq!(id.as_str(), "mac-path:/Applications/My App.app");
     }
 }

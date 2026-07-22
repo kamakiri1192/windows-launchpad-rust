@@ -96,7 +96,6 @@ pub struct FolderPanelInput<'a> {
     pub page_scroll_x: f32,
     pub progress: f32,
     pub editing: bool,
-    pub wiggle_phase: f32,
     pub dragged_child_key: Option<&'a str>,
 }
 
@@ -259,7 +258,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         let dragged = input.dragged_child_key == Some(child.key);
         let motion = TileAnim {
             phase: if input.editing {
-                input.wiggle_phase + global_index as f32 * 0.37
+                TileAnim::phase_offset(global_index)
             } else {
                 0.0
             },
@@ -585,7 +584,6 @@ mod tests {
             page_scroll_x,
             progress,
             editing: false,
-            wiggle_phase: 0.0,
             dragged_child_key: None,
         })
     }
@@ -834,7 +832,6 @@ mod tests {
             page_scroll_x: 0.0,
             progress: 1.0,
             editing: true,
-            wiggle_phase: 1.25,
             dragged_child_key: None,
         });
         let radius =
@@ -871,7 +868,7 @@ mod tests {
         assert!(tiles
             .iter()
             .all(|tile| tile.motion.flags & TileAnim::FLAG_WIGGLE != 0));
-        assert_eq!(tiles[0].motion.phase, 1.25);
+        assert_eq!(tiles[0].motion.phase, 0.0);
         assert_ne!(tiles[0].motion.phase, tiles[1].motion.phase);
     }
 

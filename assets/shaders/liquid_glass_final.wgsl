@@ -18,6 +18,8 @@ struct GlassUniforms {
     pad0: f32,
     pad1: f32,
     pad2: f32,
+    backdrop_origin: vec2<f32>,
+    backdrop_extent: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -54,11 +56,18 @@ fn decode_displacement(encoded: vec2<f32>) -> vec2<f32> {
     return (encoded * 2.0 - vec2<f32>(1.0)) * max(u.max_displacement, 1.0);
 }
 
-fn sample_backdrop(uv: vec2<f32>) -> vec4<f32> {
+fn backdrop_uv(screen_uv: vec2<f32>) -> vec2<f32> {
+    let screen_pixel = screen_uv * u.viewport;
+    return (screen_pixel - u.backdrop_origin) / max(u.backdrop_extent, vec2<f32>(1.0));
+}
+
+fn sample_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
     return textureSample(backdrop_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
-fn sample_blurred_backdrop(uv: vec2<f32>) -> vec4<f32> {
+fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
     return textureSample(blur_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
@@ -111,6 +120,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let alpha = geometry_data.a;
     let normalized_height = geometry_data.b;
     let inv_viewport = vec2<f32>(1.0) / max(u.viewport, vec2<f32>(1.0));
+
+    // More than one thickness inside a glass boundary the encoded height is
+    // exactly 1, displacement is zero, and every rim/reflection term below is
+    // zero. Preserve the same color equation with one blurred and one sharp
+    // sample instead of paying for chromatic separation, reflection, normal
+    // reconstruction, and caustics across the large flat interior.
+    if normalized_height >= 1.0 {
+        let filtered_color = sample_glass_backdrop(screen_uv);
+        let sharp_color = sample_backdrop(screen_uv);
+        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, 0.12);
+        let bg_luma = luminance(interior_rgb);
+        let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
+        interior_rgb = mix(interior_rgb, interior_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
+        interior_rgb = u.glass_color.rgb * u.glass_color.a
+            + interior_rgb * (1.0 - u.glass_color.a);
+        interior_rgb = apply_saturation(interior_rgb, u.saturation);
+        interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
+        let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92);
+        return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
+    }
+
     let refract_uv = screen_uv + displacement * inv_viewport;
     let edge_factor = pow(1.0 - clamp(normalized_height, 0.0, 1.0), 1.75);
 

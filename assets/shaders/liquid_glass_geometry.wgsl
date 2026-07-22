@@ -18,6 +18,8 @@ struct GlassUniforms {
     pad0: f32,
     pad1: f32,
     pad2: f32,
+    backdrop_origin: vec2<f32>,
+    backdrop_extent: vec2<f32>,
 };
 
 struct GlassShape {

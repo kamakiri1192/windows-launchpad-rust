@@ -15,12 +15,29 @@ mod enabled {
 
     const PROFILE_ENV: &str = "LAUNCHPAD_GPU_PROFILE";
     const MAX_SAMPLES_PER_SCOPE: usize = 240;
+    const MAX_VALID_SCOPE_MILLISECONDS: f64 = 60_000.0;
 
     pub(crate) struct GpuScope(Option<GpuProfilerQuery>);
 
     #[derive(Default)]
     struct ScopeSamples {
         milliseconds: VecDeque<f64>,
+        invalid_samples: u64,
+    }
+
+    impl ScopeSamples {
+        fn record(&mut self, milliseconds: f64) {
+            if milliseconds.is_finite()
+                && (0.0..=MAX_VALID_SCOPE_MILLISECONDS).contains(&milliseconds)
+            {
+                self.milliseconds.push_back(milliseconds);
+                if self.milliseconds.len() > MAX_SAMPLES_PER_SCOPE {
+                    self.milliseconds.pop_front();
+                }
+            } else {
+                self.invalid_samples += 1;
+            }
+        }
     }
 
     pub(crate) struct GpuProfilerState {
@@ -148,6 +165,7 @@ mod enabled {
                     values.sort_by(f64::total_cmp);
                     let value = json!({
                         "samples": values.len(),
+                        "invalid_samples": samples.invalid_samples,
                         "p50_ms": percentile(&values, 0.50),
                         "p95_ms": percentile(&values, 0.95),
                         "max_ms": values.last().copied().unwrap_or(0.0),
@@ -156,7 +174,7 @@ mod enabled {
                 })
                 .collect();
             let report = json!({
-                "schema_version": 1,
+                "schema_version": 2,
                 "finished_frames": self.finished_frames,
                 "window_samples_per_scope": MAX_SAMPLES_PER_SCOPE,
                 "scopes": scopes,
@@ -206,11 +224,8 @@ mod enabled {
                 format!("{parent}/{}", result.label)
             };
             if let Some(time) = &result.time {
-                let samples = &mut all.entry(label.clone()).or_default().milliseconds;
-                samples.push_back((time.end - time.start) * 1000.0);
-                if samples.len() > MAX_SAMPLES_PER_SCOPE {
-                    samples.pop_front();
-                }
+                let scope = all.entry(label.clone()).or_default();
+                scope.record((time.end - time.start) * 1000.0);
             }
             collect_samples(all, &result.nested_queries, &label);
         }
@@ -222,6 +237,37 @@ mod enabled {
         }
         let index = ((sorted.len() - 1) as f64 * fraction).round() as usize;
         sorted[index]
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn scope_samples_discard_invalid_gpu_durations() {
+            let mut samples = ScopeSamples::default();
+            samples.record(0.25);
+            samples.record(-1.0);
+            samples.record(f64::NAN);
+            samples.record(MAX_VALID_SCOPE_MILLISECONDS + 1.0);
+
+            assert_eq!(
+                samples.milliseconds.iter().copied().collect::<Vec<_>>(),
+                [0.25]
+            );
+            assert_eq!(samples.invalid_samples, 3);
+        }
+
+        #[test]
+        fn scope_samples_keep_a_bounded_recent_window() {
+            let mut samples = ScopeSamples::default();
+            for index in 0..=MAX_SAMPLES_PER_SCOPE {
+                samples.record(index as f64);
+            }
+
+            assert_eq!(samples.milliseconds.len(), MAX_SAMPLES_PER_SCOPE);
+            assert_eq!(samples.milliseconds.front().copied(), Some(1.0));
+        }
     }
 }
 

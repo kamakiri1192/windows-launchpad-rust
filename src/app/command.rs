@@ -92,7 +92,8 @@ impl App {
             return;
         }
         debug_log!("hide: hiding window");
-        if let Some(r) = self.renderer.as_ref() {
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_backdrop_capture_active(false);
             r.window.set_visible(false);
             r.window.set_ime_allowed(false);
         }
@@ -139,11 +140,12 @@ impl App {
     /// Re-centers on the primary monitor so a multi-monitor move doesn't
     /// strand the launcher on the wrong screen.
     pub(crate) fn summon(&mut self) {
-        let Some(r) = self.renderer.as_ref() else {
+        let Some(r) = self.renderer.as_mut() else {
             return;
         };
         debug_log!("summon: showing window (visible was {})", self.visible);
         r.window.set_visible(true);
+        r.set_backdrop_capture_active(true);
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
         // so we also allow-set-foreground + re-assert focus. If it still fails
@@ -161,6 +163,8 @@ impl App {
                 let _ = AllowSetForegroundWindow(ASFW_ANY);
             }
         }
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::integration::activate_application();
         r.window.focus_window();
         self.visible = true;
         // Record the summon time so a focus-transition artifact in the next

@@ -57,18 +57,23 @@ impl Renderer {
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
+        let qa_headless = std::env::var_os(crate::qa::HEADLESS_ENV).is_some();
         // Safety: we move `window` into the returned Renderer immediately, so
         // the surface's `'static` borrow is valid for as long as the Renderer
-        // exists. The window outlives the surface by field order.
-        let surface = unsafe {
-            let static_window: &'static winit::window::Window = &*(&window as *const _);
-            instance.create_surface(static_window)?
+        // exists. Headless QA skips surface creation entirely.
+        let surface = if qa_headless {
+            None
+        } else {
+            Some(unsafe {
+                let static_window: &'static winit::window::Window = &*(&window as *const _);
+                instance.create_surface(static_window)?
+            })
         };
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
             })
             .await
@@ -92,13 +97,24 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let caps = surface.get_capabilities(&adapter);
-        let surface_format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+        let (surface_format, present_mode, alpha_mode) = if let Some(surface) = &surface {
+            let caps = surface.get_capabilities(&adapter);
+            (
+                caps.formats
+                    .iter()
+                    .copied()
+                    .find(|format| format.is_srgb())
+                    .unwrap_or(caps.formats[0]),
+                select_present_mode(&caps.present_modes),
+                select_alpha_mode(&caps.alpha_modes),
+            )
+        } else {
+            (
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                PresentMode::Fifo,
+                CompositeAlphaMode::Auto,
+            )
+        };
 
         let size = window.inner_size();
         let max_dim = device.limits().max_texture_dimension_2d;
@@ -110,12 +126,15 @@ impl Renderer {
             format: surface_format,
             width: size.width.max(1).min(max_dim),
             height: size.height.max(1).min(max_dim),
-            present_mode: select_present_mode(&caps.present_modes),
+            present_mode,
             desired_maximum_frame_latency: 2,
-            alpha_mode: select_alpha_mode(&caps.alpha_modes),
+            alpha_mode,
             view_formats: vec![],
         };
-        surface.configure(&device, &config);
+        if let Some(surface) = &surface {
+            surface.configure(&device, &config);
+        }
+        let qa_offscreen = qa_headless.then(|| create_qa_offscreen_texture(&device, &config));
 
         // Shaders
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -584,6 +603,7 @@ impl Renderer {
             device,
             queue,
             surface,
+            qa_offscreen,
             config,
             pipeline,
             decorated: false,
@@ -651,7 +671,12 @@ impl Renderer {
         let max = self.device.limits().max_texture_dimension_2d;
         self.config.width = width.min(max);
         self.config.height = height.min(max);
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
+        if self.qa_offscreen.is_some() {
+            self.qa_offscreen = Some(create_qa_offscreen_texture(&self.device, &self.config));
+        }
         self.liquid_glass.resize(
             &self.device,
             &self.queue,
@@ -683,14 +708,25 @@ impl Renderer {
     }
 
     pub fn notify_window_moved(&mut self) {
-        self.liquid_glass.notify_window_moved();
+        if let Ok(position) = self.window.outer_position() {
+            self.liquid_glass.notify_window_moved(
+                position.x,
+                position.y,
+                self.window.scale_factor(),
+            );
+        }
+    }
+
+    pub fn set_backdrop_capture_active(&mut self, active: bool) {
+        self.liquid_glass.set_capture_active(active);
     }
 }
 
-/// Use FIFO VSync for the continuously animated launcher surface. Mailbox
-/// replaces queued frames and allows the edit-mode redraw loop to run up to
-/// `maximum_frame_latency * monitor_hz` on DX12, which can saturate the GPU
-/// while most submitted frames are never displayed.
+/// Choose presentation pacing for the platform.
+///
+/// FIFO keeps both platforms synchronized with the compositor. Mailbox can
+/// let the edit-mode redraw loop saturate the GPU with frames that are never
+/// displayed, while Immediate may tear during fast page movement.
 fn select_present_mode(available: &[PresentMode]) -> PresentMode {
     let selected = if available.contains(&PresentMode::Fifo) {
         PresentMode::Fifo
@@ -713,9 +749,13 @@ fn default_backends() -> Backends {
     {
         Backends::DX12
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        Backends::DX12 | Backends::VULKAN
+        Backends::METAL
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Backends::VULKAN
     }
 }
 
@@ -768,13 +808,43 @@ fn create_backdrop_capture(
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        match crate::liquid_glass::macos_capture::create_monitor_capture(window, event_proxy) {
+            Ok(capture) => capture,
+            Err(error) => Box::new(FallbackCapture::new(format!(
+                "ScreenCaptureKit initialization failed: {error}"
+            ))),
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (window, event_proxy);
         Box::new(FallbackCapture::new(
-            "Windows.Graphics.Capture is only available on Windows",
+            "desktop backdrop capture is unavailable on this platform",
         ))
     }
+}
+
+fn create_qa_offscreen_texture(
+    device: &wgpu::Device,
+    config: &SurfaceConfiguration,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("headless QA render target"),
+        size: wgpu::Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 #[cfg(test)]

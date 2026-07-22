@@ -1,4 +1,4 @@
-use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
+use super::capture::{BackdropCapture, CaptureStatus, CpuCaptureFrame, GpuCaptureFrame};
 use crate::UserEvent;
 use windows::core::Interface;
 use winit::event_loop::EventLoopProxy;
@@ -677,7 +677,7 @@ impl BackdropCapture for WindowsGraphicsCapture {
         }
     }
 
-    fn on_window_moved(&mut self) {
+    fn on_window_moved(&mut self, _x: i32, _y: i32, _scale_factor: f64) {
         use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 
         let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
@@ -708,8 +708,8 @@ impl BackdropCapture for WindowsGraphicsCapture {
         }
     }
 
-    fn latest_frame_rgba(&mut self, width: u32, height: u32) -> Option<Vec<u8>> {
-        match self.try_latest_frame_rgba(width, height) {
+    fn latest_frame_rgba(&mut self, width: u32, height: u32) -> Option<CpuCaptureFrame> {
+        let pixels = match self.try_latest_frame_rgba(width, height) {
             Ok(frame) => {
                 self.fallback_reason = None;
                 frame
@@ -718,7 +718,8 @@ impl BackdropCapture for WindowsGraphicsCapture {
                 self.fallback_reason = Some(err);
                 self.last_frame.clone()
             }
-        }
+        };
+        pixels.map(|pixels| CpuCaptureFrame::full(width, height, pixels))
     }
 }
 

@@ -26,11 +26,23 @@ impl App {
     pub(crate) fn tick_frame(&mut self) {
         let now = Instant::now();
         let vp = self.viewport_phys();
+        let profile_scroll_position = self.profile_scroll.as_ref().and_then(|profile| {
+            profile.position(
+                now,
+                self.layout.page_width(vp.0.max(1) as f32),
+                self.layout.page_count,
+            )
+        });
         let scroll_x;
         let dragging;
         if let Some(s) = self.scroller.as_mut() {
             dragging = s.phase == Phase::Dragging;
             s.tick(now);
+            if let Some(position) = profile_scroll_position {
+                s.position = position;
+                s.velocity = 0.0;
+                s.phase = Phase::Idle;
+            }
             scroll_x = s.position;
         } else {
             return;
@@ -48,7 +60,6 @@ impl App {
         };
         if folder_scroller_animating {
             self.update_folder_page_from_scroll();
-            self.relayout();
         }
         let auto_scroll_started = self.maybe_autoscroll_edit_drag();
         // Resolve the stable hover identity before any live reorder. Moving
@@ -112,9 +123,6 @@ impl App {
             self.refresh_spring_instances();
         }
         let folder_child_springs_animating = self.step_folder_child_springs(anim_dt);
-        if folder_child_springs_animating {
-            self.relayout();
-        }
 
         // Detect a page change (settled page differs from the last
         // tracked one) and arm the transient page indicator.
@@ -213,6 +221,7 @@ impl App {
             || folder_child_page_started
             || folder_scroller_animating
             || self.editing
+            || self.profile_scroll.is_some()
         {
             self.request_redraw();
         }

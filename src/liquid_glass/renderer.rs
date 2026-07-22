@@ -4,7 +4,10 @@ mod frame;
 mod resources;
 use resources::*;
 
-use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
+use super::capture::{
+    BackdropCapture, CaptureRegion, CaptureStatus, CpuCaptureFrame, EphemeralGpuCaptureFrame,
+    GpuCaptureFrame,
+};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::layout::grid::GridLayout;
@@ -33,6 +36,23 @@ pub(super) struct GlassUniforms {
     debug_flags: u32,
     time: f32,
     _pad: [f32; 3],
+    backdrop_origin: [f32; 2],
+    backdrop_extent: [f32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BackdropMapping {
+    region: CaptureRegion,
+    texture_size: (u32, u32),
+}
+
+impl BackdropMapping {
+    fn full(width: u32, height: u32) -> Self {
+        Self {
+            region: CaptureRegion::full(width, height),
+            texture_size: (width.max(1), height.max(1)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -40,6 +60,9 @@ struct RenderStats {
     last_report_at: Instant,
     frames: u32,
     captured_frames: u32,
+    blurred_frames: u32,
+    geometry_frames: u32,
+    geometry_shapes: u64,
     capture_time: Duration,
     upload_time: Duration,
     render_time: Duration,
@@ -51,6 +74,9 @@ impl RenderStats {
             last_report_at: Instant::now(),
             frames: 0,
             captured_frames: 0,
+            blurred_frames: 0,
+            geometry_frames: 0,
+            geometry_shapes: 0,
             capture_time: Duration::ZERO,
             upload_time: Duration::ZERO,
             render_time: Duration::ZERO,
@@ -60,6 +86,8 @@ impl RenderStats {
     fn record(
         &mut self,
         captured: bool,
+        blurred: bool,
+        geometry_shape_count: Option<u32>,
         capture_time: Duration,
         upload_time: Duration,
         render_time: Duration,
@@ -70,6 +98,13 @@ impl RenderStats {
             self.capture_time += capture_time;
             self.upload_time += upload_time;
         }
+        if blurred {
+            self.blurred_frames += 1;
+        }
+        if let Some(geometry_shape_count) = geometry_shape_count {
+            self.geometry_frames += 1;
+            self.geometry_shapes += u64::from(geometry_shape_count);
+        }
         self.render_time += render_time;
 
         let elapsed = self.last_report_at.elapsed();
@@ -79,11 +114,28 @@ impl RenderStats {
 
         let seconds = elapsed.as_secs_f32().max(0.001);
         let capture_fps = self.captured_frames as f32 / seconds;
+        let blur_fps = self.blurred_frames as f32 / seconds;
+        let geometry_fps = self.geometry_frames as f32 / seconds;
+        let blur_reuse = if self.frames == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - self.blurred_frames as f32 / self.frames as f32)
+        };
         let avg_capture_ms = avg_ms(self.capture_time, self.captured_frames);
         let avg_upload_ms = avg_ms(self.upload_time, self.captured_frames);
         let avg_render_ms = avg_ms(self.render_time, self.frames);
+        let geometry_reuse = if self.frames == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - self.geometry_frames as f32 / self.frames as f32)
+        };
+        let avg_geometry_shapes = if self.geometry_frames == 0 {
+            0.0
+        } else {
+            self.geometry_shapes as f32 / self.geometry_frames as f32
+        };
         eprintln!(
-            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} render_ms={avg_render_ms:.2}"
+            "liquid glass stats: capture_fps={capture_fps:.1} capture_ms={avg_capture_ms:.2} upload_ms={avg_upload_ms:.2} blur_fps={blur_fps:.1} blur_reuse={blur_reuse:.0}% geometry_fps={geometry_fps:.1} geometry_reuse={geometry_reuse:.0}% geometry_shapes={avg_geometry_shapes:.1} render_ms={avg_render_ms:.2}"
         );
 
         *self = Self::new();
@@ -129,6 +181,10 @@ pub struct LiquidGlassRenderer {
     badge_shape_count: u32,
     badge_shape_capacity: usize,
     badge_shapes: Vec<GlassShape>,
+    /// Edit badges whose conservative animation bounds intersect the fixed
+    /// page clip at the current scroll position.
+    active_badge_shapes: Vec<GlassShape>,
+    badge_shape_scratch: Vec<GlassShape>,
     modal_badge_shape_buffer: wgpu::Buffer,
     modal_badge_shape_count: u32,
     modal_badge_shape_capacity: usize,
@@ -145,18 +201,28 @@ pub struct LiquidGlassRenderer {
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
+    /// Base shapes that can affect the fixed page frame at the current scroll
+    /// position. Off-frame pages are culled on the CPU before the full-screen
+    /// SDF shader sees them.
+    active_base_shapes: Vec<GlassShape>,
+    base_shape_scratch: Vec<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
+    overlay_geometry_texture: wgpu::Texture,
+    overlay_geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
+    backdrop_mapping: BackdropMapping,
     gpu_backdrop_texture: Option<wgpu::Texture>,
     using_gpu_backdrop: bool,
+    gpu_backdrop_is_copy_target: bool,
     blur_texture: wgpu::Texture,
     blur_view: wgpu::TextureView,
     /// Pyramids L1=1/2, L2=1/4, L3=1/8 (src for downsample, dst for upsample).
     blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
     sampler: wgpu::Sampler,
     geometry_pipeline: wgpu::RenderPipeline,
+    badge_geometry_pipeline: wgpu::RenderPipeline,
     blur_downsample_pipeline: wgpu::RenderPipeline,
     blur_upsample_pipeline: wgpu::RenderPipeline,
     final_pipeline: wgpu::RenderPipeline,
@@ -184,6 +250,10 @@ pub struct LiquidGlassRenderer {
     control_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
     last_capture_at: Option<Instant>,
+    /// The blur pyramid depends on the captured backdrop, not on foreground
+    /// animation. Rebuild it only when that backdrop (or blur parameters)
+    /// changes instead of re-blurring identical pixels every render frame.
+    blur_dirty: bool,
     last_geometry_key: Option<GeometryKey>,
     stats: RenderStats,
 }
@@ -197,6 +267,157 @@ struct GeometryKey {
     width: u32,
     height: u32,
     shape_count: u32,
+}
+
+fn intersect_bounds(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+    let intersection = [
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ];
+    (intersection[0] < intersection[2] && intersection[1] < intersection[3]).then_some(intersection)
+}
+
+fn base_shape_may_affect_frame(
+    shape: GlassShape,
+    scroll_x: f32,
+    frame: GlassShape,
+    smooth_union_radius: f32,
+) -> bool {
+    if !shape.is_scrolling() {
+        return true;
+    }
+    let bounds = shape.screen_bounds(scroll_x);
+    let margin = smooth_union_radius.max(0.0);
+    let influence_bounds = [
+        bounds[0] - margin,
+        bounds[1] - margin,
+        bounds[2] + margin,
+        bounds[3] + margin,
+    ];
+    if intersect_bounds(influence_bounds, frame.screen_bounds(0.0)).is_none() {
+        return false;
+    }
+
+    // A scrolling rounded rect that remains at least `blend` inside the fixed
+    // frame cannot change the smooth union: the frame's signed distance is
+    // already smaller everywhere. Testing the expanded AABB is conservative
+    // around rounded corners and guarantees the whole blend neighborhood is
+    // contained before the shape is discarded.
+    !bounds_inside_rounded_rect(influence_bounds, frame)
+}
+
+fn overlay_shape_may_affect_clip(shape: GlassShape, scroll_x: f32, clip: GlassShape) -> bool {
+    shape.is_clip_only()
+        || intersect_bounds(shape.screen_bounds(scroll_x), clip.screen_bounds(0.0)).is_some()
+}
+
+fn bounds_inside_rounded_rect(bounds: [f32; 4], shape: GlassShape) -> bool {
+    [
+        [bounds[0], bounds[1]],
+        [bounds[2], bounds[1]],
+        [bounds[0], bounds[3]],
+        [bounds[2], bounds[3]],
+    ]
+    .into_iter()
+    .all(|point| rounded_rect_sdf(point, shape) <= 0.0)
+}
+
+fn rounded_rect_sdf(point: [f32; 2], shape: GlassShape) -> f32 {
+    let half = [shape.size[0] * 0.5, shape.size[1] * 0.5];
+    let radius = shape.radius.min(half[0]).min(half[1]);
+    let q = [
+        (point[0] - shape.center[0]).abs() - half[0] + radius,
+        (point[1] - shape.center[1]).abs() - half[1] + radius,
+    ];
+    q[0].max(q[1]).min(0.0) + q[0].max(0.0).hypot(q[1].max(0.0)) - radius
+}
+
+fn capture_region_for_shapes(
+    width: u32,
+    height: u32,
+    scroll_x: f32,
+    padding: f32,
+    groups: &[&[GlassShape]],
+) -> CaptureRegion {
+    let viewport = [0.0, 0.0, width.max(1) as f32, height.max(1) as f32];
+    let frame_bounds = groups
+        .iter()
+        .flat_map(|group| group.iter())
+        .find(|shape| shape.is_frame())
+        .map(|shape| shape.screen_bounds(0.0));
+
+    let mut union: Option<[f32; 4]> = None;
+    for shape in groups.iter().flat_map(|group| group.iter()) {
+        if shape.is_clip_only() {
+            continue;
+        }
+        let mut bounds = shape.screen_bounds(scroll_x);
+        if shape.is_scrolling() {
+            let Some(frame) = frame_bounds else {
+                continue;
+            };
+            let Some(clipped) = intersect_bounds(bounds, frame) else {
+                continue;
+            };
+            bounds = clipped;
+        }
+        let Some(bounds) = intersect_bounds(bounds, viewport) else {
+            continue;
+        };
+        union = Some(match union {
+            Some(current) => [
+                current[0].min(bounds[0]),
+                current[1].min(bounds[1]),
+                current[2].max(bounds[2]),
+                current[3].max(bounds[3]),
+            ],
+            None => bounds,
+        });
+    }
+
+    let Some(bounds) = union else {
+        return CaptureRegion::full(width, height);
+    };
+    let align_down = |value: f32| ((value.max(0.0).floor() as u32) / 2) * 2;
+    let align_up = |value: f32, limit: u32| {
+        let rounded = value.ceil().max(1.0).min(limit as f32) as u32;
+        rounded.saturating_add(1) / 2 * 2
+    };
+    let x = align_down(bounds[0] - padding);
+    let y = align_down(bounds[1] - padding);
+    let right = align_up(bounds[2] + padding, width.max(1)).min(width.max(1));
+    let bottom = align_up(bounds[3] + padding, height.max(1)).min(height.max(1));
+    CaptureRegion {
+        x,
+        y,
+        width: right.saturating_sub(x).max(1),
+        height: bottom.saturating_sub(y).max(1),
+    }
+    .clamped_to(width, height)
+}
+
+fn capture_sampling_padding(
+    params: &LiquidGlassParams,
+    debug: DebugOptions,
+    width: u32,
+    height: u32,
+) -> f32 {
+    let max_displacement = params.thickness * 10.0;
+    let chromatic_scale = if debug.disable_chromatic_aberration {
+        1.0
+    } else {
+        1.0 + params.chromatic_aberration * 2.15
+    };
+    let refraction = max_displacement * chromatic_scale + 3.0;
+    let reflection = max_displacement * 0.42 + width.max(height) as f32 * 0.035;
+    let blur_support = if debug.disable_blur || params.blur_radius < 0.5 {
+        1.0
+    } else {
+        40.0
+    };
+    refraction.max(reflection) + blur_support + params.blend * 0.25 + 4.0
 }
 
 impl LiquidGlassRenderer {
@@ -214,7 +435,16 @@ impl LiquidGlassRenderer {
         let capture_status = capture.status();
         log_capture_status(&capture_status);
 
-        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0, 0.0);
+        let backdrop_mapping = BackdropMapping::full(width, height);
+        let uniforms = uniforms_from_params(
+            &params,
+            debug,
+            (width, height),
+            0.0,
+            0,
+            0.0,
+            backdrop_mapping,
+        );
         let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
         let grid_overlay_uniform_buffer =
             create_uniform_buffer(device, "liquid glass grid overlay uniforms", &uniforms);
@@ -230,6 +460,8 @@ impl LiquidGlassRenderer {
             create_uniform_buffer(device, "liquid glass settings panel uniforms", &uniforms);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
+        let active_base_shapes = shapes.clone();
+        let base_shape_scratch = Vec::with_capacity(shapes.len());
         let shape_buffer = create_shape_buffer(device, &shapes);
         let shape_count = shapes.len() as u32;
         let shape_capacity = shapes.len().max(1);
@@ -264,6 +496,8 @@ impl LiquidGlassRenderer {
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
+        let (overlay_geometry_texture, overlay_geometry_view) =
+            create_overlay_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         // Final blur output is full-res: the final shader samples it without
         // any resolution-mismatch stretch.
@@ -292,10 +526,10 @@ impl LiquidGlassRenderer {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("liquid glass geometry bgl"),
                 entries: &[
-                    uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                    uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
@@ -381,7 +615,7 @@ impl LiquidGlassRenderer {
             &grid_overlay_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let drag_overlay_final_bind_group = create_final_bind_group(
@@ -390,7 +624,7 @@ impl LiquidGlassRenderer {
             &drag_overlay_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let badge_final_bind_group = create_final_bind_group(
@@ -399,7 +633,7 @@ impl LiquidGlassRenderer {
             &badge_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let modal_badge_final_bind_group = create_final_bind_group(
@@ -408,7 +642,7 @@ impl LiquidGlassRenderer {
             &modal_badge_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let control_final_bind_group = create_final_bind_group(
@@ -417,7 +651,7 @@ impl LiquidGlassRenderer {
             &control_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let settings_panel_final_bind_group = create_final_bind_group(
@@ -426,7 +660,7 @@ impl LiquidGlassRenderer {
             &settings_panel_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &geometry_view,
+            &overlay_geometry_view,
             &blur_view,
         );
         let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
@@ -442,6 +676,12 @@ impl LiquidGlassRenderer {
             label: Some("liquid glass geometry shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../assets/shaders/liquid_glass_geometry.wgsl").into(),
+            ),
+        });
+        let badge_geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("liquid glass sparse badge geometry shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../assets/shaders/liquid_glass_badge_geometry.wgsl").into(),
             ),
         });
         let final_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -489,6 +729,27 @@ impl LiquidGlassRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let badge_geometry_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("liquid glass sparse badge geometry pipeline"),
+                layout: Some(&geometry_pipeline_layout),
+                vertex: fullscreen_vertex_state(&badge_geometry_shader),
+                fragment: Some(wgpu::FragmentState {
+                    module: &badge_geometry_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: GEOMETRY_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: fullscreen_primitive_state(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
 
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("liquid glass blur pipeline layout"),
@@ -592,6 +853,8 @@ impl LiquidGlassRenderer {
             badge_shape_count,
             badge_shape_capacity,
             badge_shapes: Vec::new(),
+            active_badge_shapes: Vec::new(),
+            badge_shape_scratch: Vec::new(),
             modal_badge_shape_buffer,
             modal_badge_shape_count: 0,
             modal_badge_shape_capacity,
@@ -606,17 +869,24 @@ impl LiquidGlassRenderer {
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
             base_shapes: shapes,
+            active_base_shapes,
+            base_shape_scratch,
             geometry_texture,
             geometry_view,
+            overlay_geometry_texture,
+            overlay_geometry_view,
             backdrop_texture,
             backdrop_view,
+            backdrop_mapping,
             gpu_backdrop_texture: None,
             using_gpu_backdrop: false,
+            gpu_backdrop_is_copy_target: false,
             blur_texture,
             blur_view,
             blur_levels,
             sampler,
             geometry_pipeline,
+            badge_geometry_pipeline,
             blur_downsample_pipeline,
             blur_upsample_pipeline,
             final_pipeline,
@@ -640,6 +910,7 @@ impl LiquidGlassRenderer {
             control_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
             last_capture_at: None,
+            blur_dirty: true,
             last_geometry_key: None,
             stats: RenderStats::new(),
         }
@@ -653,6 +924,8 @@ impl LiquidGlassRenderer {
         }
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
+        let (overlay_geometry_texture, overlay_geometry_view) =
+            create_overlay_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
@@ -665,14 +938,19 @@ impl LiquidGlassRenderer {
 
         self.geometry_texture = geometry_texture;
         self.geometry_view = geometry_view;
+        self.overlay_geometry_texture = overlay_geometry_texture;
+        self.overlay_geometry_view = overlay_geometry_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
+        self.backdrop_mapping = BackdropMapping::full(width, height);
         self.gpu_backdrop_texture = None;
         self.using_gpu_backdrop = false;
+        self.gpu_backdrop_is_copy_target = false;
         self.blur_texture = blur_texture;
         self.blur_view = blur_view;
         self.blur_levels = blur_levels;
         self.texture_size = (width, height);
+        self.blur_dirty = true;
         self.last_geometry_key = None;
         let (down, up) = create_blur_pyramid_bind_groups(
             device,
@@ -724,7 +1002,7 @@ impl LiquidGlassRenderer {
             &self.grid_overlay_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.drag_overlay_final_bind_group = create_final_bind_group(
@@ -733,7 +1011,7 @@ impl LiquidGlassRenderer {
             &self.drag_overlay_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.badge_final_bind_group = create_final_bind_group(
@@ -742,7 +1020,7 @@ impl LiquidGlassRenderer {
             &self.badge_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.modal_badge_final_bind_group = create_final_bind_group(
@@ -751,7 +1029,7 @@ impl LiquidGlassRenderer {
             &self.modal_badge_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.control_final_bind_group = create_final_bind_group(
@@ -760,7 +1038,7 @@ impl LiquidGlassRenderer {
             &self.control_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
         self.settings_panel_final_bind_group = create_final_bind_group(
@@ -769,7 +1047,7 @@ impl LiquidGlassRenderer {
             &self.settings_panel_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.geometry_view,
+            &self.overlay_geometry_view,
             &self.blur_view,
         );
     }
@@ -778,6 +1056,160 @@ impl LiquidGlassRenderer {
         // Clone the view so the immutable borrow ends before we mutate `self`.
         let view = self.backdrop_view.clone();
         self.bind_backdrop_view(device, &view);
+    }
+
+    fn planned_capture_region(&self, scroll_x: f32) -> CaptureRegion {
+        let (width, height) = self.texture_size;
+        if self.debug.show_backdrop_texture {
+            return CaptureRegion::full(width, height);
+        }
+        let groups: [&[GlassShape]; 7] = [
+            &self.base_shapes,
+            &self.grid_overlay_shapes,
+            &self.drag_overlay_shapes,
+            &self.badge_shapes,
+            &self.modal_badge_shapes,
+            &self.control_shapes,
+            &self.settings_panel_shapes,
+        ];
+        capture_region_for_shapes(
+            width,
+            height,
+            scroll_x,
+            capture_sampling_padding(&self.params, self.debug, width, height),
+            &groups,
+        )
+    }
+
+    fn configure_cpu_backdrop(&mut self, device: &wgpu::Device, frame: &CpuCaptureFrame) -> bool {
+        let (viewport_width, viewport_height) = self.texture_size;
+        let region = frame.region.clamped_to(viewport_width, viewport_height);
+        let expected_len = frame.width as usize * frame.height as usize * 4;
+        if region != frame.region
+            || frame.width == 0
+            || frame.height == 0
+            || frame.pixels.len() != expected_len
+        {
+            eprintln!(
+                "liquid glass ignored invalid CPU capture: region={:?} output={}x{} bytes={}",
+                frame.region,
+                frame.width,
+                frame.height,
+                frame.pixels.len()
+            );
+            return false;
+        }
+
+        let next_mapping = BackdropMapping {
+            region,
+            texture_size: (frame.width, frame.height),
+        };
+        let texture_changed = self.backdrop_mapping.texture_size != next_mapping.texture_size;
+        if texture_changed {
+            let (backdrop_texture, backdrop_view) =
+                create_backdrop_texture(device, frame.width, frame.height);
+            let (blur_texture, blur_view) =
+                create_blur_texture_raw(device, frame.width, frame.height, 0, "blur texture");
+            let blur_levels = [
+                create_blur_texture_raw(device, frame.width, frame.height, 1, "blur level 1"),
+                create_blur_texture_raw(device, frame.width, frame.height, 2, "blur level 2"),
+                create_blur_texture_raw(device, frame.width, frame.height, 3, "blur level 3"),
+            ];
+            self.backdrop_texture = backdrop_texture;
+            self.backdrop_view = backdrop_view;
+            self.blur_texture = blur_texture;
+            self.blur_view = blur_view;
+            self.blur_levels = blur_levels;
+        }
+        self.backdrop_mapping = next_mapping;
+        if texture_changed || self.using_gpu_backdrop {
+            self.bind_cpu_backdrop(device);
+        }
+        self.gpu_backdrop_texture = None;
+        self.using_gpu_backdrop = false;
+        self.gpu_backdrop_is_copy_target = false;
+        true
+    }
+
+    fn copy_ephemeral_gpu_backdrop(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: EphemeralGpuCaptureFrame,
+    ) -> bool {
+        let EphemeralGpuCaptureFrame {
+            texture,
+            region,
+            width,
+            height,
+            release_after_submit,
+        } = frame;
+        let (viewport_width, viewport_height) = self.texture_size;
+        let region = region.clamped_to(viewport_width, viewport_height);
+        if width == 0 || height == 0 {
+            return false;
+        }
+
+        let next_mapping = BackdropMapping {
+            region,
+            texture_size: (width, height),
+        };
+        let texture_changed = self.backdrop_mapping.texture_size != next_mapping.texture_size;
+        let needs_copy_target = texture_changed
+            || !self.using_gpu_backdrop
+            || !self.gpu_backdrop_is_copy_target
+            || self.gpu_backdrop_texture.is_none();
+
+        if needs_copy_target {
+            let (gpu_texture, gpu_view) = create_gpu_backdrop_texture(device, width, height);
+            if texture_changed {
+                let (blur_texture, blur_view) =
+                    create_blur_texture_raw(device, width, height, 0, "blur texture");
+                let blur_levels = [
+                    create_blur_texture_raw(device, width, height, 1, "blur level 1"),
+                    create_blur_texture_raw(device, width, height, 2, "blur level 2"),
+                    create_blur_texture_raw(device, width, height, 3, "blur level 3"),
+                ];
+                self.blur_texture = blur_texture;
+                self.blur_view = blur_view;
+                self.blur_levels = blur_levels;
+            }
+            self.bind_backdrop_view(device, &gpu_view);
+            self.gpu_backdrop_texture = Some(gpu_texture);
+            self.gpu_backdrop_is_copy_target = true;
+            self.using_gpu_backdrop = true;
+            eprintln!("liquid glass capture path: IOSurface -> persistent GPU texture");
+        }
+        self.backdrop_mapping = next_mapping;
+
+        let Some(destination) = self.gpu_backdrop_texture.as_ref() else {
+            return false;
+        };
+        let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("liquid glass IOSurface copy encoder"),
+        });
+        copy_encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: destination,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(copy_encoder.finish()));
+        queue.on_submitted_work_done(move || drop(release_after_submit));
+        true
     }
 
     pub fn set_base_shapes(
@@ -791,6 +1223,9 @@ impl LiquidGlassRenderer {
         }
         self.base_shapes.clear();
         self.base_shapes.extend_from_slice(shapes);
+        self.active_base_shapes.clear();
+        self.active_base_shapes.extend_from_slice(shapes);
+        self.base_shape_scratch.clear();
         self.shape_count = self.base_shapes.len() as u32;
         if self.base_shapes.len() > self.shape_capacity {
             self.shape_capacity = next_shape_capacity(self.shape_capacity, self.base_shapes.len());
@@ -811,6 +1246,43 @@ impl LiquidGlassRenderer {
                 &self.shape_buffer,
                 0,
                 bytemuck::cast_slice(&self.base_shapes),
+            );
+        }
+        self.last_geometry_key = None;
+    }
+
+    fn refresh_active_base_shapes(&mut self, queue: &wgpu::Queue, scroll_x: f32) {
+        let frame = self
+            .base_shapes
+            .iter()
+            .find(|shape| shape.is_frame())
+            .copied()
+            .unwrap_or_else(|| {
+                GlassShape::fixed_rounded_rect(
+                    [
+                        self.texture_size.0 as f32 * 0.5,
+                        self.texture_size.1 as f32 * 0.5,
+                    ],
+                    [self.texture_size.0 as f32, self.texture_size.1 as f32],
+                    0.0,
+                )
+            });
+        self.base_shape_scratch.clear();
+        let smooth_union_radius = self.params.blend;
+        self.base_shape_scratch
+            .extend(self.base_shapes.iter().copied().filter(|shape| {
+                base_shape_may_affect_frame(*shape, scroll_x, frame, smooth_union_radius)
+            }));
+        if self.base_shape_scratch == self.active_base_shapes {
+            return;
+        }
+        std::mem::swap(&mut self.base_shape_scratch, &mut self.active_base_shapes);
+        self.shape_count = self.active_base_shapes.len() as u32;
+        if !self.active_base_shapes.is_empty() {
+            queue.write_buffer(
+                &self.shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.active_base_shapes),
             );
         }
         self.last_geometry_key = None;
@@ -980,18 +1452,15 @@ impl LiquidGlassRenderer {
     /// a separate Liquid Glass overlay after the app tiles/icons, so the badge
     /// actually refracts through the Liquid Glass shader instead of being a
     /// plain painted circle in the tile shader.
-    pub fn set_badge_shapes(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        shapes: &[GlassShape],
-    ) {
+    pub fn set_badge_shapes(&mut self, device: &wgpu::Device, shapes: &[GlassShape]) {
         if self.badge_shapes.as_slice() == shapes {
             return;
         }
         self.badge_shapes.clear();
         self.badge_shapes.extend_from_slice(shapes);
-        self.badge_shape_count = self.badge_shapes.len() as u32;
+        self.active_badge_shapes.clear();
+        self.badge_shape_scratch.clear();
+        self.badge_shape_count = 0;
         if self.badge_shapes.len() > self.badge_shape_capacity {
             self.badge_shape_capacity =
                 next_shape_capacity(self.badge_shape_capacity, self.badge_shapes.len());
@@ -1007,11 +1476,41 @@ impl LiquidGlassRenderer {
                 &self.badge_shape_buffer,
             );
         }
-        if !self.badge_shapes.is_empty() {
+    }
+
+    fn refresh_active_badge_shapes(&mut self, queue: &wgpu::Queue, scroll_x: f32) {
+        let clip = self
+            .badge_shapes
+            .iter()
+            .find(|shape| shape.is_clip_only())
+            .copied()
+            .unwrap_or_else(|| {
+                GlassShape::clip_rounded_rect(
+                    [
+                        self.texture_size.0 as f32 * 0.5,
+                        self.texture_size.1 as f32 * 0.5,
+                    ],
+                    [self.texture_size.0 as f32, self.texture_size.1 as f32],
+                    0.0,
+                )
+            });
+        self.badge_shape_scratch.clear();
+        self.badge_shape_scratch.extend(
+            self.badge_shapes
+                .iter()
+                .copied()
+                .filter(|shape| overlay_shape_may_affect_clip(*shape, scroll_x, clip)),
+        );
+        if self.badge_shape_scratch == self.active_badge_shapes {
+            return;
+        }
+        std::mem::swap(&mut self.badge_shape_scratch, &mut self.active_badge_shapes);
+        self.badge_shape_count = self.active_badge_shapes.len() as u32;
+        if !self.active_badge_shapes.is_empty() {
             queue.write_buffer(
                 &self.badge_shape_buffer,
                 0,
-                bytemuck::cast_slice(&self.badge_shapes),
+                bytemuck::cast_slice(&self.active_badge_shapes),
             );
         }
     }
@@ -1057,9 +1556,16 @@ impl LiquidGlassRenderer {
         }
     }
 
-    pub fn notify_window_moved(&mut self) {
-        self.capture.on_window_moved();
+    pub fn notify_window_moved(&mut self, x: i32, y: i32, scale_factor: f64) {
+        self.capture.on_window_moved(x, y, scale_factor);
         self.last_capture_at = None;
+    }
+
+    pub fn set_capture_active(&mut self, active: bool) {
+        self.capture.set_active(active);
+        if active {
+            self.last_capture_at = None;
+        }
     }
 
     pub fn handle_debug_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -1100,6 +1606,8 @@ impl LiquidGlassRenderer {
             _ => return false,
         }
 
+        self.blur_dirty = true;
+
         eprintln!(
             "liquid glass params: enabled={} thickness={:.1} ri={:.2} chroma={:.3} blur={:.1} saturation={:.2} debug_flags={:#010b}",
             self.params.enabled,
@@ -1114,16 +1622,38 @@ impl LiquidGlassRenderer {
     }
 
     fn should_capture(&self, defer_backdrop_capture: bool) -> bool {
-        if defer_backdrop_capture {
-            return self.last_capture_at.is_none();
+        #[cfg(target_os = "macos")]
+        {
+            // The macOS SCStream is continuous and non-blocking. Freezing its
+            // consumer during a drag makes video behind the launcher visibly
+            // jump when the gesture ends, so always take the newest frame.
+            let _ = defer_backdrop_capture;
+            true
         }
-        true
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if defer_backdrop_capture {
+                self.last_capture_at.is_none()
+            } else {
+                true
+            }
+        }
     }
 
     fn geometry_key(&self, scroll_x: f32) -> GeometryKey {
         let (width, height) = self.texture_size;
+        let scroll_x = if self
+            .active_base_shapes
+            .iter()
+            .any(|shape| shape.is_scrolling())
+        {
+            (scroll_x * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
         GeometryKey {
-            scroll_x: (scroll_x * 10.0).round() / 10.0,
+            scroll_x,
             thickness: self.params.thickness,
             refractive_index: self.params.refractive_index,
             blend: self.params.blend,
@@ -1142,7 +1672,15 @@ impl LiquidGlassRenderer {
         if self.debug.disable_blur {
             return 0;
         }
-        let radius = self.params.blur_radius;
+        let region = self.backdrop_mapping.region;
+        let (texture_width, texture_height) = self.backdrop_mapping.texture_size;
+        let capture_scale = (texture_width as f32 / region.width.max(1) as f32)
+            .min(texture_height as f32 / region.height.max(1) as f32)
+            .clamp(0.25, 1.0);
+        // A lower-resolution texture covers more physical pixels per texel.
+        // Scale the requested radius before selecting pyramid depth so a 2x
+        // Retina downsample does not accidentally double the visible blur.
+        let radius = self.params.blur_radius * capture_scale;
         if radius < 6.0 {
             1
         } else if radius < 16.0 {
@@ -1155,20 +1693,25 @@ impl LiquidGlassRenderer {
 
 fn log_capture_status(status: &CaptureStatus) {
     match status {
-        CaptureStatus::Ready => eprintln!("liquid glass capture: Windows.Graphics.Capture ready"),
+        CaptureStatus::Ready => eprintln!("liquid glass capture: platform backdrop ready"),
         CaptureStatus::Fallback { reason } => eprintln!("liquid glass capture fallback: {reason}"),
     }
+}
+
+fn should_refresh_blur(dirty: bool, captured: bool) -> bool {
+    dirty || captured
 }
 
 fn uniforms_from_params(
     params: &LiquidGlassParams,
     debug: DebugOptions,
-    width: u32,
-    height: u32,
+    viewport: (u32, u32),
     scroll_x: f32,
     shape_count: u32,
     time: f32,
+    backdrop: BackdropMapping,
 ) -> GlassUniforms {
+    let (width, height) = viewport;
     GlassUniforms {
         viewport: [width as f32, height as f32],
         scroll_x,
@@ -1195,6 +1738,8 @@ fn uniforms_from_params(
         debug_flags: debug.flags(),
         time,
         _pad: [0.0; 3],
+        backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
+        backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }
 }
 
@@ -1232,7 +1777,23 @@ fn premultiplied_blend() -> wgpu::BlendState {
 
 #[cfg(test)]
 mod shape_capacity_tests {
-    use super::{next_shape_capacity, GlassUniforms};
+    use super::{
+        base_shape_may_affect_frame, capture_region_for_shapes, next_shape_capacity,
+        overlay_shape_may_affect_clip, should_refresh_blur, CaptureRegion, GlassShape,
+        GlassUniforms,
+    };
+
+    fn test_scene_sdf(shapes: &[GlassShape], scroll_x: f32, point: [f32; 2], blend: f32) -> f32 {
+        shapes.iter().fold(1.0e6, |distance, shape| {
+            let mut resolved = *shape;
+            if resolved.is_scrolling() {
+                resolved.center[0] += scroll_x;
+            }
+            let shape_distance = super::rounded_rect_sdf(point, resolved);
+            let e = (blend - (distance - shape_distance).abs()).max(0.0);
+            distance.min(shape_distance) - e * e * 0.25 / blend
+        })
+    }
 
     #[test]
     fn shape_capacity_grows_only_past_current_capacity() {
@@ -1243,7 +1804,113 @@ mod shape_capacity_tests {
 
     #[test]
     fn glass_uniform_layout_matches_wgsl() {
-        assert_eq!(std::mem::size_of::<GlassUniforms>(), 96);
+        assert_eq!(std::mem::size_of::<GlassUniforms>(), 112);
         assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
+    }
+
+    #[test]
+    fn backdrop_blur_is_reused_until_capture_changes() {
+        assert!(should_refresh_blur(true, false));
+        assert!(should_refresh_blur(false, true));
+        assert!(!should_refresh_blur(false, false));
+    }
+
+    #[test]
+    fn base_shape_culling_keeps_only_shapes_with_smooth_union_influence() {
+        let frame = GlassShape::fixed_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0);
+        let just_outside = GlassShape::rounded_rect([850.0, 350.0], [100.0, 100.0], 30.0);
+        let far_page = GlassShape::rounded_rect([1_200.0, 350.0], [100.0, 100.0], 30.0);
+        let swallowed = GlassShape::rounded_rect([500.0, 350.0], [100.0, 100.0], 30.0);
+        let fixed_control = GlassShape::control_rounded_rect([1_200.0, 700.0], [100.0, 40.0], 20.0);
+
+        assert!(base_shape_may_affect_frame(just_outside, 0.0, frame, 26.0));
+        assert!(!base_shape_may_affect_frame(far_page, 0.0, frame, 26.0));
+        assert!(!base_shape_may_affect_frame(swallowed, 0.0, frame, 26.0));
+        assert!(base_shape_may_affect_frame(fixed_control, 0.0, frame, 26.0));
+    }
+
+    #[test]
+    fn edit_badge_culling_keeps_clip_and_only_badges_reaching_current_page() {
+        let clip = GlassShape::clip_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0);
+        let current_page =
+            GlassShape::animated_badge([280.0, 250.0], [30.0, 30.0], 14.0, [340.0, 310.0], 0.0);
+        let next_page =
+            GlassShape::animated_badge([1_080.0, 250.0], [30.0, 30.0], 14.0, [1_140.0, 310.0], 0.0);
+
+        assert!(overlay_shape_may_affect_clip(clip, 0.0, clip));
+        assert!(overlay_shape_may_affect_clip(current_page, 0.0, clip));
+        assert!(!overlay_shape_may_affect_clip(next_page, 0.0, clip));
+        assert!(overlay_shape_may_affect_clip(next_page, -800.0, clip));
+    }
+
+    #[test]
+    fn base_shape_culling_preserves_retina_grid_sdf_during_scroll() {
+        let layout = crate::grid::GridLayout::for_app_count(177)
+            .with_scale_factor(2.0)
+            .centered(2_560.0);
+        let (center_x, center_y, width, height) = layout.frame_panel_rect(2_560.0);
+        let frame = GlassShape::fixed_rounded_rect(
+            [center_x, center_y],
+            [width, height],
+            layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
+        );
+        let mut shapes = vec![frame];
+        for index in 0..177 {
+            let (x, y) = layout.tile_position(2_560.0, index);
+            let halo = layout.tile_size + layout.scaled(18.0);
+            shapes.push(GlassShape::rounded_rect(
+                [x + layout.tile_size * 0.5, y + layout.tile_size * 0.5],
+                [halo, halo],
+                layout.scaled(28.0),
+            ));
+        }
+
+        let page = layout.page_width(2_560.0);
+        for scroll_x in [0.0, -page * 0.25, -page * 0.5, -page * 0.75, -page] {
+            let active: Vec<_> = shapes
+                .iter()
+                .copied()
+                .filter(|shape| base_shape_may_affect_frame(*shape, scroll_x, frame, 26.0))
+                .collect();
+            for y in (0..1_602).step_by(24) {
+                for x in (0..2_560).step_by(24) {
+                    let point = [x as f32 + 0.5, y as f32 + 0.5];
+                    if super::rounded_rect_sdf(point, frame) >= 0.0 {
+                        continue;
+                    }
+                    let full = test_scene_sdf(&shapes, scroll_x, point, 26.0);
+                    let culled = test_scene_sdf(&active, scroll_x, point, 26.0);
+                    assert!(
+                        (full - culled).abs() < 0.001,
+                        "SDF changed at scroll={scroll_x} point={point:?}: full={full} culled={culled} active={}",
+                        active.len()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capture_region_unions_visible_glass_and_ignores_clipped_offscreen_shapes() {
+        let base = [
+            GlassShape::fixed_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0),
+            GlassShape::rounded_rect([1_200.0, 400.0], [100.0, 100.0], 30.0),
+        ];
+        let controls = [GlassShape::control_rounded_rect(
+            [500.0, 700.0],
+            [100.0, 40.0],
+            20.0,
+        )];
+        let groups: [&[GlassShape]; 2] = [&base, &controls];
+
+        assert_eq!(
+            capture_region_for_shapes(1_000, 800, 0.0, 20.0, &groups),
+            CaptureRegion {
+                x: 180,
+                y: 130,
+                width: 640,
+                height: 610,
+            }
+        );
     }
 }

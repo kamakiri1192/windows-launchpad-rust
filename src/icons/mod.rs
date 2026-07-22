@@ -16,12 +16,15 @@
 
 #![allow(dead_code)]
 
+#[cfg(windows)]
 pub mod extract;
+#[cfg(windows)]
 pub mod loader;
 pub mod normalize;
 
 #[allow(unused_imports)] // legacy pipeline surface; kept for reference/tests
-pub use loader::{load_all_icons, AppEntry, LoadedIcons};
+#[cfg(windows)]
+pub use loader::{load_all_icons, LoadedIcons};
 #[allow(unused_imports)] // public API surface for icon decoding callers
 pub use normalize::{normalize, DecodedIcon, TARGET};
 
@@ -30,6 +33,14 @@ pub use normalize::{normalize, DecodedIcon, TARGET};
 /// definition lives in `ui_model`. This re-export keeps historical
 /// `crate::icons::UvRect` references working during the Phase 6.5 migration.
 pub use crate::ui_model::geometry::UvRect;
+
+/// Legacy renderer-neutral launcher entry retained by the grid adapter tests.
+#[derive(Debug, Clone)]
+pub struct AppEntry {
+    pub name: String,
+    pub uv: Option<UvRect>,
+    pub link_path: std::path::PathBuf,
+}
 
 /// A packed icon atlas: one wide RGBA8 bitmap plus the UV rect of each icon.
 #[derive(Debug)]

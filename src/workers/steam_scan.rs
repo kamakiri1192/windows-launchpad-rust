@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
-use crate::icons::extract;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SteamManifest {
@@ -20,6 +19,12 @@ pub fn scan_steam_apps() -> Vec<SnapshotEntry> {
     let Some(steam_root) = find_steam_root() else {
         return Vec::new();
     };
+
+    scan_steam_apps_at(&steam_root)
+}
+
+fn scan_steam_apps_at(steam_root: &Path) -> Vec<SnapshotEntry> {
+    let steam_root = steam_root.to_path_buf();
 
     let mut libraries = vec![steam_root.clone()];
     let library_file = steam_root.join("steamapps").join("libraryfolders.vdf");
@@ -56,9 +61,9 @@ pub fn scan_steam_apps() -> Vec<SnapshotEntry> {
             }
 
             let icon_path = find_steam_icon(&steam_root, &library, &manifest)
-                .unwrap_or_else(|| steam_root.join("steam.exe"));
-            let manifest_mtime = extract::file_mtime(&manifest_path);
-            let icon_mtime = extract::file_mtime(&icon_path);
+                .unwrap_or_else(|| fallback_steam_icon(&steam_root));
+            let manifest_mtime = file_mtime(&manifest_path);
+            let icon_mtime = file_mtime(&icon_path);
             entries.push(SnapshotEntry {
                 app_id: AppId::from_normalized(format!("steam:{}", manifest.app_id)),
                 name: manifest.name,
@@ -74,6 +79,25 @@ pub fn scan_steam_apps() -> Vec<SnapshotEntry> {
     entries
 }
 
+#[cfg(windows)]
+fn fallback_steam_icon(steam_root: &Path) -> PathBuf {
+    steam_root.join("steam.exe")
+}
+
+#[cfg(target_os = "macos")]
+fn fallback_steam_icon(_steam_root: &Path) -> PathBuf {
+    PathBuf::from("/Applications/Steam.app")
+}
+
+fn file_mtime(path: &Path) -> u64 {
+    path.metadata()
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
 fn find_steam_root() -> Option<PathBuf> {
     registry_steam_root()
         .into_iter()
@@ -81,6 +105,7 @@ fn find_steam_root() -> Option<PathBuf> {
         .find(|path| path.join("steamapps").is_dir())
 }
 
+#[cfg(windows)]
 fn registry_steam_root() -> Option<PathBuf> {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
@@ -104,6 +129,12 @@ fn registry_steam_root() -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "macos")]
+fn registry_steam_root() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(windows)]
 fn default_steam_roots() -> impl Iterator<Item = PathBuf> {
     let mut roots = Vec::new();
     if let Some(path) = std::env::var_os("ProgramFiles(x86)") {
@@ -115,6 +146,14 @@ fn default_steam_roots() -> impl Iterator<Item = PathBuf> {
     roots.into_iter()
 }
 
+#[cfg(target_os = "macos")]
+fn default_steam_roots() -> impl Iterator<Item = PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Library/Application Support/Steam"))
+        .into_iter()
+}
+
 fn parse_library_paths(text: &str) -> Vec<PathBuf> {
     let tokens = quoted_tokens(text);
     tokens
@@ -124,7 +163,7 @@ fn parse_library_paths(text: &str) -> Vec<PathBuf> {
             let value = &pair[1];
             let is_path_field =
                 key.eq_ignore_ascii_case("path") || key.chars().all(|ch| ch.is_ascii_digit());
-            (is_path_field && looks_like_absolute_windows_path(value)).then(|| PathBuf::from(value))
+            (is_path_field && looks_like_absolute_library_path(value)).then(|| PathBuf::from(value))
         })
         .collect()
 }
@@ -178,21 +217,32 @@ fn quoted_tokens(text: &str) -> Vec<String> {
 }
 
 fn find_steam_icon(steam_root: &Path, library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
+    #[cfg(windows)]
     if let Some(executable) = find_matching_root_executable(library, manifest) {
         return Some(executable);
     }
 
-    let display_icon = find_uninstall_display_icon(&manifest.app_id);
-    if display_icon
-        .as_deref()
-        .is_some_and(icon_source_is_high_resolution)
+    #[cfg(windows)]
     {
-        return display_icon;
+        let display_icon = find_uninstall_display_icon(&manifest.app_id);
+        if display_icon
+            .as_deref()
+            .is_some_and(icon_source_is_high_resolution)
+        {
+            return display_icon;
+        }
+
+        display_icon.or_else(|| find_small_client_icon(steam_root, &manifest.app_id))
     }
 
-    display_icon.or_else(|| find_small_client_icon(steam_root, &manifest.app_id))
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (library, manifest);
+        find_small_client_icon(steam_root, &manifest.app_id)
+    }
 }
 
+#[cfg(windows)]
 fn find_uninstall_display_icon(app_id: &str) -> Option<PathBuf> {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
@@ -216,6 +266,7 @@ fn find_uninstall_display_icon(app_id: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(windows)]
 fn read_registry_string(
     hive: windows::Win32::System::Registry::HKEY,
     key: &str,
@@ -265,6 +316,7 @@ fn read_registry_string(
     Some(String::from_utf16_lossy(&buffer[..len]))
 }
 
+#[cfg(windows)]
 fn parse_display_icon_path(value: &str) -> PathBuf {
     let value = value.trim();
     let path = if let Some(quoted) = value.strip_prefix('"') {
@@ -281,6 +333,7 @@ fn parse_display_icon_path(value: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+#[cfg(windows)]
 fn icon_source_is_high_resolution(path: &Path) -> bool {
     let extension = path
         .extension()
@@ -295,6 +348,7 @@ fn icon_source_is_high_resolution(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
 fn find_matching_root_executable(library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
     if manifest.install_dir.is_empty() {
         return None;
@@ -331,6 +385,7 @@ fn find_matching_root_executable(library: &Path, manifest: &SteamManifest) -> Op
     candidates.into_iter().next()
 }
 
+#[cfg(windows)]
 fn normalized_executable_name(value: &str) -> String {
     value
         .chars()
@@ -388,7 +443,10 @@ fn looks_like_content_hash(path: &Path) -> bool {
     stem.len() >= 16 && stem.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn looks_like_absolute_windows_path(value: &str) -> bool {
+fn looks_like_absolute_library_path(value: &str) -> bool {
+    if Path::new(value).is_absolute() {
+        return true;
+    }
     let bytes = value.as_bytes();
     bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
@@ -407,6 +465,7 @@ fn dedupe_paths(paths: &mut Vec<PathBuf>) {
     });
 }
 
+#[cfg(windows)]
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -414,6 +473,17 @@ fn wide_null(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "launchpad-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 
     #[test]
     fn parses_modern_and_legacy_library_paths() {
@@ -430,6 +500,16 @@ mod tests {
                 PathBuf::from(r"C:\Program Files (x86)\Steam"),
                 PathBuf::from(r"D:\SteamLibrary")
             ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parses_macos_library_path() {
+        let text = r#""libraryfolders" { "0" { "path" "/Volumes/Games/SteamLibrary" } }"#;
+        assert_eq!(
+            parse_library_paths(text),
+            vec![PathBuf::from("/Volumes/Games/SteamLibrary")]
         );
     }
 
@@ -453,6 +533,27 @@ mod tests {
     }
 
     #[test]
+    fn scans_installed_game_manifest_into_launchable_entry() {
+        let root = temporary_directory("steam-library");
+        let steamapps = root.join("steamapps");
+        std::fs::create_dir_all(&steamapps).unwrap();
+        std::fs::write(
+            steamapps.join("appmanifest_620.acf"),
+            r#""AppState" { "appid" "620" "name" "Portal 2" "installdir" "Portal 2" }"#,
+        )
+        .unwrap();
+
+        let entries = scan_steam_apps_at(&root);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].app_id.as_str(), "steam:620");
+        assert_eq!(entries[0].name, "Portal 2");
+        assert_eq!(entries[0].link_path, "steam://rungameid/620");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn parses_quoted_and_indexed_display_icon_paths() {
         assert_eq!(
             parse_display_icon_path(r#""C:\Steam\game.ico",0"#),
@@ -464,6 +565,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn normalizes_names_for_strong_executable_matching() {
         assert_eq!(normalized_executable_name("Desktop Mate"), "desktopmate");

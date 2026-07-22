@@ -7,8 +7,8 @@
 //! or *invalid* (mtime/icon-location/schema/extraction-version changed) get
 //! re-extracted by the worker.
 //!
-//! Storage location: `%LOCALAPPDATA%\Launchpad\cache.sqlite3`. Falls back to a
-//! `launchpad-windows/cache.sqlite3` next to the exe if `LOCALAPPDATA` is unset.
+//! Storage location: `%LOCALAPPDATA%\Launchpad\cache.sqlite3` on Windows and
+//! `~/Library/Application Support/Launchpad/cache.sqlite3` on macOS.
 //!
 //! Resilience:
 //!   - If the DB file is corrupt / the schema can't be opened, we delete it and
@@ -44,6 +44,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// v3: replaces Steam's 32px client icons with high-resolution local sources.
 /// v4: removes wide Steam library logos and extracts square executable icons
 /// at 256px before normalizing them into the launcher atlas.
+/// v5: resolves macOS app icons through Launch Services so asset catalogs and
+/// modern ICNS encodings render consistently with Finder.
+#[cfg(target_os = "macos")]
+pub const EXTRACTION_VERSION: u32 = 5;
+#[cfg(not(target_os = "macos"))]
 pub const EXTRACTION_VERSION: u32 = 4;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
@@ -217,6 +222,22 @@ impl IconCache {
             ],
         )?;
         tx.commit()
+    }
+
+    /// Update display metadata without re-encoding or replacing icon pixels.
+    /// OS localization and bundle marketing names can change independently of
+    /// an app binary's icon invalidation fields.
+    pub fn update_display_name(
+        &self,
+        app_id: &AppId,
+        display_name: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE icons SET display_name = ?2 WHERE app_id = ?1 AND display_name <> ?2",
+            params![app_id.as_ref(), display_name],
+        )?;
+        Ok(changed > 0)
     }
 
     /// Mark an id as gone (soft delete: keeps the row so a re-add reuses the
@@ -554,16 +575,10 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Resolve `%LOCALAPPDATA%\Launchpad\cache.sqlite3`, or a fallback next to the
-/// current exe. Kept pub(crate) so docs/tests can reference the same path.
+/// Resolve the platform-native persistent database path. Kept pub(crate) so
+/// docs/tests can reference the same path.
 pub(crate) fn default_db_path() -> PathBuf {
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local).join("Launchpad").join("cache.sqlite3");
-    }
-    let mut p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    p.pop();
-    p.push("launchpad-cache.sqlite3");
-    p
+    crate::platform::paths::cache_db_path()
 }
 
 #[cfg(test)]
@@ -699,6 +714,19 @@ mod tests {
     }
 
     #[test]
+    fn display_name_updates_without_replacing_icon_pixels() {
+        let c = cache();
+        c.put(&entry("app1", 10)).unwrap();
+        let app = id("app1");
+
+        assert!(c.update_display_name(&app, "localized name").unwrap());
+        let got = c.get_if_valid(&probe(&app, 10)).unwrap().unwrap();
+        assert_eq!(got.display_name, "localized name");
+        assert_eq!(got.image.rgba, fake_icon([1, 2, 3, 255]).rgba);
+        assert!(!c.update_display_name(&app, "localized name").unwrap());
+    }
+
+    #[test]
     fn forget_removes_row() {
         let c = cache();
         c.put(&entry("app1", 10)).unwrap();
@@ -746,10 +774,8 @@ mod tests {
     }
 
     #[test]
-    fn default_db_path_under_localappdata_when_set() {
-        // In CI / test envs LOCALAPPDATA is usually set; just assert it's sane.
-        let p = default_db_path();
-        assert!(p.to_string_lossy().ends_with("cache.sqlite3"));
+    fn default_db_path_uses_platform_cache_path() {
+        assert_eq!(default_db_path(), crate::platform::paths::cache_db_path());
     }
 
     #[test]

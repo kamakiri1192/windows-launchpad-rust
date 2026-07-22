@@ -80,3 +80,83 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.asset_path }}
+
+  macos-application:
+    name: Build and attach macOS application
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      TARGET: aarch64-apple-darwin
+      BIN_NAME: launchpad-windows
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target "$TARGET"
+          rustup default "$RUST_VERSION"
+
+      - name: Cache Cargo registry and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-release-${{ env.TARGET }}
+
+      - name: Build release application
+        run: cargo build --release --locked --target "$TARGET" --bin "$BIN_NAME"
+
+      - name: Package application bundle
+        id: package
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          safe_tag="$(printf '%s' "$RELEASE_TAG" | tr '/:*?"<>|' '-')"
+          asset_name="$BIN_NAME-$safe_tag-macos-arm64"
+          app_dir="dist/$asset_name/Launchpad.app"
+          contents="$app_dir/Contents"
+          mkdir -p "$contents/MacOS" "$contents/Frameworks" "$contents/Resources"
+          cp "target/$TARGET/release/$BIN_NAME" "$contents/MacOS/$BIN_NAME"
+          cp assets/macos/Info.plist "$contents/Info.plist"
+
+          version="${RELEASE_TAG#v}"
+          if [[ "$version" =~ ^[0-9]+([.][0-9]+){1,2}([+-][0-9A-Za-z.-]+)?$ ]]; then
+            plutil -replace CFBundleShortVersionString -string "$version" "$contents/Info.plist"
+          fi
+          plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" "$contents/Info.plist"
+
+          cat > "$contents/Resources/BUILD_INFO.txt" <<EOF
+          Repository: $GITHUB_REPOSITORY
+          Workflow: $GITHUB_WORKFLOW
+          Release: $RELEASE_TAG
+          Commit: $GITHUB_SHA
+          Target: $TARGET
+          Built at UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Signing: ad-hoc
+
+          If Gatekeeper retains the downloaded archive quarantine, run:
+            xattr -dr com.apple.quarantine Launchpad.app
+          EOF
+
+          xcrun swift-stdlib-tool \
+            --copy \
+            --scan-executable "$contents/MacOS/$BIN_NAME" \
+            --destination "$contents/Frameworks" \
+            --platform macosx \
+            --strip-bitcode
+
+          find "$contents/Frameworks" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
+          codesign --force --deep --sign - "$app_dir"
+          codesign --verify --deep --strict "$app_dir"
+
+          archive="dist/$asset_name.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$archive"
+          test -s "$archive"
+          echo "asset_path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Attach application to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.asset_path }}

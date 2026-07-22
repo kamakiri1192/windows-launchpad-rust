@@ -2,9 +2,9 @@
 //!
 //! Release builds use `windows_subsystem = "windows"`, so there is no console
 //! and `eprintln!` goes nowhere. This writes timestamped lines to
-//! `%LOCALAPPDATA%\Launchpad\debug.log` (or a fallback next to the exe), which
-//! survives release and is easy to copy-paste back when debugging the hotkey
-//! hook / tray / lifecycle.
+//! `%LOCALAPPDATA%\Launchpad\debug.log` on Windows or
+//! `~/Library/Logs/Launchpad/debug.log` on macOS, which survives release and is
+//! easy to copy-paste back when debugging the hotkey hook / tray / lifecycle.
 //!
 //! The log is overwritten on each launch (truncate, not append) so it doesn't
 //! grow unbounded — a single session's worth is enough to diagnose a bug.
@@ -22,16 +22,9 @@ use std::sync::OnceLock;
 static LOG_FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
-/// Resolve the log path: `%LOCALAPPDATA%\Launchpad\debug.log`, or a fallback
-/// next to the current exe.
+/// Resolve the platform-native diagnostic log path.
 fn log_path() -> PathBuf {
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local).join("Launchpad").join("debug.log");
-    }
-    let mut p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    p.pop();
-    p.push("launchpad-debug.log");
-    p
+    crate::platform::paths::debug_log_path()
 }
 
 /// Open (or reset) the log file. Called once at startup. Truncates any prior

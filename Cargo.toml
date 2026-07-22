@@ -19,10 +19,12 @@ glam = "0.29"
 env_logger = "0.11"
 cosmic-text = "0.19"
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "ico"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wgpu-profiler = { version = "0.27", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
 windows = { version = "0.62", features = [
     "Foundation",
     "Graphics_Capture",
@@ -52,7 +54,51 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-[build-dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.7.0"
+icns = "0.3.1"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSWorkspace",
+    "objc2-core-graphics",
+] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGImage"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSBundle",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSLocale",
+    "NSObject",
+    "NSString",
+    "std",
+] }
+plist = "1.7.0"
+rusqlite = "0.32"
+# 1.3.0's Swift bridge links macOS 26-only screenshot classes when built with
+# the Xcode 26 SDK, which prevents the binary from loading on macOS 14/15.
+screencapturekit = { version = "=1.2.0", features = ["macos_14_0"] }
+objc2-io-surface = { version = "0.3.2", default-features = false, features = ["IOSurfaceRef", "objc2"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "MTLAllocation",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+    "objc2-io-surface",
+] }
+tray-icon = { version = "0.21.2", default-features = false }
+
+[target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
 # Release: keep optimized rendering without LTO; this avoids rustc/MSVC

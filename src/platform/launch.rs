@@ -54,9 +54,18 @@ fn open_via_explorer(path: &Path) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn open_shortcut(path: &Path) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Launch Services open failed: {error}"))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn open_shortcut(_path: &Path) -> Result<(), String> {
-    Err("launching shortcuts is only supported on Windows".to_string())
+    Err("launching applications is unsupported on this platform".to_string())
 }
 
 #[cfg(windows)]

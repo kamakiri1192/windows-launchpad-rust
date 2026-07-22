@@ -1,8 +1,9 @@
 # Icon cache
 
 The launcher caches normalized icon bitmaps on disk so that the **second and
-later launches** never block first paint on Shell/GDI extraction. This document
-covers the storage location, schema, validity rules, and recovery behavior.
+later launches** never block first paint on platform icon extraction. This
+document covers the storage location, schema, validity rules, and recovery
+behavior.
 
 See also: [STARTUP_PERFORMANCE.md](STARTUP_PERFORMANCE.md) for how the cache
 fits into the launch pipeline, and [APP_REFRESH.md](APP_REFRESH.md) for how
@@ -10,10 +11,11 @@ cache invalidation interacts with live Start Menu changes.
 
 ## Storage location
 
-The cache is a single SQLite file at:
+The cache is a single SQLite file at the platform data directory:
 
 ```text
-%LOCALAPPDATA%\Launchpad\cache.sqlite3
+Windows: %LOCALAPPDATA%\Launchpad\cache.sqlite3
+macOS:   ~/Library/Application Support/Launchpad/cache.sqlite3
 ```
 
 If `LOCALAPPDATA` is unset (unusual on a normal Windows session), the launcher
@@ -74,11 +76,14 @@ Two independent version numbers guard against stale data:
 - **`SCHEMA_VERSION`** (`icon_cache::SCHEMA_VERSION`, currently `1`) — the
   on-disk table layout. A mismatch on open wipes the `icons` table so every
   entry is re-extracted against the new schema.
-- **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `1`) —
+- **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `4`
+  on Windows and `5` on macOS) —
   the *extraction algorithm itself* (normalization target size, alpha handling,
   fallback strategy). Stored per-row in `extraction_version`; an entry whose
   stored version differs from the current one is treated as invalid even if the
-  `.lnk` is byte-identical.
+  source is byte-identical. macOS version 5 resolves icons through Launch
+  Services, covering asset-catalog-only apps and ICNS encodings that the
+  portable decoder cannot read.
 
 Bump either constant when you change the corresponding thing; no manual
 migration code is needed.

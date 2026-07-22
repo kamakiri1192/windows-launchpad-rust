@@ -110,6 +110,58 @@ impl GlassShape {
             motion: [0.0; 4],
         }
     }
+
+    pub(crate) fn is_frame(self) -> bool {
+        self.shape_type == SHAPE_FIXED
+    }
+
+    pub(crate) fn is_clip_only(self) -> bool {
+        self.shape_type == SHAPE_CLIP_ONLY
+    }
+
+    pub(crate) fn is_scrolling(self) -> bool {
+        matches!(
+            self.shape_type,
+            SHAPE_SCROLLING | SHAPE_ANIMATED_BADGE | SHAPE_ANIMATED_SCROLLING
+        )
+    }
+
+    /// Conservative screen-space AABB, including every point reached by the
+    /// edit-mode wiggle. The capture planner uses this only to avoid omitting
+    /// backdrop samples; the actual rounded outline remains GPU-defined.
+    pub(crate) fn screen_bounds(self, scroll_x: f32) -> [f32; 4] {
+        let scroll = if self.is_scrolling() { scroll_x } else { 0.0 };
+        let half = [self.size[0] * 0.5, self.size[1] * 0.5];
+
+        if self.shape_type == SHAPE_ANIMATED_BADGE {
+            let dx = self.center[0] - self.motion[0];
+            let dy = self.center[1] - self.motion[1];
+            let orbit = (dx * dx + dy * dy).sqrt() + 2.0;
+            return [
+                self.motion[0] + scroll - orbit - half[0],
+                self.motion[1] - orbit - half[1],
+                self.motion[0] + scroll + orbit + half[0],
+                self.motion[1] + orbit + half[1],
+            ];
+        }
+
+        let extent = if matches!(
+            self.shape_type,
+            SHAPE_ANIMATED_SCROLLING | SHAPE_ANIMATED_CONTROL
+        ) {
+            // A circle around the rectangle encloses every ±0.06 rad rotation.
+            let diagonal = (half[0] * half[0] + half[1] * half[1]).sqrt() + 2.0;
+            [diagonal, diagonal]
+        } else {
+            half
+        };
+        [
+            self.center[0] + scroll - extent[0],
+            self.center[1] - extent[1],
+            self.center[0] + scroll + extent[0],
+            self.center[1] + extent[1],
+        ]
+    }
 }
 
 /// Build the base glass shapes (fixed page frame + scrolling tile halos).
@@ -171,5 +223,13 @@ mod tests {
             GlassShape::animated_control_rounded_rect([12.0, 34.0], [80.0, 80.0], 19.0, 1.25);
         assert_eq!(shape.shape_type, 6);
         assert_eq!(shape.motion, [12.0, 34.0, 1.25, 1.0]);
+    }
+
+    #[test]
+    fn scrolling_bounds_apply_scroll_while_fixed_bounds_do_not() {
+        let scrolling = GlassShape::rounded_rect([50.0, 60.0], [20.0, 30.0], 5.0);
+        let fixed = GlassShape::fixed_rounded_rect([50.0, 60.0], [20.0, 30.0], 5.0);
+        assert_eq!(scrolling.screen_bounds(-15.0), [25.0, 45.0, 45.0, 75.0]);
+        assert_eq!(fixed.screen_bounds(-15.0), [40.0, 45.0, 60.0, 75.0]);
     }
 }
