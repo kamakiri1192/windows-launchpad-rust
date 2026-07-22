@@ -13,7 +13,15 @@ mode="${1:-qa}"
 runs="${RUNS:-3}"
 duration="${DURATION_SECONDS:-20}"
 warmup="${WARMUP_SECONDS:-8}"
-scenario_list="${SCENARIOS:-qa/folder_interactions.json qa/folder_creation.json}"
+custom_scenarios=0
+if [[ -n "${SCENARIOS+x}" ]]; then
+  custom_scenarios=1
+  scenario_list="$SCENARIOS"
+elif [[ "$mode" == "folder-scroll" ]]; then
+  scenario_list="qa/folder_page_scroll.json"
+else
+  scenario_list="qa/folder_interactions.json qa/folder_creation.json"
+fi
 if [[ -n "${ANIMATED_BACKDROP:-}" ]]; then
   animated_backdrop="$ANIMATED_BACKDROP"
 elif [[ "$mode" == "live" || "$mode" == "gpu" || "$mode" == "scroll" || "$mode" == "scroll-gpu" || "$mode" == "edit" || "$mode" == "edit-gpu" ]]; then
@@ -56,7 +64,7 @@ output_dir="$(cd "$output_dir" && pwd)"
 } > "$output_dir/environment.txt"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  if [[ "$mode" == "qa" || "$mode" == "gpu" || "$mode" == "scroll-gpu" || "$mode" == "edit-gpu" ]]; then
+  if [[ "$mode" == "qa" || "$mode" == "folder-scroll" || "$mode" == "gpu" || "$mode" == "scroll-gpu" || "$mode" == "edit-gpu" ]]; then
     cargo build --release --locked --features gpu-profile
   else
     cargo build --release --locked
@@ -66,7 +74,7 @@ fi
 binary="$repo_root/target/release/launchpad-windows"
 
 case "$mode" in
-  qa)
+  qa|folder-scroll)
     qa_output="$output_dir/qa-sequences"
     read -r -a scenarios <<< "$scenario_list"
     for scenario in "${scenarios[@]}"; do
@@ -82,17 +90,22 @@ destination.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", en
 PY
       for run in $(seq 1 "$runs"); do
         mkdir -p "$output_dir/home-$scenario_key-$run"
-        HOME="$output_dir/home-$scenario_key-$run" \
-        LAUNCHPAD_DEBUG=1 \
-        LAUNCHPAD_QA_HEADLESS=1 \
-        LAUNCHPAD_QA_SCENARIO="$scenario_copy" \
-        LAUNCHPAD_GPU_PROFILE="$output_dir/qa-$scenario_key-$run.json" \
-        WGPU_BACKEND=metal \
-        RUST_LOG=warn \
+        /usr/bin/time -p env \
+          HOME="$output_dir/home-$scenario_key-$run" \
+          LAUNCHPAD_DEBUG=1 \
+          LAUNCHPAD_QA_HEADLESS=1 \
+          LAUNCHPAD_QA_SCENARIO="$scenario_copy" \
+          LAUNCHPAD_GPU_PROFILE="$output_dir/qa-$scenario_key-$run.json" \
+          WGPU_BACKEND=metal \
+          RUST_LOG=warn \
           "$binary" > "$output_dir/qa-$scenario_key-$run.log" 2>&1
       done
     done
-    python3 scripts/verify_qa_artifact.py "$qa_output"
+    if [[ "$mode" == "folder-scroll" || "$custom_scenarios" == "1" ]]; then
+      python3 scripts/verify_qa_artifact.py "$qa_output" --allow-partial
+    else
+      python3 scripts/verify_qa_artifact.py "$qa_output"
+    fi
     ;;
   live|gpu|scroll|scroll-gpu|edit|edit-gpu)
     if pgrep -x launchpad-windows >/dev/null; then
@@ -191,7 +204,7 @@ PY
     trap - EXIT INT TERM
     ;;
   *)
-    echo "usage: $0 [qa|live|gpu|scroll|scroll-gpu|edit|edit-gpu]" >&2
+    echo "usage: $0 [qa|folder-scroll|live|gpu|scroll|scroll-gpu|edit|edit-gpu]" >&2
     exit 2
     ;;
 esac

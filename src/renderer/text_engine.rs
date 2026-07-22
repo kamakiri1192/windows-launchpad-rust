@@ -92,6 +92,21 @@ struct PlacedGlyph {
     color: [f32; 4],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LabelLayoutKey {
+    text: String,
+    max_width_bits: u32,
+    scale_factor_bits: u32,
+}
+
+#[derive(Debug, Clone)]
+struct CachedLabelGlyph {
+    physical: PhysicalGlyph,
+    /// Position relative to the label box's top-left corner.
+    x: f32,
+    y: f32,
+}
+
 /// Parameters for [`TextRenderer::layout_centered_line`]: a single centered
 /// line of text with an explicit color. Bundled into a struct so the method
 /// stays under clippy's argument-count limit.
@@ -119,6 +134,10 @@ pub struct TextRenderer {
     row_height: u32,
     /// True if the atlas changed since the last GPU upload.
     pub atlas_dirty: bool,
+    /// Shaping is independent of a label's on-screen position. Folder paging
+    /// changes only that position, so retain relative glyph layouts instead
+    /// of asking cosmic-text to shape every visible name on every frame.
+    label_layout_cache: HashMap<LabelLayoutKey, Vec<CachedLabelGlyph>>,
 }
 
 const ATLAS_W: u32 = 1024;
@@ -128,6 +147,7 @@ const PAD: u32 = 1;
 const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
 const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
+const LABEL_LAYOUT_CACHE_CAPACITY: usize = 4096;
 /// Soft, layered shadow in logical px: (x offset, y offset, alpha).
 const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
     (0.0, 1.0, 0.30),
@@ -150,6 +170,7 @@ impl TextRenderer {
             cursor_y: PAD,
             row_height: 0,
             atlas_dirty: true,
+            label_layout_cache: HashMap::new(),
         }
     }
 
@@ -166,7 +187,46 @@ impl TextRenderer {
     /// `scale_factor` converts cosmic-text's logical px to physical px (the
     /// units the rest of the renderer uses). Pass the window's scale factor.
     pub fn layout_labels(&mut self, labels: &[Label], scale_factor: f32) -> Vec<GlyphQuad> {
-        let placed = self.layout_phase(labels, scale_factor);
+        let mut placed = Vec::new();
+        for label in labels {
+            let key = LabelLayoutKey {
+                text: label.text.clone(),
+                max_width_bits: label.max_width.to_bits(),
+                scale_factor_bits: scale_factor.to_bits(),
+            };
+            if !self.label_layout_cache.contains_key(&key) {
+                if self.label_layout_cache.len() >= LABEL_LAYOUT_CACHE_CAPACITY {
+                    self.label_layout_cache.clear();
+                }
+                let relative = self
+                    .layout_phase(
+                        &[Label {
+                            text: label.text.clone(),
+                            x: 0.0,
+                            y: 0.0,
+                            max_width: label.max_width,
+                            color: [1.0; 4],
+                        }],
+                        scale_factor,
+                    )
+                    .into_iter()
+                    .map(|glyph| CachedLabelGlyph {
+                        physical: glyph.physical,
+                        x: glyph.x,
+                        y: glyph.y,
+                    })
+                    .collect();
+                self.label_layout_cache.insert(key.clone(), relative);
+            }
+            if let Some(relative) = self.label_layout_cache.get(&key) {
+                placed.extend(relative.iter().map(|glyph| PlacedGlyph {
+                    physical: glyph.physical.clone(),
+                    x: label.x + glyph.x,
+                    y: label.y + glyph.y,
+                    color: label.color,
+                }));
+            }
+        }
         self.raster_phase(placed, scale_factor, LABEL_SHADOW_LAYERS)
     }
 
@@ -307,7 +367,12 @@ impl TextRenderer {
             // cosmic-text lays out in logical px; we scale to physical.
             buffer.set_size(
                 Some(label.max_width / scale_factor),
-                Some(LABEL_LINE_HEIGHT * 2.0 / scale_factor),
+                // Metrics and Buffer dimensions are both logical pixels.
+                // The label rectangle is physical (hence the width divide),
+                // but the two-line logical height must not be divided by the
+                // display scale a second time. Doing so collapsed Retina
+                // labels to one line.
+                Some(LABEL_LINE_HEIGHT * 2.0),
             );
             buffer.set_text(&label.text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
@@ -498,5 +563,48 @@ impl TextRenderer {
         px[1] = g;
         px[2] = b;
         px[3] = a;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label(text: &str, x: f32) -> Label {
+        Label {
+            text: text.to_owned(),
+            x,
+            y: 40.0,
+            max_width: 280.0,
+            color: [1.0; 4],
+        }
+    }
+
+    #[test]
+    fn label_layout_cache_reuses_two_line_shaping_across_positions() {
+        let mut renderer = TextRenderer::new();
+        let first = renderer.layout_labels(&[label("Adobe Premiere Pro 2026", 20.0)], 2.0);
+        assert_eq!(renderer.label_layout_cache.len(), 1);
+
+        let cached = renderer
+            .label_layout_cache
+            .values()
+            .next()
+            .expect("label layout should be cached");
+        let first_line_y = cached.first().expect("label should contain glyphs").y;
+        assert!(
+            cached
+                .iter()
+                .any(|glyph| (glyph.y - first_line_y).abs() > LABEL_LINE_HEIGHT),
+            "a long Mac app name should use the second label line"
+        );
+
+        let second = renderer.layout_labels(&[label("Adobe Premiere Pro 2026", 140.0)], 2.0);
+        assert_eq!(renderer.label_layout_cache.len(), 1);
+        assert_eq!(first.len(), second.len());
+        for (before, after) in first.iter().zip(&second) {
+            assert!((after.x - before.x - 120.0).abs() < 0.01);
+            assert!((after.y - before.y).abs() < 0.01);
+        }
     }
 }

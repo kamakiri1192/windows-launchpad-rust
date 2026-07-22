@@ -24,7 +24,7 @@ def png_size(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
-def verify(root: Path) -> None:
+def verify(root: Path, require_default_scenarios: bool = True) -> None:
     manifests = sorted(root.glob("*/manifest.json"))
     if not manifests:
         fail(f"expected at least one manifest below {root}")
@@ -33,10 +33,11 @@ def verify(root: Path) -> None:
     for manifest_path in manifests:
         scenarios.add(verify_manifest(manifest_path))
 
-    expected = {"folder-interactions", "folder-creation"}
-    missing = expected - scenarios
-    if missing:
-        fail(f"missing required scenarios: {', '.join(sorted(missing))}")
+    if require_default_scenarios:
+        expected = {"folder-interactions", "folder-creation"}
+        missing = expected - scenarios
+        if missing:
+            fail(f"missing required scenarios: {', '.join(sorted(missing))}")
 
 
 def verify_manifest(manifest_path: Path) -> str:
@@ -100,9 +101,9 @@ def verify_manifest(manifest_path: Path) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        fail("usage: verify_qa_artifact.py <qa-sequences-root>")
-    verify(Path(sys.argv[1]))
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--allow-partial"):
+        fail("usage: verify_qa_artifact.py <qa-sequences-root> [--allow-partial]")
+    verify(Path(sys.argv[1]), require_default_scenarios=len(sys.argv) == 2)
 
 
 if __name__ == "__main__":

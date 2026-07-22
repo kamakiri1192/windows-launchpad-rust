@@ -219,7 +219,9 @@ impl App {
                     .is_none_or(|scroller| scroller.phase == crate::scroll::Phase::Idle)
                 && progress > 0.99;
             self.update_folder_child_springs(&children, &model.child_rects, animate_reorder);
-            self.apply_folder_child_springs(&folder_key, &children, &mut model);
+            if animate_reorder {
+                self.apply_folder_child_springs(&folder_key, &children, &mut model);
+            }
         } else {
             self.folder_child_springs.clear();
         }

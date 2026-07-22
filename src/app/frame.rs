@@ -60,7 +60,6 @@ impl App {
         };
         if folder_scroller_animating {
             self.update_folder_page_from_scroll();
-            self.relayout();
         }
         let auto_scroll_started = self.maybe_autoscroll_edit_drag();
         // Resolve the stable hover identity before any live reorder. Moving
@@ -124,9 +123,6 @@ impl App {
             self.refresh_spring_instances();
         }
         let folder_child_springs_animating = self.step_folder_child_springs(anim_dt);
-        if folder_child_springs_animating {
-            self.relayout();
-        }
 
         // Detect a page change (settled page differs from the last
         // tracked one) and arm the transient page indicator.

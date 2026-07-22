@@ -20,6 +20,7 @@ CAPTURE_GEOMETRY_RE = re.compile(
     r"dimension_scale=([0-9.]+) target_hz=([0-9.]+) "
     r"pixel_reduction=([0-9.]+)%"
 )
+TIME_RE = re.compile(r"^(real|user|sys) ([0-9]+(?:\.[0-9]+)?)$", re.MULTILINE)
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -175,8 +176,113 @@ def load_capture_geometry(directory: Path) -> list[dict[str, float | int]]:
     return list(records.values())
 
 
+def load_qa_telemetry(directory: Path) -> dict[str, float | int] | None:
+    runs = []
+    for path in sorted(directory.glob("qa-sequences/*/manifest.json")):
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        frames = manifest.get("frames", [])
+        if not isinstance(frames, list) or not frames:
+            continue
+        frame_dt = [
+            value
+            for frame in frames
+            if isinstance(frame, dict)
+            and (value := finite_number(frame.get("frame_dt_ms"))) is not None
+        ]
+        active = [
+            frame
+            for frame in frames
+            if isinstance(frame, dict)
+            and frame.get("folder_scroll_phase") not in (None, "Idle")
+        ]
+        active_dt = [
+            value
+            for frame in active
+            if (value := finite_number(frame.get("frame_dt_ms"))) is not None
+        ]
+        relayouts = sum(
+            int(frame.get("relayout_delta", 0))
+            for frame in frames
+            if isinstance(frame, dict)
+        )
+        active_relayouts = sum(int(frame.get("relayout_delta", 0)) for frame in active)
+        runs.append(
+            {
+                "frames": len(frames),
+                "active_frames": len(active),
+                "frame_p95_ms": percentile(frame_dt, 0.95),
+                "frame_max_ms": max(frame_dt, default=0.0),
+                "active_frame_p95_ms": percentile(active_dt, 0.95),
+                "relayouts": relayouts,
+                "active_relayouts_per_frame": active_relayouts / max(1, len(active)),
+            }
+        )
+    if not runs:
+        return None
+    return {
+        "runs": len(runs),
+        "min_frames": min(run["frames"] for run in runs),
+        "min_active_frames": min(run["active_frames"] for run in runs),
+        "median_frame_p95_ms": statistics.median(run["frame_p95_ms"] for run in runs),
+        "max_frame_ms": max(run["frame_max_ms"] for run in runs),
+        "median_active_frame_p95_ms": statistics.median(
+            run["active_frame_p95_ms"] for run in runs
+        ),
+        "median_relayouts": statistics.median(run["relayouts"] for run in runs),
+        "median_active_relayouts_per_frame": statistics.median(
+            run["active_relayouts_per_frame"] for run in runs
+        ),
+    }
+
+
+def load_qa_process_times(directory: Path) -> dict[str, float | int] | None:
+    runs = []
+    for path in sorted(directory.glob("qa-*.log")):
+        values = {
+            key: float(value)
+            for key, value in TIME_RE.findall(
+                path.read_text(encoding="utf-8", errors="replace")
+            )
+        }
+        if all(key in values for key in ("real", "user", "sys")):
+            runs.append(values)
+    if not runs:
+        return None
+    return {
+        "runs": len(runs),
+        "median_real_seconds": statistics.median(run["real"] for run in runs),
+        "median_user_seconds": statistics.median(run["user"] for run in runs),
+        "median_system_seconds": statistics.median(run["sys"] for run in runs),
+        "median_cpu_seconds": statistics.median(
+            run["user"] + run["sys"] for run in runs
+        ),
+    }
+
+
 def markdown(summary: dict[str, object]) -> str:
     lines = ["# macOS performance summary", ""]
+    qa = summary.get("qa")
+    if qa:
+        lines += [
+            "## QA frame telemetry",
+            "",
+            f"- Runs / minimum frames: {qa['runs']} / {qa['min_frames']}",
+            f"- Active folder-scroll frames (minimum): {qa['min_active_frames']}",
+            f"- Frame dt median p95 / max: {qa['median_frame_p95_ms']:.2f} / {qa['max_frame_ms']:.2f} ms",
+            f"- Active folder-scroll frame dt median p95: {qa['median_active_frame_p95_ms']:.2f} ms",
+            f"- Relayouts median / active relayouts per frame: {qa['median_relayouts']:.1f} / {qa['median_active_relayouts_per_frame']:.2f}",
+            "",
+        ]
+    qa_process = summary.get("qa_process")
+    if qa_process:
+        lines += [
+            "## QA process time",
+            "",
+            f"- Runs: {qa_process['runs']}",
+            f"- Median real / user / system: {qa_process['median_real_seconds']:.2f} / {qa_process['median_user_seconds']:.2f} / {qa_process['median_system_seconds']:.2f} s",
+            f"- Median CPU time (user + system): {qa_process['median_cpu_seconds']:.2f} s",
+            "",
+        ]
     process = summary.get("process")
     if process:
         lines += [
@@ -244,6 +350,8 @@ def main() -> int:
         "process": load_process_samples(directory),
         "runtime": load_runtime_metrics(directory),
         "capture_geometry": load_capture_geometry(directory),
+        "qa": load_qa_telemetry(directory),
+        "qa_process": load_qa_process_times(directory),
     }
     (directory / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

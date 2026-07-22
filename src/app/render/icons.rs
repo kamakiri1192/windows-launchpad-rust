@@ -237,11 +237,11 @@ impl App {
         let mut requests: Vec<IconRequest> = Vec::new();
         let mut cached_applied = 0usize;
 
-        // Insert every app from the snapshot (the registry dedupes; updates
-        // happen via the diff path on subsequent scans).
+        // Insert every app from the snapshot and refresh metadata for records
+        // preloaded from the persistent icon cache.
         for (id, entry) in &new_snapshot {
-            let exists = self.registry.get(id).is_some();
-            if !exists {
+            let previous_name = self.registry.get(id).map(|record| record.name.clone());
+            if previous_name.is_none() {
                 let slot = self.registry.alloc_slot();
                 let rec = AppRecord {
                     app_id: id.clone(),
@@ -253,6 +253,17 @@ impl App {
                     uv: None,
                 };
                 self.registry.insert(rec);
+            } else {
+                self.registry.update(id, |record| {
+                    record.name = entry.name.clone();
+                    record.link_path = PathBuf::from(&entry.link_path);
+                    record.resolved_target = PathBuf::from(&entry.target_path);
+                });
+                if previous_name.as_deref() != Some(entry.name.as_str()) {
+                    if let Err(error) = self.cache.update_display_name(id, &entry.name) {
+                        eprintln!("icon-cache: display name update failed for {id}: {error}");
+                    }
+                }
             }
         }
 
@@ -363,6 +374,11 @@ impl App {
         }
         match self.cache.get_if_valid(&probe) {
             Ok(Some(cached)) => {
+                if cached.display_name != entry.name {
+                    if let Err(error) = self.cache.update_display_name(id, &entry.name) {
+                        eprintln!("icon-cache: display name update failed for {id}: {error}");
+                    }
+                }
                 self.apply_cached_icon(id, cached);
                 1
             }
@@ -456,6 +472,11 @@ impl App {
             };
             match self.cache.get_if_valid(&probe) {
                 Ok(Some(cached)) => {
+                    if cached.display_name != entry.name {
+                        if let Err(error) = self.cache.update_display_name(id, &entry.name) {
+                            eprintln!("icon-cache: display name update failed for {id}: {error}");
+                        }
+                    }
                     self.apply_cached_icon(id, cached);
                 }
                 _ => {

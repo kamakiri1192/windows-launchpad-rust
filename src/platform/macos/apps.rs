@@ -79,6 +79,7 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
         return None;
     }
 
+    let is_wrapped_ios_app = metadata_bundle != bundle_path;
     let name = ios_store_name(bundle_path)
         .or_else(|| localized_bundle_name(&metadata_bundle, preferred_languages))
         .or_else(|| dictionary_string(dictionary, "CFBundleDisplayName").map(str::to_owned))
@@ -88,6 +89,11 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
                 .file_stem()
                 .map(|name| name.to_string_lossy().into_owned())
         })?;
+    let name = if is_wrapped_ios_app {
+        name
+    } else {
+        prefer_descriptive_bundle_name(bundle_path, name)
+    };
     let bundle_id = dictionary_string(dictionary, "CFBundleIdentifier");
     let app_id = AppId::from_macos_bundle(bundle_id, bundle_path);
 
@@ -227,6 +233,38 @@ fn locate_metadata_bundle(bundle_path: &Path) -> Option<(PathBuf, PathBuf)> {
 fn ios_store_name(bundle_path: &Path) -> Option<String> {
     let metadata = Value::from_file(bundle_path.join("Wrapper/iTunesMetadata.plist")).ok()?;
     dictionary_string(metadata.as_dictionary()?, "itemName").map(str::to_owned)
+}
+
+/// Preserve the OS-localized display name unless the installed bundle name is
+/// a strict extension of it. Some Mac apps omit an edition or year from
+/// `CFBundleDisplayName` (for example "Adobe Premiere" inside
+/// "Adobe Premiere Pro 2026.app"). Keeping the descriptive suffix lets the
+/// shared two-line launcher label distinguish installed versions, while a
+/// localized name such as "カレンダー" still wins over `Calendar.app`.
+fn prefer_descriptive_bundle_name(bundle_path: &Path, display_name: String) -> String {
+    let Some(bundle_name) = bundle_path
+        .file_stem()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
+        return display_name;
+    };
+    let normalize = |value: &str| {
+        value
+            .chars()
+            .filter(|ch| ch.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let display_key = normalize(&display_name);
+    let bundle_key = normalize(&bundle_name);
+    if !display_key.is_empty()
+        && bundle_key.len() > display_key.len()
+        && bundle_key.starts_with(&display_key)
+    {
+        bundle_name
+    } else {
+        display_name
+    }
 }
 
 fn dictionary_string<'a>(dictionary: &'a Dictionary, key: &str) -> Option<&'a str> {
@@ -462,6 +500,44 @@ mod tests {
     }
 
     #[test]
+    fn native_app_uses_descriptive_bundle_suffix_for_two_line_label() {
+        let root = temporary_directory("descriptive-mac-name");
+        let bundle = root.join("Adobe Premiere Pro 2026.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+
+        let mut info = Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            Value::String("com.adobe.PremierePro.26".into()),
+        );
+        info.insert(
+            "CFBundleDisplayName".into(),
+            Value::String("Adobe Premiere".into()),
+        );
+        info.insert(
+            "CFBundleExecutable".into(),
+            Value::String("Adobe Premiere Pro 2026".into()),
+        );
+        Value::Dictionary(info)
+            .to_file_xml(bundle.join("Contents/Info.plist"))
+            .unwrap();
+
+        let entry = snapshot_entry(&bundle, &["ja-JP".to_owned()])
+            .expect("native Mac app should be discovered");
+        assert_eq!(entry.name, "Adobe Premiere Pro 2026");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn localized_name_wins_when_bundle_name_is_not_its_extension() {
+        assert_eq!(
+            prefer_descriptive_bundle_name(Path::new("Calendar.app"), "カレンダー".to_owned()),
+            "カレンダー"
+        );
+    }
+
+    #[test]
     fn system_calendar_uses_current_os_localization() {
         let bundle = Path::new("/System/Applications/Calendar.app");
         if !bundle.is_dir() {
@@ -476,6 +552,32 @@ mod tests {
             entry.name
         );
         assert_eq!(entry.name, expected);
+    }
+
+    #[test]
+    fn installed_premiere_keeps_edition_and_year_when_available() {
+        let bundle = Path::new("/Applications/Adobe Premiere Pro 2026/Adobe Premiere Pro 2026.app");
+        if !bundle.is_dir() {
+            return;
+        }
+        let entry = snapshot_entry(bundle, &preferred_languages())
+            .expect("installed Premiere should be discovered");
+        assert_eq!(entry.name, "Adobe Premiere Pro 2026");
+    }
+
+    #[test]
+    fn application_scan_keeps_installed_premiere_edition_and_year() {
+        let bundle = Path::new("/Applications/Adobe Premiere Pro 2026/Adobe Premiere Pro 2026.app");
+        if !bundle.is_dir() {
+            return;
+        }
+        let id = AppId::from_normalized("mac:com.adobe.PremierePro.26".to_owned());
+        let applications = scan_applications();
+        let entry = applications
+            .get(&id)
+            .expect("installed Premiere should be included in the application scan");
+        assert_eq!(entry.name, "Adobe Premiere Pro 2026");
+        assert_eq!(Path::new(&entry.link_path), bundle);
     }
 
     #[test]

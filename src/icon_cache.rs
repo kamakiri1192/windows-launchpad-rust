@@ -224,6 +224,22 @@ impl IconCache {
         tx.commit()
     }
 
+    /// Update display metadata without re-encoding or replacing icon pixels.
+    /// OS localization and bundle marketing names can change independently of
+    /// an app binary's icon invalidation fields.
+    pub fn update_display_name(
+        &self,
+        app_id: &AppId,
+        display_name: &str,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE icons SET display_name = ?2 WHERE app_id = ?1 AND display_name <> ?2",
+            params![app_id.as_ref(), display_name],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Mark an id as gone (soft delete: keeps the row so a re-add reuses the
     /// id, but validity will fail until re-extraction succeeds).
     pub fn forget(&self, app_id: &AppId) -> rusqlite::Result<()> {
@@ -695,6 +711,19 @@ mod tests {
         let got = c.get_if_valid(&probe(&app, 20)).unwrap().unwrap();
         assert_eq!(got.display_name, "renamed");
         assert_eq!(c.count(), 1);
+    }
+
+    #[test]
+    fn display_name_updates_without_replacing_icon_pixels() {
+        let c = cache();
+        c.put(&entry("app1", 10)).unwrap();
+        let app = id("app1");
+
+        assert!(c.update_display_name(&app, "localized name").unwrap());
+        let got = c.get_if_valid(&probe(&app, 10)).unwrap().unwrap();
+        assert_eq!(got.display_name, "localized name");
+        assert_eq!(got.image.rgba, fake_icon([1, 2, 3, 255]).rgba);
+        assert!(!c.update_display_name(&app, "localized name").unwrap());
     }
 
     #[test]

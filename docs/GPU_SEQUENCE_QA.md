@@ -80,6 +80,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 追加シナリオ:
 
 - `qa/folder_creation.json`: アプリ同士の Liquid Glass 融合プレビューから、2アプリのフォルダが作成されて開くまでを記録します。
+- `qa/folder_page_scroll.json`: 18個の子アプリを持つ2ページのフォルダを60fpsで往復スワイプします。スクロール中のフレーム時間、入力追従、ページ遷移、再レイアウト回数を変更前後で比較する回帰計測用です。
 - `qa/folder_single_page_scroll.json`: 最初の長押しで子アプリをそのまま持ち上げて並べ替えた後、1ページだけのフォルダの空き領域を横方向へ引っ張ります。`folder_child_drag` と `folder_scroll_phase` が同時に競合せず、`folder_scroll_x` がドラッグ中に0へ強制リセットされず、`Dragging` から `Settling` を経て `Idle` に戻ることを60fpsで確認します。
 - `qa/folder_child_page_drag.json`: 子アプリを長押ししたまま右端で保持し、pointerを離さず2ページ目へ送り、そのページのセルへ配置するまでを記録します。端保持の進捗、ページ番号、子ドラッグの所有権が連続することを確認します。
 - `qa/folder_child_exit.json`: 子アプリを長押ししたまま上端からパネル外へ出し、フォルダを閉じながら同じpointerのトップレベルドラッグへ引き継いで配置するまでを記録します。`folder_child_drag` から `top_level_drag` への切り替えと項目数・子数の変化を確認します。

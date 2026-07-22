@@ -875,7 +875,6 @@ impl App {
                 scroller.drag_move(x);
             }
             self.update_folder_page_from_scroll();
-            self.relayout();
             self.request_redraw();
             return;
         }
@@ -892,7 +891,6 @@ impl App {
             self.folders.pressed_child = None;
             self.folders.page_press = None;
             self.update_folder_page_from_scroll();
-            self.relayout();
             self.request_redraw();
             return;
         }
