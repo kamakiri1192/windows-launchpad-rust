@@ -209,7 +209,6 @@ impl App {
             page_scroll_x,
             progress,
             editing: durable && self.editing,
-            wiggle_phase: self.wiggle_phase,
             dragged_child_key: dragged_key.as_deref(),
         });
         if durable {

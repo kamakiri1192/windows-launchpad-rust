@@ -170,14 +170,14 @@ impl App {
                 }
                 if is_drag {
                     grid::TileAnim {
-                        phase: self.wiggle_phase + i as f32 * 0.37,
+                        phase: grid::TileAnim::phase_offset(i),
                         lift: 24.0 * self.scale_factor.max(1.0),
                         scale: 1.15 * background_scale,
                         flags: grid::TileAnim::FLAG_WIGGLE | grid::TileAnim::FLAG_DRAG | item_flags,
                     }
                 } else {
                     grid::TileAnim {
-                        phase: self.wiggle_phase + i as f32 * 0.37,
+                        phase: grid::TileAnim::phase_offset(i),
                         lift: 0.0,
                         scale: background_scale,
                         flags: grid::TileAnim::FLAG_WIGGLE | item_flags,

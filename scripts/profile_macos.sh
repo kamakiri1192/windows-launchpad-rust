@@ -16,7 +16,7 @@ warmup="${WARMUP_SECONDS:-8}"
 scenario_list="${SCENARIOS:-qa/folder_interactions.json qa/folder_creation.json}"
 if [[ -n "${ANIMATED_BACKDROP:-}" ]]; then
   animated_backdrop="$ANIMATED_BACKDROP"
-elif [[ "$mode" == "live" || "$mode" == "gpu" || "$mode" == "scroll" || "$mode" == "scroll-gpu" ]]; then
+elif [[ "$mode" == "live" || "$mode" == "gpu" || "$mode" == "scroll" || "$mode" == "scroll-gpu" || "$mode" == "edit" || "$mode" == "edit-gpu" ]]; then
   animated_backdrop=1
 else
   animated_backdrop=0
@@ -56,7 +56,7 @@ output_dir="$(cd "$output_dir" && pwd)"
 } > "$output_dir/environment.txt"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  if [[ "$mode" == "qa" || "$mode" == "gpu" || "$mode" == "scroll-gpu" ]]; then
+  if [[ "$mode" == "qa" || "$mode" == "gpu" || "$mode" == "scroll-gpu" || "$mode" == "edit-gpu" ]]; then
     cargo build --release --locked --features gpu-profile
   else
     cargo build --release --locked
@@ -94,7 +94,7 @@ PY
     done
     python3 scripts/verify_qa_artifact.py "$qa_output"
     ;;
-  live|gpu|scroll|scroll-gpu)
+  live|gpu|scroll|scroll-gpu|edit|edit-gpu)
     if pgrep -x launchpad-windows >/dev/null; then
       echo "another launchpad-windows process is running" >&2
       exit 1
@@ -125,12 +125,17 @@ PY
     if [[ "$mode" == "scroll" || "$mode" == "scroll-gpu" ]]; then
       profile_scroll=1
     fi
-    if [[ "$mode" == "gpu" || "$mode" == "scroll-gpu" ]]; then
+    profile_edit=0
+    if [[ "$mode" == "edit" || "$mode" == "edit-gpu" ]]; then
+      profile_edit=1
+    fi
+    if [[ "$mode" == "gpu" || "$mode" == "scroll-gpu" || "$mode" == "edit-gpu" ]]; then
       env \
         HOME="$output_dir/home" \
         LAUNCHPAD_DEBUG=1 \
         LAUNCHPAD_PROFILE_KEEP_VISIBLE=1 \
         LAUNCHPAD_PROFILE_SCROLL="$profile_scroll" \
+        LAUNCHPAD_PROFILE_EDIT="$profile_edit" \
         LAUNCHPAD_GPU_PROFILE="$output_dir/gpu.json" \
         WGPU_BACKEND=metal \
         RUST_LOG=warn \
@@ -141,6 +146,7 @@ PY
         LAUNCHPAD_DEBUG=1 \
         LAUNCHPAD_PROFILE_KEEP_VISIBLE=1 \
         LAUNCHPAD_PROFILE_SCROLL="$profile_scroll" \
+        LAUNCHPAD_PROFILE_EDIT="$profile_edit" \
         WGPU_BACKEND=metal \
         RUST_LOG=warn \
         "$binary" > "$output_dir/$mode.log" 2>&1 &
@@ -185,7 +191,7 @@ PY
     trap - EXIT INT TERM
     ;;
   *)
-    echo "usage: $0 [qa|live|gpu|scroll|scroll-gpu]" >&2
+    echo "usage: $0 [qa|live|gpu|scroll|scroll-gpu|edit|edit-gpu]" >&2
     exit 2
     ;;
 esac

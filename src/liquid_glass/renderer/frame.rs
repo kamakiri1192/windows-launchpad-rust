@@ -420,7 +420,13 @@ impl LiquidGlassRenderer {
         scroll_x: f32,
         time: f32,
     ) {
-        if !self.params.enabled || self.badge_shape_count == 0 {
+        if !self.params.enabled || self.badge_shapes.is_empty() {
+            return;
+        }
+
+        self.refresh_active_badge_shapes(queue, scroll_x);
+        // A clip-only shape cannot produce any glass by itself.
+        if self.badge_shape_count <= 1 {
             return;
         }
 
@@ -453,9 +459,11 @@ impl LiquidGlassRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_pipeline(&self.badge_geometry_pipeline);
             pass.set_bind_group(0, &self.badge_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            // Index zero is the page clip; each remaining instance is one
+            // tightly bounded badge quad.
+            pass.draw(0..6, 1..self.badge_shape_count);
         }
 
         {

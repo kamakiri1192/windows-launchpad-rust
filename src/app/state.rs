@@ -326,6 +326,11 @@ impl App {
         inbox: Arc<Inbox>,
         worker: WorkerHandle,
     ) -> Self {
+        let profile_edit = std::env::var_os("LAUNCHPAD_PROFILE_EDIT").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+        if profile_edit {
+            eprintln!("profile edit workload: enabled (continuous production edit animation)");
+        }
         Self {
             event_proxy,
             renderer: None,
@@ -350,7 +355,7 @@ impl App {
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
-            editing: false,
+            editing: profile_edit,
             pending_press: None,
             drag_item: None,
             drag_x: 0.0,

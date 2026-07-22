@@ -27,6 +27,14 @@ pub struct TileAnim {
 }
 
 impl TileAnim {
+    /// Stable per-slot phase offset. The global animation clock is supplied
+    /// separately as a per-frame uniform; embedding that clock here would let
+    /// independently rebuilt tile/icon buffers drift out of phase.
+    #[inline]
+    pub fn phase_offset(index: usize) -> f32 {
+        index as f32 * 0.37
+    }
+
     pub const FLAG_WIGGLE: u32 = 1 << 0;
     pub const FLAG_DRAG: u32 = 1 << 1;
     /// Fixed screen-space content that bypasses horizontal scrolling and the
@@ -52,5 +60,16 @@ impl TileAnim {
     #[inline]
     pub fn shader_payload(self) -> [f32; 4] {
         [self.phase, self.lift, self.scale, self.flags as f32]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TileAnim;
+
+    #[test]
+    fn edit_phase_offset_depends_only_on_stable_slot() {
+        assert_eq!(TileAnim::phase_offset(0), 0.0);
+        assert!((TileAnim::phase_offset(3) - 1.11).abs() < f32::EPSILON);
     }
 }

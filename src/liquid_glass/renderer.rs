@@ -181,6 +181,10 @@ pub struct LiquidGlassRenderer {
     badge_shape_count: u32,
     badge_shape_capacity: usize,
     badge_shapes: Vec<GlassShape>,
+    /// Edit badges whose conservative animation bounds intersect the fixed
+    /// page clip at the current scroll position.
+    active_badge_shapes: Vec<GlassShape>,
+    badge_shape_scratch: Vec<GlassShape>,
     modal_badge_shape_buffer: wgpu::Buffer,
     modal_badge_shape_count: u32,
     modal_badge_shape_capacity: usize,
@@ -218,6 +222,7 @@ pub struct LiquidGlassRenderer {
     blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
     sampler: wgpu::Sampler,
     geometry_pipeline: wgpu::RenderPipeline,
+    badge_geometry_pipeline: wgpu::RenderPipeline,
     blur_downsample_pipeline: wgpu::RenderPipeline,
     blur_upsample_pipeline: wgpu::RenderPipeline,
     final_pipeline: wgpu::RenderPipeline,
@@ -301,6 +306,11 @@ fn base_shape_may_affect_frame(
     // around rounded corners and guarantees the whole blend neighborhood is
     // contained before the shape is discarded.
     !bounds_inside_rounded_rect(influence_bounds, frame)
+}
+
+fn overlay_shape_may_affect_clip(shape: GlassShape, scroll_x: f32, clip: GlassShape) -> bool {
+    shape.is_clip_only()
+        || intersect_bounds(shape.screen_bounds(scroll_x), clip.screen_bounds(0.0)).is_some()
 }
 
 fn bounds_inside_rounded_rect(bounds: [f32; 4], shape: GlassShape) -> bool {
@@ -516,10 +526,10 @@ impl LiquidGlassRenderer {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("liquid glass geometry bgl"),
                 entries: &[
-                    uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                    uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
@@ -668,6 +678,12 @@ impl LiquidGlassRenderer {
                 include_str!("../../assets/shaders/liquid_glass_geometry.wgsl").into(),
             ),
         });
+        let badge_geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("liquid glass sparse badge geometry shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../assets/shaders/liquid_glass_badge_geometry.wgsl").into(),
+            ),
+        });
         let final_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("liquid glass final shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -713,6 +729,27 @@ impl LiquidGlassRenderer {
             multiview_mask: None,
             cache: None,
         });
+        let badge_geometry_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("liquid glass sparse badge geometry pipeline"),
+                layout: Some(&geometry_pipeline_layout),
+                vertex: fullscreen_vertex_state(&badge_geometry_shader),
+                fragment: Some(wgpu::FragmentState {
+                    module: &badge_geometry_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: GEOMETRY_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: fullscreen_primitive_state(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
 
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("liquid glass blur pipeline layout"),
@@ -816,6 +853,8 @@ impl LiquidGlassRenderer {
             badge_shape_count,
             badge_shape_capacity,
             badge_shapes: Vec::new(),
+            active_badge_shapes: Vec::new(),
+            badge_shape_scratch: Vec::new(),
             modal_badge_shape_buffer,
             modal_badge_shape_count: 0,
             modal_badge_shape_capacity,
@@ -847,6 +886,7 @@ impl LiquidGlassRenderer {
             blur_levels,
             sampler,
             geometry_pipeline,
+            badge_geometry_pipeline,
             blur_downsample_pipeline,
             blur_upsample_pipeline,
             final_pipeline,
@@ -1412,18 +1452,15 @@ impl LiquidGlassRenderer {
     /// a separate Liquid Glass overlay after the app tiles/icons, so the badge
     /// actually refracts through the Liquid Glass shader instead of being a
     /// plain painted circle in the tile shader.
-    pub fn set_badge_shapes(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        shapes: &[GlassShape],
-    ) {
+    pub fn set_badge_shapes(&mut self, device: &wgpu::Device, shapes: &[GlassShape]) {
         if self.badge_shapes.as_slice() == shapes {
             return;
         }
         self.badge_shapes.clear();
         self.badge_shapes.extend_from_slice(shapes);
-        self.badge_shape_count = self.badge_shapes.len() as u32;
+        self.active_badge_shapes.clear();
+        self.badge_shape_scratch.clear();
+        self.badge_shape_count = 0;
         if self.badge_shapes.len() > self.badge_shape_capacity {
             self.badge_shape_capacity =
                 next_shape_capacity(self.badge_shape_capacity, self.badge_shapes.len());
@@ -1439,11 +1476,41 @@ impl LiquidGlassRenderer {
                 &self.badge_shape_buffer,
             );
         }
-        if !self.badge_shapes.is_empty() {
+    }
+
+    fn refresh_active_badge_shapes(&mut self, queue: &wgpu::Queue, scroll_x: f32) {
+        let clip = self
+            .badge_shapes
+            .iter()
+            .find(|shape| shape.is_clip_only())
+            .copied()
+            .unwrap_or_else(|| {
+                GlassShape::clip_rounded_rect(
+                    [
+                        self.texture_size.0 as f32 * 0.5,
+                        self.texture_size.1 as f32 * 0.5,
+                    ],
+                    [self.texture_size.0 as f32, self.texture_size.1 as f32],
+                    0.0,
+                )
+            });
+        self.badge_shape_scratch.clear();
+        self.badge_shape_scratch.extend(
+            self.badge_shapes
+                .iter()
+                .copied()
+                .filter(|shape| overlay_shape_may_affect_clip(*shape, scroll_x, clip)),
+        );
+        if self.badge_shape_scratch == self.active_badge_shapes {
+            return;
+        }
+        std::mem::swap(&mut self.badge_shape_scratch, &mut self.active_badge_shapes);
+        self.badge_shape_count = self.active_badge_shapes.len() as u32;
+        if !self.active_badge_shapes.is_empty() {
             queue.write_buffer(
                 &self.badge_shape_buffer,
                 0,
-                bytemuck::cast_slice(&self.badge_shapes),
+                bytemuck::cast_slice(&self.active_badge_shapes),
             );
         }
     }
@@ -1712,7 +1779,8 @@ fn premultiplied_blend() -> wgpu::BlendState {
 mod shape_capacity_tests {
     use super::{
         base_shape_may_affect_frame, capture_region_for_shapes, next_shape_capacity,
-        should_refresh_blur, CaptureRegion, GlassShape, GlassUniforms,
+        overlay_shape_may_affect_clip, should_refresh_blur, CaptureRegion, GlassShape,
+        GlassUniforms,
     };
 
     fn test_scene_sdf(shapes: &[GlassShape], scroll_x: f32, point: [f32; 2], blend: f32) -> f32 {
@@ -1759,6 +1827,20 @@ mod shape_capacity_tests {
         assert!(!base_shape_may_affect_frame(far_page, 0.0, frame, 26.0));
         assert!(!base_shape_may_affect_frame(swallowed, 0.0, frame, 26.0));
         assert!(base_shape_may_affect_frame(fixed_control, 0.0, frame, 26.0));
+    }
+
+    #[test]
+    fn edit_badge_culling_keeps_clip_and_only_badges_reaching_current_page() {
+        let clip = GlassShape::clip_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0);
+        let current_page =
+            GlassShape::animated_badge([280.0, 250.0], [30.0, 30.0], 14.0, [340.0, 310.0], 0.0);
+        let next_page =
+            GlassShape::animated_badge([1_080.0, 250.0], [30.0, 30.0], 14.0, [1_140.0, 310.0], 0.0);
+
+        assert!(overlay_shape_may_affect_clip(clip, 0.0, clip));
+        assert!(overlay_shape_may_affect_clip(current_page, 0.0, clip));
+        assert!(!overlay_shape_may_affect_clip(next_page, 0.0, clip));
+        assert!(overlay_shape_may_affect_clip(next_page, -800.0, clip));
     }
 
     #[test]

@@ -65,8 +65,7 @@ impl Renderer {
             shapes.insert(0, clip_shape);
         }
 
-        self.liquid_glass
-            .set_badge_shapes(&self.device, &self.queue, &shapes);
+        self.liquid_glass.set_badge_shapes(&self.device, &shapes);
         let outcome = self
             .badge_instance_buffer
             .set(&self.device, &self.queue, &marks);
