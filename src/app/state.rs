@@ -276,6 +276,9 @@ pub struct App {
     /// the whole process. Underscore-prefixed because we never read it.
     #[cfg(windows)]
     pub _os: Option<crate::platform::windows::OsIntegrationHandle>,
+    /// Anchor keeping the macOS menu-bar item and global shortcut alive.
+    #[cfg(target_os = "macos")]
+    pub _macos: Option<crate::platform::macos::integration::MacOsIntegration>,
 }
 
 use crate::domain::app_registry::AppLaunchInfo;
@@ -344,6 +347,8 @@ impl App {
             should_quit: false,
             #[cfg(windows)]
             _os: None,
+            #[cfg(target_os = "macos")]
+            _macos: None,
         }
     }
 }
