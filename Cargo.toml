@@ -85,6 +85,7 @@ rusqlite = "0.32"
 # 1.3.0's Swift bridge links macOS 26-only screenshot classes when built with
 # the Xcode 26 SDK, which prevents the binary from loading on macOS 14/15.
 screencapturekit = { version = "=1.2.0", features = ["macos_14_0"] }
+sys-locale = "0.3"
 objc2-io-surface = { version = "0.3.2", default-features = false, features = ["IOSurfaceRef", "objc2"] }
 objc2-metal = { version = "0.3.2", default-features = false, features = [
     "std",
