@@ -45,13 +45,16 @@ fn configure_macos_swift_runtime() {
         );
         return;
     };
-    let runtime = toolchain_usr.join("lib/swift/macosx");
-    if runtime.is_dir() {
+    let runtime = ["lib/swift-5.5/macosx", "lib/swift/macosx"]
+        .into_iter()
+        .map(|relative| toolchain_usr.join(relative))
+        .find(|candidate| candidate.join("libswift_Concurrency.dylib").is_file());
+    if let Some(runtime) = runtime {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", runtime.display());
     } else {
         println!(
-            "cargo:warning=Swift runtime directory was not found at {}",
-            runtime.display()
+            "cargo:warning=Swift concurrency runtime was not found under {}",
+            toolchain_usr.display()
         );
     }
 }
