@@ -182,7 +182,7 @@ fn capture_worker(
         .with_pixel_format(PixelFormat::BGRA)
         .with_shows_cursor(false);
     let mut configured_geometry = None;
-    let mut previous_capture_started = None;
+    let mut previous_capture_started: Option<Instant> = None;
     let mut stats = WorkerStats::new();
 
     while let Ok(geometry) = request_rx.recv() {
