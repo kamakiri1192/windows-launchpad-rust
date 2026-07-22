@@ -68,7 +68,7 @@ fn smooth_union(d1: f32, d2: f32, k: f32) -> f32 {
 
 fn resolved_center(shape: GlassShape) -> vec2<f32> {
     var center = shape.center;
-    if shape.shape_type == 4u {
+    if shape.shape_type == 4u || shape.shape_type == 5u || shape.shape_type == 6u {
         let t = u.time + shape.motion.z;
         let rot = sin(t * 8.0) * 0.06;
         let dy = abs(sin(t * 8.0)) * 2.0;
@@ -81,10 +81,28 @@ fn resolved_center(shape: GlassShape) -> vec2<f32> {
             rel.x * sinr + rel.y * cosr - dy,
         );
     }
-    if shape.shape_type == 0u || shape.shape_type == 4u {
+    if shape.shape_type == 0u || shape.shape_type == 4u || shape.shape_type == 5u {
         center.x = center.x + u.scroll_x;
     }
     return center;
+}
+
+fn resolved_local(shape: GlassShape, pixel: vec2<f32>) -> vec2<f32> {
+    let center = resolved_center(shape);
+    var local = pixel - center;
+    if shape.shape_type == 5u || shape.shape_type == 6u {
+        // Rotate the sample point by the inverse parent wiggle so the rounded
+        // folder rect and its miniature children behave as one rigid body.
+        let t = u.time + shape.motion.z;
+        let rot = -sin(t * 8.0) * 0.06;
+        let cosr = cos(rot);
+        let sinr = sin(rot);
+        local = vec2<f32>(
+            local.x * cosr - local.y * sinr,
+            local.x * sinr + local.y * cosr,
+        );
+    }
+    return local;
 }
 
 fn scene_sdf(pixel: vec2<f32>) -> f32 {
@@ -97,8 +115,7 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
         }
         // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
         // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
-        let center = resolved_center(shape);
-        let local = pixel - center;
+        let local = resolved_local(shape, pixel);
         let half_size = shape.size * 0.5;
         let shape_d = sdf_rrect(local, half_size, shape.radius);
         d = smooth_union(d, shape_d, u.blend);
@@ -122,16 +139,17 @@ fn frame_sdf(pixel: vec2<f32>) -> f32 {
     return d;
 }
 
-// Signed distance to frame-independent controls (shape_type == 2). These live
-// outside the page frame and must NOT be clipped to it. Multiple control shapes
-// are smooth-unioned so paired capsules can visibly attach and separate.
+// Signed distance to frame-independent controls (shape_type == 2, or animated
+// control == 6). These live outside the page frame and must NOT be clipped to
+// it. Multiple control shapes are smooth-unioned so paired capsules can
+// visibly attach and separate.
 fn control_sdf(pixel: vec2<f32>) -> f32 {
     let count = min(u.shape_count, arrayLength(&shapes));
     var d = 1.0e6;
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
-        if shape.shape_type == 2u {
-            let local = pixel - shape.center;
+        if shape.shape_type == 2u || shape.shape_type == 6u {
+            let local = resolved_local(shape, pixel);
             let shape_d = sdf_rrect(local, shape.size * 0.5, shape.radius);
             d = smooth_union(d, shape_d, u.blend);
         }

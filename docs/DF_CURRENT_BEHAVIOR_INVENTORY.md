@@ -6,6 +6,79 @@ This document records current user-visible behavior that rearchitecture slices
 must preserve. It is intentionally concrete. Each vertical slice should update
 or extend this inventory before moving behavior behind a new boundary.
 
+## Folder Feature
+
+Source after the Phase 8 vertical slice:
+
+- `src/domain/launcher_state.rs` owns item order, folder membership, moves, and
+  automatic folder dissolution.
+- `src/features/folders/mod.rs` owns open/close motion, hover intent, rename,
+  and child-drag preview state.
+- `src/layout/folder_panel.rs` owns the dynamic panel, pagination, child
+  trajectories, and matching hit regions.
+- `src/app/render/folders.rs` adapts domain records to generic UI primitives.
+
+Current behavior to preserve:
+
+- The normal grid interleaves app and folder items in persisted
+  `LauncherState.items` order. Search stays a flat app-only result set.
+- A closed folder uses only its Liquid Glass container and shows at most the
+  first nine visible child icons in ordered 3x3 mini slots. It does not render
+  the opaque colored fallback used behind a normal app icon. Hidden or
+  currently undiscovered children are not rendered. The folder container uses
+  a nested grid-glass compositing lane so its rounded boundary remains visible
+  inside the larger page-frame glass, with mini icons drawn above it. Its outer
+  bounds and corner radius match a normal app tile; it does not use the larger
+  tile-halo dimensions.
+- Clicking a folder opens a centered Liquid Glass modal. The panel size is
+  derived from the visible child count, incomplete rows are centered, and more
+  than nine children are split into pages with a page indicator.
+- Opening morphs the current folder tile rectangle into the panel while child
+  icons travel from their mini slots to panel cells. Closing reverses the same
+  spring without restarting, and resolves the source rectangle from the latest
+  grid layout on every frame. The morph also receives the current closed-folder
+  corner radius, so its final frame exactly matches the restored grid glass.
+  During the closed-end portion of the morph, each child's colored tile fill
+  collapses into its own center while the icon continues to its mini slot. The
+  fill is already gone before the closed-folder preview takes over.
+- While a folder is active, its source tile's grid-preview mini icons are
+  suppressed because the modal lane owns the moving child icons. They return
+  only after the close morph reaches its endpoint.
+- Opening a folder fades in the **Glass Focus Veil**. Before the modal is drawn,
+  the completed lower scene (page glass, app fills, icons, closed folders, and
+  labels) is rendered to an intermediate texture and passed through a
+  three-level Dual-Kawase blur. The blurred scene plus a restrained cool-neutral
+  tint is recomposited only inside the fixed page-frame rounded rectangle. A
+  12 px inner transition preserves the crisp Liquid Glass rim and prevents the
+  transparent window surround from bleeding into it; the surround itself is
+  unaffected. The folder panel glass and its children are drawn afterward and
+  remain sharp.
+- The modal owns input while visible. Clicking the modal backdrop closes it
+  without replaying the click underneath. `Esc` first cancels an active rename;
+  otherwise it closes the folder.
+- Clicking the title starts rename. IME preedit is shown without committing,
+  Enter commits, and blank or whitespace-only names become `フォルダ`. Cursor
+  movement and deletion use UTF-8 character boundaries.
+- Child labels and the panel title are truncated at character boundaries with
+  an ellipsis when they do not fit.
+- Dragging one top-level app over another past the hover threshold previews the
+  merge with two Liquid Glass overlays. The new folder and its ordered children
+  (`target`, then `dragged`) are committed only on drop.
+- Hovering a dragged top-level app over an existing folder past the same
+  threshold spring-opens it. Dropping then moves the app into that folder.
+- Folder children can be reordered with a live preview, moved to another
+  folder, or dragged back to the top-level grid.
+- A folder with one child after a move or hide is dissolved in place and the
+  remaining child is promoted. An empty folder is removed.
+- Opening settings, resetting settings, hiding the launcher, or losing the
+  referenced folder clears folder-modal state so stale ids cannot receive
+  input.
+- Folder open/close redraws only while its spring is moving. A fully open idle
+  panel does not create a continuous redraw loop.
+- Renderer submission remains semantic-free: modal surfaces, icons, text, and
+  backdrop are generic render-model lanes; renderer modules do not import
+  `LauncherItem`, `Folder`, `FolderId`, or `LauncherState`.
+
 ## Settings Overlay
 
 Source before extraction:

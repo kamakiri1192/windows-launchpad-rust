@@ -35,6 +35,34 @@ fn shape_for(surface: &GlassSurface) -> GlassShape {
     }
 }
 
+fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape {
+    let center = [surface.rect.center().x, surface.rect.center().y];
+    let size = [surface.rect.width, surface.rect.height];
+    let animated_parent = tiles.iter().find(|tile| {
+        tile.id == surface.id
+            && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0
+    });
+    if let Some(tile) = animated_parent {
+        if surface.behavior == GlassBehavior::Control {
+            GlassShape::animated_control_rounded_rect(
+                center,
+                size,
+                surface.radius,
+                tile.motion.phase,
+            )
+        } else {
+            GlassShape::animated_scrolling_rounded_rect(
+                center,
+                size,
+                surface.radius,
+                tile.motion.phase,
+            )
+        }
+    } else {
+        shape_for(surface)
+    }
+}
+
 /// The current Liquid Glass modal pass accepts one surface. Select the
 /// highest-z modal surface, using later model order as the same-z tie-breaker.
 /// The classification comes from renderer-neutral model data rather than a
@@ -103,6 +131,12 @@ fn tile_instance(view: &TileView, index: usize) -> TileInstance {
     }
 }
 
+fn has_trailing_drag_tile(instances: &[TileInstance]) -> bool {
+    instances.last().is_some_and(|instance| {
+        instance.extra[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
+    })
+}
+
 fn icon_instance(view: &IconView) -> Option<IconInstance> {
     let IconSource::AtlasUv(uv) = view.source else {
         return None;
@@ -117,6 +151,9 @@ fn icon_instance(view: &IconView) -> Option<IconInstance> {
         u1: uv.u1,
         v1: uv.v1,
         extra: view.motion.shader_payload(),
+        motion_pivot: view
+            .motion_pivot
+            .map_or([0.0; 4], |pivot| [pivot.x, pivot.y, 1.0, 0.0]),
     })
 }
 
@@ -126,18 +163,57 @@ impl Renderer {
     /// shader-facing structs remains an internal renderer responsibility.
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
+        let modal_clip = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| (surface.rect, surface.radius))
+            });
+        self.modal_clip_rect = modal_clip.map(|(rect, _)| rect);
+        self.modal_clip_radius = modal_clip.map_or(0.0, |(_, radius)| radius);
+        let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
-            if self
+            let batch_unchanged = self
                 .prepared_model
                 .glass
                 .iter()
                 .find(|old| old.layer == batch.layer)
-                == Some(batch)
-            {
+                == Some(batch);
+            let follows_grid_motion = matches!(
+                batch.layer,
+                GlassLayer::GridOverlay | GlassLayer::DragOverlay
+            );
+            if batch_unchanged && !(follows_grid_motion && grid_motion_changed) {
                 self.counters.record_dirty_skip();
                 continue;
             }
             match batch.layer {
+                GlassLayer::GridOverlay => {
+                    let tiles = model.tiles.as_deref().unwrap_or_default();
+                    let shapes: Vec<_> = batch
+                        .surfaces
+                        .iter()
+                        .map(|surface| grid_overlay_shape(surface, tiles))
+                        .collect();
+                    self.liquid_glass
+                        .set_grid_overlay_shapes(&self.device, &self.queue, &shapes);
+                }
+                GlassLayer::DragOverlay => {
+                    let tiles = model.tiles.as_deref().unwrap_or_default();
+                    let shapes: Vec<_> = batch
+                        .surfaces
+                        .iter()
+                        .map(|surface| grid_overlay_shape(surface, tiles))
+                        .collect();
+                    self.liquid_glass
+                        .set_drag_overlay_shapes(&self.device, &self.queue, &shapes);
+                }
                 GlassLayer::Overlay => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
@@ -180,6 +256,7 @@ impl Renderer {
                 .enumerate()
                 .map(|(index, view)| tile_instance(view, index))
                 .collect();
+            self.top_level_dragged_tile_instance = has_trailing_drag_tile(&instances);
             set_instances(
                 &self.device,
                 &self.queue,
@@ -197,10 +274,11 @@ impl Renderer {
         if model.icons != self.prepared_model.icons {
             let icons = model.icons.as_deref().unwrap_or_default();
             let instances: Vec<_> = icons.iter().filter_map(icon_instance).collect();
-            self.dragged_icon_instance = instances
-                .last()
-                .map(|instance| (instance.extra[3] as u32 & 2) != 0)
-                .unwrap_or(false);
+            self.dragged_icon_instance_count = instances
+                .iter()
+                .rev()
+                .take_while(|instance| (instance.extra[3] as u32 & 2) != 0)
+                .count() as u32;
             set_instances(
                 &self.device,
                 &self.queue,
@@ -212,6 +290,54 @@ impl Renderer {
             self.prepared_model.icons.clone_from(&model.icons);
         } else {
             self.counters.record_dirty_skip();
+        }
+        if model.modal_tiles != self.prepared_model.modal_tiles {
+            let views = model.modal_tiles.as_deref().unwrap_or_default();
+            let instances: Vec<_> = views
+                .iter()
+                .enumerate()
+                .map(|(index, view)| tile_instance(view, index))
+                .collect();
+            self.modal_dragged_tile_instance = has_trailing_drag_tile(&instances);
+            self.prepare_modal_edit_badges(
+                &instances,
+                self.modal_clip_rect
+                    .map(|rect| (rect, self.modal_clip_radius)),
+            );
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.modal_tile_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Tile,
+            );
+            self.prepared_model
+                .modal_tiles
+                .clone_from(&model.modal_tiles);
+        }
+        if model.modal_icons != self.prepared_model.modal_icons {
+            let instances: Vec<_> = model
+                .modal_icons
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(icon_instance)
+                .collect();
+            self.modal_dragged_icon_instance = instances.last().is_some_and(|instance| {
+                instance.extra[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
+            });
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.modal_icon_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Icon,
+            );
+            self.prepared_model
+                .modal_icons
+                .clone_from(&model.modal_icons);
         }
 
         for batch in &model.ink {
@@ -227,6 +353,14 @@ impl Renderer {
             }
             let instances: Vec<_> = batch.views.iter().filter_map(ink_instance).collect();
             match batch.lane {
+                InkLane::Backdrop => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.backdrop_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Control,
+                ),
                 InkLane::BottomControl => set_instances(
                     &self.device,
                     &self.queue,
@@ -252,6 +386,14 @@ impl Renderer {
                     Category::Settings,
                 ),
                 InkLane::EditBadge => {}
+                InkLane::Modal => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.modal_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Settings,
+                ),
             }
             self.prepared_model
                 .set_ink_batch(batch.lane, batch.views.clone());
@@ -290,6 +432,14 @@ impl Renderer {
                     &self.device,
                     &self.queue,
                     &mut self.settings_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::SettingsText,
+                ),
+                GlyphLane::Modal => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.modal_text_instance_buffer,
                     &quads,
                     &mut self.counters,
                     Category::SettingsText,
@@ -371,6 +521,30 @@ mod tests {
     }
 
     #[test]
+    fn dragged_folder_control_glass_keeps_the_tile_wiggle_phase() {
+        let source = surface("folder", 22, 240.0);
+        let tile = TileView {
+            id: source.id.clone(),
+            rect: Rect::new(10.0, 20.0, 84.0, 84.0),
+            radius: 19.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 0.0),
+            has_icon: false,
+            motion: crate::ui_model::grid::TileAnim {
+                phase: 1.75,
+                lift: 24.0,
+                scale: 1.15,
+                flags: crate::ui_model::grid::TileAnim::FLAG_WIGGLE
+                    | crate::ui_model::grid::TileAnim::FLAG_DRAG,
+            },
+            z: 0,
+        };
+
+        let shape = grid_overlay_shape(&source, &[tile]);
+        assert_eq!(shape.shape_type, 6);
+        assert_eq!(shape.motion, [240.0, 60.0, 1.75, 1.0]);
+    }
+
+    #[test]
     fn empty_model_clears_modal_lane() {
         assert!(highest_shape(&[]).is_none());
     }
@@ -382,6 +556,7 @@ mod tests {
             center: Point::new(12.25, 34.5),
             extent: 7.0,
             opacity: 0.8,
+            scene_blur: 0.0,
             stroke: 1.4,
             corner_radius: 0.0,
             color: Color::rgba(1.0, 0.9, 0.8, 0.7),
@@ -419,5 +594,26 @@ mod tests {
             [0.1, 0.2, 0.3, 0.4]
         );
         assert_eq!(packed.color, [0.5, 0.6, 0.7, 0.8]);
+    }
+
+    #[test]
+    fn top_level_drag_lane_requires_a_trailing_drag_tile() {
+        let ordinary = TileInstance {
+            x: 0.0,
+            y: 0.0,
+            size: 84.0,
+            radius: 19.0,
+            r: 0.2,
+            g: 0.3,
+            b: 0.4,
+            icon_index: 0.0,
+            extra: [0.0; 4],
+        };
+        let mut dragged = ordinary;
+        dragged.extra[3] = crate::ui_model::grid::TileAnim::FLAG_DRAG as f32;
+
+        assert!(!has_trailing_drag_tile(&[]));
+        assert!(!has_trailing_drag_tile(&[ordinary]));
+        assert!(has_trailing_drag_tile(&[ordinary, dragged]));
     }
 }

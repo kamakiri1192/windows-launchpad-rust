@@ -18,6 +18,38 @@ impl UiId {
         Self::new(format!("launcher-badge:{}", key.as_ref()))
     }
 
+    pub fn launcher_preview(key: impl AsRef<str>, slot: usize) -> Self {
+        Self::new(format!("launcher-preview:{}:{slot}", key.as_ref()))
+    }
+
+    pub fn folder_panel(key: impl AsRef<str>) -> Self {
+        Self::new(format!("folder-panel:{}", key.as_ref()))
+    }
+
+    pub fn folder_title(key: impl AsRef<str>) -> Self {
+        Self::new(format!("folder-title:{}", key.as_ref()))
+    }
+
+    pub fn folder_child(folder: impl AsRef<str>, child: impl AsRef<str>) -> Self {
+        Self::new(format!(
+            "folder-child:{}:{}",
+            folder.as_ref(),
+            child.as_ref()
+        ))
+    }
+
+    pub fn folder_child_badge(folder: impl AsRef<str>, child: impl AsRef<str>) -> Self {
+        Self::new(format!(
+            "folder-child-badge:{}:{}",
+            folder.as_ref(),
+            child.as_ref()
+        ))
+    }
+
+    pub fn folder_page(key: impl AsRef<str>, page: usize) -> Self {
+        Self::new(format!("folder-page:{}:{page}", key.as_ref()))
+    }
+
     pub fn bottom_control() -> Self {
         Self::new("bottom-control")
     }

@@ -35,6 +35,7 @@ mod icons;
 mod layout;
 mod liquid_glass;
 mod platform;
+mod qa;
 mod renderer;
 mod scroll;
 mod startup_timer;
@@ -142,15 +143,23 @@ pub(crate) fn dump_atlas_png(atlas: &IconAtlas) {
 
 fn main() {
     #[cfg(windows)]
-    let _single_instance = match platform::windows::SingleInstanceGuard::acquire() {
-        Ok(guard) => guard,
-        Err(e) if e.is_already_running() => {
-            crate::debug_log!("single-instance: existing instance signaled");
-            return;
-        }
-        Err(e) => {
-            eprintln!("single-instance: {e}");
-            std::process::exit(1);
+    let _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some() {
+        // Hidden deterministic QA must be able to run beside the user's
+        // foreground launcher (and beside other branch worktrees). It owns no
+        // tray/hotkey/persistence state, so the production singleton does not
+        // apply to this process.
+        None
+    } else {
+        match platform::windows::SingleInstanceGuard::acquire() {
+            Ok(guard) => Some(guard),
+            Err(e) if e.is_already_running() => {
+                crate::debug_log!("single-instance: existing instance signaled");
+                return;
+            }
+            Err(e) => {
+                eprintln!("single-instance: {e}");
+                std::process::exit(1);
+            }
         }
     };
 
@@ -220,17 +229,22 @@ fn main() {
     // OS integration: global hot key (Win+Space) + tray icon. Spawned before
     // the event loop so the hot key works even during the very first frame.
     #[cfg(windows)]
-    let os = platform::windows::OsIntegrationHandle::spawn(proxy.clone());
+    let os = (std::env::var_os(qa::SCENARIO_ENV).is_none())
+        .then(|| platform::windows::OsIntegrationHandle::spawn(proxy.clone()));
 
     let mut app = App::new(proxy, timer, cache, inbox, worker);
     // Anchor the OS-integration thread for the whole process lifetime.
     #[cfg(windows)]
     {
-        app._os = Some(os);
+        app._os = os;
     }
     // Restore the user's saved layout (drag-to-reorder + hidden apps) before the
     // first scan lands, so apps appear in the user's arrangement from frame one.
-    app.load_customization();
+    if app.qa_enabled() {
+        app.install_qa_fixture();
+    } else {
+        app.load_customization();
+    }
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("event loop error: {e}");
         std::process::exit(1);

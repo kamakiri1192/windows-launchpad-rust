@@ -50,6 +50,8 @@ struct VsOut {
 const FLAG_WIGGLE: f32 = 1.0;
 // Flag bit set in `extra.w` while this icon is the one being dragged.
 const FLAG_DRAG: f32 = 2.0;
+const FLAG_FIXED: f32 = 4.0;
+const FLAG_NO_FILL: f32 = 16.0;
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -79,6 +81,7 @@ fn vs_main(
     let flags = extra.w;
     let wiggling = (u32(flags) & u32(FLAG_WIGGLE)) != 0u;
     let dragged = (u32(flags) & u32(FLAG_DRAG)) != 0u;
+    let fixed = (u32(flags) & u32(FLAG_FIXED)) != 0u;
 
     // Effective size after the drag scale (wiggle doesn't change the size).
     let eff_size = size * scale;
@@ -92,6 +95,8 @@ fn vs_main(
     var tl: vec2<f32>;
     if dragged && u.drag_active > 0.5 {
         tl = vec2<f32>(u.drag_pos.x - eff_size * 0.5, u.drag_pos.y - eff_size * 0.5);
+    } else if fixed {
+        tl = vec2<f32>(origin.x - size_delta, origin.y - size_delta);
     } else {
         tl = vec2<f32>(origin.x + u.scroll_x - size_delta, origin.y - size_delta);
     }
@@ -107,7 +112,9 @@ fn vs_main(
     // per-app phase offset, so icons wobble out of sync.
     var wiggle_rot = 0.0;
     var wiggle_dy = 0.0;
-    if wiggling && !dragged {
+    // Keep the same phase after lift-off. Disabling wiggle for the dragged
+    // frame would snap its current rotation/bob to zero on pointer-down.
+    if wiggling {
         let t = u.time + phase;
         wiggle_rot = sin(t * 8.0) * 0.06;          // ±~3.4°
         wiggle_dy = abs(sin(t * 8.0)) * 2.0;        // gentle bob
@@ -150,6 +157,9 @@ fn sdRoundBox(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    if (u32(in.flags) & u32(FLAG_NO_FILL)) != 0u {
+        discard;
+    }
     let half_size = in.size_r.x * 0.5;
     let r = min(in.size_r.y, half_size);
     let d = sdRoundBox(in.uv, vec2<f32>(half_size, half_size), r);
@@ -161,9 +171,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Clip to the fixed page frame so tiles never spill past its rounded edge.
     // A dragged (lifted) icon bypasses the clip so it can rise above the panel.
     let dragged = (u32(in.flags) & u32(FLAG_DRAG)) != 0u;
+    let fixed = (u32(in.flags) & u32(FLAG_FIXED)) != 0u;
 
     var frame_a = 1.0;
-    if !dragged {
+    if !dragged && !fixed {
         frame_a = frame_alpha(in.pos.xy);
     }
     let body_a = alpha * frame_a;

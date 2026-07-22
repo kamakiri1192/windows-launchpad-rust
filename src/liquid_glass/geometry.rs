@@ -1,5 +1,5 @@
 use crate::layout::grid::GridLayout;
-use crate::ui_model::grid::GridApp;
+use crate::ui_model::grid::GridItem;
 use crate::ui_model::render_model::TileView;
 
 #[repr(C)]
@@ -29,11 +29,17 @@ pub struct GlassShape {
 ///   the frame.
 /// - 3 = fixed rounded rectangle used only as a clip mask. It is not rendered
 ///   as glass.
+/// - 4 = scrolling edit badge animated around its parent tile pivot.
+/// - 5 = scrolling rounded rectangle animated around its own center.
+/// - 6 = frame-independent control rounded rectangle animated around its own
+///   center.
 const SHAPE_SCROLLING: u32 = 0;
 const SHAPE_FIXED: u32 = 1;
 const SHAPE_CONTROL: u32 = 2;
 const SHAPE_CLIP_ONLY: u32 = 3;
 const SHAPE_ANIMATED_BADGE: u32 = 4;
+const SHAPE_ANIMATED_SCROLLING: u32 = 5;
+const SHAPE_ANIMATED_CONTROL: u32 = 6;
 
 impl GlassShape {
     pub fn rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
@@ -72,6 +78,28 @@ impl GlassShape {
         shape
     }
 
+    pub fn animated_scrolling_rounded_rect(
+        center: [f32; 2],
+        size: [f32; 2],
+        radius: f32,
+        phase: f32,
+    ) -> Self {
+        let mut shape = Self::with_kind(center, size, radius, SHAPE_ANIMATED_SCROLLING);
+        shape.motion = [center[0], center[1], phase, 1.0];
+        shape
+    }
+
+    pub fn animated_control_rounded_rect(
+        center: [f32; 2],
+        size: [f32; 2],
+        radius: f32,
+        phase: f32,
+    ) -> Self {
+        let mut shape = Self::with_kind(center, size, radius, SHAPE_ANIMATED_CONTROL);
+        shape.motion = [center[0], center[1], phase, 1.0];
+        shape
+    }
+
     fn with_kind(center: [f32; 2], size: [f32; 2], radius: f32, shape_type: u32) -> Self {
         Self {
             center,
@@ -90,7 +118,7 @@ impl GlassShape {
 pub fn shapes_from_layout(
     layout: &GridLayout,
     viewport_w: f32,
-    apps: &[GridApp<'_>],
+    apps: &[GridItem<'_>],
 ) -> Vec<GlassShape> {
     let mut shapes = Vec::with_capacity(1 + apps.len().min(layout.total_tiles()));
     let (center_x, center_y, panel_w, panel_h) = layout.frame_panel_rect(viewport_w);
@@ -135,5 +163,13 @@ mod tests {
     fn glass_shape_layout_matches_wgsl_storage_struct() {
         assert_eq!(std::mem::size_of::<GlassShape>(), 48);
         assert_eq!(std::mem::align_of::<GlassShape>(), 4);
+    }
+
+    #[test]
+    fn animated_control_retains_center_and_phase_without_scrolling_kind() {
+        let shape =
+            GlassShape::animated_control_rounded_rect([12.0, 34.0], [80.0, 80.0], 19.0, 1.25);
+        assert_eq!(shape.shape_type, 6);
+        assert_eq!(shape.motion, [12.0, 34.0, 1.25, 1.0]);
     }
 }

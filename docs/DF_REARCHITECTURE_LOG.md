@@ -2168,3 +2168,149 @@ Final validation after all corrections:
 - `cargo build --release`: passed
 - `codex review --base main -c 'model="gpt-5.5"'`: no actionable findings.
 
+## 2026-07-13 — Phase 8: Folder Feature Vertical Slice
+
+Phase 8 is complete. Folders now exercise the intended domain -> feature ->
+layout/UI model -> renderer boundary end to end without introducing folder
+semantics into the renderer.
+
+Files and boundaries:
+
+- `src/domain/launcher_state.rs` now provides stable item reorder,
+  app-on-app folder creation, top-level-to-folder moves, child reorder,
+  folder-to-folder moves, child-to-top-level moves, and deterministic
+  one/zero-child dissolution. Hidden folder children use the same dissolution
+  rule.
+- `src/features/folders/mod.rs` is the folder feature state machine: reversible
+  dt-based spring, hover thresholds, presentation-only pending merge preview,
+  rename/IME editor, and child-drag preview state. Domain data is mutated only
+  at drop/commit boundaries.
+- `src/layout/folder_panel.rs` is pure geometry for dynamic 3-column panels,
+  centered incomplete rows, nine items per page, viewport/DPI clamping,
+  source-to-panel container morph, child mini-to-cell trajectories, generic UI
+  primitives, and a hit map built from the same rectangles.
+- `src/app/render/folders.rs` and the app shell resolve current domain records,
+  current tile springs, current scroll, atlas UVs, and pointer actions into the
+  feature/layout inputs. Search deliberately uses a separate flat app-only
+  projection.
+- `src/grid.rs` emits item-based top-level tiles and ordered 3x3 folder mini
+  previews. `src/ui_model/*` and renderer preparation/frame modules gained
+  generic modal tile/icon/text/backdrop lanes.
+- `src/shader.wgsl` and `src/shader_icon.wgsl` gained only generic fixed-screen
+  and no-badge flags. Architecture tests continue to reject domain folder
+  imports from renderer code.
+
+Behavior and policy decisions:
+
+- New-folder hover may animate a panel before drop, but no folder is inserted
+  into `LauncherState` until the drop succeeds. The committed folder inherits
+  the preview's motion progress instead of restarting.
+- Existing-folder hover remains stable while the pointer moves from the source
+  tile into the opened panel. The lifted app is resubmitted through generic
+  modal tile/icon lanes above the glass, remains pointer-attached over child
+  targets, and is added to the durable folder only on release.
+- Child order is stable `AppId` order. New folders start with target then
+  dragged; all later moves preserve unaffected relative order, including
+  undiscovered placeholder children. Normal top-level live reorder pauses while
+  a stable app/folder hover target is active so it cannot reset the formation
+  timer by moving the dragged item into the target cell.
+- `normalize` applies the same zero/one-child dissolve policy after repairing
+  hidden, duplicate, or corrupt persisted membership, so undersized folders
+  cannot survive a restart as invalid durable containers.
+- The folder source rectangle is resolved from the latest grid layout and tile
+  spring every frame, so close remains spatially connected after layout or
+  scroll changes.
+- Modal input has precedence over the grid. Outside clicks dismiss without
+  click replay. `Esc` cancels rename before it closes the panel.
+- Rename is UTF-8-safe and IME-aware; a blank commit becomes `フォルダ`.
+- More than nine visible children are paginated. Hidden/undiscovered children
+  are omitted from both closed previews and open panel cells.
+- Opening settings or hiding/resetting the launcher clears folder presentation
+  state immediately. Open-idle panels do not request continuous redraw.
+
+Screen Verification Gate (release build, isolated temporary
+`LOCALAPPDATA`, `LAUNCHPAD_ALLOW_SCREENSHOT=1`, GPU self-capture enabled):
+
+- Verified initial app/folder interleave, ordered closed 3x3 preview, an
+  11-child paginated panel, a centered 3-child single-row panel, long-title
+  ellipsis, page navigation, and page indicator.
+- Verified production Liquid Glass panel/backdrop rendering, modal outside
+  dismissal with no passthrough, and app-only flat search presentation.
+- Captured opening and closing in five roughly 105 ms frames. The container
+  rect/radius and child icons morph between the latest folder-tile geometry and
+  panel cells, while dimming/refraction fades with the same progress.
+- Captured an opening interrupted by `Esc`; the same spring reversed from its
+  in-flight value and settled closed without an endpoint reset.
+- Verified rename commit persistence through `launcher_state`, stopped and
+  restarted the release process with the same temporary cache, and confirmed
+  the persisted folder name, child order, and top-level item placement on
+  screen. Rename cancellation with `Esc` left that committed value unchanged.
+  The automation bridge could not emit real Japanese
+  IME commits, so Japanese preedit/commit and UTF-8 editing are covered by
+  deterministic feature tests rather than claimed as screen-verified.
+- Not screen-verified: long-press drag-to-create, drag-into-folder, child live
+  reorder, cross-folder move, child drag-out/dissolution, app launch, and
+  resize/DPI transitions. The available desktop automation exposes an atomic
+  drag but not the required long-press/hold/move/release sequence. These paths
+  are covered by domain, feature, layout, input, and architecture tests.
+
+Final validation:
+
+- `cargo fmt --check`: passed.
+- `cargo test`: 193 library + 408 app (2 ignored) + 9 architecture + 22 domain
+  integration + 2 WGSL validation = 634 total, 632 passed and 2 ignored.
+- `cargo clippy --all-targets --all-features`: passed with no warnings.
+- `cargo build --release`: passed.
+
+### 2026-07-13 — Closed-folder surface stabilization
+
+- Closed folder tiles now suppress the generic opaque app-tile fallback while
+  retaining the generic Liquid Glass surface and ordered 3x3 mini preview.
+- The suppression is a renderer-neutral tile flag rather than folder logic in
+  the renderer. During edit-mode drag, the folder glass surface follows the
+  pointer with the lifted tile instead of remaining at its original cell.
+- Initial release-build GPU capture verified removal of the opaque fallback,
+  but a follow-up visual review found that the folder boundary itself was
+  absorbed into the page-frame SDF union and therefore was not visible.
+- Validation passed: `cargo fmt --check`, 635 tests (633 passed, 2 ignored),
+  `cargo clippy --all-targets --all-features`, and `cargo build --release`.
+
+### 2026-07-13 — Visible closed-folder Liquid Glass
+
+- Added the renderer-neutral `GridOverlay` glass lane between opaque tile
+  fills and grid icons/text. Closed folder containers use this separate SDF
+  field, so their rounded boundary remains visible inside the larger page
+  frame instead of being swallowed by its smooth union.
+- Folder mini icons render after the new glass pass. Normal app fills stay in
+  the earlier tile pass, and the active or dragged folder is omitted from the
+  static lane so open/close and drag presentation do not leave duplicate glass.
+- Release-build GPU capture verified visible closed-folder glass behind both
+  nine-icon and three-icon previews, unchanged normal app backgrounds, and
+  successful folder open/close with the closed glass restored afterward.
+- A follow-up size correction removes the generic 9 px-per-side tile halo from
+  the visible folder container. Its bounds and corner radius now match the
+  normal app tile exactly while the separate glass pass remains unchanged.
+- The modal morph now receives that same grid radius as explicit source
+  geometry instead of ending at the legacy 24 px radius. Closing therefore
+  hands off to the 19 px closed-folder glass without an endpoint flash.
+- Child icon motion and colored tile-fill motion are now separate at the closed
+  end of the morph. During the final 42% the fill scales about the child's
+  center to zero, while the icon keeps moving into its stable miniature slot;
+  the modal-to-grid handoff no longer removes a visible fill in one frame.
+- The active folder's grid-preview mini icons are filtered from every grid icon
+  rebuild path while modal child icons own the morph. This removes the duplicate
+  miniatures left at the source tile without changing the endpoint handoff.
+- Replaced the window-wide black folder dimmer with the **Glass Focus Veil**.
+  The renderer-neutral veil now takes the exact fixed page-frame rectangle and
+  corner radius from `GridLayout`. Its neutral `scene_blur` request makes the
+  renderer finish the lower scene in an intermediate texture, run a three-level
+  Dual-Kawase pyramid, and recompose the blurred result through that rounded
+  shape before adding the low-contrast cool-neutral tint. The page rim stays
+  crisp through a 12 px inner mask, the transparent surround remains untouched,
+  and the modal folder glass/content render sharply after the effect.
+- Release-build transparent-window QA verified that lower app icons, other
+  folders, and labels blur together while the open folder stays sharp; the
+  effect remains inside the page frame and fades out with the close motion.
+- Validation passed: `cargo fmt --check`, 640 tests (638 passed, 2 ignored),
+  `cargo clippy --all-targets --all-features`, and `cargo build --release`.
+

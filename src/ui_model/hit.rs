@@ -1,15 +1,47 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HitTarget {
-    LauncherItem { key: String },
-    LauncherItemBadge { key: String },
-    LauncherCell { index: usize },
+    LauncherItem {
+        key: String,
+    },
+    LauncherItemBadge {
+        key: String,
+    },
+    LauncherCell {
+        index: usize,
+    },
+    FolderPanel {
+        key: String,
+    },
+    FolderTitle {
+        key: String,
+    },
+    FolderChild {
+        folder: String,
+        child: String,
+        index: usize,
+    },
+    FolderChildBadge {
+        folder: String,
+        child: String,
+        index: usize,
+    },
+    FolderPagePrevious {
+        key: String,
+    },
+    FolderPageNext {
+        key: String,
+    },
     BottomControl,
     BottomControlClose,
     SearchField,
     EditSettingsGear,
     SettingsPanel,
-    Settings { target: SettingsTarget },
-    Backdrop { kind: BackdropKind },
+    Settings {
+        target: SettingsTarget,
+    },
+    Backdrop {
+        kind: BackdropKind,
+    },
 }
 
 impl HitTarget {
@@ -23,6 +55,34 @@ impl HitTarget {
 
     pub const fn launcher_cell(index: usize) -> Self {
         Self::LauncherCell { index }
+    }
+
+    pub fn folder_panel(key: impl Into<String>) -> Self {
+        Self::FolderPanel { key: key.into() }
+    }
+
+    pub fn folder_title(key: impl Into<String>) -> Self {
+        Self::FolderTitle { key: key.into() }
+    }
+
+    pub fn folder_child(folder: impl Into<String>, child: impl Into<String>, index: usize) -> Self {
+        Self::FolderChild {
+            folder: folder.into(),
+            child: child.into(),
+            index,
+        }
+    }
+
+    pub fn folder_child_badge(
+        folder: impl Into<String>,
+        child: impl Into<String>,
+        index: usize,
+    ) -> Self {
+        Self::FolderChildBadge {
+            folder: folder.into(),
+            child: child.into(),
+            index,
+        }
     }
 
     pub fn settings_category(key: impl Into<String>) -> Self {

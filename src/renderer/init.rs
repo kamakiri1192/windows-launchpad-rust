@@ -19,6 +19,7 @@ use crate::UserEvent;
 
 use super::controls::ControlUniforms;
 use super::counters::BufferCounters;
+use super::focus_blur::FocusBlurRenderer;
 use super::frame_clip;
 use super::resources::InstanceBuffer;
 use super::tiles::Uniforms;
@@ -34,6 +35,7 @@ impl Renderer {
         window: winit::window::Window,
         layout: &GridLayout,
         event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+        backdrop_capture_enabled: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // On Windows we render to a transparent winit window. The default DX12
         // swapchain (DxgiFromHwnd) can't carry per-pixel alpha to the DWM, so
@@ -72,10 +74,12 @@ impl Renderer {
             .await
             .map_err(|e| format!("no suitable GPU adapter: {e}"))?;
 
+        let required_features =
+            super::gpu_profile::GpuProfilerState::required_features(adapter.features());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("launchpad device"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 // `downlevel_defaults()` caps the max texture dimension at
                 // 2048, which high-DPI windows easily exceed (e.g. a 150%
                 // scale 1920x1080 window becomes 2880x1620). Use the full
@@ -422,7 +426,7 @@ impl Renderer {
             cache: None,
         });
 
-        let capture = create_backdrop_capture(&window, event_proxy);
+        let capture = create_backdrop_capture(&window, event_proxy, backdrop_capture_enabled);
         let liquid_glass = LiquidGlassRenderer::new(
             &device,
             &queue,
@@ -432,6 +436,9 @@ impl Renderer {
             layout,
             capture,
         );
+        let focus_blur =
+            FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
+        let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
         // Small viewport-only uniform shared by the control shape + text
@@ -581,10 +588,15 @@ impl Renderer {
             pipeline,
             decorated: false,
             instance_buffer: InstanceBuffer::new("instance buffer"),
+            top_level_dragged_tile_instance: false,
+            modal_tile_instance_buffer: InstanceBuffer::new("modal tile instance buffer"),
+            modal_dragged_tile_instance: false,
             uniform_buffer,
             uniform_bind_group,
             surface_format,
             liquid_glass,
+            focus_blur,
+            gpu_profiler,
             text_pipeline,
             text_instance_buffer: InstanceBuffer::new("text instance buffer"),
             atlas_texture,
@@ -592,24 +604,37 @@ impl Renderer {
             text_bgl,
             icon_pipeline,
             icon_instance_buffer: InstanceBuffer::new("icon instance buffer"),
-            dragged_icon_instance: false,
+            modal_icon_instance_buffer: InstanceBuffer::new("modal icon instance buffer"),
+            modal_dragged_icon_instance: false,
+            dragged_icon_instance_count: 0,
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
+            modal_clip_rect: None,
+            modal_clip_radius: 0.0,
             control_pipeline,
             control_uniform_buffer,
             control_bind_group: control_bind_group.clone(),
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
+            backdrop_instance_buffer: InstanceBuffer::new("backdrop instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
             badge_sources: Vec::new(),
             badge_shape_scratch: Vec::new(),
             badge_mark_scratch: Vec::new(),
             badge_instance_buffer: InstanceBuffer::new("badge foreground instance buffer"),
+            modal_badge_sources: Vec::new(),
+            modal_badge_shape_scratch: Vec::new(),
+            modal_badge_mark_scratch: Vec::new(),
+            modal_badge_instance_buffer: InstanceBuffer::new(
+                "modal badge foreground instance buffer",
+            ),
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
+            modal_instance_buffer: InstanceBuffer::new("modal ink instance buffer"),
+            modal_text_instance_buffer: InstanceBuffer::new("modal text instance buffer"),
             prepared_model: crate::ui_model::render_model::RenderModel::new(),
             counters: BufferCounters::default(),
             qa_shot: None,
@@ -633,6 +658,8 @@ impl Renderer {
             self.config.width,
             self.config.height,
         );
+        self.focus_blur
+            .resize(&self.device, self.config.width, self.config.height);
     }
 
     #[allow(dead_code)]
@@ -660,15 +687,25 @@ impl Renderer {
     }
 }
 
-/// Prefer Mailbox (low-latency VSync); fall back to FIFO.
+/// Use FIFO VSync for the continuously animated launcher surface. Mailbox
+/// replaces queued frames and allows the edit-mode redraw loop to run up to
+/// `maximum_frame_latency * monitor_hz` on DX12, which can saturate the GPU
+/// while most submitted frames are never displayed.
 fn select_present_mode(available: &[PresentMode]) -> PresentMode {
-    if available.contains(&PresentMode::Mailbox) {
-        PresentMode::Mailbox
+    let selected = if available.contains(&PresentMode::Fifo) {
+        PresentMode::Fifo
     } else if available.contains(&PresentMode::AutoVsync) {
         PresentMode::AutoVsync
+    } else if available.contains(&PresentMode::Mailbox) {
+        PresentMode::Mailbox
     } else {
         PresentMode::Fifo
-    }
+    };
+    eprintln!(
+        "surface present_mode: {:?} (available: {:?})",
+        selected, available
+    );
+    selected
 }
 
 fn default_backends() -> Backends {
@@ -702,7 +739,14 @@ fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
 fn create_backdrop_capture(
     window: &winit::window::Window,
     event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+    enabled: bool,
 ) -> Box<dyn crate::liquid_glass::capture::BackdropCapture> {
+    if !enabled {
+        return Box::new(FallbackCapture::new(
+            "desktop backdrop capture disabled for deterministic QA",
+        ));
+    }
+
     #[cfg(windows)]
     {
         match crate::liquid_glass::windows_capture::create_monitor_capture(window, event_proxy) {
@@ -730,5 +774,18 @@ fn create_backdrop_capture(
         Box::new(FallbackCapture::new(
             "Windows.Graphics.Capture is only available on Windows",
         ))
+    }
+}
+
+#[cfg(test)]
+mod present_mode_tests {
+    use super::*;
+
+    #[test]
+    fn fifo_is_preferred_over_mailbox_for_animation_pacing() {
+        assert_eq!(
+            select_present_mode(&[PresentMode::Mailbox, PresentMode::Fifo]),
+            PresentMode::Fifo
+        );
     }
 }

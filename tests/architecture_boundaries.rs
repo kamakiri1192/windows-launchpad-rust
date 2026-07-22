@@ -47,10 +47,11 @@ fn layout_and_ui_model_are_library_public() {
 
 #[test]
 fn glass_layer_is_renderer_neutral() {
-    // GlassLayer (Base/Overlay/Modal) is renderer-neutral compositing intent,
+    // GlassLayer is renderer-neutral compositing intent,
     // not a feature-specific pass selector.
     use launchpad_windows::ui_model::render_model::GlassLayer;
     assert_eq!(GlassLayer::Base, GlassLayer::Base);
+    assert_eq!(GlassLayer::GridOverlay, GlassLayer::GridOverlay);
     assert_eq!(GlassLayer::Overlay, GlassLayer::Overlay);
     assert_eq!(GlassLayer::Modal, GlassLayer::Modal);
     assert_ne!(GlassLayer::Base, GlassLayer::Modal);
@@ -182,4 +183,42 @@ fn edit_badge_frame_motion_is_gpu_driven() {
     .expect("glass shader");
     assert!(control_shader.contains("u.viewport_scroll.w + kind.w"));
     assert!(glass_shader.contains("u.time + shape.motion.z"));
+}
+
+#[test]
+fn dragged_tiles_keep_the_running_wiggle_phase() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in ["src/shader.wgsl", "src/shader_icon.wgsl"] {
+        let shader = std::fs::read_to_string(root.join(relative)).expect("tile shader");
+        assert!(
+            !shader.contains("wiggling && !dragged"),
+            "{relative} must not snap a lifted item back to neutral"
+        );
+    }
+
+    let glass_shader =
+        std::fs::read_to_string(root.join("assets/shaders/liquid_glass_geometry.wgsl"))
+            .expect("glass shader");
+    assert!(glass_shader.contains("shape.shape_type == 5u || shape.shape_type == 6u"));
+}
+
+#[test]
+fn dragged_folder_glass_is_isolated_and_drawn_immediately_before_drag_content() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let frame =
+        std::fs::read_to_string(root.join("src/renderer/frame.rs")).expect("renderer frame source");
+    let badges = frame.find("render_badges(").expect("edit badge glass pass");
+    let drag_glass = frame
+        .find("render_drag_overlay(")
+        .expect("dragged folder glass pass");
+    let drag_content = frame
+        .find("label: Some(\"drag overlay pass\")")
+        .expect("drag content pass");
+    assert!(badges < drag_glass && drag_glass < drag_content);
+
+    let grid =
+        std::fs::read_to_string(root.join("src/app/render/grid.rs")).expect("grid render adapter");
+    assert!(grid.contains("GlassLayer::GridOverlay, folder_glass"));
+    assert!(grid.contains("GlassLayer::DragOverlay"));
+    assert!(grid.contains("batch.layer == GlassLayer::DragOverlay"));
 }

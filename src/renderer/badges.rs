@@ -14,7 +14,7 @@ use crate::ui_model::grid::TileAnim;
 use super::counters::Category;
 use super::Renderer;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct EditBadgeSource {
     base_center: [f32; 2],
     tile_center: [f32; 2],
@@ -76,16 +76,80 @@ impl Renderer {
         self.badge_shape_scratch = shapes;
         self.badge_mark_scratch = marks;
     }
+
+    /// Prepare the open-folder badges for the modal compositing lane. Their
+    /// glass disks are rendered after folder content and their foreground
+    /// marks use a fixed-position animated shader kind (no main-page scroll or
+    /// main-frame clipping).
+    pub(super) fn prepare_modal_edit_badges(
+        &mut self,
+        instances: &[TileInstance],
+        clip: Option<(crate::ui_model::geometry::Rect, f32)>,
+    ) {
+        const KIND_MODAL_BADGE_CLOSE: f32 = 9.0;
+
+        let sources = edit_badge_sources(instances);
+        if sources == self.modal_badge_sources {
+            return;
+        }
+        self.modal_badge_sources = sources;
+
+        let mut shapes = std::mem::take(&mut self.modal_badge_shape_scratch);
+        let mut marks = std::mem::take(&mut self.modal_badge_mark_scratch);
+        shapes.clear();
+        marks.clear();
+        shapes.reserve(self.modal_badge_sources.len() + usize::from(clip.is_some()));
+        marks.reserve(self.modal_badge_sources.len());
+        if let Some((clip, radius)) = clip {
+            shapes.push(GlassShape::clip_rounded_rect(
+                [clip.center().x, clip.center().y],
+                [clip.width, clip.height],
+                radius,
+            ));
+        }
+        for source in &self.modal_badge_sources {
+            shapes.push(GlassShape::animated_badge(
+                source.base_center,
+                [source.radius * 2.15, source.radius * 2.15],
+                source.radius,
+                source.tile_center,
+                source.phase,
+            ));
+            marks.push(ControlInstance {
+                center: source.base_center,
+                params: [source.radius, 0.92, (source.radius * 0.13).max(1.4), 0.0],
+                color: [1.0, 1.0, 1.0, 0.92],
+                kind: [
+                    KIND_MODAL_BADGE_CLOSE,
+                    source.tile_center[0],
+                    source.tile_center[1],
+                    source.phase,
+                ],
+            });
+        }
+
+        self.liquid_glass
+            .set_modal_badge_shapes(&self.device, &self.queue, &shapes);
+        let outcome = self
+            .modal_badge_instance_buffer
+            .set(&self.device, &self.queue, &marks);
+        if outcome.allocated {
+            self.counters.record_growth(Category::BadgeForeground);
+        }
+        self.modal_badge_shape_scratch = shapes;
+        self.modal_badge_mark_scratch = marks;
+    }
 }
 
 pub(super) fn edit_badge_sources(instances: &[TileInstance]) -> Vec<EditBadgeSource> {
     const FLAG_WIGGLE: u32 = TileAnim::FLAG_WIGGLE;
     const FLAG_DRAG: u32 = TileAnim::FLAG_DRAG;
+    const FLAG_NO_BADGE: u32 = TileAnim::FLAG_NO_BADGE;
 
     let mut sources = Vec::new();
     for tile in instances {
         let flags = tile.extra[3] as u32;
-        if flags & FLAG_WIGGLE == 0 || flags & FLAG_DRAG != 0 {
+        if flags & FLAG_WIGGLE == 0 || flags & (FLAG_DRAG | FLAG_NO_BADGE) != 0 {
             continue;
         }
 
@@ -137,5 +201,12 @@ mod tests {
 
         assert!((source.base_center[0] - (100.0 + inset)).abs() < 1e-4);
         assert!((source.base_center[1] - (50.0 + inset)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn no_badge_flag_suppresses_badge_generation() {
+        let mut tile_without_badge = tile(BASE_TILE_SIZE);
+        tile_without_badge.extra[3] = (TileAnim::FLAG_WIGGLE | TileAnim::FLAG_NO_BADGE) as f32;
+        assert!(edit_badge_sources(&[tile_without_badge]).is_empty());
     }
 }

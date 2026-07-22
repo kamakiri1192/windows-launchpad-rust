@@ -8,6 +8,9 @@ pub struct RenderModel {
     pub glass: Vec<GlassBatch>,
     pub tiles: Option<Vec<TileView>>,
     pub icons: Option<Vec<IconView>>,
+    /// Fixed content composited after the generic modal glass lane.
+    pub modal_tiles: Option<Vec<TileView>>,
+    pub modal_icons: Option<Vec<IconView>>,
     pub text: Vec<TextView>,
     pub controls: Vec<ControlView>,
     /// Procedural renderer-neutral ink primitives, split into draw-order lanes.
@@ -26,6 +29,8 @@ impl RenderModel {
         self.glass.is_empty()
             && self.tiles.as_ref().is_none_or(Vec::is_empty)
             && self.icons.as_ref().is_none_or(Vec::is_empty)
+            && self.modal_tiles.as_ref().is_none_or(Vec::is_empty)
+            && self.modal_icons.as_ref().is_none_or(Vec::is_empty)
             && self.text.is_empty()
             && self.controls.is_empty()
             && self.ink.is_empty()
@@ -87,6 +92,14 @@ pub enum GlassMaterial {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GlassLayer {
     Base,
+    /// Glass surfaces composited above opaque grid fills but below grid icons
+    /// and labels. This keeps nested glass boundaries distinct from the page
+    /// frame's SDF union.
+    GridOverlay,
+    /// Pointer-following Liquid Glass for a lifted top-level folder. It is
+    /// isolated from `GridOverlay` so overlapping closed folders never enter
+    /// the same SDF union, and is composited immediately before drag content.
+    DragOverlay,
     Overlay,
     Modal,
 }
@@ -108,6 +121,10 @@ pub struct IconView {
     pub rect: Rect,
     pub source: IconSource,
     pub motion: TileAnim,
+    /// Optional common pivot for a rigid icon group, such as the 3x3
+    /// miniatures inside a closed folder. The renderer keeps every child at
+    /// its relative offset while the parent folder wiggles or follows a drag.
+    pub motion_pivot: Option<Point>,
     pub z: i16,
 }
 
@@ -158,10 +175,12 @@ pub enum ControlKind {
 /// Draw-order lane for procedural foreground ink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InkLane {
+    Backdrop,
     BottomControl,
     Gear,
     Settings,
     EditBadge,
+    Modal,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +199,9 @@ pub struct InkView {
     pub center: Point,
     pub extent: f32,
     pub opacity: f32,
+    /// Renderer-neutral request to blur the already-rendered lower scene
+    /// inside this view's rounded geometry. Zero keeps the normal sharp scene.
+    pub scene_blur: f32,
     pub stroke: f32,
     pub corner_radius: f32,
     pub color: Color,
@@ -193,6 +215,7 @@ pub enum GlyphLane {
     Grid,
     BottomControl,
     Settings,
+    Modal,
 }
 
 #[derive(Debug, Clone, PartialEq)]

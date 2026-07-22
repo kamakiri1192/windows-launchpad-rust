@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "use_case": "ui-mockup",
+  "asset_type": "high-fidelity motion storyboard for the Phase 8 folder interaction",
+  "primary_request": "Create a polished six-panel storyboard showing how a Windows desktop app launcher folder behaves with iOS-inspired spatial motion and production-quality Liquid Glass.",
+  "canvas": {
+    "orientation": "landscape",
+    "aspect_ratio": "16:9",
+    "layout": "three columns by two rows, six equally sized panels with narrow gutters",
+    "viewpoint": "straight-on desktop UI presentation",
+    "continuity": "show the exact same launcher, wallpaper, folder, app icons, and camera framing in every panel"
+  },
+  "scene_backdrop": {
+    "environment": "a frameless translucent Windows desktop launcher floating above a rich teal, indigo, and warm coral abstract wallpaper",
+    "launcher": "wide desktop launcher with a centered grid of rounded app tiles and a compact glass search control near the bottom",
+    "icons": "original generic colorful application glyphs with no real product logos or trademarks",
+    "depth": "the wallpaper remains visible through all glass surfaces and provides enough detail to clearly demonstrate blur and refraction"
+  },
+  "visual_system": {
+    "style": "shippable high-fidelity product UI mockup, not concept art, not a wireframe",
+    "inspiration": "iOS 26 Home Screen folder interaction translated naturally to a landscape Windows launcher",
+    "liquid_glass": [
+      "real translucent glass with visible background blur, optical refraction, subtle chromatic edge dispersion, adaptive luminosity, soft tint, crisp edge highlight, and layered depth",
+      "the folder tile and folder panel must use the same continuous glass material",
+      "avoid fake flat transparency and avoid opaque frosted rectangles",
+      "the open folder uses a legible regular glass treatment with a restrained dark dimming layer behind it"
+    ],
+    "folder_tile": "rounded glass tile containing a clean three by three grid of nine miniature child icons, with the folder name below",
+    "folder_panel": "large centered dynamic rounded Liquid Glass surface containing a three by three child icon grid, title at top, and two tiny page indicator dots at bottom",
+    "background_treatment": "while the folder opens, the home grid subtly scales back, softens, blurs, and dims while remaining recognizable"
+  },
+  "panels": [
+    {
+      "number": 1,
+      "label": "CLOSED",
+      "action": "Show the normal launcher grid. The folder tile sits among app tiles and displays nine miniature icons in a three by three preview.",
+      "motion_state": "resting, sharp launcher grid, undimmed wallpaper"
+    },
+    {
+      "number": 2,
+      "label": "PRESS",
+      "action": "Show a pointer pressing the folder tile. The tile compresses slightly, its edge highlight brightens, and the glass begins to feel fluid.",
+      "motion_state": "subtle press feedback, no panel visible yet"
+    },
+    {
+      "number": 3,
+      "label": "OPENING",
+      "action": "Show the decisive mid-animation frame. The folder tile glass shape is physically expanding and moving toward the center as one continuous rounded container. The nine miniature icons visibly travel outward from their preview positions toward full-size child positions. The background launcher scales back and starts blurring and dimming.",
+      "motion_state": "container transform at approximately fifty percent progress, visible directional motion trails only where useful"
+    },
+    {
+      "number": 4,
+      "label": "OPEN",
+      "action": "Show the fully open folder. A centered regular Liquid Glass panel clearly refracts the colorful wallpaper and launcher beneath it. Nine child icons form a spacious three by three grid, the title is visible at top, and two page indicator dots appear at bottom.",
+      "motion_state": "settled, crisp foreground content, soft subdued background"
+    },
+    {
+      "number": 5,
+      "label": "DRAG IN",
+      "action": "Show one lifted app icon following the pointer just above the open folder. Keep the folder panel as a stable, clean rounded rectangle with no stretching, bridge, tentacle, or protrusion. Highlight one empty destination cell inside the three by three grid with a subtle glass glow while the existing child icons spring-reflow to make room. Use only a restrained edge-highlight pulse on the panel to acknowledge the valid drop target.",
+      "motion_state": "interactive spring-loaded drop preview with a stable panel silhouette; dragged icon remains independent until drop; domain change not yet committed"
+    },
+    {
+      "number": 6,
+      "label": "CLOSING",
+      "action": "Show the inverse transition at approximately fifty percent progress. The folder panel shrinks back toward the exact source tile, child icons converge toward the three by three miniature preview, and the launcher background returns to full scale and clarity.",
+      "motion_state": "smooth reversible close transition, spatially symmetric with panel three"
+    }
+  ],
+  "motion_cues": [
+    "Use restrained curved trajectory lines and slight directional blur to clarify movement without turning the image into a technical diagram.",
+    "Make panel three and panel six visibly mirror one another.",
+    "Keep spring motion controlled and premium, with almost no bounce.",
+    "Preserve exact source-to-target spatial continuity for the glass container and child icons."
+  ],
+  "lighting_mood": "premium, calm, responsive, tactile, luminous but not flashy",
+  "color_palette": "deep teal and indigo backdrop with warm coral accents, neutral clear glass, white labels, colorful original app glyphs",
+  "text_verbatim": [
+    "CLOSED",
+    "PRESS",
+    "OPENING",
+    "OPEN",
+    "DRAG IN",
+    "CLOSING",
+    "フォルダ"
+  ],
+  "typography": "small clean modern sans-serif panel labels, white, consistent placement; render each required label exactly once and add no other text",
+  "constraints": [
+    "All six panels must depict the same UI and the same folder.",
+    "The launcher is landscape desktop UI, not an iPhone device mockup.",
+    "Liquid Glass refraction and blur must be visibly grounded in the wallpaper beneath each surface.",
+    "Use a three by three miniature folder preview, not a two by two preview.",
+    "Keep app icons generic and original.",
+    "Maintain practical readable spacing and realistic UI proportions.",
+    "No watermark."
+  ],
+  "avoid": [
+    "Apple logo",
+    "Windows logo",
+    "real app logos",
+    "phone hardware frame",
+    "flat translucent gray rectangles",
+    "opaque folder panel",
+    "neon cyberpunk styling",
+    "excessive bloom",
+    "cartoon illustration",
+    "low fidelity wireframe",
+    "random extra text",
+    "inconsistent icons or wallpaper between panels",
+    "two by two folder preview"
+  ]
+}

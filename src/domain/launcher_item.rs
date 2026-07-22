@@ -66,8 +66,8 @@ impl LauncherItem {
     /// between a domain id and a renderer-neutral `UiId`.
     pub fn stable_key(&self) -> String {
         match self {
-            LauncherItem::App(id) => id.as_str().to_string(),
-            LauncherItem::Folder(id) => id.as_str().to_string(),
+            LauncherItem::App(id) => format!("app:{}", id.as_str()),
+            LauncherItem::Folder(id) => format!("folder:{}", id.as_str()),
         }
     }
 }
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn stable_key_round_trips_for_app() {
         let item = LauncherItem::app(app("c:/x.lnk"));
-        assert_eq!(item.stable_key(), "c:/x.lnk");
+        assert_eq!(item.stable_key(), "app:c:/x.lnk");
     }
 
     #[test]

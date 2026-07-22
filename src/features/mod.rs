@@ -12,3 +12,4 @@
 
 pub mod bottom_control;
 pub mod edit_mode;
+pub mod folders;

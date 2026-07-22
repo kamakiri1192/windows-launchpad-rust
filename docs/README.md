@@ -4,6 +4,8 @@
   boundaries, data flow, and extension rules.
 - [DF_REARCHITECTURE_PLAN.md](DF_REARCHITECTURE_PLAN.md) - proposed Dynamic
   Feature-ready refactor plan and migration phases.
+- [GLASS_FOCUS_VEIL.md](GLASS_FOCUS_VEIL.md) - フォルダ表示時に下層シーンを
+  ぼかすGlass Focus Veilの目的、描画順、GPU構成、調整方法、視覚QA項目。
 
 - [KEYBINDINGS.md](KEYBINDINGS.md) — runtime debug / tuning keys, the
   `blur_radius` → pyramid depth mapping, and Windows transparency notes.
