@@ -85,6 +85,7 @@ pub enum QaAction {
     OpenFolder { id: String },
     Move { target: QaTarget },
     PointerDown,
+    LongPress,
     PointerUp,
     TypeText { value: String },
     CommitRename,
@@ -473,6 +474,20 @@ impl App {
                 let action = self.classify_pointer_press(self.pointer_phys_x, self.pointer_phys_y);
                 self.handle_action(AppAction::PointerPress(action));
             }
+            QaAction::LongPress => {
+                let action = self.classify_pointer_press(self.pointer_phys_x, self.pointer_phys_y);
+                self.handle_action(AppAction::PointerPress(action));
+                if let Some(ready_at) = self
+                    .pending_press
+                    .as_ref()
+                    .map(|press| press.start + crate::features::edit_mode::LONG_PRESS_THRESHOLD)
+                {
+                    // Keep deterministic QA independent of shader warm-up and
+                    // runner speed while exercising the production long-press
+                    // threshold, slop, and edit-entry path.
+                    self.maybe_long_press_into_edit(ready_at);
+                }
+            }
             QaAction::PointerUp => {
                 let action =
                     self.classify_pointer_release(self.pointer_phys_x, self.pointer_phys_y);
@@ -653,7 +668,8 @@ mod tests {
             "actions": [
                 {"at_ms": 0, "type": "open_folder", "id": "folder-0"},
                 {"at_ms": 200, "type": "move", "target": {"kind": "folder_child", "index": 0}},
-                {"at_ms": 250, "type": "pointer_down"}
+                {"at_ms": 250, "type": "pointer_down"},
+                {"at_ms": 300, "type": "long_press"}
             ]
         });
         let scenario: QaScenario = serde_json::from_value(value).unwrap();
@@ -665,6 +681,7 @@ mod tests {
                 target: QaTarget::FolderChild { index: 0 }
             }
         ));
+        assert!(matches!(scenario.actions[3].action, QaAction::LongPress));
     }
 
     #[test]

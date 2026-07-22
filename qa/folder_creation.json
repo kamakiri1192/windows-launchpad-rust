@@ -21,7 +21,7 @@
   },
   "actions": [
     { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
-    { "at_ms": 100, "type": "pointer_down" },
+    { "at_ms": 100, "type": "long_press" },
     { "at_ms": 700, "type": "move", "target": { "kind": "grid_item_point", "index": 1, "x": 0.25, "y": 0.50 } },
     { "at_ms": 900, "type": "move", "target": { "kind": "grid_item_point", "index": 1, "x": 0.50, "y": 0.50 } },
     { "at_ms": 1150, "type": "pointer_up" }
