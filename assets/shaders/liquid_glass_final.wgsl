@@ -18,6 +18,8 @@ struct GlassUniforms {
     pad0: f32,
     pad1: f32,
     pad2: f32,
+    backdrop_origin: vec2<f32>,
+    backdrop_extent: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -54,11 +56,18 @@ fn decode_displacement(encoded: vec2<f32>) -> vec2<f32> {
     return (encoded * 2.0 - vec2<f32>(1.0)) * max(u.max_displacement, 1.0);
 }
 
-fn sample_backdrop(uv: vec2<f32>) -> vec4<f32> {
+fn backdrop_uv(screen_uv: vec2<f32>) -> vec2<f32> {
+    let screen_pixel = screen_uv * u.viewport;
+    return (screen_pixel - u.backdrop_origin) / max(u.backdrop_extent, vec2<f32>(1.0));
+}
+
+fn sample_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
     return textureSample(backdrop_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
-fn sample_blurred_backdrop(uv: vec2<f32>) -> vec4<f32> {
+fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
     return textureSample(blur_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 

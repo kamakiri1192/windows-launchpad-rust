@@ -4,7 +4,9 @@ mod frame;
 mod resources;
 use resources::*;
 
-use super::capture::{BackdropCapture, CaptureStatus, GpuCaptureFrame};
+use super::capture::{
+    BackdropCapture, CaptureRegion, CaptureStatus, CpuCaptureFrame, GpuCaptureFrame,
+};
 use super::geometry::{shapes_from_layout, GlassShape};
 use super::params::{DebugOptions, LiquidGlassParams};
 use crate::layout::grid::GridLayout;
@@ -33,6 +35,23 @@ pub(super) struct GlassUniforms {
     debug_flags: u32,
     time: f32,
     _pad: [f32; 3],
+    backdrop_origin: [f32; 2],
+    backdrop_extent: [f32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BackdropMapping {
+    region: CaptureRegion,
+    texture_size: (u32, u32),
+}
+
+impl BackdropMapping {
+    fn full(width: u32, height: u32) -> Self {
+        Self {
+            region: CaptureRegion::full(width, height),
+            texture_size: (width.max(1), height.max(1)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -161,6 +180,7 @@ pub struct LiquidGlassRenderer {
     geometry_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
+    backdrop_mapping: BackdropMapping,
     gpu_backdrop_texture: Option<wgpu::Texture>,
     using_gpu_backdrop: bool,
     blur_texture: wgpu::Texture,
@@ -215,6 +235,102 @@ struct GeometryKey {
     shape_count: u32,
 }
 
+fn intersect_bounds(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+    let intersection = [
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ];
+    (intersection[0] < intersection[2] && intersection[1] < intersection[3]).then_some(intersection)
+}
+
+fn capture_region_for_shapes(
+    width: u32,
+    height: u32,
+    scroll_x: f32,
+    padding: f32,
+    groups: &[&[GlassShape]],
+) -> CaptureRegion {
+    let viewport = [0.0, 0.0, width.max(1) as f32, height.max(1) as f32];
+    let frame_bounds = groups
+        .iter()
+        .flat_map(|group| group.iter())
+        .find(|shape| shape.is_frame())
+        .map(|shape| shape.screen_bounds(0.0));
+
+    let mut union: Option<[f32; 4]> = None;
+    for shape in groups.iter().flat_map(|group| group.iter()) {
+        if shape.is_clip_only() {
+            continue;
+        }
+        let mut bounds = shape.screen_bounds(scroll_x);
+        if shape.is_scrolling() {
+            let Some(frame) = frame_bounds else {
+                continue;
+            };
+            let Some(clipped) = intersect_bounds(bounds, frame) else {
+                continue;
+            };
+            bounds = clipped;
+        }
+        let Some(bounds) = intersect_bounds(bounds, viewport) else {
+            continue;
+        };
+        union = Some(match union {
+            Some(current) => [
+                current[0].min(bounds[0]),
+                current[1].min(bounds[1]),
+                current[2].max(bounds[2]),
+                current[3].max(bounds[3]),
+            ],
+            None => bounds,
+        });
+    }
+
+    let Some(bounds) = union else {
+        return CaptureRegion::full(width, height);
+    };
+    let align_down = |value: f32| ((value.max(0.0).floor() as u32) / 2) * 2;
+    let align_up = |value: f32, limit: u32| {
+        let rounded = value.ceil().max(1.0).min(limit as f32) as u32;
+        rounded.saturating_add(1) / 2 * 2
+    };
+    let x = align_down(bounds[0] - padding);
+    let y = align_down(bounds[1] - padding);
+    let right = align_up(bounds[2] + padding, width.max(1)).min(width.max(1));
+    let bottom = align_up(bounds[3] + padding, height.max(1)).min(height.max(1));
+    CaptureRegion {
+        x,
+        y,
+        width: right.saturating_sub(x).max(1),
+        height: bottom.saturating_sub(y).max(1),
+    }
+    .clamped_to(width, height)
+}
+
+fn capture_sampling_padding(
+    params: &LiquidGlassParams,
+    debug: DebugOptions,
+    width: u32,
+    height: u32,
+) -> f32 {
+    let max_displacement = params.thickness * 10.0;
+    let chromatic_scale = if debug.disable_chromatic_aberration {
+        1.0
+    } else {
+        1.0 + params.chromatic_aberration * 2.15
+    };
+    let refraction = max_displacement * chromatic_scale + 3.0;
+    let reflection = max_displacement * 0.42 + width.max(height) as f32 * 0.035;
+    let blur_support = if debug.disable_blur || params.blur_radius < 0.5 {
+        1.0
+    } else {
+        40.0
+    };
+    refraction.max(reflection) + blur_support + params.blend * 0.25 + 4.0
+}
+
 impl LiquidGlassRenderer {
     pub fn new(
         device: &wgpu::Device,
@@ -230,7 +346,16 @@ impl LiquidGlassRenderer {
         let capture_status = capture.status();
         log_capture_status(&capture_status);
 
-        let uniforms = uniforms_from_params(&params, debug, width, height, 0.0, 0, 0.0);
+        let backdrop_mapping = BackdropMapping::full(width, height);
+        let uniforms = uniforms_from_params(
+            &params,
+            debug,
+            (width, height),
+            0.0,
+            0,
+            0.0,
+            backdrop_mapping,
+        );
         let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
         let grid_overlay_uniform_buffer =
             create_uniform_buffer(device, "liquid glass grid overlay uniforms", &uniforms);
@@ -626,6 +751,7 @@ impl LiquidGlassRenderer {
             geometry_view,
             backdrop_texture,
             backdrop_view,
+            backdrop_mapping,
             gpu_backdrop_texture: None,
             using_gpu_backdrop: false,
             blur_texture,
@@ -684,6 +810,7 @@ impl LiquidGlassRenderer {
         self.geometry_view = geometry_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
+        self.backdrop_mapping = BackdropMapping::full(width, height);
         self.gpu_backdrop_texture = None;
         self.using_gpu_backdrop = false;
         self.blur_texture = blur_texture;
@@ -796,6 +923,78 @@ impl LiquidGlassRenderer {
         // Clone the view so the immutable borrow ends before we mutate `self`.
         let view = self.backdrop_view.clone();
         self.bind_backdrop_view(device, &view);
+    }
+
+    fn planned_capture_region(&self, scroll_x: f32) -> CaptureRegion {
+        let (width, height) = self.texture_size;
+        if self.debug.show_backdrop_texture {
+            return CaptureRegion::full(width, height);
+        }
+        let groups: [&[GlassShape]; 7] = [
+            &self.base_shapes,
+            &self.grid_overlay_shapes,
+            &self.drag_overlay_shapes,
+            &self.badge_shapes,
+            &self.modal_badge_shapes,
+            &self.control_shapes,
+            &self.settings_panel_shapes,
+        ];
+        capture_region_for_shapes(
+            width,
+            height,
+            scroll_x,
+            capture_sampling_padding(&self.params, self.debug, width, height),
+            &groups,
+        )
+    }
+
+    fn configure_cpu_backdrop(&mut self, device: &wgpu::Device, frame: &CpuCaptureFrame) -> bool {
+        let (viewport_width, viewport_height) = self.texture_size;
+        let region = frame.region.clamped_to(viewport_width, viewport_height);
+        let expected_len = frame.width as usize * frame.height as usize * 4;
+        if region != frame.region
+            || frame.width == 0
+            || frame.height == 0
+            || frame.pixels.len() != expected_len
+        {
+            eprintln!(
+                "liquid glass ignored invalid CPU capture: region={:?} output={}x{} bytes={}",
+                frame.region,
+                frame.width,
+                frame.height,
+                frame.pixels.len()
+            );
+            return false;
+        }
+
+        let next_mapping = BackdropMapping {
+            region,
+            texture_size: (frame.width, frame.height),
+        };
+        let texture_changed = self.backdrop_mapping.texture_size != next_mapping.texture_size;
+        if texture_changed {
+            let (backdrop_texture, backdrop_view) =
+                create_backdrop_texture(device, frame.width, frame.height);
+            let (blur_texture, blur_view) =
+                create_blur_texture_raw(device, frame.width, frame.height, 0, "blur texture");
+            let blur_levels = [
+                create_blur_texture_raw(device, frame.width, frame.height, 1, "blur level 1"),
+                create_blur_texture_raw(device, frame.width, frame.height, 2, "blur level 2"),
+                create_blur_texture_raw(device, frame.width, frame.height, 3, "blur level 3"),
+            ];
+            self.backdrop_texture = backdrop_texture;
+            self.backdrop_view = backdrop_view;
+            self.blur_texture = blur_texture;
+            self.blur_view = blur_view;
+            self.blur_levels = blur_levels;
+        }
+        self.backdrop_mapping = next_mapping;
+        if texture_changed || self.using_gpu_backdrop {
+            self.bind_cpu_backdrop(device);
+        }
+        self.gpu_backdrop_texture = None;
+        self.using_gpu_backdrop = false;
+        true
     }
 
     pub fn set_base_shapes(
@@ -1162,7 +1361,15 @@ impl LiquidGlassRenderer {
         if self.debug.disable_blur {
             return 0;
         }
-        let radius = self.params.blur_radius;
+        let region = self.backdrop_mapping.region;
+        let (texture_width, texture_height) = self.backdrop_mapping.texture_size;
+        let capture_scale = (texture_width as f32 / region.width.max(1) as f32)
+            .min(texture_height as f32 / region.height.max(1) as f32)
+            .clamp(0.25, 1.0);
+        // A lower-resolution texture covers more physical pixels per texel.
+        // Scale the requested radius before selecting pyramid depth so a 2x
+        // Retina downsample does not accidentally double the visible blur.
+        let radius = self.params.blur_radius * capture_scale;
         if radius < 6.0 {
             1
         } else if radius < 16.0 {
@@ -1187,12 +1394,13 @@ fn should_refresh_blur(dirty: bool, captured: bool) -> bool {
 fn uniforms_from_params(
     params: &LiquidGlassParams,
     debug: DebugOptions,
-    width: u32,
-    height: u32,
+    viewport: (u32, u32),
     scroll_x: f32,
     shape_count: u32,
     time: f32,
+    backdrop: BackdropMapping,
 ) -> GlassUniforms {
+    let (width, height) = viewport;
     GlassUniforms {
         viewport: [width as f32, height as f32],
         scroll_x,
@@ -1219,6 +1427,8 @@ fn uniforms_from_params(
         debug_flags: debug.flags(),
         time,
         _pad: [0.0; 3],
+        backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
+        backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }
 }
 
@@ -1256,7 +1466,10 @@ fn premultiplied_blend() -> wgpu::BlendState {
 
 #[cfg(test)]
 mod shape_capacity_tests {
-    use super::{next_shape_capacity, should_refresh_blur, GlassUniforms};
+    use super::{
+        capture_region_for_shapes, next_shape_capacity, should_refresh_blur, CaptureRegion,
+        GlassShape, GlassUniforms,
+    };
 
     #[test]
     fn shape_capacity_grows_only_past_current_capacity() {
@@ -1267,7 +1480,7 @@ mod shape_capacity_tests {
 
     #[test]
     fn glass_uniform_layout_matches_wgsl() {
-        assert_eq!(std::mem::size_of::<GlassUniforms>(), 96);
+        assert_eq!(std::mem::size_of::<GlassUniforms>(), 112);
         assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
     }
 
@@ -1276,5 +1489,29 @@ mod shape_capacity_tests {
         assert!(should_refresh_blur(true, false));
         assert!(should_refresh_blur(false, true));
         assert!(!should_refresh_blur(false, false));
+    }
+
+    #[test]
+    fn capture_region_unions_visible_glass_and_ignores_clipped_offscreen_shapes() {
+        let base = [
+            GlassShape::fixed_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0),
+            GlassShape::rounded_rect([1_200.0, 400.0], [100.0, 100.0], 30.0),
+        ];
+        let controls = [GlassShape::control_rounded_rect(
+            [500.0, 700.0],
+            [100.0, 40.0],
+            20.0,
+        )];
+        let groups: [&[GlassShape]; 2] = [&base, &controls];
+
+        assert_eq!(
+            capture_region_for_shapes(1_000, 800, 0.0, 20.0, &groups),
+            CaptureRegion {
+                x: 180,
+                y: 130,
+                width: 640,
+                height: 610,
+            }
+        );
     }
 }

@@ -17,6 +17,11 @@ scenario_list="${SCENARIOS:-qa/folder_interactions.json qa/folder_creation.json}
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output_dir="${OUTPUT_DIR:-target/macos-profile-$mode-$timestamp}"
 
+if [[ -n "${CAPTURE_SCALE:-}" ]]; then
+  export LAUNCHPAD_MACOS_CAPTURE_SCALE="$CAPTURE_SCALE"
+fi
+capture_scale="${LAUNCHPAD_MACOS_CAPTURE_SCALE:-auto-logical-point}"
+
 if [[ -e "$output_dir" ]]; then
   echo "output already exists: $output_dir" >&2
   exit 1
@@ -30,6 +35,7 @@ output_dir="$(cd "$output_dir" && pwd)"
   echo "rustc=$(rustc --version)"
   echo "cargo=$(cargo --version)"
   echo "arch=$(uname -m)"
+  echo "macos_capture_scale=$capture_scale"
   sw_vers
   system_profiler SPHardwareDataType SPDisplaysDataType
 } > "$output_dir/environment.txt"

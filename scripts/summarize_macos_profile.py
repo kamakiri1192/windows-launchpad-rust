@@ -14,6 +14,11 @@ from pathlib import Path
 
 
 METRIC_RE = re.compile(r"([a-z_]+)=(-?[0-9]+(?:\.[0-9]+)?)%?")
+CAPTURE_GEOMETRY_RE = re.compile(
+    r"macOS capture geometry: window=(\d+)x(\d+) "
+    r"roi=(\d+),(\d+) (\d+)x(\d+) output=(\d+)x(\d+) "
+    r"scale=([0-9.]+) pixel_reduction=([0-9.]+)%"
+)
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -125,6 +130,34 @@ def load_runtime_metrics(directory: Path) -> dict[str, dict[str, float | int]]:
     return result
 
 
+def load_capture_geometry(directory: Path) -> list[dict[str, float | int]]:
+    records: dict[tuple[int, ...], dict[str, float | int]] = {}
+    for path in sorted(directory.glob("*.log")):
+        for match in CAPTURE_GEOMETRY_RE.finditer(
+            path.read_text(encoding="utf-8", errors="replace")
+        ):
+            raw = match.groups()
+            integer_values = tuple(int(value) for value in raw[:8])
+            record = {
+                "window_width": integer_values[0],
+                "window_height": integer_values[1],
+                "roi_x": integer_values[2],
+                "roi_y": integer_values[3],
+                "roi_width": integer_values[4],
+                "roi_height": integer_values[5],
+                "output_width": integer_values[6],
+                "output_height": integer_values[7],
+                "scale": float(raw[8]),
+                "pixel_reduction_percent": float(raw[9]),
+                "observations": 0,
+            }
+            key = integer_values + (round(record["scale"] * 1000),)
+            if key not in records:
+                records[key] = record
+            records[key]["observations"] += 1
+    return list(records.values())
+
+
 def markdown(summary: dict[str, object]) -> str:
     lines = ["# macOS performance summary", ""]
     process = summary.get("process")
@@ -150,6 +183,26 @@ def markdown(summary: dict[str, object]) -> str:
                 )
             lines.append("")
 
+    geometries = summary.get("capture_geometry", [])
+    if geometries:
+        lines += [
+            "## Capture geometry",
+            "",
+            "| Window | ROI | Output | scale | pixel reduction | observations |",
+            "|---|---|---|---:|---:|---:|",
+        ]
+        for geometry in geometries:
+            lines.append(
+                f"| {geometry['window_width']}x{geometry['window_height']} "
+                f"| {geometry['roi_x']},{geometry['roi_y']} "
+                f"{geometry['roi_width']}x{geometry['roi_height']} "
+                f"| {geometry['output_width']}x{geometry['output_height']} "
+                f"| {geometry['scale']:.2f} "
+                f"| {geometry['pixel_reduction_percent']:.1f}% "
+                f"| {geometry['observations']} |"
+            )
+        lines.append("")
+
     gpu = summary["gpu"]
     scopes = gpu["scopes"]
     if scopes:
@@ -172,6 +225,7 @@ def main() -> int:
         "gpu": load_gpu_reports(directory),
         "process": load_process_samples(directory),
         "runtime": load_runtime_metrics(directory),
+        "capture_geometry": load_capture_geometry(directory),
     }
     (directory / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

@@ -18,24 +18,17 @@ impl LiquidGlassRenderer {
 
         let render_started = Instant::now();
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
-            &self.params,
-            self.debug,
-            width,
-            height,
-            scroll_x,
-            self.shape_count,
-            0.0,
-        );
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let mut captured = false;
         let mut capture_time = Duration::ZERO;
         let mut upload_time = Duration::ZERO;
         if self.should_capture(defer_backdrop_capture) {
+            let capture_region = self.planned_capture_region(scroll_x);
+            self.capture.set_capture_region(capture_region);
             let capture_started = Instant::now();
             if let Some(gpu_frame) = self.capture.latest_frame_texture(device, width, height) {
                 capture_time = capture_started.elapsed();
+                self.backdrop_mapping = BackdropMapping::full(width, height);
                 if let GpuCaptureFrame::New { texture, view } = gpu_frame {
                     if !self.using_gpu_backdrop {
                         eprintln!("liquid glass capture path: GPU shared texture");
@@ -48,33 +41,33 @@ impl LiquidGlassRenderer {
             } else if let Some(frame) = self.capture.latest_frame_rgba(width, height) {
                 capture_time = capture_started.elapsed();
                 let upload_started = Instant::now();
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.backdrop_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &frame,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(width * 4),
-                        rows_per_image: Some(height),
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-                upload_time = upload_started.elapsed();
-                if self.using_gpu_backdrop {
-                    eprintln!("liquid glass capture path: CPU texture upload fallback");
-                    self.bind_cpu_backdrop(device);
-                    self.gpu_backdrop_texture = None;
-                    self.using_gpu_backdrop = false;
+                let was_using_gpu = self.using_gpu_backdrop;
+                if self.configure_cpu_backdrop(device, &frame) {
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.backdrop_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &frame.pixels,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(frame.width * 4),
+                            rows_per_image: Some(frame.height),
+                        },
+                        wgpu::Extent3d {
+                            width: frame.width,
+                            height: frame.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    upload_time = upload_started.elapsed();
+                    if was_using_gpu {
+                        eprintln!("liquid glass capture path: CPU texture upload fallback");
+                    }
+                    captured = true;
                 }
-                captured = true;
             } else {
                 capture_time = capture_started.elapsed();
             }
@@ -85,6 +78,17 @@ impl LiquidGlassRenderer {
             log_capture_status(&next_status);
             self.capture_status = next_status;
         }
+
+        let uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            (width, height),
+            scroll_x,
+            self.shape_count,
+            0.0,
+            self.backdrop_mapping,
+        );
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let blur_levels = self.blur_level_count();
         let refreshed_blur = should_refresh_blur(self.blur_dirty, captured);
@@ -250,11 +254,11 @@ impl LiquidGlassRenderer {
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
-            width,
-            height,
+            (width, height),
             scroll_x,
             self.grid_overlay_shape_count,
             time,
+            self.backdrop_mapping,
         );
         queue.write_buffer(
             &self.grid_overlay_uniform_buffer,
@@ -328,11 +332,11 @@ impl LiquidGlassRenderer {
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
-            width,
-            height,
+            (width, height),
             0.0,
             self.drag_overlay_shape_count,
             time,
+            self.backdrop_mapping,
         );
         queue.write_buffer(
             &self.drag_overlay_uniform_buffer,
@@ -403,11 +407,11 @@ impl LiquidGlassRenderer {
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
-            width,
-            height,
+            (width, height),
             scroll_x,
             self.badge_shape_count,
             time,
+            self.backdrop_mapping,
         );
         queue.write_buffer(&self.badge_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -476,11 +480,11 @@ impl LiquidGlassRenderer {
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
-            width,
-            height,
+            (width, height),
             0.0,
             self.modal_badge_shape_count,
             time,
+            self.backdrop_mapping,
         );
         queue.write_buffer(
             &self.modal_badge_uniform_buffer,
@@ -552,11 +556,11 @@ impl LiquidGlassRenderer {
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
-            width,
-            height,
+            (width, height),
             0.0,
             self.control_shape_count,
             0.0,
+            self.backdrop_mapping,
         );
         queue.write_buffer(
             &self.control_uniform_buffer,
@@ -630,11 +634,11 @@ impl LiquidGlassRenderer {
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
-            width,
-            height,
+            (width, height),
             0.0,
             self.settings_panel_shape_count,
             0.0,
+            self.backdrop_mapping,
         );
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,

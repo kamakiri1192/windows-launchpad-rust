@@ -16,16 +16,30 @@ fallback instead of exiting. Restart the app after changing the permission.
 
 ## Backdrop performance diagnostics
 
-ScreenCaptureKit screenshots and their full-frame RGBA conversion run on the
-`launchpad-macos-capture` worker. The render thread only polls a bounded latest-
-frame channel, uploads a completed frame, and reuses the previous backdrop
-while capture is in flight. Capture requests are capped at about 30 FPS, and
-the GPU blur pyramid is rebuilt only when a new backdrop arrives.
+ScreenCaptureKit screenshots and their RGBA conversion run on the
+`launchpad-macos-capture` worker. The renderer unions the visible Liquid Glass
+shapes, expands that rectangle by the refraction/reflection/blur sampling
+radius, and requests one ROI rather than issuing several screenshots. The
+single request avoids multiplying ScreenCaptureKit's fixed capture latency.
+
+By default the output keeps one backdrop sample per logical point. A 2x Retina
+window therefore captures the ROI at 50% linear resolution. Liquid Glass
+already filters this backdrop, so this removes 75% of the output pixels before
+RGBA conversion/upload while retaining native logical resolution. The shader
+maps the smaller texture back to the physical ROI and the blur pyramid selects
+one fewer level to keep its physical blur radius stable.
+
+The render thread only polls a bounded latest-frame channel, uploads a
+completed frame, and reuses the previous backdrop while capture is in flight.
+Capture requests are capped at about 30 FPS, and the GPU blur pyramid is
+rebuilt only when a new backdrop arrives.
 
 Two periodic stderr lines separate capture cost from render-thread cost:
 
 - `macOS capture stats` reports ScreenCaptureKit latency and RGBA copy time on
   the worker.
+- `macOS capture geometry` reports the window, ROI, output resolution, linear
+  scale, and pixel reduction versus a physical full-window capture.
 - `liquid glass stats` reports render-thread polling/upload time, blur refresh
   rate, and the percentage of frames that reused the cached blur.
 
@@ -50,6 +64,9 @@ scripts/profile_macos.sh qa
 # Twenty seconds of the real window and ScreenCaptureKit backdrop. Interact
 # with the launcher while the command is running.
 scripts/profile_macos.sh live
+
+# A/B control: retain the ROI but capture it at physical 1:1 resolution.
+CAPTURE_SCALE=1 scripts/profile_macos.sh live
 ```
 
 `RUNS`, `SCENARIOS` (a space-separated list), `DURATION_SECONDS`,
@@ -60,7 +77,9 @@ summons the resident process before starting its samples. Set `SKIP_BUILD=1` to
 reuse an existing `gpu-profile` release binary. Each run creates a new
 `target/macos-profile-*` directory containing hardware/toolchain metadata, raw
 logs, GPU JSON/Chrome trace files, process samples for live runs, and
-`summary.md` / `summary.json`.
+`summary.md` / `summary.json`. `CAPTURE_SCALE` overrides the automatic
+logical-point scale (clamped to 0.25–1.0); use `1` for a visual/performance A/B
+control rather than as the production default.
 
 The QA mode includes PNG readback and is intended for repeatable comparisons,
 not absolute full-screen throughput. Live mode samples macOS `ps` CPU (where

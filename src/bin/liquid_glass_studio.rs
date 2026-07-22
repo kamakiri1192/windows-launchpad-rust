@@ -41,6 +41,10 @@ struct GlassUniforms {
     max_displacement: f32,
     shape_count: u32,
     debug_flags: u32,
+    time: f32,
+    _pad: [f32; 3],
+    backdrop_origin: [f32; 2],
+    backdrop_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -1297,6 +1301,10 @@ fn uniforms_from_params(
         max_displacement: params.thickness * 10.0,
         shape_count,
         debug_flags: debug.flags(),
+        time: 0.0,
+        _pad: [0.0; 3],
+        backdrop_origin: [0.0, 0.0],
+        backdrop_extent: [width as f32, height as f32],
     }
 }
 
