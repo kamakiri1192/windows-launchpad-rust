@@ -19,6 +19,8 @@ impl App {
             self.render_model
                 .set_glass_batch(GlassLayer::Modal, Vec::new());
             self.render_model
+                .set_ink_batch(InkLane::Backdrop, Vec::new());
+            self.render_model
                 .set_ink_batch(InkLane::Settings, Vec::new());
             self.render_model
                 .set_glyph_batch(GlyphLane::Settings, Vec::new());
@@ -29,10 +31,20 @@ impl App {
         let hidden_count = self.launcher_state.hidden_apps.len();
         let hidden_count_label = format!("{hidden_count} 件");
         let copy = settings_panel_copy(&hidden_count_label);
+        let viewport = self.viewport_phys();
+        let (frame_x, frame_y, frame_width, frame_height) =
+            self.layout.frame_panel_rect(viewport.0 as f32);
         let model = layout::settings_panel::build_with_copy(
             layout::settings_panel::SettingsPanelInput {
-                viewport: self.viewport_phys(),
+                viewport,
                 scale_factor: scale,
+                page_frame_rect: Rect::new(
+                    frame_x - frame_width * 0.5,
+                    frame_y - frame_height * 0.5,
+                    frame_width,
+                    frame_height,
+                ),
+                page_frame_radius: self.layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
                 category: settings_category_id(self.settings_category),
                 sort_order: sort_order_id(self.settings.sort_order),
                 frequent_apps_enabled: self.settings.frequent_apps_enabled,
@@ -88,7 +100,16 @@ impl App {
             .find(|batch| batch.layer == GlassLayer::Modal)
             .map(|batch| batch.surfaces.clone())
             .unwrap_or_default();
+        let backdrop = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Backdrop)
+            .map(|batch| batch.views.clone())
+            .unwrap_or_default();
         self.render_model.set_glass_batch(GlassLayer::Modal, modal);
+        self.render_model.set_ink_batch(InkLane::Backdrop, backdrop);
         self.render_model
             .set_ink_batch(InkLane::Settings, instances);
         self.render_model

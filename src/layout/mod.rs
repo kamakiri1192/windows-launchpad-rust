@@ -1,6 +1,7 @@
 pub mod bottom_control;
 pub mod control_geometry;
 pub mod edit_mode;
+pub mod focus_veil;
 pub mod folder_panel;
 pub mod grid;
 pub mod hit_map;

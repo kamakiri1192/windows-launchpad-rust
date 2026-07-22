@@ -95,6 +95,8 @@ Current behavior to preserve:
   command.
 - Opening settings exits edit mode, closes the search field, clears pending
   grid/control presses, and requests redraw.
+- The panel's open/close progress drives the same Glass Focus Veil used by the
+  folder modal, clipped to the fixed page-frame glass.
 - Closing settings sets `settings_open = false` and lets the close animation
   finish through `settings_panel_progress`.
 - Hiding the launcher closes the overlay and resets `settings_panel_progress`
