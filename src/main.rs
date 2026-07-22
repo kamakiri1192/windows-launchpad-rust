@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 // The startup/icon pipeline exposes a number of items that are part of its
 // public surface or reserved for near-term phases (the `Stale` icon state,
 // registry/cache inspectors, diff helpers, the `Mark` timing record, …). They

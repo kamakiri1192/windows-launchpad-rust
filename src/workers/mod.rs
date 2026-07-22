@@ -16,4 +16,5 @@
 pub mod app_scan;
 pub mod icon_worker;
 pub mod refresh_watcher;
+#[cfg(windows)]
 pub mod steam_scan;

@@ -16,6 +16,7 @@
 
 #![allow(dead_code)]
 
+#[cfg(windows)]
 pub mod extract;
 pub mod loader;
 pub mod normalize;

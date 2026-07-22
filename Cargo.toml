@@ -19,10 +19,12 @@ glam = "0.29"
 env_logger = "0.11"
 cosmic-text = "0.19"
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "ico"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wgpu-profiler = { version = "0.27", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
 windows = { version = "0.62", features = [
     "Foundation",
     "Graphics_Capture",
@@ -52,7 +54,10 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-[build-dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
+rusqlite = "0.32"
+
+[target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
 # Release: keep optimized rendering without LTO; this avoids rustc/MSVC

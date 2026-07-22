@@ -21,6 +21,9 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
+#[cfg(target_os = "macos")]
+use winit::platform::macos::WindowAttributesExtMacOS;
+#[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
@@ -69,11 +72,6 @@ impl ApplicationHandler<UserEvent> for App {
         let mut attrs = Window::default_attributes()
             .with_title("Launchpad")
             .with_transparent(true)
-            // Drop the classic HWND back buffer (WS_EX_NOREDIRECTIONBITMAP) so
-            // the DWM composites only our DirectComposition swap chain. Without
-            // this, alpha=0 pixels are filled with the window's white
-            // background brush and transparency reads as solid white.
-            .with_no_redirection_bitmap(true)
             // Borderless: the glass tiles own the visuals, so we drop the OS
             // title bar / frame. Closing via Esc/Alt-F4.
             .with_decorations(false)
@@ -82,6 +80,21 @@ impl ApplicationHandler<UserEvent> for App {
                 INITIAL_WINDOW_HEIGHT,
             ))
             .with_min_inner_size(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+        #[cfg(windows)]
+        {
+            // Drop the classic HWND back buffer so DWM composites only the
+            // DirectComposition swap chain and preserves per-pixel alpha.
+            attrs = attrs.with_no_redirection_bitmap(true);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            attrs = attrs
+                .with_titlebar_hidden(true)
+                .with_titlebar_buttons_hidden(true)
+                .with_fullsize_content_view(true)
+                .with_has_shadow(false)
+                .with_accepts_first_mouse(true);
+        }
         if let Some(viewport) = self.qa_runner.as_ref().map(|runner| runner.viewport()) {
             attrs = attrs
                 .with_visible(false)
