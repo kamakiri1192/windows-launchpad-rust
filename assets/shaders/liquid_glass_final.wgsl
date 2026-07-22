@@ -15,7 +15,7 @@ struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    pad0: f32,
+    material_strength: f32,
     pad1: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
@@ -78,6 +78,19 @@ fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     return sample_blurred_backdrop(uv);
 }
 
+// Detail samples normally preserve the sharp capture for lensing and rim
+// reflections. A prominent settings panel must not reintroduce that capture
+// after the page focus blur, so route every such sample through the same strong
+// material blur while the prominent material is active.
+fn sample_material_detail_backdrop(uv: vec2<f32>) -> vec4<f32> {
+    let sharp = sample_backdrop(uv);
+    if has_flag(7u) || u.blur_radius < 0.5 {
+        return sharp;
+    }
+    let blurred = sample_blurred_backdrop(uv);
+    return mix(sharp, blurred, clamp(u.material_strength, 0.0, 1.0));
+}
+
 fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
     let luma = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
     return mix(vec3<f32>(luma), rgb, saturation);
@@ -90,6 +103,27 @@ fn sample_geometry_height(pixel: vec2<f32>) -> f32 {
 
 fn luminance(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
+}
+
+fn material_sharp_mix() -> f32 {
+    return mix(0.12, 0.0, clamp(u.material_strength, 0.0, 1.0));
+}
+
+fn material_saturation() -> f32 {
+    return mix(u.saturation, 1.05, clamp(u.material_strength, 0.0, 1.0));
+}
+
+fn material_tint_mix() -> f32 {
+    return mix(0.55, 0.66, clamp(u.material_strength, 0.0, 1.0));
+}
+
+// PostMultiplied presentation requires the final pass to expose straight RGB.
+// That is correct for the window as a whole, but the large prominent settings
+// sheet then reads too optically thin over bright desktop content. Restore the
+// denser frosted-sheet response only for that material; regular page glass and
+// the Focus Veil remain byte-for-byte on the normal path.
+fn material_frost_attenuation(alpha: f32) -> f32 {
+    return mix(1.0, clamp(alpha, 0.0, 1.0), clamp(u.material_strength, 0.0, 1.0));
 }
 
 @fragment
@@ -128,17 +162,26 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // reconstruction, and caustics across the large flat interior.
     if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
-        let sharp_color = sample_backdrop(screen_uv);
-        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, 0.12);
+        let sharp_mix = material_sharp_mix();
+        var interior_rgb = filtered_color.rgb;
+        if sharp_mix > 0.001 {
+            let sharp_color = sample_material_detail_backdrop(screen_uv);
+            interior_rgb = mix(interior_rgb, sharp_color.rgb, sharp_mix);
+        }
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
-        interior_rgb = mix(interior_rgb, interior_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
+        interior_rgb = mix(
+            interior_rgb,
+            interior_rgb * adaptive_tint + adaptive_tint * 0.045,
+            material_tint_mix(),
+        );
         interior_rgb = u.glass_color.rgb * u.glass_color.a
             + interior_rgb * (1.0 - u.glass_color.a);
-        interior_rgb = apply_saturation(interior_rgb, u.saturation);
+        interior_rgb = apply_saturation(interior_rgb, material_saturation());
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92);
-        return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
+        let frost = material_frost_attenuation(interior_alpha);
+        return vec4<f32>(interior_rgb * interior_alpha * frost, interior_alpha);
     }
 
     let refract_uv = screen_uv + displacement * inv_viewport;
@@ -161,17 +204,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         refract_color = vec4<f32>(red, green_sample.g, blue, green_sample.a);
     }
 
-    let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
-    let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
-    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, 0.12);
+    let sharp_color = sample_material_detail_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
+    let reflection_color = sample_material_detail_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
+    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, material_sharp_mix());
     final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * 0.22);
 
     let bg_luma = luminance(final_rgb);
     let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
-    final_rgb = mix(final_rgb, final_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
+    final_rgb = mix(
+        final_rgb,
+        final_rgb * adaptive_tint + adaptive_tint * 0.045,
+        material_tint_mix(),
+    );
     final_rgb = u.glass_color.rgb * u.glass_color.a
         + final_rgb * (1.0 - u.glass_color.a);
-    final_rgb = apply_saturation(final_rgb, u.saturation);
+    final_rgb = apply_saturation(final_rgb, material_saturation());
 
     if !has_flag(6u) {
         let thickness_scale = clamp(40.0 / max(u.thickness, 1.0), 1.0, 4.0);
@@ -221,8 +268,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5), 0.0, 0.92);
 
     if has_flag(4u) {
-        return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
+        let frost = material_frost_attenuation(glass_alpha);
+        return vec4<f32>(final_rgb * glass_alpha * frost, glass_alpha);
     }
 
-    return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
+    let frost = material_frost_attenuation(glass_alpha);
+    return vec4<f32>(final_rgb * glass_alpha * frost, glass_alpha);
 }

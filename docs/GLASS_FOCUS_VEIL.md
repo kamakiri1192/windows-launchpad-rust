@@ -2,24 +2,33 @@
 
 ## 概要
 
-Glass Focus Veil（グラス・フォーカス・ヴェール）は、フォルダを開いたときに、
-開いたフォルダより下にあるランチャーの表示をぼかして視線をフォルダへ集める
-ためのGPUエフェクトです。
+Glass Focus Veil（グラス・フォーカス・ヴェール）は、フォルダまたは設定画面を
+開いたときに、モーダルより下にあるランチャーの表示をぼかして視線を前面の
+操作対象へ集めるためのGPUエフェクトです。
 
 単純な黒い半透明レイヤーではありません。ページのLiquid Glass、通常アプリ、
 閉じたフォルダ、アイコン、ラベルまでを含む「完成済みの下層シーン」を一度
 テクスチャへ描画し、そのテクスチャをぼかしてからページガラスの形状内へ
-再合成します。開いたフォルダのLiquid Glassと内容は、その後にシャープな状態で
-描画します。
+再合成します。開いたフォルダまたは設定パネルのLiquid Glassと内容は、その後に
+シャープな状態で描画します。
+
+設定パネル自体は `GlassMaterial::Prominent` を使用します。背面を覆うFocus Veilの
+強さは変えず、設定パネルの角丸内だけ完成済み下層シーンを32 px広域の9タップで
+追加平滑化します。さらにパネルが直接参照するOS背景キャプチャは、通常の
+Dual-Kawase結果を入力として、専用の3段Dual-Kawaseへもう一度通します。中心の
+鮮明なサンプルを混ぜないため、背景文字がゴースト状に残りません。パネル内の
+シャープな背景・反射サンプルも同じ専用テクスチャへ切り替えるため、モーダル描画時
+に未加工のキャプチャが再び混ざることもありません。淡いtintと組み合わせ、通常の
+フォルダよりも曇りガラスに近い見た目にしています。
 
 このエフェクトが守るべき要件は次のとおりです。
 
 - 通常アプリ、別の閉じたフォルダ、アイコン、アプリ名を同じ下層としてぼかす。
-- 開いたフォルダのLiquid Glass、子アイコン、子ラベルはぼかさない。
+- 開いたフォルダまたは設定パネルのLiquid Glassと内容はぼかさない。
 - 効果範囲をメインのページガラスと同じ矩形・角丸に限定する。
 - ページガラス外の透明なウィンドウ領域へ色やブラーを出さない。
 - ページガラスの輪郭はシャープに残す。
-- フォルダの開閉アニメーションと連続的に強度を変化させる。
+- フォルダまたは設定パネルの開閉アニメーションと連続的に強度を変化させる。
 
 ## 描画順
 
@@ -102,7 +111,8 @@ L1（1/2）
 ## アニメーション
 
 `InkView::scene_blur` は、レンダラーに依存しない0.0〜1.0のブラー要求値です。
-フォルダパネルでは、フォルダのスムージング済み開閉進捗をそのまま設定します。
+フォルダパネルと設定パネルでは、それぞれのスムージング済み開閉進捗をそのまま
+設定します。
 
 ```text
 閉じた状態       scene_blur = 0.0
@@ -118,9 +128,11 @@ L1（1/2）
 
 | 責務 | 実装 |
 |---|---|
-| ページフレーム形状と開閉進捗をエフェクトへ渡す | `src/layout/folder_panel.rs` |
+| 共通のVeil形状・色・強度を生成する | `src/layout/focus_veil.rs` |
+| ページフレーム形状と開閉進捗をエフェクトへ渡す | `src/layout/folder_panel.rs`、`src/layout/settings_panel.rs` |
 | レンダラー中立なブラー要求値 | `src/ui_model/render_model.rs` の `InkView::scene_blur` |
 | 下層シーンとモーダルの描画順を分割する | `src/renderer/frame.rs` |
+| 設定パネルのProminent材質をブラー・tintへ反映する | `src/renderer/frame.rs`、`src/renderer/focus_blur.rs`、`src/liquid_glass/renderer.rs`、`src/shader_focus_blur.wgsl`、`assets/shaders/liquid_glass_final.wgsl` |
 | 中間テクスチャ、ブラー段、合成パイプラインを管理する | `src/renderer/focus_blur.rs` |
 | 角丸マスク、12 px境界遷移、シャープ/ブラー合成 | `src/shader_focus_blur.wgsl` |
 | Dual-Kawaseの縮小シェーダー | `assets/shaders/liquid_glass_blur_downsample.wgsl` |
@@ -130,11 +142,31 @@ L1（1/2）
 スワップチェーンへ戻すときにY座標を一度だけ反転します。この反転を削除すると、
 ランチャーの下層シーンが上下逆に表示されます。
 
+## 最終RGBAと透過
+
+タイル、アイコン、Liquid Glass、Focus Veilを含む内部合成は、透明境界で暗い縁を
+作らないようpremultiplied RGBAで行います。macOSで利用可能な
+`CompositeAlphaMode::PostMultiplied` とPNGはstraight RGBAを期待するため、完成した
+フレームを `src/renderer/presentation.rs` の専用テクスチャへ描き、最終フルスクリーン
+パスでRGBだけをalphaで割ってからsurfaceまたはQA PNGへ出力します。alpha自体は
+変更しません。
+
+この変換を省くと、premultipliedのRGBへプラットフォームやPNGビューアがalphaを
+もう一度掛けるため、実際のalpha値よりも暗く、透過が強いように見えます。
+
+一方、面積の大きい設定パネルはstraight RGBへ直したままだと、明るいデスクトップ
+背景の色を通しすぎて薄く見えます。通常ランチャーとFocus Veilの合成は変更せず、
+`GlassMaterial::Prominent` の最終RGBだけをその素材のalphaに応じて減衰し、初期版と
+同程度の曇りガラス密度へ戻します。専用3段ブラーとalpha値そのものは維持します。
+
 ## 調整するときの基準
 
 ### ブラーを強くしたい場合
 
 - ピラミッド段数を増やすと大きくぼけますが、GPUパスと中間テクスチャが増えます。
+- 設定パネル内の下層シーン追加ブラー半径は `src/renderer/frame.rs` の
+  `PROMINENT_FOCUS_BLUR_SPREAD`、OS背景キャプチャの再ブラー段数は
+  `src/liquid_glass/renderer/frame.rs` の `PROMINENT_CAPTURE_BLUR_LEVELS` で調整します。
 - サンプルオフセットやカーネルを変更する場合は、既存Liquid Glassのブラーとの
   見た目の整合性も確認します。
 - `scene_blur` は現在、ぼけた結果とシャープな結果の混合率です。1.0を超える値は

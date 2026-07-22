@@ -5,7 +5,7 @@ use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
     Color, ControlKind, ControlView, GlassBatch, GlassBehavior, GlassLayer, GlassMaterial,
-    GlassSurface, RenderModel,
+    GlassSurface, InkLane, RenderModel,
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
 
@@ -187,6 +187,9 @@ impl SettingsPanelLayout {
 pub struct SettingsPanelInput {
     pub viewport: (u32, u32),
     pub scale_factor: f32,
+    /// Fixed page-frame geometry used to clip the Glass Focus Veil.
+    pub page_frame_rect: Rect,
+    pub page_frame_radius: f32,
     pub category: SettingsCategoryId,
     pub sort_order: SortOrderId,
     pub frequent_apps_enabled: bool,
@@ -401,11 +404,19 @@ pub fn build_with_copy(
             id: UiId::settings_panel(),
             rect: scaled_rect_around_center(&layout, visual_scale),
             radius: layout.radius * visual_scale,
-            material: GlassMaterial::Regular,
+            material: GlassMaterial::Prominent,
             behavior: GlassBehavior::Control,
             z: Z_PANEL,
         }],
     });
+    render.set_ink_batch(
+        InkLane::Backdrop,
+        vec![super::focus_veil::view(
+            input.page_frame_rect,
+            input.page_frame_radius,
+            visual_alpha,
+        )],
+    );
 
     hits.push(HitRegion::rect_inclusive(
         UiId::backdrop("settings-modal"),
@@ -1015,6 +1026,8 @@ mod tests {
         SettingsPanelInput {
             viewport: (1280, 800),
             scale_factor: 1.0,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0,
             category,
             sort_order: SortOrderId::Name,
             frequent_apps_enabled: false,
@@ -1254,6 +1267,44 @@ mod tests {
     }
 
     #[test]
+    fn model_emits_focus_veil_for_settings_progress() {
+        let mut input = input(SettingsCategoryId::Apps);
+        input.progress = 0.5;
+        let model = build(input);
+        let veil = &model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Backdrop)
+            .expect("settings focus veil")
+            .views[0];
+
+        assert_eq!(veil.id, UiId::backdrop("glass-focus-veil"));
+        assert_eq!(veil.center, Point::new(640.0, 400.0));
+        assert_eq!(veil.stroke, 560.0);
+        assert_eq!(veil.extent, 340.0);
+        assert_eq!(veil.corner_radius, 54.0);
+        assert!((veil.opacity - crate::layout::focus_veil::OPACITY * 0.5).abs() < 0.001);
+        assert!((veil.scene_blur - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn settings_panel_uses_prominent_glass_material() {
+        let model = build(input(SettingsCategoryId::Apps));
+        let panel = &model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .expect("settings modal glass")
+            .surfaces[0];
+
+        assert_eq!(panel.material, GlassMaterial::Prominent);
+    }
+
+    #[test]
     fn model_hit_map_uses_circular_close_region() {
         let model = build(input(SettingsCategoryId::Apps));
         let (close_x, close_y) = model.layout.close_center(1.0);
@@ -1312,6 +1363,8 @@ mod tests {
             SettingsPanelInput {
                 viewport: (1280, 800),
                 scale_factor: 1.0,
+                page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+                page_frame_radius: 54.0,
                 category: SettingsCategoryId::Apps,
                 sort_order: SortOrderId::Manual,
                 frequent_apps_enabled: false,

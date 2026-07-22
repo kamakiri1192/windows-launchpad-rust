@@ -24,9 +24,10 @@
 use wgpu::{Color, TextureViewDescriptor};
 
 use crate::renderer::tiles::TileInstance;
+use crate::ui_model::render_model::{GlassLayer, GlassMaterial};
 
 use super::controls::ControlUniforms;
-use super::focus_blur::FocusBlurParams;
+use super::focus_blur::{FocusBlurParams, ProminentBlurParams};
 use super::tiles::Uniforms;
 use super::{DrawArgs, Renderer};
 
@@ -34,6 +35,11 @@ enum RenderFrame {
     Surface(wgpu::SurfaceTexture),
     Offscreen(wgpu::Texture),
 }
+
+/// Extra screen-space blur applied only inside the prominent settings panel.
+/// The underlying Dual-Kawase result is already soft; this wider kernel removes
+/// the remaining recognizable icon and label silhouettes behind the panel.
+const PROMINENT_FOCUS_BLUR_SPREAD: f32 = 32.0;
 
 impl RenderFrame {
     fn texture(&self) -> &wgpu::Texture {
@@ -91,9 +97,20 @@ impl Renderer {
             eprintln!("renderer has neither a surface nor an offscreen target");
             return;
         };
-        let view = frame
+        let output_view = frame
             .texture()
             .create_view(&TextureViewDescriptor::default());
+        let view = self.presentation.create_view();
+        let prominent_surface = self
+            .prepared_model
+            .glass
+            .iter()
+            .filter(|batch| batch.layer == GlassLayer::Modal)
+            .flat_map(|batch| batch.surfaces.iter())
+            .enumerate()
+            .filter(|(_, surface)| surface.material == GlassMaterial::Prominent)
+            .max_by_key(|(index, surface)| (surface.z, *index))
+            .map(|(_, surface)| surface);
         let focus_blur_params = self
             .prepared_model
             .ink
@@ -106,6 +123,16 @@ impl Renderer {
                 half_size: [focus.stroke, focus.extent],
                 radius: focus.corner_radius,
                 strength: focus.scene_blur,
+                prominent: prominent_surface.map(|surface| {
+                    let center = surface.rect.center();
+                    ProminentBlurParams {
+                        center: [center.x, center.y],
+                        half_size: [surface.rect.width * 0.5, surface.rect.height * 0.5],
+                        radius: surface.radius,
+                        strength: focus.scene_blur,
+                        spread: PROMINENT_FOCUS_BLUR_SPREAD,
+                    }
+                }),
             })
             .unwrap_or(FocusBlurParams {
                 viewport: args.viewport,
@@ -113,6 +140,7 @@ impl Renderer {
                 half_size: [clip.2, clip.3],
                 radius: clip.4,
                 strength: 0.0,
+                prominent: None,
             });
         let scene_view = self.focus_blur.scene_view();
 
@@ -660,6 +688,25 @@ impl Renderer {
 
         self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Internal blending is premultiplied. Resolve the completed frame to
+        // the alpha representation required by the platform surface (or PNG
+        // QA) only after every visual layer has been composited.
+        let mut presentation_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("presentation resolve encoder"),
+                });
+        let profile_scope = self
+            .gpu_profiler
+            .begin("presentation_resolve", &mut presentation_encoder);
+        self.presentation
+            .encode(&mut presentation_encoder, &output_view);
+        self.gpu_profiler
+            .end(&mut presentation_encoder, profile_scope);
+        self.gpu_profiler.resolve(&mut presentation_encoder);
+        self.queue
+            .submit(std::iter::once(presentation_encoder.finish()));
         self.gpu_profiler.finish_frame(&self.queue);
 
         // Optional QA self-capture: copy the surface texture to a host-readable

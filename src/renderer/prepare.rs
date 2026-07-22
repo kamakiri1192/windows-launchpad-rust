@@ -8,8 +8,8 @@
 
 use crate::liquid_glass::geometry::GlassShape;
 use crate::ui_model::render_model::{
-    ControlKind, GlassBehavior, GlassLayer, GlassSurface, GlyphLane, GlyphView, IconSource,
-    IconView, InkLane, InkView, RenderModel, TileView,
+    ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, GlyphLane, GlyphView,
+    IconSource, IconView, InkLane, InkView, RenderModel, TileView,
 };
 
 use super::controls::{
@@ -32,6 +32,13 @@ fn shape_for(surface: &GlassSurface) -> GlassShape {
         GlassBehavior::FixedFrame => GlassShape::fixed_rounded_rect(center, size, surface.radius),
         GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
         GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
+    }
+}
+
+fn material_strength(material: GlassMaterial) -> f32 {
+    match material {
+        GlassMaterial::Regular => 0.0,
+        GlassMaterial::Prominent => 1.0,
     }
 }
 
@@ -221,8 +228,18 @@ impl Renderer {
                 }
                 GlassLayer::Modal => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
-                    self.liquid_glass
-                        .set_modal_shapes(&self.device, &self.queue, &shapes);
+                    let prominence = batch
+                        .surfaces
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(index, surface)| (surface.z, *index))
+                        .map_or(0.0, |(_, surface)| material_strength(surface.material));
+                    self.liquid_glass.set_modal_shapes(
+                        &self.device,
+                        &self.queue,
+                        &shapes,
+                        prominence,
+                    );
                 }
                 GlassLayer::Base => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
@@ -502,6 +519,12 @@ mod tests {
     fn highest_z_modal_wins() {
         let surfaces = [surface("low", 10, 100.0), surface("high", 20, 200.0)];
         assert_eq!(highest_shape(&surfaces).unwrap().center[0], 200.0);
+    }
+
+    #[test]
+    fn prominent_material_maps_to_full_strength() {
+        assert_eq!(material_strength(GlassMaterial::Regular), 0.0);
+        assert_eq!(material_strength(GlassMaterial::Prominent), 1.0);
     }
 
     #[test]

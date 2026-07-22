@@ -572,8 +572,10 @@ impl App {
         self.folder_layout = None;
         self.render_model.modal_tiles = Some(Vec::new());
         self.render_model.modal_icons = Some(Vec::new());
-        self.render_model
-            .set_ink_batch(InkLane::Backdrop, Vec::new());
+        if !self.settings_panel_active() {
+            self.render_model
+                .set_ink_batch(InkLane::Backdrop, Vec::new());
+        }
         self.render_model.set_ink_batch(InkLane::Modal, Vec::new());
         self.render_model
             .set_glyph_batch(GlyphLane::Modal, Vec::new());

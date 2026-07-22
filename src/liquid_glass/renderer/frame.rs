@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// The prominent settings material re-blurs the normal captured-backdrop
+/// result through all three pyramid levels. Because its source is already
+/// blurred, this removes text-scale detail without affecting the Focus Veil.
+const PROMINENT_CAPTURE_BLUR_LEVELS: usize = 3;
+
 impl LiquidGlassRenderer {
     pub fn render(
         &mut self,
@@ -200,6 +205,104 @@ impl LiquidGlassRenderer {
         }
         if refreshed_blur {
             self.blur_dirty = false;
+        }
+
+        let prominent_blur_active =
+            self.settings_panel_shape_count > 0 && self.settings_panel_material_strength > 0.001;
+        let refreshed_prominent_blur = should_refresh_prominent_blur(
+            prominent_blur_active,
+            self.prominent_blur_dirty,
+            refreshed_blur,
+        ) && !self.debug.disable_blur
+            && self.params.blur_radius >= 0.5;
+
+        // The settings pass owns a completely separate pyramid. Its first
+        // downsample reads the full-resolution normal blur instead of the raw
+        // capture, and its last upsample writes a prominent texture consumed
+        // only by the settings panel. No normal page-glass resource is mutated.
+        let mut prominent_blur_commands = Vec::with_capacity(PROMINENT_CAPTURE_BLUR_LEVELS * 2);
+        for i in 0..if refreshed_prominent_blur {
+            PROMINENT_CAPTURE_BLUR_LEVELS
+        } else {
+            0
+        } {
+            let dst = &self.prominent_blur_levels[i].1;
+            let label = format!("prominent capture blur downsample L{i}->L{}", i + 1);
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(label.as_str()),
+            });
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: dst,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blur_downsample_pipeline);
+                pass.set_bind_group(0, &self.prominent_blur_down_bind_groups[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            prominent_blur_commands.push(enc.finish());
+        }
+        for j in 0..if refreshed_prominent_blur {
+            PROMINENT_CAPTURE_BLUR_LEVELS
+        } else {
+            0
+        } {
+            let dst = if j == PROMINENT_CAPTURE_BLUR_LEVELS - 1 {
+                &self.prominent_blur_view
+            } else {
+                &self.prominent_blur_levels[PROMINENT_CAPTURE_BLUR_LEVELS - 2 - j].1
+            };
+            let bind_idx = 3 - PROMINENT_CAPTURE_BLUR_LEVELS + j;
+            let label = format!(
+                "prominent capture blur upsample L{}->L{}",
+                PROMINENT_CAPTURE_BLUR_LEVELS - j,
+                PROMINENT_CAPTURE_BLUR_LEVELS - 1 - j
+            );
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(label.as_str()),
+            });
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: dst,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.blur_upsample_pipeline);
+                pass.set_bind_group(0, &self.prominent_blur_up_bind_groups[bind_idx], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            prominent_blur_commands.push(enc.finish());
+        }
+        if !prominent_blur_commands.is_empty() {
+            queue.submit(prominent_blur_commands);
+        }
+        if refreshed_prominent_blur {
+            self.prominent_blur_dirty = false;
+        } else if refreshed_blur {
+            self.prominent_blur_dirty = true;
         }
 
         let geometry_key = self.geometry_key(scroll_x);
@@ -651,7 +754,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -660,6 +763,7 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        uniforms.material_strength = self.settings_panel_material_strength;
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,
@@ -706,7 +810,12 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
+            let final_bind_group = if self.settings_panel_material_strength > 0.001 {
+                &self.prominent_settings_panel_final_bind_group
+            } else {
+                &self.settings_panel_final_bind_group
+            };
+            pass.set_bind_group(0, final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }

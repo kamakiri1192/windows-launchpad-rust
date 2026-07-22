@@ -31,6 +31,7 @@ pub(crate) mod icon_pipeline;
 mod icons;
 mod init;
 mod prepare;
+mod presentation;
 mod resources;
 mod text;
 pub(crate) mod text_engine;
@@ -80,6 +81,7 @@ pub struct Renderer {
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
+    presentation: presentation::PresentationRenderer,
     gpu_profiler: gpu_profile::GpuProfilerState,
 
     // -- Text rendering -------------------------------------------------

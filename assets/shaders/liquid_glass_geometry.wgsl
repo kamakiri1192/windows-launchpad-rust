@@ -15,7 +15,7 @@ struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    pad0: f32,
+    material_strength: f32,
     pad1: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
