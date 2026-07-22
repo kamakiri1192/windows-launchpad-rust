@@ -15,6 +15,8 @@
 //! command executor" path. Side effects (hide, launch, passthrough, persist,
 //! reset) all flow through [`App::execute_command`].
 
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
@@ -46,6 +48,9 @@ use super::state::{
 };
 
 use crate::{initial_window_position, load_window_icon};
+
+#[cfg(target_os = "macos")]
+const MACOS_BACKDROP_REDRAW_INTERVAL: Duration = Duration::from_millis(33);
 
 impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -99,6 +104,11 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(viewport) = self.qa_runner.as_ref().map(|runner| runner.viewport()) {
             attrs = attrs
                 .with_visible(false)
+                // The production minimum is expressed in logical points. On
+                // Retina displays it can exceed a physically-sized QA target
+                // (for example 480pt becomes 960px), silently changing the
+                // deterministic viewport.
+                .with_min_inner_size(PhysicalSize::new(1, 1))
                 .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
             self.visible = false;
         }
@@ -260,6 +270,24 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(deadline) = self.qa_next_deadline() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
         } else {
+            #[cfg(target_os = "macos")]
+            if self.visible {
+                // A ScreenCaptureKit result wakes the event loop, but that
+                // wakeup is not guaranteed to form a self-sustaining redraw
+                // chain after a hidden resident window is summoned. Keep the
+                // visible backdrop moving at the same 30 FPS ceiling used by
+                // the capture worker. Normal interaction/animation redraws
+                // can still happen sooner; hidden and QA windows remain idle.
+                let deadline = self
+                    .last_redraw
+                    .map(|redraw| redraw + MACOS_BACKDROP_REDRAW_INTERVAL)
+                    .unwrap_or(now);
+                if deadline <= now {
+                    self.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
+                return;
+            }
             event_loop.set_control_flow(ControlFlow::Wait);
         }
     }

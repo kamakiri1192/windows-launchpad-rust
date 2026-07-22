@@ -34,15 +34,14 @@ impl CaptureGeometry {
         let source_width = f64::from(self.width) / scale;
         let source_height = f64::from(self.height) / scale;
 
-        configuration
-            .set_width(self.width)
-            .set_height(self.height)
-            .set_source_rect(CGRect::new(
-                source_x.max(0.0),
-                source_y.max(0.0),
-                source_width,
-                source_height,
-            ));
+        configuration.set_width(self.width);
+        configuration.set_height(self.height);
+        configuration.set_source_rect(CGRect::new(
+            source_x.max(0.0),
+            source_y.max(0.0),
+            source_width,
+            source_height,
+        ));
     }
 }
 
@@ -134,18 +133,20 @@ pub fn create_monitor_capture(
         .or_else(|| displays.first())
         .ok_or_else(|| "ScreenCaptureKit reported no displays".to_owned())?;
 
-    let applications = content.applications();
-    let current_application = applications
+    let current_pid = std::process::id() as i32;
+    let windows = content.windows();
+    let current_windows: Vec<_> = windows
         .iter()
-        .find(|application| application.process_id() == std::process::id() as i32);
-    let filter_builder = SCContentFilter::builder().display(display);
-    let filter = if let Some(application) = current_application {
-        filter_builder
-            .exclude_applications(&[application], &[])
-            .build()
-    } else {
-        filter_builder.exclude_windows(&[]).build()
-    };
+        .filter(|candidate| {
+            candidate
+                .owning_application()
+                .is_some_and(|application| application.process_id() == current_pid)
+        })
+        .collect();
+    let filter = SCContentFilter::builder()
+        .display(display)
+        .exclude_windows(&current_windows)
+        .build();
 
     let size = window.inner_size();
     let geometry = CaptureGeometry {
@@ -178,9 +179,9 @@ fn capture_worker(
     outcome_tx: SyncSender<CaptureOutcome>,
     event_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
 ) {
-    let mut configuration = SCStreamConfiguration::new()
-        .with_pixel_format(PixelFormat::BGRA)
-        .with_shows_cursor(false);
+    let mut configuration = SCStreamConfiguration::default();
+    configuration.set_pixel_format(PixelFormat::BGRA);
+    configuration.set_shows_cursor(false);
     let mut configured_geometry = None;
     let mut previous_capture_started: Option<Instant> = None;
     let mut stats = WorkerStats::new();
@@ -203,7 +204,7 @@ fn capture_worker(
         let image = SCScreenshotManager::capture_image(&filter, &configuration);
         let capture_time = capture_started.elapsed();
         let conversion_started = Instant::now();
-        let outcome = match image.and_then(|image| image.rgba_data()) {
+        let outcome = match image.and_then(|image| image.get_rgba_data()) {
             Ok(pixels)
                 if pixels.len() == geometry.width as usize * geometry.height as usize * 4 =>
             {

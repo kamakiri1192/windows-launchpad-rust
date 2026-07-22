@@ -38,6 +38,41 @@ The default global shortcut is Option+Space. Set `LAUNCHPAD_HOTKEY` before
 launching to use another `global-hotkey` key string, for example
 `shift+alt+Space`.
 
+## Repeatable performance runs
+
+Use the checked-in harness to keep the release/profile features, Metal backend,
+run count, environment metadata, and summary format consistent:
+
+```sh
+# Three deterministic 1280x800 runs of each required folder scenario.
+scripts/profile_macos.sh qa
+
+# Twenty seconds of the real window and ScreenCaptureKit backdrop. Interact
+# with the launcher while the command is running.
+scripts/profile_macos.sh live
+```
+
+`RUNS`, `SCENARIOS` (a space-separated list), `DURATION_SECONDS`,
+`WARMUP_SECONDS`, and `OUTPUT_DIR` override the defaults. The QA verifier
+requires both default folder scenarios, so include them when extending the
+scenario list. Live mode waits eight seconds for discovery and icon work, then
+summons the resident process before starting its samples. Set `SKIP_BUILD=1` to
+reuse an existing `gpu-profile` release binary. Each run creates a new
+`target/macos-profile-*` directory containing hardware/toolchain metadata, raw
+logs, GPU JSON/Chrome trace files, process samples for live runs, and
+`summary.md` / `summary.json`.
+
+The QA mode includes PNG readback and is intended for repeatable comparisons,
+not absolute full-screen throughput. Live mode samples macOS `ps` CPU (where
+100% means one fully occupied logical CPU) and resident memory once per second.
+The periodic capture/render logs remain the source for ScreenCaptureKit,
+conversion, upload, blur-refresh, and blur-reuse costs.
+
+GPU timestamp results can occasionally arrive with an invalid negative duration
+on Metal. Those samples are excluded from percentiles and reported separately
+as `invalid_samples`; a run with a high invalid count should be repeated rather
+than treated as authoritative.
+
 ## Pull request artifacts
 
 Pull request labels start opt-in macOS artifact workflows:
