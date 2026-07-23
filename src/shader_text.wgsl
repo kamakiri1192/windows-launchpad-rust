@@ -1,9 +1,18 @@
-// Text label shaders.
+// Text label shaders (SDF drop-shadow + halo).
 //
 // One quad (two triangles) per glyph instance. The quad's screen position is
 // offset by the same per-frame `scroll_x` as the tiles, so labels scroll in
-// lockstep with icons. The fragment samples the glyph atlas and uses its
-// alpha as coverage for each instance tint.
+// lockstep with icons. Mask glyphs are stored in the atlas as a signed
+// distance field (see `text_engine.rs`); the fragment shader reconstructs the
+// pixel distance and, from it, derives:
+//
+//   * the crisp glyph body (anti-aliased via smoothstep on the 0.5 isovalue),
+//   * a Windows-10-style drop shadow offset toward the lower-right
+//     (`1px 1px 2px rgba(0,0,0,.9)` in the CSS reference), and
+//   * a soft all-directions halo (`0 0 4px rgba(0,0,0,.6)`).
+//
+// Colour (emoji) glyphs bypass the SDF path: they are stored as plain RGBA and
+// drawn with straight alpha coverage.
 
 struct Uniforms {
     viewport: vec2<f32>,
@@ -30,6 +39,8 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // (is_sdf, spread, 0, 0) — passed through for the fragment branch.
+    @location(2) extra: vec4<f32>,
 };
 
 @vertex
@@ -38,6 +49,7 @@ fn vs_main(
     @location(0) xywh: vec4<f32>,  // (x, y, w, h) top-left + size, content px
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
+    @location(3) extra: vec4<f32>,  // (is_sdf, spread, ..)
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
@@ -67,6 +79,7 @@ fn vs_main(
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.color = color;
+    out.extra = extra;
     return out;
 }
 
@@ -77,6 +90,10 @@ fn sdRoundBox(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// One device-independent pixel in physical units, for sizing the shadow
+// offsets relative to the viewport height.
+const PX: f32 = 1.0;
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
@@ -84,7 +101,55 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let local = in.pos.xy - u.frame_center;
     let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
     let frame_alpha = smoothstep(1.0, -1.0, fd);
-    // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
-    // the pipeline's standard alpha blending.
-    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha);
+
+    let is_sdf = in.extra.x >= 0.5;
+    if (!is_sdf) {
+        // Plain RGBA glyph (colour emoji): straight alpha, no shadow effects.
+        return vec4<f32>(in.color.rgb * sampled.rgb, sampled.a * in.color.a * frame_alpha);
+    }
+
+    // --- SDF path ----------------------------------------------------------
+    // Decode the distance field. The atlas stores the normalised distance in
+    // the red channel (0 = far outside, 128 = on the outline, 255 = far
+    // inside); convert to physical px, with the 0.5 isovalue as the edge.
+    let spread = max(in.extra.y, 0.0001);
+    let dist_px = (sampled.r * 2.0 - 1.0) * spread;
+
+    // Anti-aliasing half-width in px (~1px, screen-frequency dependent).
+    let aa = max(fwidth(dist_px), 0.5);
+    let edge = 0.0;
+
+    // Glyph body coverage.
+    let body = saturate((edge - dist_px) / aa + 0.5);
+
+    // Main drop shadow: re-sample the distance field at a UV shifted toward the
+    // upper-left, so the outline it describes lands ~1 physical px toward the
+    // lower-right of the current fragment (TextMeshPro "Underlay" trick).
+    // `fwidth(uv)` gives the per-pixel UV step, so multiplying by PX yields a
+    // one-screen-pixel offset regardless of DPI.
+    let uv_step = fwidth(in.uv);
+    let shadow_uv = in.uv - vec2<f32>(1.0, -1.0) * PX * uv_step;
+    let shadow_sample = textureSample(atlas, atlas_sampler, shadow_uv);
+    let shadow_dist = (shadow_sample.r * 2.0 - 1.0) * spread;
+    // Soften over ~2px (the "1px 1px 2px" blur radius of the CSS reference).
+    let shadow_soft = max(fwidth(shadow_dist), 2.0);
+    let shadow = saturate((shadow_soft - shadow_dist) / (2.0 * shadow_soft));
+
+    // Halo: a soft outline glow extending both sides of the edge, matching the
+    // "0 0 4px" all-directions halo that keeps text legible on bright walls.
+    // Falloff over ~4px so the glow reads on bright backgrounds.
+    let halo_radius = 4.0;
+    let halo = saturate((halo_radius - abs(dist_px)) / halo_radius);
+
+    let body_alpha = body * in.color.a;
+    let shadow_alpha = shadow * 0.9 * in.color.a;
+    let halo_alpha = halo * 0.6 * in.color.a;
+
+    // Composite: shadow and halo are black, drawn under the white body.
+    let black = max(shadow_alpha, halo_alpha);
+    let out_a = max(black, body_alpha);
+    // When the body covers a pixel, use the body (white) tint; otherwise the
+    // darker shadow/halo contributes the colour.
+    let out_rgb = mix(vec3<f32>(0.0), in.color.rgb, body_alpha / max(out_a, 0.0001));
+    return vec4<f32>(out_rgb, out_a * frame_alpha);
 }

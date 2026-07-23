@@ -20,7 +20,10 @@ use cosmic_text::{
 };
 
 /// A drawable glyph quad, matching the WGSL instance attributes for the text
-/// pipeline. 48 bytes for clean GPU alignment.
+/// pipeline. 64 bytes: 16 for xywh, 16 for the atlas UV rect, 16 for the
+/// non-premultiplied RGBA tint, and a trailing 16-byte `extra` vec that the
+/// fragment shader reads to switch between SDF and plain RGBA glyphs and to
+/// carry the per-instance SDF spread.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlyphQuad {
@@ -36,24 +39,24 @@ pub struct GlyphQuad {
     pub v1: f32,
     /// Non-premultiplied RGBA tint applied in the fragment shader.
     pub color: [f32; 4],
+    /// Shader-facing payload:
+    /// - `extra[0]`: 1.0 for an SDF glyph (distance field in the alpha/red
+    ///   channel), 0.0 for a plain RGBA glyph (e.g. colour emoji).
+    /// - `extra[1]`: SDF spread in physical px used to decode the sampled
+    ///   distance back into pixels. Unused for plain glyphs.
+    /// - `extra[2..]`: reserved (padding for the vec4 alignment).
+    pub extra: [f32; 4],
 }
 
 impl GlyphQuad {
-    pub const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
+    pub const ATTRIBS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GlyphQuad>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &GlyphQuad::ATTRIBS,
     };
-
-    fn with_offset_and_color(mut self, dx: f32, dy: f32, color: [f32; 4]) -> Self {
-        self.x += dx;
-        self.y += dy;
-        self.color = color;
-        self
-    }
 }
 
 /// One entry in the atlas: where the glyph bitmap lives (in pixels).
@@ -67,6 +70,9 @@ struct AtlasEntry {
     /// top-left, derived from swash's `placement.left`/`placement.top`.
     off_x: i32,
     off_y: i32,
+    /// True when the stored pixels are an SDF (distance field) rather than a
+    /// plain coverage/colour bitmap. The fragment shader branches on this.
+    is_sdf: bool,
 }
 
 /// A label to lay out: the text plus the on-screen anchor.
@@ -140,21 +146,27 @@ pub struct TextRenderer {
     label_layout_cache: HashMap<LabelLayoutKey, Vec<CachedLabelGlyph>>,
 }
 
-const ATLAS_W: u32 = 1024;
-const ATLAS_H: u32 = 1024;
-/// 1px padding between glyphs to avoid bleeding at UV edges.
+/// Atlas grown to 2048² to accommodate the SDF padding border added around
+/// every mask glyph (±`SDF_PADDING` px per side).
+const ATLAS_W: u32 = 2048;
+const ATLAS_H: u32 = 2048;
+/// Padding between glyphs in the atlas to avoid bleeding at UV edges.
 const PAD: u32 = 1;
 const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
 const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
 const LABEL_LAYOUT_CACHE_CAPACITY: usize = 4096;
-/// Soft, layered shadow in logical px: (x offset, y offset, alpha).
-const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
-    (0.0, 1.0, 0.30),
-    (0.0, 2.0, 0.14),
-    (-0.7, 1.2, 0.10),
-    (0.7, 1.2, 0.10),
-];
+/// SDF spread in physical px: the maximum distance (in either direction)
+/// encoded around each glyph outline. ±`SDF_SPREAD` maps to the atlas byte
+/// range 0..=255, so the fragment shader reconstructs the pixel distance as
+/// `(sampled * 2.0 - 1.0) * spread`. A spread of 4 px comfortably covers the
+/// CSS reference (`1px 1px 2px` main shadow + `0 0 4px` halo) at 1× and
+/// leaves headroom for Retina.
+const SDF_SPREAD: f32 = 4.0;
+/// Per-glyph border added by [`oxitext_sdf::compute_sdf`] so the distance
+/// field can represent the full ±`SDF_SPREAD` range outside the outline
+/// without clipping at the tile edge. Equals `ceil(SDF_SPREAD)`.
+const SDF_PADDING: u32 = 4;
 
 impl TextRenderer {
     pub fn new() -> Self {
@@ -227,13 +239,14 @@ impl TextRenderer {
                 }));
             }
         }
-        self.raster_phase(placed, scale_factor, LABEL_SHADOW_LAYERS)
+        self.raster_phase(placed)
     }
 
-    /// Lay out a single centered line of text with an explicit color, returning
-    /// glyph quads *without* the label drop-shadow. Used by the bottom control
-    /// (search pill label + search field query + placeholder), which draws its
-    /// own crisp text over the Liquid Glass capsule.
+    /// Lay out a single centered line of text with an explicit color. Used by
+    /// the bottom control (search pill label + search field query +
+    /// placeholder) and by semantic UI text such as a folder title. Shadows
+    /// are no longer baked in here; the text fragment shader derives them from
+    /// the SDF distance field, so all centered lines share one crisp code path.
     ///
     /// `spec.center` is the on-screen center of the line in physical px. The
     /// glyph quads are positioned so the line is horizontally centered on it.
@@ -246,26 +259,6 @@ impl TextRenderer {
         &mut self,
         spec: &CenteredLineSpec<'_>,
         weight: Weight,
-    ) -> Vec<GlyphQuad> {
-        self.layout_centered_line_weighted_with_layers(spec, weight, &[])
-    }
-
-    /// Centered semantic text with the same soft layered shadow used by app
-    /// labels. Folder titles use this so they retain contrast over the moving
-    /// blurred scene without changing their bold shaping or fitting.
-    pub fn layout_centered_line_weighted_with_shadow(
-        &mut self,
-        spec: &CenteredLineSpec<'_>,
-        weight: Weight,
-    ) -> Vec<GlyphQuad> {
-        self.layout_centered_line_weighted_with_layers(spec, weight, LABEL_SHADOW_LAYERS)
-    }
-
-    fn layout_centered_line_weighted_with_layers(
-        &mut self,
-        spec: &CenteredLineSpec<'_>,
-        weight: Weight,
-        shadow_layers: &[(f32, f32, f32)],
     ) -> Vec<GlyphQuad> {
         let CenteredLineSpec {
             text,
@@ -315,7 +308,7 @@ impl TextRenderer {
                 });
             }
         }
-        self.raster_phase(placed, scale_factor, shadow_layers)
+        self.raster_phase(placed)
     }
 
     /// Measure a single line of text's laid-out width in physical px without
@@ -407,13 +400,8 @@ impl TextRenderer {
 
     // -- Phase 2: rasterize into the atlas, emit quads --------------------
 
-    fn raster_phase(
-        &mut self,
-        placed: Vec<PlacedGlyph>,
-        scale_factor: f32,
-        shadow_layers: &[(f32, f32, f32)],
-    ) -> Vec<GlyphQuad> {
-        let mut glyphs = Vec::with_capacity(placed.len());
+    fn raster_phase(&mut self, placed: Vec<PlacedGlyph>) -> Vec<GlyphQuad> {
+        let mut quads = Vec::with_capacity(placed.len());
         for g in placed {
             let entry = match self.ensure_glyph(&g.physical) {
                 Some(e) => e,
@@ -422,9 +410,13 @@ impl TextRenderer {
             // The bitmap's top-left relative to the pen position:
             //   x = pen_x + placement.left
             //   y = pen_y - placement.top   (swash Y is up-positive)
+            //
+            // For SDF glyphs `off_x`/`off_y` already account for the spread
+            // padding, so the distance field extends beyond the original
+            // glyph box. Plain RGBA glyphs keep the legacy behaviour.
             let bx = g.x + entry.off_x as f32;
             let by = g.y - entry.off_y as f32;
-            glyphs.push(GlyphQuad {
+            quads.push(GlyphQuad {
                 x: bx,
                 y: by,
                 w: entry.w as f32,
@@ -434,24 +426,20 @@ impl TextRenderer {
                 u1: (entry.x + entry.w) as f32 / ATLAS_W as f32,
                 v1: (entry.y + entry.h) as f32 / ATLAS_H as f32,
                 color: g.color,
+                extra: [if entry.is_sdf { 1.0 } else { 0.0 }, SDF_SPREAD, 0.0, 0.0],
             });
         }
-
-        let mut quads = Vec::with_capacity(glyphs.len() * (shadow_layers.len() + 1));
-        for glyph in glyphs.iter().copied() {
-            for &(dx, dy, alpha) in shadow_layers {
-                quads.push(glyph.with_offset_and_color(
-                    dx * scale_factor,
-                    dy * scale_factor,
-                    [0.0, 0.0, 0.0, alpha * glyph.color[3]],
-                ));
-            }
-        }
-        quads.extend(glyphs);
         quads
     }
 
     /// Ensure a glyph is in the atlas (rasterize on miss). Returns its entry.
+    ///
+    /// Mask/subpixel-mask glyphs are converted to a signed distance field with
+    /// [`oxitext_sdf::compute_sdf`], which adds `2 * SDF_PADDING` px of border
+    /// around the original bitmap so the field can represent the full
+    /// ±`SDF_SPREAD` falloff outside the outline. Colour glyphs (emoji) bypass
+    /// the SDF path and are stored as plain RGBA, since a distance field cannot
+    /// preserve their per-pixel colour.
     fn ensure_glyph(&mut self, physical: &PhysicalGlyph) -> Option<AtlasEntry> {
         if let Some(&e) = self.cache.get(&physical.cache_key) {
             return Some(e);
@@ -473,84 +461,91 @@ impl TextRenderer {
             return None;
         }
 
+        use cosmic_text::SwashContent;
+        let is_sdf = matches!(content, SwashContent::Mask | SwashContent::SubpixelMask);
+        let (store_w, store_h, sdf_field) = if is_sdf {
+            let coverage = coverage_from_mask(&content, &data, w, h);
+            match oxitext_sdf::compute_sdf(
+                &coverage,
+                w as usize,
+                h as usize,
+                SDF_SPREAD,
+                SDF_PADDING,
+            ) {
+                Ok(field) => (w + 2 * SDF_PADDING, h + 2 * SDF_PADDING, Some(field)),
+                Err(err) => {
+                    // SDF failures are unexpected (the coverage map is well
+                    // formed at this point). Drop the glyph rather than risk a
+                    // misaligned fallback; the atlas stays consistent.
+                    eprintln!("SDF generation failed for glyph: {err}; dropping");
+                    return None;
+                }
+            }
+        } else {
+            (w, h, None)
+        };
+
         // Find a slot in the current row, wrapping to a new row if needed.
-        if self.cursor_x + w + PAD > ATLAS_W {
+        if self.cursor_x + store_w + PAD > ATLAS_W {
             self.cursor_y += self.row_height + PAD;
             self.cursor_x = PAD;
             self.row_height = 0;
         }
-        if self.cursor_y + h + PAD > ATLAS_H {
+        if self.cursor_y + store_h + PAD > ATLAS_H {
             eprintln!("text atlas full; glyph dropped");
             return None;
         }
 
         let dst_x = self.cursor_x;
         let dst_y = self.cursor_y;
-        self.row_height = self.row_height.max(h);
-        self.cursor_x += w + PAD;
+        self.row_height = self.row_height.max(store_h);
+        self.cursor_x += store_w + PAD;
 
-        self.blit(content, &data, w, h, dst_x, dst_y);
+        if let Some(field) = sdf_field {
+            self.blit_sdf(&field, store_w, store_h, dst_x, dst_y);
+        } else {
+            self.blit_color_rgba(&data, w, h, dst_x, dst_y);
+        }
 
+        // For SDF glyphs the stored tile is padded; offset the placement so
+        // the original glyph box still lands at pen + placement.left/top.
+        let pad = if is_sdf { SDF_PADDING as i32 } else { 0 };
         let entry = AtlasEntry {
             x: dst_x,
             y: dst_y,
-            w,
-            h,
-            off_x: placement.left,
-            off_y: placement.top,
+            w: store_w,
+            h: store_h,
+            off_x: placement.left - pad,
+            off_y: placement.top + pad,
+            is_sdf,
         };
         self.cache.insert(physical.cache_key, entry);
         self.atlas_dirty = true;
         Some(entry)
     }
 
-    /// Copy a swash image into the RGBA atlas, normalizing Mask/Color forms.
-    fn blit(
-        &mut self,
-        content: cosmic_text::SwashContent,
-        data: &[u8],
-        w: u32,
-        h: u32,
-        dst_x: u32,
-        dst_y: u32,
-    ) {
-        use cosmic_text::SwashContent;
-        match content {
-            SwashContent::Mask => {
-                // Single-channel alpha → white glyph with coverage alpha.
-                for y in 0..h {
-                    for x in 0..w {
-                        let a = data[(y * w + x) as usize];
-                        self.write_pixel(dst_x + x, dst_y + y, 255, 255, 255, a);
-                    }
-                }
+    /// Write an SDF distance field into the atlas red channel (GBA = 255 so the
+    /// shader can treat the sample as a scalar distance).
+    fn blit_sdf(&mut self, field: &[u8], w: u32, h: u32, dst_x: u32, dst_y: u32) {
+        for y in 0..h {
+            for x in 0..w {
+                let d = field[(y * w + x) as usize];
+                self.write_pixel(dst_x + x, dst_y + y, d, 255, 255, 255);
             }
-            SwashContent::SubpixelMask => {
-                let mut i = 0;
-                for y in 0..h {
-                    for x in 0..w {
-                        let r = data[i] as u16;
-                        let g = data[i + 1] as u16;
-                        let b = data[i + 2] as u16;
-                        let a = ((r + g + b) / 3) as u8;
-                        self.write_pixel(dst_x + x, dst_y + y, 255, 255, 255, a);
-                        i += 4;
-                    }
-                }
-            }
-            SwashContent::Color => {
-                // Color emoji: BGRA → RGBA.
-                let mut i = 0;
-                for y in 0..h {
-                    for x in 0..w {
-                        let b = data[i];
-                        let g = data[i + 1];
-                        let r = data[i + 2];
-                        let a = data[i + 3];
-                        self.write_pixel(dst_x + x, dst_y + y, r, g, b, a);
-                        i += 4;
-                    }
-                }
+        }
+    }
+
+    /// Copy a colour (emoji) swash image into the RGBA atlas (BGRA → RGBA).
+    fn blit_color_rgba(&mut self, data: &[u8], w: u32, h: u32, dst_x: u32, dst_y: u32) {
+        let mut i = 0;
+        for _y in 0..h {
+            for _x in 0..w {
+                let b = data[i];
+                let g = data[i + 1];
+                let r = data[i + 2];
+                let a = data[i + 3];
+                self.write_pixel(dst_x + _x, dst_y + _y, r, g, b, a);
+                i += 4;
             }
         }
     }
@@ -563,6 +558,32 @@ impl TextRenderer {
         px[1] = g;
         px[2] = b;
         px[3] = a;
+    }
+}
+
+/// Collapse a swash mask/subpixel-mask image to a single-channel coverage map
+/// (`width * height` bytes), the input format [`oxitext_sdf::compute_sdf`]
+/// expects. Mask images are already one byte per pixel; subpixel masks are
+/// RGB(LCD) triplets averaged to luminance.
+fn coverage_from_mask(content: &cosmic_text::SwashContent, data: &[u8], w: u32, h: u32) -> Vec<u8> {
+    use cosmic_text::SwashContent;
+    match content {
+        SwashContent::Mask => data.to_vec(),
+        SwashContent::SubpixelMask => {
+            let n = (w * h) as usize;
+            let mut out = Vec::with_capacity(n);
+            let mut i = 0;
+            for _ in 0..n {
+                let r = data[i] as u16;
+                let g = data[i + 1] as u16;
+                let b = data[i + 2] as u16;
+                out.push(((r + g + b) / 3) as u8);
+                i += 4;
+            }
+            out
+        }
+        // Colour glyphs are never routed through the SDF path.
+        SwashContent::Color => Vec::new(),
     }
 }
 
@@ -606,5 +627,61 @@ mod tests {
             assert!((after.x - before.x - 120.0).abs() < 0.01);
             assert!((after.y - before.y).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn sdf_marks_inside_outside_and_outline_for_a_filled_square() {
+        // A 16×16 solid square: the centre must be "inside" (byte > 128),
+        // the corners "outside" (< 128), and the byte range covers the full
+        // ±SDF_SPREAD falloff that the shader decodes.
+        let coverage = vec![255u8; 16 * 16];
+        let sdf = oxitext_sdf::compute_sdf(&coverage, 16, 16, SDF_SPREAD, SDF_PADDING)
+            .expect("compute_sdf on solid square");
+        // The output includes SDF_PADDING border on every side.
+        let side = 16 + 2 * SDF_PADDING as usize;
+        assert_eq!(sdf.len(), side * side);
+        let center = sdf[(side / 2) * side + side / 2];
+        assert!(center > 128, "centre should be inside, got {center}");
+        let corner = sdf[0];
+        assert!(corner < 128, "corner should be outside, got {corner}");
+    }
+
+    #[test]
+    fn coverage_from_mask_passes_single_channel_through() {
+        use cosmic_text::SwashContent;
+        let data = vec![0u8, 128, 255, 64];
+        let coverage = coverage_from_mask(&SwashContent::Mask, &data, 4, 1);
+        assert_eq!(coverage, data);
+    }
+
+    #[test]
+    fn coverage_from_mask_averages_subpixel_to_luminance() {
+        use cosmic_text::SwashContent;
+        // BGRA-ish triplets; luminance is (r+g+b)/3 of the first three bytes.
+        let data = vec![30u8, 60, 90, 255];
+        let coverage = coverage_from_mask(&SwashContent::SubpixelMask, &data, 1, 1);
+        assert_eq!(coverage, vec![((30 + 60 + 90) / 3) as u8]);
+    }
+
+    #[test]
+    fn layout_labels_tags_mask_glyphs_as_sdf_in_extra() {
+        // Shaping a plain ASCII label produces mask glyphs; each emitted quad
+        // must carry the SDF flag and spread so the shader can branch.
+        let mut renderer = TextRenderer::new();
+        let quads = renderer.layout_labels(&[label("ABC", 10.0)], 2.0);
+        assert!(!quads.is_empty(), "label should produce glyphs");
+        assert!(
+            quads.iter().all(|q| q.extra[0] >= 0.5),
+            "every mask glyph should be tagged SDF"
+        );
+        assert!(
+            quads.iter().all(|q| (q.extra[1] - SDF_SPREAD).abs() < 1e-3),
+            "spread should be SDF_SPREAD"
+        );
+    }
+
+    #[test]
+    fn glyph_quad_is_64_bytes_for_clean_gpu_alignment() {
+        assert_eq!(std::mem::size_of::<GlyphQuad>(), 64);
     }
 }

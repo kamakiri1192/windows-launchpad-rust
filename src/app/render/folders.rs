@@ -341,7 +341,7 @@ impl App {
                     self.scale_factor,
                     cosmic_weight(view.style.weight),
                 );
-                glyphs.append(&mut text.layout_centered_line_weighted_with_shadow(
+                glyphs.append(&mut text.layout_centered_line_weighted(
                     &CenteredLineSpec {
                         text: &fitted,
                         font_size: view.style.size,
@@ -657,6 +657,8 @@ fn glyph_views(quads: &[GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 130,
+            is_sdf: quad.extra[0] >= 0.5,
+            sdf_spread: quad.extra[1],
         })
         .collect()
 }

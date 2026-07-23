@@ -114,6 +114,12 @@ fn glyph_quad(view: &GlyphView) -> GlyphQuad {
         u1: view.uv.u1,
         v1: view.uv.v1,
         color: [view.color.r, view.color.g, view.color.b, view.color.a],
+        extra: [
+            if view.is_sdf { 1.0 } else { 0.0 },
+            view.sdf_spread,
+            0.0,
+            0.0,
+        ],
     }
 }
 
@@ -583,6 +589,8 @@ mod tests {
             },
             color: Color::rgba(0.5, 0.6, 0.7, 0.8),
             z: 2,
+            is_sdf: false,
+            sdf_spread: 0.0,
         };
         let packed = glyph_quad(&view);
         assert_eq!(
@@ -594,6 +602,7 @@ mod tests {
             [0.1, 0.2, 0.3, 0.4]
         );
         assert_eq!(packed.color, [0.5, 0.6, 0.7, 0.8]);
+        assert_eq!(packed.extra, [0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

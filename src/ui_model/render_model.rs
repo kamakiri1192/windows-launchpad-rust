@@ -231,6 +231,15 @@ pub struct GlyphView {
     pub uv: UvRect,
     pub color: Color,
     pub z: i16,
+    /// True when the atlas pixels for this glyph are a signed distance field
+    /// (mask glyphs) rather than plain RGBA (colour emoji). The fragment
+    /// shader branches on this to apply SDF anti-aliasing, drop shadow, and
+    /// halo effects.
+    pub is_sdf: bool,
+    /// SDF spread in physical px used to decode the sampled distance back into
+    /// pixels (`(sample * 2 - 1) * spread`). Meaningful only when
+    /// [`is_sdf`](Self::is_sdf) is true; `0.0` otherwise.
+    pub sdf_spread: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
