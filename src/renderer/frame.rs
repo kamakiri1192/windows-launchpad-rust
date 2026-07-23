@@ -7,16 +7,18 @@
 //! 2. Liquid Glass base pass (page frame + scrolling tile halos, backdrop)
 //! 3. tile fill pass (opaque app fills; folder fallback fills are discarded)
 //! 4. nested grid Liquid Glass pass (closed folder containers)
-//! 5. grid icon + text pass (content above nested glass)
-//! 6. edit-badge glass + foreground marks (above grid, below dragged icon)
-//! 7. isolated dragged-folder Liquid Glass pass
-//! 8. drag overlay pass (dragged tile + icon on top)
-//! 9. Liquid Glass control pass (capsule + gear merge)
-//! 10. control overlay pass (control ink, gear ink, control text)
-//! 11. optional lower-scene Dual-Kawase blur + rounded focus composite
-//! 12. focus tint backdrop
-//! 13. Liquid Glass settings/folder panel pass (modal)
-//! 14. modal content pass
+//! 5. grid icon pass (content above nested glass)
+//! 6. all text lanes -> full-resolution shadow mask -> separable blur
+//! 7. shadow composite + coverage-font grid text
+//! 8. edit-badge glass + foreground marks (above grid, below dragged icon)
+//! 9. isolated dragged-folder Liquid Glass pass
+//! 10. drag overlay pass (dragged tile + icon on top)
+//! 11. Liquid Glass control pass (capsule + gear merge)
+//! 12. control overlay pass (control ink, gear ink, control text)
+//! 13. optional lower-scene Dual-Kawase blur + rounded focus composite
+//! 14. focus tint backdrop
+//! 15. Liquid Glass settings/folder panel pass (modal)
+//! 16. modal content pass
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -27,6 +29,7 @@ use crate::renderer::tiles::TileInstance;
 
 use super::controls::ControlUniforms;
 use super::focus_blur::FocusBlurParams;
+use super::text_shadow::TextShadowParams;
 use super::tiles::Uniforms;
 use super::{DrawArgs, Renderer};
 
@@ -115,6 +118,22 @@ impl Renderer {
                 strength: 0.0,
             });
         let scene_view = self.focus_blur.scene_view();
+        let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
+        let content_scissor = self
+            .modal_clip_rect
+            .map(|rect| {
+                let x = rect.x.floor().max(0.0) as u32;
+                let y = rect.y.floor().max(0.0) as u32;
+                let max_x = rect.max_x().ceil().clamp(0.0, self.config.width as f32) as u32;
+                let max_y = rect.max_y().ceil().clamp(0.0, self.config.height as f32) as u32;
+                (
+                    x.min(self.config.width.saturating_sub(1)),
+                    y.min(self.config.height.saturating_sub(1)),
+                    max_x.saturating_sub(x).max(1),
+                    max_y.saturating_sub(y).max(1),
+                )
+            })
+            .unwrap_or(full_scissor);
 
         let mut encoder = self
             .device
@@ -214,10 +233,10 @@ impl Renderer {
         );
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
-        let profile_scope = self.gpu_profiler.begin("grid_icons_text", &mut encoder);
+        let profile_scope = self.gpu_profiler.begin("grid_icons", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("grid icon and text pass"),
+                label: Some("grid icon pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: scene_view,
                     depth_slice: None,
@@ -243,22 +262,11 @@ impl Renderer {
                     pass.draw(0..6, 0..normal_icon_count);
                 }
             }
-
-            // Text labels: same pass, third draw call. Uses the same
-            // uniform (scroll/viewport) plus the atlas texture.
-            if self.text_instance_buffer.len() > 0 {
-                if let Some(buf) = self.text_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.text_pipeline);
-                    pass.set_bind_group(0, &self.atlas_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.text_instance_buffer.len());
-                }
-            }
         }
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
-        // Edit badges sit above the normal grid but below the lifted dragged
-        // icon. The bottom control remains a later, screen-fixed overlay.
+        // The fixed-text vertex shader needs this uniform while writing the
+        // control, modal, and settings lanes into the shared shadow mask.
         self.queue.write_buffer(
             &self.control_uniform_buffer,
             0,
@@ -273,6 +281,111 @@ impl Renderer {
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
             }),
         );
+
+        let has_text = self.text_instance_buffer.len() > 0
+            || self.control_text_instance_buffer.len() > 0
+            || self.modal_text_instance_buffer.len() > 0
+            || self.settings_text_instance_buffer.len() > 0;
+        if has_text {
+            let profile_scope = self.gpu_profiler.begin("text_shadow_mask", &mut encoder);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("all text shadow mask pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: self.text_shadow.shadow_view(),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                if let Some(buf) = self.text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.shadow_text_pipeline);
+                    pass.set_bind_group(0, &self.shadow_text_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.text_instance_buffer.len());
+                }
+
+                pass.set_scissor_rect(
+                    full_scissor.0,
+                    full_scissor.1,
+                    full_scissor.2,
+                    full_scissor.3,
+                );
+                pass.set_pipeline(&self.shadow_control_text_pipeline);
+                pass.set_bind_group(0, &self.shadow_control_text_bind_group, &[]);
+                if let Some(buf) = self.control_text_instance_buffer.as_ref() {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.control_text_instance_buffer.len());
+                }
+
+                pass.set_scissor_rect(
+                    content_scissor.0,
+                    content_scissor.1,
+                    content_scissor.2,
+                    content_scissor.3,
+                );
+                if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                }
+                if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
+                }
+            }
+            self.gpu_profiler.end(&mut encoder, profile_scope);
+
+            let profile_scope = self.gpu_profiler.begin("text_shadow_blur", &mut encoder);
+            self.text_shadow.blur(&mut encoder);
+            self.gpu_profiler.end(&mut encoder, profile_scope);
+
+            let profile_scope = self
+                .gpu_profiler
+                .begin("text_shadow_composite", &mut encoder);
+            self.text_shadow.composite(
+                &self.queue,
+                &mut encoder,
+                scene_view,
+                TextShadowParams::default(),
+            );
+            self.gpu_profiler.end(&mut encoder, profile_scope);
+        }
+
+        let profile_scope = self.gpu_profiler.begin("grid_text", &mut encoder);
+        if let Some(buf) = self.text_instance_buffer.as_ref() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("grid text pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: scene_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.text_pipeline);
+            pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..6, 0..self.text_instance_buffer.len());
+        }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // Edit badges sit above the normal grid but below the lifted dragged
+        // icon. The bottom control remains a later, screen-fixed overlay.
         let profile_scope = self.gpu_profiler.begin("edit_badge_glass", &mut encoder);
         self.liquid_glass.render_badges(
             &self.queue,
@@ -486,22 +599,6 @@ impl Renderer {
             let modal_icon_count = self.modal_icon_instance_buffer.len();
             let normal_modal_icon_count =
                 modal_icon_count.saturating_sub(u32::from(self.modal_dragged_icon_instance));
-            let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
-            let content_scissor = self
-                .modal_clip_rect
-                .map(|rect| {
-                    let x = rect.x.floor().max(0.0) as u32;
-                    let y = rect.y.floor().max(0.0) as u32;
-                    let max_x = rect.max_x().ceil().clamp(0.0, self.config.width as f32) as u32;
-                    let max_y = rect.max_y().ceil().clamp(0.0, self.config.height as f32) as u32;
-                    (
-                        x.min(self.config.width.saturating_sub(1)),
-                        y.min(self.config.height.saturating_sub(1)),
-                        max_x.saturating_sub(x).max(1),
-                        max_y.saturating_sub(y).max(1),
-                    )
-                })
-                .unwrap_or(full_scissor);
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("modal content pass"),

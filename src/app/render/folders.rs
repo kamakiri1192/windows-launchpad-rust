@@ -341,7 +341,7 @@ impl App {
                     self.scale_factor,
                     cosmic_weight(view.style.weight),
                 );
-                glyphs.append(&mut text.layout_centered_line_weighted_with_shadow(
+                glyphs.append(&mut text.layout_centered_line_weighted(
                     &CenteredLineSpec {
                         text: &fitted,
                         font_size: view.style.size,

@@ -88,3 +88,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // the pipeline's standard alpha blending.
     return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha);
 }
+
+// Shadow-mask variant: preserve the coverage bitmap and all grid clipping,
+// but emit black with coverage in alpha for the dedicated blur target.
+@fragment
+fn fs_shadow(in: VsOut) -> @location(0) vec4<f32> {
+    let sampled = textureSample(atlas, atlas_sampler, in.uv);
+    let local = in.pos.xy - u.frame_center;
+    let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
+    let frame_alpha = smoothstep(1.0, -1.0, fd);
+    return vec4<f32>(0.0, 0.0, 0.0, sampled.a * in.color.a * frame_alpha);
+}

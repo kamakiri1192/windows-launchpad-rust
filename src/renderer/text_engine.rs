@@ -47,13 +47,6 @@ impl GlyphQuad {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &GlyphQuad::ATTRIBS,
     };
-
-    fn with_offset_and_color(mut self, dx: f32, dy: f32, color: [f32; 4]) -> Self {
-        self.x += dx;
-        self.y += dy;
-        self.color = color;
-        self
-    }
 }
 
 /// One entry in the atlas: where the glyph bitmap lives (in pixels).
@@ -148,14 +141,6 @@ const LABEL_FONT_FAMILY: &str = "Yu Gothic UI";
 const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
 const LABEL_LAYOUT_CACHE_CAPACITY: usize = 4096;
-/// Soft, layered shadow in logical px: (x offset, y offset, alpha).
-const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
-    (0.0, 1.0, 0.30),
-    (0.0, 2.0, 0.14),
-    (-0.7, 1.2, 0.10),
-    (0.7, 1.2, 0.10),
-];
-
 impl TextRenderer {
     pub fn new() -> Self {
         let font_system = FontSystem::new();
@@ -227,7 +212,7 @@ impl TextRenderer {
                 }));
             }
         }
-        self.raster_phase(placed, scale_factor, LABEL_SHADOW_LAYERS)
+        self.raster_phase(placed)
     }
 
     /// Lay out a single centered line of text with an explicit color, returning
@@ -246,26 +231,6 @@ impl TextRenderer {
         &mut self,
         spec: &CenteredLineSpec<'_>,
         weight: Weight,
-    ) -> Vec<GlyphQuad> {
-        self.layout_centered_line_weighted_with_layers(spec, weight, &[])
-    }
-
-    /// Centered semantic text with the same soft layered shadow used by app
-    /// labels. Folder titles use this so they retain contrast over the moving
-    /// blurred scene without changing their bold shaping or fitting.
-    pub fn layout_centered_line_weighted_with_shadow(
-        &mut self,
-        spec: &CenteredLineSpec<'_>,
-        weight: Weight,
-    ) -> Vec<GlyphQuad> {
-        self.layout_centered_line_weighted_with_layers(spec, weight, LABEL_SHADOW_LAYERS)
-    }
-
-    fn layout_centered_line_weighted_with_layers(
-        &mut self,
-        spec: &CenteredLineSpec<'_>,
-        weight: Weight,
-        shadow_layers: &[(f32, f32, f32)],
     ) -> Vec<GlyphQuad> {
         let CenteredLineSpec {
             text,
@@ -315,7 +280,7 @@ impl TextRenderer {
                 });
             }
         }
-        self.raster_phase(placed, scale_factor, shadow_layers)
+        self.raster_phase(placed)
     }
 
     /// Measure a single line of text's laid-out width in physical px without
@@ -407,13 +372,8 @@ impl TextRenderer {
 
     // -- Phase 2: rasterize into the atlas, emit quads --------------------
 
-    fn raster_phase(
-        &mut self,
-        placed: Vec<PlacedGlyph>,
-        scale_factor: f32,
-        shadow_layers: &[(f32, f32, f32)],
-    ) -> Vec<GlyphQuad> {
-        let mut glyphs = Vec::with_capacity(placed.len());
+    fn raster_phase(&mut self, placed: Vec<PlacedGlyph>) -> Vec<GlyphQuad> {
+        let mut quads = Vec::with_capacity(placed.len());
         for g in placed {
             let entry = match self.ensure_glyph(&g.physical) {
                 Some(e) => e,
@@ -424,7 +384,7 @@ impl TextRenderer {
             //   y = pen_y - placement.top   (swash Y is up-positive)
             let bx = g.x + entry.off_x as f32;
             let by = g.y - entry.off_y as f32;
-            glyphs.push(GlyphQuad {
+            quads.push(GlyphQuad {
                 x: bx,
                 y: by,
                 w: entry.w as f32,
@@ -436,18 +396,6 @@ impl TextRenderer {
                 color: g.color,
             });
         }
-
-        let mut quads = Vec::with_capacity(glyphs.len() * (shadow_layers.len() + 1));
-        for glyph in glyphs.iter().copied() {
-            for &(dx, dy, alpha) in shadow_layers {
-                quads.push(glyph.with_offset_and_color(
-                    dx * scale_factor,
-                    dy * scale_factor,
-                    [0.0, 0.0, 0.0, alpha * glyph.color[3]],
-                ));
-            }
-        }
-        quads.extend(glyphs);
         quads
     }
 
@@ -591,6 +539,10 @@ mod tests {
             .values()
             .next()
             .expect("label layout should be cached");
+        assert!(
+            first.len() <= cached.len(),
+            "rasterization should emit at most one coverage quad per placed glyph"
+        );
         let first_line_y = cached.first().expect("label should contain glyphs").y;
         assert!(
             cached

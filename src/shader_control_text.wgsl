@@ -61,3 +61,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied.
     return vec4<f32>(in.color.rgb, sampled.a * in.color.a);
 }
+
+// Fixed-screen shadow-mask variant for control, modal, and settings text.
+@fragment
+fn fs_shadow(in: VsOut) -> @location(0) vec4<f32> {
+    let sampled = textureSample(atlas, atlas_sampler, in.uv);
+    return vec4<f32>(0.0, 0.0, 0.0, sampled.a * in.color.a);
+}

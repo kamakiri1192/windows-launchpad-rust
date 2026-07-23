@@ -34,6 +34,7 @@ mod prepare;
 mod resources;
 mod text;
 pub(crate) mod text_engine;
+mod text_shadow;
 pub(crate) mod tiles;
 
 use std::sync::Arc;
@@ -80,13 +81,16 @@ pub struct Renderer {
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
+    text_shadow: text_shadow::TextShadowBlur,
     gpu_profiler: gpu_profile::GpuProfilerState,
 
     // -- Text rendering -------------------------------------------------
     text_pipeline: RenderPipeline,
+    shadow_text_pipeline: RenderPipeline,
     text_instance_buffer: InstanceBuffer<GlyphQuad>,
     atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
+    shadow_text_bind_group: wgpu::BindGroup,
     /// Copy of the bind group layout (for texture/sampler + uniform).
     #[allow(dead_code)]
     text_bgl: wgpu::BindGroupLayout,
@@ -134,7 +138,9 @@ pub struct Renderer {
     modal_badge_mark_scratch: Vec<crate::renderer::controls::ControlInstance>,
     modal_badge_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     control_text_pipeline: RenderPipeline,
+    shadow_control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
+    shadow_control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Settings overlay ink (close ×) + title text instances, drawn in a final
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
