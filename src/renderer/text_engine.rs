@@ -684,4 +684,32 @@ mod tests {
     fn glyph_quad_is_64_bytes_for_clean_gpu_alignment() {
         assert_eq!(std::mem::size_of::<GlyphQuad>(), 64);
     }
+
+    /// Visual debug: dump the SDF glyph atlas to `target/text-atlas-sdf.png`.
+    /// Run with `cargo test --release dump_sdf_atlas_visual -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn dump_sdf_atlas_visual() {
+        let mut renderer = TextRenderer::new();
+        let labels = [
+            ("メール", 10.0),
+            ("カレンダー", 40.0),
+            ("Safari", 70.0),
+            ("Adobe Premiere Pro 2026", 100.0),
+        ]
+        .map(|(text, y)| Label {
+            text: text.into(),
+            x: 10.0,
+            y,
+            max_width: 200.0,
+            color: [1.0; 4],
+        });
+        let _quads = renderer.layout_labels(&labels, 2.0);
+        let rgba = renderer.atlas_rgba().to_vec();
+        if let Some(img) = image::RgbaImage::from_raw(ATLAS_W, ATLAS_H, rgba) {
+            let path = std::path::Path::new("target/text-atlas-sdf.png");
+            let _ = img.save(path);
+            println!("Saved SDF atlas to {}", path.display());
+        }
+    }
 }

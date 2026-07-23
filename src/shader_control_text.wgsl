@@ -79,17 +79,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let spread = max(in.extra.y, 0.0001);
     let dist_px = (sampled.r * 2.0 - 1.0) * spread;
     let aa = max(fwidth(dist_px), 0.5);
-    let body = saturate((0.0 - dist_px) / aa + 0.5);
+    let body = saturate(dist_px / aa + 0.5);
 
     let uv_step = fwidth(in.uv);
     let shadow_uv = in.uv - vec2<f32>(1.0, -1.0) * PX * uv_step;
     let shadow_sample = textureSample(atlas, atlas_sampler, shadow_uv);
     let shadow_dist = (shadow_sample.r * 2.0 - 1.0) * spread;
     let shadow_soft = max(fwidth(shadow_dist), 2.0);
-    let shadow = saturate((shadow_soft - shadow_dist) / (2.0 * shadow_soft));
+    let shadow = saturate(shadow_dist / shadow_soft + 0.5);
 
-    let halo_radius = 4.0;
-    let halo = saturate((halo_radius - abs(dist_px)) / halo_radius);
+    let halo_radius = spread;
+    let halo = saturate(1.0 + dist_px / halo_radius);
 
     let body_alpha = body * in.color.a;
     let shadow_alpha = shadow * 0.9 * in.color.a;

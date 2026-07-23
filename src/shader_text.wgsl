@@ -110,46 +110,45 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // --- SDF path ----------------------------------------------------------
     // Decode the distance field. The atlas stores the normalised distance in
-    // the red channel (0 = far outside, 128 = on the outline, 255 = far
-    // inside); convert to physical px, with the 0.5 isovalue as the edge.
+    // the red channel: 0 = far outside (clamped at -spread), 0.5 = on the
+    // outline, 1 = far inside (clamped at +spread). `dist_px` is the signed
+    // physical-pixel distance to the glyph outline (>0 inside, <0 outside).
     let spread = max(in.extra.y, 0.0001);
     let dist_px = (sampled.r * 2.0 - 1.0) * spread;
 
     // Anti-aliasing half-width in px (~1px, screen-frequency dependent).
     let aa = max(fwidth(dist_px), 0.5);
-    let edge = 0.0;
 
-    // Glyph body coverage.
-    let body = saturate((edge - dist_px) / aa + 0.5);
+    // Glyph body coverage (inside the outline). `dist_px > 0` inside, so a
+    // positive distance maps to full coverage.
+    let body = saturate(dist_px / aa + 0.5);
 
-    // Main drop shadow: re-sample the distance field at a UV shifted toward the
-    // upper-left, so the outline it describes lands ~1 physical px toward the
-    // lower-right of the current fragment (TextMeshPro "Underlay" trick).
-    // `fwidth(uv)` gives the per-pixel UV step, so multiplying by PX yields a
-    // one-screen-pixel offset regardless of DPI.
+    // Main drop shadow: sample the field at a UV shifted toward the upper-left
+    // so the outline it describes lands ~1 physical px toward the lower-right
+    // of the current fragment (TextMeshPro "Underlay" trick). `fwidth(uv)` is
+    // the per-pixel UV step, so PX * uv_step is a one-screen-pixel offset.
     let uv_step = fwidth(in.uv);
     let shadow_uv = in.uv - vec2<f32>(1.0, -1.0) * PX * uv_step;
     let shadow_sample = textureSample(atlas, atlas_sampler, shadow_uv);
     let shadow_dist = (shadow_sample.r * 2.0 - 1.0) * spread;
-    // Soften over ~2px (the "1px 1px 2px" blur radius of the CSS reference).
+    // The shadow is the underlay's *body* (the shifted sample is inside the
+    // outline), softened over ~2px to match the "1px 1px 2px" blur radius.
     let shadow_soft = max(fwidth(shadow_dist), 2.0);
-    let shadow = saturate((shadow_soft - shadow_dist) / (2.0 * shadow_soft));
+    let shadow = saturate(shadow_dist / shadow_soft + 0.5);
 
-    // Halo: a soft outline glow extending both sides of the edge, matching the
-    // "0 0 4px" all-directions halo that keeps text legible on bright walls.
-    // Falloff over ~4px so the glow reads on bright backgrounds.
-    let halo_radius = 4.0;
-    let halo = saturate((halo_radius - abs(dist_px)) / halo_radius);
+    // Halo: a soft all-directions outline glow. Strongest right at the outline
+    // (dist_px = 0) and fading out over `halo_radius` px into the outside.
+    let halo_radius = spread;
+    let halo = saturate(1.0 + dist_px / halo_radius);
 
     let body_alpha = body * in.color.a;
     let shadow_alpha = shadow * 0.9 * in.color.a;
     let halo_alpha = halo * 0.6 * in.color.a;
 
-    // Composite: shadow and halo are black, drawn under the white body.
+    // Composite: shadow and halo are black, drawn under the white body. The
+    // body wins wherever it is opaque; otherwise the darker effects show.
     let black = max(shadow_alpha, halo_alpha);
     let out_a = max(black, body_alpha);
-    // When the body covers a pixel, use the body (white) tint; otherwise the
-    // darker shadow/halo contributes the colour.
     let out_rgb = mix(vec3<f32>(0.0), in.color.rgb, body_alpha / max(out_a, 0.0001));
     return vec4<f32>(out_rgb, out_a * frame_alpha);
 }
