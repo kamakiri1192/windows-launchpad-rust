@@ -96,11 +96,12 @@ fn channel_blur(uv: vec2<f32>, texel: vec2<f32>, direction: vec2<f32>, sigma: f3
 }
 
 // The vertical pass samples an intermediate RGBA whose .r/.a are the
-// horizontally-blurred narrow/wide channels. This mirrors channel_blur but
-// reads the chosen channel instead of always alpha.
-fn channel_blur_rgba(uv: vec2<f32>, texel: vec2<f32>, direction: vec2<f32>, sigma: f32, channel: f32) -> f32 {
+// horizontally-blurred narrow/wide channels. Two explicit variants (one reading
+// R, one reading A) avoid dynamic `select` on the channel — some D3D12 drivers
+// mishandle texture fetches guarded by data-dependent branches, so we keep the
+// sampling fully unconditional and branch-free.
+fn channel_blur_r(uv: vec2<f32>, texel: vec2<f32>, direction: vec2<f32>, sigma: f32) -> f32 {
     let center = textureSample(shadow_mask, shadow_sampler, uv);
-    let center_val = select(center.r, center.a, channel >= 0.5);
     let w0 = gaussian_weight(0.0, sigma);
     let w1 = gaussian_weight(1.0, sigma);
     let w2 = gaussian_weight(2.0, sigma);
@@ -111,44 +112,74 @@ fn channel_blur_rgba(uv: vec2<f32>, texel: vec2<f32>, direction: vec2<f32>, sigm
     let w7 = gaussian_weight(7.0, sigma);
     let w8 = gaussian_weight(8.0, sigma);
 
-    var acc = vec2<f32>(center_val * w0, w0);
+    var acc = vec2<f32>(center.r * w0, w0);
+    // Each pair is unconditionally sampled; weight is the combined value (0
+    // when both taps are past the kernel, contributing nothing).
+    let c12 = w1 + w2;
+    let o12 = 1.0 + w2 / max(c12, 0.000001);
+    let p12 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o12).r;
+    let n12 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o12).r;
+    acc += vec2<f32>((p12 + n12) * c12, 2.0 * c12);
 
-    let combined12 = w1 + w2;
-    let combined34 = w3 + w4;
-    if (combined12 > 0.000001) {
-        let offset12 = 1.0 + w2 / combined12;
-        let p12 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * offset12);
-        let n12 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * offset12);
-        let pv12 = select(p12.r, p12.a, channel >= 0.5);
-        let nv12 = select(n12.r, n12.a, channel >= 0.5);
-        acc += vec2<f32>((pv12 + nv12) * combined12, 2.0 * combined12);
-    }
-    if (combined34 > 0.000001) {
-        let offset34 = 3.0 + w4 / combined34;
-        let p34 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * offset34);
-        let n34 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * offset34);
-        let pv34 = select(p34.r, p34.a, channel >= 0.5);
-        let nv34 = select(n34.r, n34.a, channel >= 0.5);
-        acc += vec2<f32>((pv34 + nv34) * combined34, 2.0 * combined34);
-    }
-    let combined56 = w5 + w6;
-    if (combined56 > 0.000001) {
-        let offset56 = 5.0 + w6 / combined56;
-        let p56 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * offset56);
-        let n56 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * offset56);
-        let pv56 = select(p56.r, p56.a, channel >= 0.5);
-        let nv56 = select(n56.r, n56.a, channel >= 0.5);
-        acc += vec2<f32>((pv56 + nv56) * combined56, 2.0 * combined56);
-    }
-    let combined78 = w7 + w8;
-    if (combined78 > 0.000001) {
-        let offset78 = 7.0 + w8 / combined78;
-        let p78 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * offset78);
-        let n78 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * offset78);
-        let pv78 = select(p78.r, p78.a, channel >= 0.5);
-        let nv78 = select(n78.r, n78.a, channel >= 0.5);
-        acc += vec2<f32>((pv78 + nv78) * combined78, 2.0 * combined78);
-    }
+    let c34 = w3 + w4;
+    let o34 = 3.0 + w4 / max(c34, 0.000001);
+    let p34 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o34).r;
+    let n34 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o34).r;
+    acc += vec2<f32>((p34 + n34) * c34, 2.0 * c34);
+
+    let c56 = w5 + w6;
+    let o56 = 5.0 + w6 / max(c56, 0.000001);
+    let p56 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o56).r;
+    let n56 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o56).r;
+    acc += vec2<f32>((p56 + n56) * c56, 2.0 * c56);
+
+    let c78 = w7 + w8;
+    let o78 = 7.0 + w8 / max(c78, 0.000001);
+    let p78 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o78).r;
+    let n78 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o78).r;
+    acc += vec2<f32>((p78 + n78) * c78, 2.0 * c78);
+
+    return acc.x / max(acc.y, 0.000001);
+}
+
+// A-channel variant of channel_blur_r (reads .a instead of .r).
+fn channel_blur_a(uv: vec2<f32>, texel: vec2<f32>, direction: vec2<f32>, sigma: f32) -> f32 {
+    let center = textureSample(shadow_mask, shadow_sampler, uv);
+    let w0 = gaussian_weight(0.0, sigma);
+    let w1 = gaussian_weight(1.0, sigma);
+    let w2 = gaussian_weight(2.0, sigma);
+    let w3 = gaussian_weight(3.0, sigma);
+    let w4 = gaussian_weight(4.0, sigma);
+    let w5 = gaussian_weight(5.0, sigma);
+    let w6 = gaussian_weight(6.0, sigma);
+    let w7 = gaussian_weight(7.0, sigma);
+    let w8 = gaussian_weight(8.0, sigma);
+
+    var acc = vec2<f32>(center.a * w0, w0);
+
+    let c12 = w1 + w2;
+    let o12 = 1.0 + w2 / max(c12, 0.000001);
+    let p12 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o12).a;
+    let n12 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o12).a;
+    acc += vec2<f32>((p12 + n12) * c12, 2.0 * c12);
+
+    let c34 = w3 + w4;
+    let o34 = 3.0 + w4 / max(c34, 0.000001);
+    let p34 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o34).a;
+    let n34 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o34).a;
+    acc += vec2<f32>((p34 + n34) * c34, 2.0 * c34);
+
+    let c56 = w5 + w6;
+    let o56 = 5.0 + w6 / max(c56, 0.000001);
+    let p56 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o56).a;
+    let n56 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o56).a;
+    acc += vec2<f32>((p56 + n56) * c56, 2.0 * c56);
+
+    let c78 = w7 + w8;
+    let o78 = 7.0 + w8 / max(c78, 0.000001);
+    let p78 = textureSample(shadow_mask, shadow_sampler, uv + direction * texel * o78).a;
+    let n78 = textureSample(shadow_mask, shadow_sampler, uv - direction * texel * o78).a;
+    acc += vec2<f32>((p78 + n78) * c78, 2.0 * c78);
 
     return acc.x / max(acc.y, 0.000001);
 }
@@ -175,7 +206,7 @@ fn fs_vertical(in: VsOut) -> @location(0) vec4<f32> {
     let narrow_sigma = max(uniforms.sample_scale.y, 0.1) * scale;
     let wide_sigma = max(uniforms.sample_scale.z, 0.1) * scale;
 
-    let narrow = channel_blur_rgba(in.uv, texel, vec2<f32>(0.0, 1.0), narrow_sigma, 0.0);
-    let wide = channel_blur_rgba(in.uv, texel, vec2<f32>(0.0, 1.0), wide_sigma, 1.0);
+    let narrow = channel_blur_r(in.uv, texel, vec2<f32>(0.0, 1.0), narrow_sigma);
+    let wide = channel_blur_a(in.uv, texel, vec2<f32>(0.0, 1.0), wide_sigma);
     return vec4<f32>(narrow, 0.0, 0.0, wide);
 }
