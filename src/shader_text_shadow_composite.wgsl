@@ -42,20 +42,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(blurred_shadow));
     let texel_offset = uniforms.offset_alpha.xy / max(dimensions, vec2<f32>(1.0));
-    // Main shadow: sample the tight blur at the offset position so the glyph
-    // corner's dense core lands just lower-right of the body.
-    let main_alpha = textureSample(
-        blurred_shadow,
-        shadow_sampler,
-        in.uv - texel_offset,
-    ).r * uniforms.offset_alpha.z;
-    // Halo: zero-offset, wider blur. No artificial boost; the parameter alpha
-    // controls strength.
-    let halo_alpha = textureSample(
-        blurred_shadow,
-        shadow_sampler,
-        in.uv,
-    ).a * uniforms.offset_alpha.w;
+    // Main shadow: the tight blur is sampled at the +1,+1 offset so its dense
+    // core lands just lower-right of the body (CSS "1px 1px 2px"). Because it
+    // is a real blur (not raw coverage), the core still reaches corners.
+    let main_alpha = textureSample(blurred_shadow, shadow_sampler, in.uv - texel_offset).r
+        * uniforms.offset_alpha.z;
+    // Halo: the wide blur at zero offset covers the whole glyph with a soft
+    // outer glow (CSS "0 0 4px"). No artificial boost.
+    let halo_alpha = textureSample(blurred_shadow, shadow_sampler, in.uv).a
+        * uniforms.offset_alpha.w;
     // Screen-combine the two black contributions so they add without clamping.
     let combined_alpha = 1.0
         - (1.0 - clamp(main_alpha, 0.0, 1.0))
