@@ -74,6 +74,14 @@ pub enum AppAction {
     },
     PointerRelease(ReleaseAction),
     CursorLeft,
+    /// Vertical wheel/scroll while the pointer is over the transparent
+    /// launcher area (outside the page glass). The delta is in winit
+    /// `MouseScrollDelta` units already normalized to "lines" (`+1.0` ≈ one
+    /// line up). Horizontal scroll is dropped at the handler and never
+    /// produces this action.
+    WheelOutsideGlass {
+        delta_y: f32,
+    },
 }
 
 /// Keyboard intent, classified by [`keyboard_action`] from the shell flags and
@@ -466,6 +474,9 @@ impl App {
             }
             AppAction::CursorLeft => {
                 self.handle_cursor_left();
+            }
+            AppAction::WheelOutsideGlass { delta_y } => {
+                self.execute_command(AppCommand::ForwardVerticalWheel(delta_y));
             }
         }
     }

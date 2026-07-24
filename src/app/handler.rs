@@ -250,6 +250,39 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
             WindowEvent::Focused(focused) => AppAction::Focused(focused),
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Vertical-only transparent-area passthrough. Horizontal scroll
+                // (LineDelta x / PixelDelta x) is dropped and never forwarded.
+                // We only forward when the cursor is outside the page glass so
+                // scrolling inside a folder/over an app tile still belongs to
+                // the launcher (today: a no-op; horizontal drag-scroll lives on
+                // CursorMoved). PixelDelta (precision touchpads) is normalized
+                // to lines at ~40 px/line, a middle-ground default.
+                let dy_lines = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_x, y) => Some(y),
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                        // pos is in physical pixels. Skip sub-pixel jitter.
+                        if pos.y.abs() >= 1.0 {
+                            Some(pos.y as f32 / 40.0)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                let Some(dy) = dy_lines else {
+                    return;
+                };
+                if dy.abs() < f32::EPSILON
+                    || !self.visible
+                    || !matches!(
+                        self.grid_hit_at_pointer(self.pointer_phys_x, self.pointer_phys_y),
+                        crate::layout::grid::GridHit::OutsideFrame
+                    )
+                {
+                    return;
+                }
+                AppAction::WheelOutsideGlass { delta_y: dy }
+            }
             _ => return,
         };
         self.handle_action(action);

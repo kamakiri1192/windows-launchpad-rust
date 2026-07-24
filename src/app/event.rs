@@ -122,6 +122,12 @@ pub enum AppCommand {
     /// Programmatically glide the scroller to `page` (edge autoscroll). Only
     /// fires when the scroller is `Idle`.
     SettleToPage(usize),
+    /// Forward a vertical wheel scroll to the window underneath, for the
+    /// transparent-area scroll passthrough. Unlike `HideWithClickPassthrough`,
+    /// the launcher stays visible: wheel events can be re-injected at the live
+    /// cursor position without first removing the window. Horizontal scroll is
+    /// never forwarded (the caller drops the horizontal component).
+    ForwardVerticalWheel(f32),
 }
 
 #[cfg(test)]
@@ -163,5 +169,23 @@ mod tests {
         // The two must not be the same command — modal dismiss never replays
         // the click.
         assert!(!matches!(plain_hide, AppCommand::HideWithClickPassthrough));
+    }
+
+    /// Vertical scroll passthrough is its own command, distinct from the click
+    /// passthrough (which hides the window first) and from `HideWindow`. The
+    /// scroll path keeps the launcher visible, so the three must never collide.
+    /// This also documents the invariant that horizontal scroll is never
+    /// forwarded: `ForwardVerticalWheel` carries only the vertical delta.
+    #[test]
+    fn vertical_wheel_passthrough_is_distinct_from_hide_paths() {
+        let wheel = AppCommand::ForwardVerticalWheel(1.0);
+        let hide = AppCommand::HideWindow;
+        let click = AppCommand::HideWithClickPassthrough;
+        assert!(matches!(wheel, AppCommand::ForwardVerticalWheel(_)));
+        assert!(!matches!(wheel, AppCommand::HideWindow));
+        assert!(!matches!(wheel, AppCommand::HideWithClickPassthrough));
+        // The two hide paths remain distinct from each other too.
+        assert!(!matches!(hide, AppCommand::HideWithClickPassthrough));
+        assert!(!matches!(click, AppCommand::HideWindow));
     }
 }

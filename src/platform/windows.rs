@@ -35,7 +35,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+    VIRTUAL_KEY,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
@@ -56,6 +57,12 @@ use crate::{app_icon, UserEvent};
 /// App-private window message used by the shell to deliver tray notifications.
 /// Anything in the `WM_APP`..`WM_APP+0x7FFF` range is safe for this.
 const WM_TRAYICON: u32 = 0x8000; // WM_APP
+
+/// One wheel notch == `WHEEL_DELTA` delta ticks (`MOUSEINPUT.mouseData` is in
+/// these units). The `windows` crate does not re-export this constant under
+/// the KeyboardAndMouse feature we already pull in, so we inline the stable
+/// Win32 value.
+const WHEEL_DELTA: u32 = 120;
 
 /// Menu item ids for the tray popup.
 const ID_SHOW: u32 = 1001;
@@ -400,21 +407,53 @@ fn dummy_input(up: bool) -> INPUT {
 /// underneath receive the click that the launcher window itself consumed.
 pub fn replay_left_click_at_cursor() -> bool {
     let inputs = [
-        mouse_input(MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTDOWN.0)),
-        mouse_input(MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTUP.0)),
+        mouse_input(0, MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTDOWN.0)),
+        mouse_input(0, MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTUP.0)),
     ];
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     sent as usize == inputs.len()
 }
 
-fn mouse_input(flags: MOUSE_EVENT_FLAGS) -> INPUT {
+/// Best-effort vertical wheel passthrough for transparent launcher areas.
+///
+/// Unlike the click passthrough, the launcher window is **not** hidden first:
+/// wheel events don't need the window out of the way because Windows dispatches
+/// `WM_MOUSEWHEEL` to the window under the cursor that currently owns it, and
+/// `SendInput` re-targets using the live cursor position once we synthesize the
+/// event at our own cursor. The caller has already decided the pointer is over
+/// the transparent area.
+///
+/// `delta_y` is in "lines" (winit `MouseScrollDelta::LineDelta` units, where
+/// `+1.0` is one line up). We scale by `WHEEL_DELTA` and round to a whole delta
+/// tick because `mouseData` is an integer number of delta ticks. Sub-tick
+/// remainders are dropped intentionally — Windows coalesces wheel ticks anyway
+/// and a partial tick has no effect. Horizontal scroll is deliberately ignored
+/// (only `MOUSEEVENTF_WHEEL`, never `MOUSEEVENTF_HWHEEL`).
+pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
+    if delta_y_lines.abs() < f32::EPSILON {
+        return true; // nothing to do, treat as success
+    }
+    // WHEEL_DELTA (120) == one notch == roughly 3 lines by default. winit's
+    // LineDelta is already in lines, so convert lines → ticks by dividing by 3.
+    // Rounding to at least one tick preserves the user intent for slow scrolls.
+    let ticks = (delta_y_lines / 3.0).round() as i32;
+    if ticks == 0 {
+        return true;
+    }
+    let mouse_data = ticks.saturating_mul(WHEEL_DELTA as i32);
+    let input = mouse_input(mouse_data as u32, MOUSE_EVENT_FLAGS(MOUSEEVENTF_WHEEL.0));
+    let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+    sent as usize == 1
+}
+
+fn mouse_input(mouse_data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
     INPUT {
         r#type: INPUT_TYPE(0), // INPUT_MOUSE
         Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
             mi: MOUSEINPUT {
                 dx: 0,
                 dy: 0,
-                mouseData: 0,
+                mouseData: mouse_data,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: 0,
