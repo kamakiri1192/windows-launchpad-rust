@@ -1,6 +1,10 @@
-// Composite a strong +1,+1 px drop shadow and a softer zero-offset halo.
-// The render pipeline uses standard alpha-over blending, so this shader emits
-// only the combined black shadow contribution.
+// Composite a narrow +1,+1 px drop shadow and a wider zero-offset halo.
+//
+// The blur texture holds both layers as blurred Gaussians (no unblurred
+// channel): R is the tight main shadow (offset at composite time), A is the
+// wide halo (zero offset). Both are black contributions; they are
+// screen-combined (so overlapping shadow doesn't clamp flat) and then
+// alpha-over blended onto the scene by the pipeline.
 
 struct CompositeUniforms {
     // (offset x px, offset y px, main alpha, halo alpha)
@@ -37,21 +41,22 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(blurred_shadow));
-    let texel_offset = uniforms.offset_alpha.xy
-        / max(dimensions, vec2<f32>(1.0));
+    let texel_offset = uniforms.offset_alpha.xy / max(dimensions, vec2<f32>(1.0));
+    // Main shadow: sample the tight blur at the offset position so the glyph
+    // corner's dense core lands just lower-right of the body.
     let main_alpha = textureSample(
         blurred_shadow,
         shadow_sampler,
         in.uv - texel_offset,
     ).r * uniforms.offset_alpha.z;
-    // A normalized wide Gaussian loses peak coverage quickly around small
-    // glyphs. Boost it before clamping so the zero-offset halo remains visible
-    // on dark wallpaper as well as bright areas.
+    // Halo: zero-offset, wider blur. No artificial boost; the parameter alpha
+    // controls strength.
     let halo_alpha = textureSample(
         blurred_shadow,
         shadow_sampler,
         in.uv,
-    ).a * uniforms.offset_alpha.w * 2.0;
+    ).a * uniforms.offset_alpha.w;
+    // Screen-combine the two black contributions so they add without clamping.
     let combined_alpha = 1.0
         - (1.0 - clamp(main_alpha, 0.0, 1.0))
         * (1.0 - clamp(halo_alpha, 0.0, 1.0));

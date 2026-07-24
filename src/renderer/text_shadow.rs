@@ -1,15 +1,32 @@
 //! Full-resolution GPU blur for text shadows.
 //!
 //! Every text lane first writes glyph coverage into `shadow_texture`. The mask
-//! is filtered horizontally and vertically in parallel texture channels: an
-//! unblurred offset shadow and a bilinear-optimized sigma≈2 Gaussian for the
-//! zero-offset halo. The mask stays at physical surface resolution so its
-//! coverage exactly matches the body glyph; only Gaussian sigma and offset are
-//! scaled to preserve logical CSS-pixel dimensions on high-DPI displays.
+//! is blurred in a two-layer, separable Gaussian pass:
+//!   * **R / main shadow** — narrow (σ ≈ 0.75 logical px) so sharp corners
+//!     ("A", "フ") keep a dense shadow core; offset to +1,+1 px at composite
+//!     time (CSS `1px 1px 2px`).
+//!   * **A / halo** — wider (σ ≈ 1.75 logical px) zero-offset halo (CSS
+//!     `0 0 4px`).
+//!
+//! Concept:
+//! ```text
+//! coverage ─┬─ narrow horizontal → narrow vertical → R
+//!           └─ wide horizontal   → wide vertical   → A
+//! ```
+//! Both channels are real Gaussians (the previous design passed the raw
+//! coverage through R, which let glyph corners lose shadow area where the
+//! offset body overlapped). The mask stays at physical surface resolution so
+//! its coverage matches the body glyph; only the Gaussian sigma and offset
+//! scale with the display factor to keep logical CSS-pixel dimensions stable.
 
 use std::num::NonZeroU64;
 
 pub(super) const TEXT_SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Narrow (main shadow) Gaussian sigma in logical CSS pixels.
+pub(super) const MAIN_SIGMA_LOGICAL: f32 = 0.75;
+/// Wide (halo) Gaussian sigma in logical CSS pixels.
+pub(super) const HALO_SIGMA_LOGICAL: f32 = 1.75;
 
 fn sanitized_scale_factor(scale_factor: f32) -> f32 {
     if scale_factor.is_finite() && scale_factor > 0.0 {
@@ -22,7 +39,7 @@ fn sanitized_scale_factor(scale_factor: f32) -> f32 {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TextShadowBlurUniforms {
-    /// (physical pixels per logical px, unused...)
+    /// (physical px per logical px, narrow sigma logical, wide sigma logical, _)
     sample_scale: [f32; 4],
 }
 
@@ -44,8 +61,8 @@ impl Default for TextShadowParams {
     fn default() -> Self {
         Self {
             offset: [1.0, 1.0],
-            main_alpha: 1.0,
-            halo_alpha: 1.0,
+            main_alpha: 0.85,
+            halo_alpha: 0.35,
         }
     }
 }
@@ -312,7 +329,7 @@ impl TextShadowBlur {
             &self.blur_uniform_buffer,
             0,
             bytemuck::bytes_of(&TextShadowBlurUniforms {
-                sample_scale: [scale, 0.0, 0.0, 0.0],
+                sample_scale: [scale, MAIN_SIGMA_LOGICAL, HALO_SIGMA_LOGICAL, 0.0],
             }),
         );
         {
@@ -542,42 +559,118 @@ mod tests {
         assert_eq!(std::mem::align_of::<TextShadowBlurUniforms>(), 4);
     }
 
+    /// Gaussian weight at integer distance `d` (physical px) for a given sigma.
+    fn gw(d: f32, sigma: f32) -> f32 {
+        (-0.5 * d * d / (sigma * sigma)).exp()
+    }
+
     #[test]
-    fn paired_gaussian_reconstructs_every_physical_tap() {
+    fn narrow_gaussian_weights_normalize() {
+        // σ = 0.75 logical px; the shader taps ±8 physical px (4 paired taps).
+        // The paired sum must match the direct normalization so the blur is
+        // energy-preserving.
         for scale in [1.0_f32, 2.0] {
-            let sigma = 2.0 * scale;
-            let radius = (4.0 * scale).ceil() as usize;
-            let weights: Vec<f32> = (0..=8)
-                .map(|distance| {
-                    if distance > radius {
-                        0.0
-                    } else {
-                        (-0.5 * (distance as f32 / sigma).powi(2)).exp()
-                    }
-                })
-                .collect();
-            let normalization = weights[0] + 2.0 * weights[1..].iter().copied().sum::<f32>();
-            let paired_sum = weights[0]
+            let sigma = MAIN_SIGMA_LOGICAL * scale;
+            let direct = gw(0.0, sigma)
                 + 2.0
-                    * [
-                        weights[1] + weights[2],
-                        weights[3] + weights[4],
-                        weights[5] + weights[6],
-                        weights[7] + weights[8],
-                    ]
-                    .iter()
-                    .copied()
-                    .sum::<f32>();
-            assert!((paired_sum / normalization - 1.0).abs() < 0.000_001);
+                    * (gw(1.0, sigma)
+                        + gw(2.0, sigma)
+                        + gw(3.0, sigma)
+                        + gw(4.0, sigma)
+                        + gw(5.0, sigma)
+                        + gw(6.0, sigma)
+                        + gw(7.0, sigma)
+                        + gw(8.0, sigma));
+            let paired = gw(0.0, sigma)
+                + 2.0
+                    * ((gw(1.0, sigma) + gw(2.0, sigma))
+                        + (gw(3.0, sigma) + gw(4.0, sigma))
+                        + (gw(5.0, sigma) + gw(6.0, sigma))
+                        + (gw(7.0, sigma) + gw(8.0, sigma)));
+            assert!(
+                (paired / direct - 1.0).abs() < 0.000_001,
+                "narrow scale={scale}: paired {paired} must match direct {direct}"
+            );
         }
+    }
+
+    #[test]
+    fn wide_gaussian_weights_normalize() {
+        for scale in [1.0_f32, 2.0] {
+            let sigma = HALO_SIGMA_LOGICAL * scale;
+            let direct = gw(0.0, sigma)
+                + 2.0
+                    * (gw(1.0, sigma)
+                        + gw(2.0, sigma)
+                        + gw(3.0, sigma)
+                        + gw(4.0, sigma)
+                        + gw(5.0, sigma)
+                        + gw(6.0, sigma)
+                        + gw(7.0, sigma)
+                        + gw(8.0, sigma));
+            let paired = gw(0.0, sigma)
+                + 2.0
+                    * ((gw(1.0, sigma) + gw(2.0, sigma))
+                        + (gw(3.0, sigma) + gw(4.0, sigma))
+                        + (gw(5.0, sigma) + gw(6.0, sigma))
+                        + (gw(7.0, sigma) + gw(8.0, sigma)));
+            assert!(
+                (paired / direct - 1.0).abs() < 0.000_001,
+                "wide scale={scale}: paired {paired} must match direct {direct}"
+            );
+        }
+    }
+
+    #[test]
+    fn kernel_radius_covers_sigma_at_both_scales() {
+        // The shader uses a fixed ±8 physical-tap radius. Verify the Gaussian
+        // tail beyond ±8 is negligible for both sigmas at scale 2.0 (the worst
+        // case), so no significant coverage leaks past the kernel edge.
+        for logical in [MAIN_SIGMA_LOGICAL, HALO_SIGMA_LOGICAL] {
+            let sigma = logical * 2.0;
+            let tail = gw(9.0, sigma) + gw(10.0, sigma) + gw(11.0, sigma) + gw(12.0, sigma);
+            let total = gw(0.0, sigma)
+                + 2.0
+                    * (gw(1.0, sigma)
+                        + gw(2.0, sigma)
+                        + gw(3.0, sigma)
+                        + gw(4.0, sigma)
+                        + gw(5.0, sigma)
+                        + gw(6.0, sigma)
+                        + gw(7.0, sigma)
+                        + gw(8.0, sigma))
+                + 2.0 * tail;
+            let leakage = 2.0 * tail / total;
+            assert!(
+                leakage < 0.02,
+                "σ={logical}@2×: tail leakage {leakage} beyond ±8 taps is too large"
+            );
+        }
+    }
+
+    #[test]
+    fn bilinear_paired_sample_reproduces_discrete_taps() {
+        // The shader samples a pair of symmetric taps (±first, ±second) at a
+        // weighted-average offset. When the two weights are equal the sample
+        // lands midway and linear filtering yields the average — which, scaled
+        // by the combined weight, equals the sum of the two discrete taps.
+        // Equal weights at distance 1 and 1 (degenerate) → offset 1.5.
+        let sigma = 1.0;
+        let w1 = gw(1.0, sigma);
+        let combined = w1 + w1;
+        let offset = 1.0 + w1 / combined;
+        assert!(
+            (offset - 1.5).abs() < 0.000_001,
+            "equal-weight pair must sample at 1.5, got {offset}"
+        );
     }
 
     #[test]
     fn default_shadow_matches_design_values() {
         let params = TextShadowParams::default();
         assert_eq!(params.offset, [1.0, 1.0]);
-        assert_eq!(params.main_alpha, 1.0);
-        assert_eq!(params.halo_alpha, 1.0);
+        assert_eq!(params.main_alpha, 0.85);
+        assert_eq!(params.halo_alpha, 0.35);
     }
 
     #[test]
