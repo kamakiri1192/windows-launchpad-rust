@@ -72,6 +72,32 @@ fn all_wgsl_shaders_compile_with_wgpu_validation() {
 }
 
 #[test]
+fn all_wgsl_shaders_parse_without_gpu_adapter() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut shader_paths = Vec::new();
+    collect_wgsl_files(&manifest_dir.join("src"), &mut shader_paths);
+    collect_wgsl_files(&manifest_dir.join("assets"), &mut shader_paths);
+    shader_paths.sort();
+
+    assert!(
+        !shader_paths.is_empty(),
+        "expected at least one .wgsl shader under src/ or assets/"
+    );
+
+    for path in shader_paths {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        wgpu::naga::front::wgsl::parse_str(&source).unwrap_or_else(|error| {
+            panic!(
+                "Naga failed to parse {}:\n{}",
+                shader_label(&manifest_dir, &path),
+                error.emit_to_string(&source),
+            )
+        });
+    }
+}
+
+#[test]
 fn renderer_render_pipelines_compile_with_wgpu_validation() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 

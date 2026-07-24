@@ -66,5 +66,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_shadow(in: VsOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
-    return vec4<f32>(0.0, 0.0, 0.0, sampled.a * in.color.a);
+    let coverage = sampled.a * in.color.a;
+    return vec4<f32>(1.0, 0.0, 0.0, coverage);
 }

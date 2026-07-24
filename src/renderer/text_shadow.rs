@@ -1,12 +1,30 @@
 //! Full-resolution GPU blur for text shadows.
 //!
 //! Every text lane first writes glyph coverage into `shadow_texture`. The mask
-//! is blurred horizontally and vertically with a 9-tap Gaussian kernel, then
-//! composited as a strong offset shadow plus a softer zero-offset halo.
+//! is filtered horizontally and vertically in parallel texture channels: an
+//! unblurred offset shadow and a bilinear-optimized sigma≈2 Gaussian for the
+//! zero-offset halo. The mask stays at physical surface resolution so its
+//! coverage exactly matches the body glyph; only Gaussian sigma and offset are
+//! scaled to preserve logical CSS-pixel dimensions on high-DPI displays.
 
 use std::num::NonZeroU64;
 
 pub(super) const TEXT_SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+fn sanitized_scale_factor(scale_factor: f32) -> f32 {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TextShadowBlurUniforms {
+    /// (physical pixels per logical px, unused...)
+    sample_scale: [f32; 4],
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,8 +44,8 @@ impl Default for TextShadowParams {
     fn default() -> Self {
         Self {
             offset: [1.0, 1.0],
-            main_alpha: 0.9,
-            halo_alpha: 0.6,
+            main_alpha: 1.0,
+            halo_alpha: 1.0,
         }
     }
 }
@@ -43,6 +61,7 @@ pub(super) struct TextShadowBlur {
     blur_bind_group_layout: wgpu::BindGroupLayout,
     blur_h_bind_group: wgpu::BindGroup,
     blur_v_bind_group: wgpu::BindGroup,
+    blur_uniform_buffer: wgpu::Buffer,
     composite_bind_group_layout: wgpu::BindGroupLayout,
     composite_bind_group: wgpu::BindGroup,
     composite_uniform_buffer: wgpu::Buffer,
@@ -78,6 +97,19 @@ impl TextShadowBlur {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: NonZeroU64::new(std::mem::size_of::<
+                                TextShadowBlurUniforms,
+                            >()
+                                as u64),
+                        },
                         count: None,
                     },
                 ],
@@ -165,6 +197,12 @@ impl TextShadowBlur {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let blur_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("text shadow blur uniform buffer"),
+            size: std::mem::size_of::<TextShadowBlurUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let (shadow_texture, shadow_view) =
             create_texture(device, "text shadow mask texture", width, height);
@@ -172,10 +210,20 @@ impl TextShadowBlur {
             create_texture(device, "text shadow horizontal blur texture", width, height);
         let (blur_v_texture, blur_v_view) =
             create_texture(device, "text shadow vertical blur texture", width, height);
-        let blur_h_bind_group =
-            blur_bind_group(device, &blur_bind_group_layout, &shadow_view, &sampler);
-        let blur_v_bind_group =
-            blur_bind_group(device, &blur_bind_group_layout, &blur_h_view, &sampler);
+        let blur_h_bind_group = blur_bind_group(
+            device,
+            &blur_bind_group_layout,
+            &shadow_view,
+            &sampler,
+            &blur_uniform_buffer,
+        );
+        let blur_v_bind_group = blur_bind_group(
+            device,
+            &blur_bind_group_layout,
+            &blur_h_view,
+            &sampler,
+            &blur_uniform_buffer,
+        );
         let composite_bind_group = composite_bind_group(
             device,
             &composite_bind_group_layout,
@@ -195,6 +243,7 @@ impl TextShadowBlur {
             blur_bind_group_layout,
             blur_h_bind_group,
             blur_v_bind_group,
+            blur_uniform_buffer,
             composite_bind_group_layout,
             composite_bind_group,
             composite_uniform_buffer,
@@ -227,12 +276,14 @@ impl TextShadowBlur {
             &self.blur_bind_group_layout,
             &shadow_view,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.blur_v_bind_group = blur_bind_group(
             device,
             &self.blur_bind_group_layout,
             &blur_h_view,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.composite_bind_group = composite_bind_group(
             device,
@@ -250,7 +301,20 @@ impl TextShadowBlur {
         self.size = (width, height);
     }
 
-    pub(super) fn blur(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(super) fn blur(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scale_factor: f32,
+    ) {
+        let scale = sanitized_scale_factor(scale_factor);
+        queue.write_buffer(
+            &self.blur_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&TextShadowBlurUniforms {
+                sample_scale: [scale, 0.0, 0.0, 0.0],
+            }),
+        );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("text shadow horizontal blur pass"),
@@ -301,11 +365,13 @@ impl TextShadowBlur {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         params: TextShadowParams,
+        scale_factor: f32,
     ) {
+        let scale = sanitized_scale_factor(scale_factor);
         let uniforms = TextShadowCompositeUniforms {
             offset_alpha: [
-                params.offset[0],
-                params.offset[1],
+                params.offset[0] * scale,
+                params.offset[1] * scale,
                 params.main_alpha.clamp(0.0, 1.0),
                 params.halo_alpha.clamp(0.0, 1.0),
             ],
@@ -415,6 +481,7 @@ fn blur_bind_group(
     layout: &wgpu::BindGroupLayout,
     source: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("text shadow blur bg"),
@@ -427,6 +494,10 @@ fn blur_bind_group(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
             },
         ],
     })
@@ -467,19 +538,52 @@ mod tests {
     fn composite_uniform_layout_matches_wgsl_vec4() {
         assert_eq!(std::mem::size_of::<TextShadowCompositeUniforms>(), 16);
         assert_eq!(std::mem::align_of::<TextShadowCompositeUniforms>(), 4);
+        assert_eq!(std::mem::size_of::<TextShadowBlurUniforms>(), 16);
+        assert_eq!(std::mem::align_of::<TextShadowBlurUniforms>(), 4);
     }
 
     #[test]
-    fn gaussian_kernel_is_normalized() {
-        let sum: f32 = 0.20416369 + 2.0 * (0.18017382 + 0.12383154 + 0.06628224 + 0.02763055);
-        assert!((sum - 1.0).abs() < 0.000_001);
+    fn paired_gaussian_reconstructs_every_physical_tap() {
+        for scale in [1.0_f32, 2.0] {
+            let sigma = 2.0 * scale;
+            let radius = (4.0 * scale).ceil() as usize;
+            let weights: Vec<f32> = (0..=8)
+                .map(|distance| {
+                    if distance > radius {
+                        0.0
+                    } else {
+                        (-0.5 * (distance as f32 / sigma).powi(2)).exp()
+                    }
+                })
+                .collect();
+            let normalization = weights[0] + 2.0 * weights[1..].iter().copied().sum::<f32>();
+            let paired_sum = weights[0]
+                + 2.0
+                    * [
+                        weights[1] + weights[2],
+                        weights[3] + weights[4],
+                        weights[5] + weights[6],
+                        weights[7] + weights[8],
+                    ]
+                    .iter()
+                    .copied()
+                    .sum::<f32>();
+            assert!((paired_sum / normalization - 1.0).abs() < 0.000_001);
+        }
     }
 
     #[test]
     fn default_shadow_matches_design_values() {
         let params = TextShadowParams::default();
         assert_eq!(params.offset, [1.0, 1.0]);
-        assert_eq!(params.main_alpha, 0.9);
-        assert_eq!(params.halo_alpha, 0.6);
+        assert_eq!(params.main_alpha, 1.0);
+        assert_eq!(params.halo_alpha, 1.0);
+    }
+
+    #[test]
+    fn invalid_scale_factor_falls_back_to_one() {
+        assert_eq!(sanitized_scale_factor(2.0), 2.0);
+        assert_eq!(sanitized_scale_factor(0.0), 1.0);
+        assert_eq!(sanitized_scale_factor(f32::NAN), 1.0);
     }
 }

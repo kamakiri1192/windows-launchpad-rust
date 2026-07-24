@@ -8,7 +8,7 @@
 //! 3. tile fill pass (opaque app fills; folder fallback fills are discarded)
 //! 4. nested grid Liquid Glass pass (closed folder containers)
 //! 5. grid icon pass (content above nested glass)
-//! 6. all text lanes -> full-resolution shadow mask -> separable blur
+//! 6. lower-scene text lanes -> full-resolution shadow mask -> separable blur
 //! 7. shadow composite + coverage-font grid text
 //! 8. edit-badge glass + foreground marks (above grid, below dragged icon)
 //! 9. isolated dragged-folder Liquid Glass pass
@@ -18,7 +18,9 @@
 //! 13. optional lower-scene Dual-Kawase blur + rounded focus composite
 //! 14. focus tint backdrop
 //! 15. Liquid Glass settings/folder panel pass (modal)
-//! 16. modal content pass
+//! 16. modal tiles/icons/ink
+//! 17. modal text shadow mask -> blur -> composite
+//! 18. coverage-font modal text
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -134,6 +136,7 @@ impl Renderer {
                 )
             })
             .unwrap_or(full_scissor);
+        let shadow_scale = self.window.scale_factor() as f32;
 
         let mut encoder = self
             .device
@@ -282,11 +285,9 @@ impl Renderer {
             }),
         );
 
-        let has_text = self.text_instance_buffer.len() > 0
-            || self.control_text_instance_buffer.len() > 0
-            || self.modal_text_instance_buffer.len() > 0
-            || self.settings_text_instance_buffer.len() > 0;
-        if has_text {
+        let has_lower_scene_text =
+            self.text_instance_buffer.len() > 0 || self.control_text_instance_buffer.len() > 0;
+        if has_lower_scene_text {
             let profile_scope = self.gpu_profiler.begin("text_shadow_mask", &mut encoder);
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -325,26 +326,12 @@ impl Renderer {
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.control_text_instance_buffer.len());
                 }
-
-                pass.set_scissor_rect(
-                    content_scissor.0,
-                    content_scissor.1,
-                    content_scissor.2,
-                    content_scissor.3,
-                );
-                if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
-                }
-                if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
-                }
             }
             self.gpu_profiler.end(&mut encoder, profile_scope);
 
             let profile_scope = self.gpu_profiler.begin("text_shadow_blur", &mut encoder);
-            self.text_shadow.blur(&mut encoder);
+            self.text_shadow
+                .blur(&self.queue, &mut encoder, shadow_scale);
             self.gpu_profiler.end(&mut encoder, profile_scope);
 
             let profile_scope = self
@@ -355,6 +342,7 @@ impl Renderer {
                 &mut encoder,
                 scene_view,
                 TextShadowParams::default(),
+                shadow_scale,
             );
             self.gpu_profiler.end(&mut encoder, profile_scope);
         }
@@ -644,14 +632,6 @@ impl Renderer {
                         pass.draw(0..6, 0..self.modal_instance_buffer.len());
                     }
                 }
-                if self.modal_text_instance_buffer.len() > 0 {
-                    if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
-                        pass.set_pipeline(&self.control_text_pipeline);
-                        pass.set_bind_group(0, &self.control_text_bind_group, &[]);
-                        pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
-                    }
-                }
                 if self.settings_instance_buffer.len() > 0 {
                     if let Some(buf) = self.settings_instance_buffer.as_ref() {
                         pass.set_pipeline(&self.control_pipeline);
@@ -660,13 +640,87 @@ impl Renderer {
                         pass.draw(0..6, 0..self.settings_instance_buffer.len());
                     }
                 }
-                if self.settings_text_instance_buffer.len() > 0 {
+            }
+
+            let has_modal_text = self.modal_text_instance_buffer.len() > 0
+                || self.settings_text_instance_buffer.len() > 0;
+            if has_modal_text {
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("modal text shadow mask pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: self.text_shadow.shadow_view(),
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_scissor_rect(
+                        content_scissor.0,
+                        content_scissor.1,
+                        content_scissor.2,
+                        content_scissor.3,
+                    );
+                    pass.set_pipeline(&self.shadow_control_text_pipeline);
+                    pass.set_bind_group(0, &self.shadow_control_text_bind_group, &[]);
+                    if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                    }
                     if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
-                        pass.set_pipeline(&self.control_text_pipeline);
-                        pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                         pass.set_vertex_buffer(0, buf.slice(..));
                         pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
                     }
+                }
+
+                self.text_shadow
+                    .blur(&self.queue, &mut encoder, shadow_scale);
+                self.text_shadow.composite(
+                    &self.queue,
+                    &mut encoder,
+                    &view,
+                    TextShadowParams::default(),
+                    shadow_scale,
+                );
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("modal text pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_scissor_rect(
+                    content_scissor.0,
+                    content_scissor.1,
+                    content_scissor.2,
+                    content_scissor.3,
+                );
+                pass.set_pipeline(&self.control_text_pipeline);
+                pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                }
+                if let Some(buf) = self.settings_text_instance_buffer.as_ref() {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.settings_text_instance_buffer.len());
                 }
             }
 

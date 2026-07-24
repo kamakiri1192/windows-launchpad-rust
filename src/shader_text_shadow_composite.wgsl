@@ -43,12 +43,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         blurred_shadow,
         shadow_sampler,
         in.uv - texel_offset,
-    ).a * uniforms.offset_alpha.z;
+    ).r * uniforms.offset_alpha.z;
+    // A normalized wide Gaussian loses peak coverage quickly around small
+    // glyphs. Boost it before clamping so the zero-offset halo remains visible
+    // on dark wallpaper as well as bright areas.
     let halo_alpha = textureSample(
         blurred_shadow,
         shadow_sampler,
         in.uv,
-    ).a * uniforms.offset_alpha.w;
+    ).a * uniforms.offset_alpha.w * 2.0;
     let combined_alpha = 1.0
         - (1.0 - clamp(main_alpha, 0.0, 1.0))
         * (1.0 - clamp(halo_alpha, 0.0, 1.0));
