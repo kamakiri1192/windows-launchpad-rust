@@ -30,6 +30,10 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // Physical screen position. Unlike @builtin(position) in the fragment
+    // stage, this stays in the main surface coordinate system even when the
+    // shadow mask is rasterized into a DPI-normalized, lower-resolution RT.
+    @location(2) world: vec2<f32>,
 };
 
 @vertex
@@ -67,6 +71,7 @@ fn vs_main(
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.color = color;
+    out.world = world;
     return out;
 }
 
@@ -81,10 +86,24 @@ fn sdRoundBox(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
     // Clip labels to the fixed page frame so they never spill past its edge.
-    let local = in.pos.xy - u.frame_center;
+    let local = in.world - u.frame_center;
     let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
     let frame_alpha = smoothstep(1.0, -1.0, fd);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
     // the pipeline's standard alpha blending.
     return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha);
+}
+
+// Shadow-mask variant: preserve the coverage bitmap and all grid clipping,
+// but emit black with coverage in alpha for the dedicated blur target.
+@fragment
+fn fs_shadow(in: VsOut) -> @location(0) vec4<f32> {
+    let sampled = textureSample(atlas, atlas_sampler, in.uv);
+    let local = in.world - u.frame_center;
+    let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
+    let frame_alpha = smoothstep(1.0, -1.0, fd);
+    let coverage = sampled.a * in.color.a * frame_alpha;
+    // Standard alpha blending over transparent keeps R and A equal to the
+    // accumulated coverage. The blur pass then gives them separate radii.
+    return vec4<f32>(1.0, 0.0, 0.0, coverage);
 }

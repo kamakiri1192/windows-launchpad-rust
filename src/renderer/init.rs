@@ -22,6 +22,7 @@ use super::counters::BufferCounters;
 use super::focus_blur::FocusBlurRenderer;
 use super::frame_clip;
 use super::resources::InstanceBuffer;
+use super::text_shadow::{TextShadowBlur, TEXT_SHADOW_FORMAT};
 use super::tiles::Uniforms;
 use super::Renderer;
 
@@ -349,6 +350,35 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let shadow_text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("grid shadow text pipeline"),
+            layout: Some(&text_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &text_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[GlyphQuad::LAYOUT],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &text_shader,
+                entry_point: Some("fs_shadow"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TEXT_SHADOW_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         // ---- Icon pipeline + atlas --------------------------------------
         // The atlas starts as a 1×1 placeholder; the real atlas is uploaded
@@ -457,6 +487,7 @@ impl Renderer {
         );
         let focus_blur =
             FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
+        let text_shadow = TextShadowBlur::new(&device, surface_format, config.width, config.height);
         let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
@@ -597,6 +628,36 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             });
+        let shadow_control_text_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("fixed shadow text pipeline"),
+                layout: Some(&control_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &control_text_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[GlyphQuad::LAYOUT],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &control_text_shader,
+                    entry_point: Some("fs_shadow"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: TEXT_SHADOW_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
 
         Ok(Self {
             window,
@@ -616,10 +677,13 @@ impl Renderer {
             surface_format,
             liquid_glass,
             focus_blur,
+            text_shadow,
             gpu_profiler,
             text_pipeline,
+            shadow_text_pipeline,
             text_instance_buffer: InstanceBuffer::new("text instance buffer"),
             atlas_texture,
+            shadow_text_bind_group: atlas_bind_group.clone(),
             atlas_bind_group,
             text_bgl,
             icon_pipeline,
@@ -649,7 +713,9 @@ impl Renderer {
                 "modal badge foreground instance buffer",
             ),
             control_text_pipeline,
-            control_text_bind_group: control_bind_group,
+            shadow_control_text_pipeline,
+            control_text_bind_group: control_bind_group.clone(),
+            shadow_control_text_bind_group: control_bind_group,
             control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
@@ -684,6 +750,8 @@ impl Renderer {
             self.config.height,
         );
         self.focus_blur
+            .resize(&self.device, self.config.width, self.config.height);
+        self.text_shadow
             .resize(&self.device, self.config.width, self.config.height);
     }
 
