@@ -244,7 +244,11 @@ impl App {
                 {
                     // Resolve our own HWND so the platform layer can skip it
                     // when picking the window under the cursor (otherwise the
-                    // launcher would re-receive its own forwarded wheel).
+                    // launcher would re-receive its own forwarded wheel). The
+                    // launcher is NOT hidden: wheel scroll is a continuous
+                    // gesture and dismissing the launcher mid-scroll would be
+                    // jarring. Instead we PostMessage WM_MOUSEWHEEL straight to
+                    // the window under the cursor.
                     use raw_window_handle::HasWindowHandle;
                     let hwnd = self
                         .renderer

@@ -283,12 +283,22 @@ impl ApplicationHandler<UserEvent> for App {
                 let Some(dy) = dy_lines else {
                     return;
                 };
+                let px = self.pointer_phys_x;
+                let py = self.pointer_phys_y;
+                let visible = self.visible;
+                let hit = self.grid_hit_at_pointer(px, py);
+                debug_log!(
+                    "wheel: dy={:.3} visible={} drag={} pointer=({:.0},{:.0}) hit={:?}",
+                    dy,
+                    visible,
+                    scroller_dragging,
+                    px,
+                    py,
+                    hit
+                );
                 if dy.abs() < f32::EPSILON
-                    || !self.visible
-                    || !matches!(
-                        self.grid_hit_at_pointer(self.pointer_phys_x, self.pointer_phys_y),
-                        crate::layout::grid::GridHit::OutsideFrame
-                    )
+                    || !visible
+                    || !matches!(hit, crate::layout::grid::GridHit::OutsideFrame)
                 {
                     return;
                 }

@@ -26,7 +26,8 @@ use std::thread;
 
 use windows::core::w;
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT,
+    WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
@@ -43,12 +44,13 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyIcon, DestroyMenu, DispatchMessageW, FindWindowExW, GetAncestor, GetCursorPos,
-    GetMessageW, InsertMenuItemW, PostMessageW, RegisterClassExW, SetForegroundWindow,
-    SetWindowsHookExW, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
-    CS_HREDRAW, CS_VREDRAW, GA_ROOT, HICON, HWND_MESSAGE, ICONINFO, KBDLLHOOKSTRUCT,
-    LLKHF_INJECTED, MENUITEMINFOW, MENU_ITEM_MASK, MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG,
-    TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    GetMessageW, GetWindow, GetWindowLongPtrW, GetWindowRect, InsertMenuItemW, IsWindowVisible,
+    PostMessageW, RegisterClassExW, SetForegroundWindow, SetWindowsHookExW, TrackPopupMenu,
+    TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, GA_ROOT, GWL_EXSTYLE,
+    GW_HWNDNEXT, HICON, HWND_MESSAGE, ICONINFO, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENUITEMINFOW,
+    MENU_ITEM_MASK, MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONUP, WM_MOUSEWHEEL,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW, WS_EX_TRANSPARENT,
 };
 
 use crate::{app_icon, UserEvent};
@@ -415,13 +417,17 @@ pub fn replay_left_click_at_cursor() -> bool {
 
 /// Best-effort vertical wheel passthrough for transparent launcher areas.
 ///
-/// Unlike the click passthrough, the launcher window is **not** hidden first.
 /// `WM_MOUSEWHEEL` and `SendInput(MOUSEEVENTF_WHEEL)` are both delivered to the
-/// *foreground* window — which is us while visible — so synthesizing a wheel
-/// event would just be re-consumed by the launcher. Instead we resolve the
-/// window directly under the cursor with `WindowFromPoint` and `PostMessageW`
-/// a `WM_MOUSEWHEEL` straight to it. That keeps the launcher on screen (no
-/// flicker) while letting the app behind scroll.
+/// *foreground* window — which is the launcher itself while visible — so we
+/// cannot just synthesize a wheel event (it would be re-consumed by us). We
+/// also must not hide the launcher: wheel scroll is a continuous gesture and
+/// dismissing it mid-scroll would be jarring.
+///
+/// Instead we resolve the window directly under the cursor with
+/// `WindowFromPoint` (which already descends into child windows, so e.g. the
+/// editor pane inside an IDE is returned, not its frame) and `PostMessageW` a
+/// `WM_MOUSEWHEEL` straight to it. The launcher stays on screen (no flicker,
+/// no dismissal) and the app behind scrolls.
 ///
 /// `delta_y_lines` is in winit `MouseScrollDelta` line units (`+1.0` ≈ one
 /// line up). We scale to `WHEEL_DELTA` ticks (1 line → 120 = one notch) so the
@@ -447,34 +453,96 @@ pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32, launcher_hwnd: HWND) 
         if GetCursorPos(&mut pt).is_err() {
             return false;
         }
-        // 2. Window under the cursor. Skip if it is us or one of our child
-        //    windows (e.g. a winit child) — that scroll belongs to the launcher.
-        let target = WindowFromPoint(pt);
-        if target == launcher_hwnd || is_descendant_of(target, launcher_hwnd) {
-            return true;
-        }
+        // 2. The launcher window is borderless + transparent for compositing,
+        // but its HWND still covers the whole client rect as far as the OS
+        // hit-test is concerned, so WindowFromPoint returns *us* even over the
+        // visually-transparent glass area. Temporarily mark our window as
+        // transparent-to-hit-testing (WS_EX_TRANSPARENT), re-resolve the window
+        // under the cursor, then restore the ex-style. The toggle is on the UI
+        // thread and instantaneous, so the user never sees input drop on the
+        // launcher itself.
+        let target = window_under_cursor_skipping(pt, launcher_hwnd);
+        let Some(target) = target else {
+            crate::debug_log!(
+                "wheel-fwd: no target under cursor ({},{}) — nothing forwarded",
+                pt.x,
+                pt.y
+            );
+            return true; // nothing under the cursor but us → nothing to forward
+        };
         // 3. Build WM_MOUSEWHEEL params:
         //    wParam: HIWORD = wheel delta (signed), LOWORD = key state (0).
         //    lParam: screen coords, LOWORD = x, HIWORD = y.
         let wparam = WPARAM(((mouse_data as u16 as u32) << 16) as usize);
         let lparam = LPARAM(((pt.y as u16 as u32) << 16 | (pt.x as u16 as u32)) as isize);
-        PostMessageW(Some(target), WM_MOUSEWHEEL, wparam, lparam).is_ok()
+        let posted = PostMessageW(Some(target), WM_MOUSEWHEEL, wparam, lparam).is_ok();
+        crate::debug_log!(
+            "wheel-fwd: cursor=({},{}) mouse_data={} target={:?} posted={}",
+            pt.x,
+            pt.y,
+            mouse_data,
+            target,
+            posted
+        );
+        posted
     }
 }
 
-/// True if `child` is `parent` or a descendant of it (walks `GetParent`).
+/// Resolve the topmost window under `pt` that is not `skip` (or its
+/// descendant). The launcher HWND covers the whole client area for hit testing
+/// even where it is visually transparent, and toggling `WS_EX_TRANSPARENT` is
+/// unreliable without `WS_EX_LAYERED` (the launcher uses
+/// `WS_EX_NOREDIRECTIONBITMAP` + DirectComposition instead), so a plain
+/// `WindowFromPoint` returns us. We walk the Z-order with `GetWindow` starting
+/// from `skip`'s next sibling (the window directly beneath us in the Z-order),
+/// and return the first visible, non-transparent window whose rect contains
+/// `pt`. Starting from our own next sibling avoids matching a higher-up
+/// topmost window (e.g. the shell's full-screen wallpaper window) that
+/// wouldn't actually receive the wheel if we weren't on screen.
+unsafe fn window_under_cursor_skipping(pt: POINT, skip: HWND) -> Option<HWND> {
+    // Begin directly below `skip` in the Z-order.
+    let mut current = GetWindow(skip, GW_HWNDNEXT).ok();
+    while let Some(hwnd) = current {
+        if hwnd == skip || is_descendant_of(hwnd, skip) {
+            current = GetWindow(hwnd, GW_HWNDNEXT).ok();
+            continue;
+        }
+        if is_hit_testable(hwnd, pt) {
+            return Some(hwnd);
+        }
+        current = GetWindow(hwnd, GW_HWNDNEXT).ok();
+    }
+    None
+}
+
+/// True if `hwnd` is visible, not transparent-to-hit-test, and its bounding
+/// rect contains `pt` (screen coords).
+unsafe fn is_hit_testable(hwnd: HWND, pt: POINT) -> bool {
+    if !IsWindowVisible(hwnd).as_bool() {
+        return false;
+    }
+    let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if ex & WS_EX_TRANSPARENT.0 as isize != 0 {
+        return false;
+    }
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return false;
+    }
+    pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom
+}
+
+/// True if `child` is `parent` or a descendant of it (walks `GetAncestor` to
+/// the root and checks for `parent`).
 unsafe fn is_descendant_of(child: HWND, parent: HWND) -> bool {
     let mut current = child;
-    // Bounded walk up the parent chain. `GetAncestor(GA_ROOT)` short-circuits
-    // owned/child windows to their top-level owner, and we cap iterations as a
-    // defensive guard against any pathological cycle.
+    // Bounded walk up the parent chain as a defensive guard.
     for _ in 0..64 {
         if current == parent {
             return true;
         }
         let root = GetAncestor(current, GA_ROOT);
         if root == current || root.is_invalid() {
-            // Reached a root that isn't us.
             return root == parent;
         }
         if root == parent {
