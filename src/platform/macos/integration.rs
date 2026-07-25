@@ -58,49 +58,50 @@ pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
     if delta_y_lines.abs() < f32::EPSILON {
         return true; // nothing to do, treat as success
     }
-    // unsafe: Core Graphics C calls. The source state HIDSystemState (1) is
-    // the standard "as if from the hardware" source used for synthesized
-    // input; it is the same state SendInput-equivalent tools use on macOS.
-    unsafe {
-        let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
-            Some(s) => s,
-            None => {
-                eprintln!("macos-wheel: CGEventSource::new failed");
-                return false;
-            }
-        };
-        // One axis only (vertical). delta is in line units; macOS expects an
-        // i32 line count so we round and require at least one tick of intent.
-        let line_count = delta_y_lines.round() as i32;
-        if line_count == 0 {
-            return true;
-        }
-        // CGEvent::new_scroll_wheel_event2 mirrors the C ABI:
-        //   (source, unit, wheelCount, w1, w2, w3).
-        // wheel_count=1 → only the vertical axis (wheel1) is read; wheel2/wheel3
-        // must still be passed (0) but are ignored. Horizontal scroll is
-        // therefore structurally impossible here.
-        //
-        // `source` is a CFRetained<CGEventSource>; Deref it to &CGEventSource
-        // for the Option<&CGEventSource> the ABI expects (Option won't
-        // auto-coerce the inner reference).
-        let event = CGEvent::new_scroll_wheel_event2(
-            Some(&*source),
-            CGScrollEventUnit::Line,
-            /* wheel_count */ 1,
-            /* wheel1 (vertical) */ line_count,
-            /* wheel2 (horizontal) */ 0,
-            /* wheel3 */ 0,
-        );
-        let Some(event) = event else {
-            eprintln!("macos-wheel: CGEvent::new_scroll_wheel_event2 failed");
+    // The objc2-core-graphics method-form wrappers (CGEventSource::new,
+    // CGEvent::new_scroll_wheel_event2, CGEvent::post) encapsulate the
+    // underlying unsafe C calls, so no unsafe block is needed here. The source
+    // state HIDSystemState (1) is the standard "as if from the hardware"
+    // source used for synthesized input; it is the same state
+    // SendInput-equivalent tools use on macOS.
+    let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+        Some(s) => s,
+        None => {
+            eprintln!("macos-wheel: CGEventSource::new failed");
             return false;
-        };
-        // kCGHIDEventTap posts at the hardware tap so the event reaches the app
-        // under the cursor just like a real trackpad/wheel scroll.
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&*event));
-        true
+        }
+    };
+    // One axis only (vertical). delta is in line units; macOS expects an
+    // i32 line count so we round and require at least one tick of intent.
+    let line_count = delta_y_lines.round() as i32;
+    if line_count == 0 {
+        return true;
     }
+    // CGEvent::new_scroll_wheel_event2 mirrors the C ABI:
+    //   (source, unit, wheelCount, w1, w2, w3).
+    // wheel_count=1 → only the vertical axis (wheel1) is read; wheel2/wheel3
+    // must still be passed (0) but are ignored. Horizontal scroll is
+    // therefore structurally impossible here.
+    //
+    // `source` is a CFRetained<CGEventSource>; Deref it to &CGEventSource
+    // for the Option<&CGEventSource> the ABI expects (Option won't
+    // auto-coerce the inner reference).
+    let event = CGEvent::new_scroll_wheel_event2(
+        Some(&*source),
+        CGScrollEventUnit::Line,
+        /* wheel_count */ 1,
+        /* wheel1 (vertical) */ line_count,
+        /* wheel2 (horizontal) */ 0,
+        /* wheel3 */ 0,
+    );
+    let Some(event) = event else {
+        eprintln!("macos-wheel: CGEvent::new_scroll_wheel_event2 failed");
+        return false;
+    };
+    // kCGHIDEventTap posts at the hardware tap so the event reaches the app
+    // under the cursor just like a real trackpad/wheel scroll.
+    CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&*event));
+    true
 }
 
 /// Owns the menu-bar item and registered global shortcut for the process.
