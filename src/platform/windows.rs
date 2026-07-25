@@ -35,21 +35,20 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS,
-    VIRTUAL_KEY,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyMenu, DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW,
-    InsertMenuItemW, PostMessageW, RegisterClassExW, SetForegroundWindow, SetWindowsHookExW,
-    TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, CS_HREDRAW, CS_VREDRAW, HICON,
-    HWND_MESSAGE, ICONINFO, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MENUITEMINFOW, MENU_ITEM_MASK,
-    MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG, TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WNDCLASSEXW,
+    DestroyIcon, DestroyMenu, DispatchMessageW, FindWindowExW, GetAncestor, GetCursorPos,
+    GetMessageW, InsertMenuItemW, PostMessageW, RegisterClassExW, SetForegroundWindow,
+    SetWindowsHookExW, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
+    CS_HREDRAW, CS_VREDRAW, GA_ROOT, HICON, HWND_MESSAGE, ICONINFO, KBDLLHOOKSTRUCT,
+    LLKHF_INJECTED, MENUITEMINFOW, MENU_ITEM_MASK, MENU_ITEM_STATE, MENU_ITEM_TYPE, MSG,
+    TRACK_POPUP_MENU_FLAGS, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
 };
 
 use crate::{app_icon, UserEvent};
@@ -416,34 +415,74 @@ pub fn replay_left_click_at_cursor() -> bool {
 
 /// Best-effort vertical wheel passthrough for transparent launcher areas.
 ///
-/// Unlike the click passthrough, the launcher window is **not** hidden first:
-/// wheel events don't need the window out of the way because Windows dispatches
-/// `WM_MOUSEWHEEL` to the window under the cursor that currently owns it, and
-/// `SendInput` re-targets using the live cursor position once we synthesize the
-/// event at our own cursor. The caller has already decided the pointer is over
-/// the transparent area.
+/// Unlike the click passthrough, the launcher window is **not** hidden first.
+/// `WM_MOUSEWHEEL` and `SendInput(MOUSEEVENTF_WHEEL)` are both delivered to the
+/// *foreground* window — which is us while visible — so synthesizing a wheel
+/// event would just be re-consumed by the launcher. Instead we resolve the
+/// window directly under the cursor with `WindowFromPoint` and `PostMessageW`
+/// a `WM_MOUSEWHEEL` straight to it. That keeps the launcher on screen (no
+/// flicker) while letting the app behind scroll.
 ///
-/// `delta_y` is in "lines" (winit `MouseScrollDelta::LineDelta` units, where
-/// `+1.0` is one line up). We scale by `WHEEL_DELTA` and round to a whole delta
-/// tick because `mouseData` is an integer number of delta ticks. Sub-tick
-/// remainders are dropped intentionally — Windows coalesces wheel ticks anyway
-/// and a partial tick has no effect. Horizontal scroll is deliberately ignored
-/// (only `MOUSEEVENTF_WHEEL`, never `MOUSEEVENTF_HWHEEL`).
-pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
+/// `delta_y_lines` is in winit `MouseScrollDelta` line units (`+1.0` ≈ one
+/// line up). We scale to `WHEEL_DELTA` ticks (1 line → 120 = one notch) so the
+/// receiver honors its own wheel-speed setting, and so any non-zero input
+/// produces a non-zero delta. Horizontal scroll is deliberately ignored: only
+/// the vertical component is forwarded (we never synthesize `WM_MOUSEHWHEEL`).
+///
+/// `launcher_hwnd` is our own top-level window; if `WindowFromPoint` returns it
+/// (or a descendant) we treat the scroll as belonging to the launcher and do
+/// not forward.
+pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32, launcher_hwnd: HWND) -> bool {
     if delta_y_lines.abs() < f32::EPSILON {
         return true; // nothing to do, treat as success
     }
-    // WHEEL_DELTA (120) == one notch == roughly 3 lines by default. winit's
-    // LineDelta is already in lines, so convert lines → ticks by dividing by 3.
-    // Rounding to at least one tick preserves the user intent for slow scrolls.
-    let ticks = (delta_y_lines / 3.0).round() as i32;
-    if ticks == 0 {
+    let mouse_data = (delta_y_lines * WHEEL_DELTA as f32).round() as i32;
+    if mouse_data == 0 {
         return true;
     }
-    let mouse_data = ticks.saturating_mul(WHEEL_DELTA as i32);
-    let input = mouse_input(mouse_data as u32, MOUSE_EVENT_FLAGS(MOUSEEVENTF_WHEEL.0));
-    let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-    sent as usize == 1
+    unsafe {
+        // 1. Current cursor in screen coordinates (for both targeting and the
+        //    WM_MOUSEWHEEL lParam).
+        let mut pt = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut pt).is_err() {
+            return false;
+        }
+        // 2. Window under the cursor. Skip if it is us or one of our child
+        //    windows (e.g. a winit child) — that scroll belongs to the launcher.
+        let target = WindowFromPoint(pt);
+        if target == launcher_hwnd || is_descendant_of(target, launcher_hwnd) {
+            return true;
+        }
+        // 3. Build WM_MOUSEWHEEL params:
+        //    wParam: HIWORD = wheel delta (signed), LOWORD = key state (0).
+        //    lParam: screen coords, LOWORD = x, HIWORD = y.
+        let wparam = WPARAM(((mouse_data as u16 as u32) << 16) as usize);
+        let lparam = LPARAM(((pt.y as u16 as u32) << 16 | (pt.x as u16 as u32)) as isize);
+        PostMessageW(Some(target), WM_MOUSEWHEEL, wparam, lparam).is_ok()
+    }
+}
+
+/// True if `child` is `parent` or a descendant of it (walks `GetParent`).
+unsafe fn is_descendant_of(child: HWND, parent: HWND) -> bool {
+    let mut current = child;
+    // Bounded walk up the parent chain. `GetAncestor(GA_ROOT)` short-circuits
+    // owned/child windows to their top-level owner, and we cap iterations as a
+    // defensive guard against any pathological cycle.
+    for _ in 0..64 {
+        if current == parent {
+            return true;
+        }
+        let root = GetAncestor(current, GA_ROOT);
+        if root == current || root.is_invalid() {
+            // Reached a root that isn't us.
+            return root == parent;
+        }
+        if root == parent {
+            return true;
+        }
+        current = root;
+    }
+    false
 }
 
 fn mouse_input(mouse_data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {

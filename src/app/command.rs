@@ -242,16 +242,34 @@ impl App {
             AppCommand::ForwardVerticalWheel(delta_y) => {
                 #[cfg(windows)]
                 {
-                    if crate::platform::windows::replay_vertical_wheel_at_cursor(delta_y) {
-                        debug_log!(
-                            "outside-wheel: replayed vertical scroll (delta_y={}) to underlying window",
-                            delta_y
-                        );
-                    } else {
-                        debug_log!(
-                            "outside-wheel: failed to replay vertical scroll (delta_y={}) to underlying window",
-                            delta_y
-                        );
+                    // Resolve our own HWND so the platform layer can skip it
+                    // when picking the window under the cursor (otherwise the
+                    // launcher would re-receive its own forwarded wheel).
+                    use raw_window_handle::HasWindowHandle;
+                    let hwnd = self
+                        .renderer
+                        .as_ref()
+                        .and_then(|r| r.window.window_handle().ok())
+                        .and_then(|h| match h.as_raw() {
+                            raw_window_handle::RawWindowHandle::Win32(w) => {
+                                Some(w.hwnd.get() as *mut core::ffi::c_void)
+                            }
+                            _ => None,
+                        });
+                    if let Some(hwnd_raw) = hwnd {
+                        let hwnd = windows::Win32::Foundation::HWND(hwnd_raw);
+                        if crate::platform::windows::replay_vertical_wheel_at_cursor(delta_y, hwnd)
+                        {
+                            debug_log!(
+                                "outside-wheel: forwarded vertical scroll (delta_y={}) to underlying window",
+                                delta_y
+                            );
+                        } else {
+                            debug_log!(
+                                "outside-wheel: failed to forward vertical scroll (delta_y={}) to underlying window",
+                                delta_y
+                            );
+                        }
                     }
                 }
                 #[cfg(target_os = "macos")]

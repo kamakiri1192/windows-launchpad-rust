@@ -255,9 +255,20 @@ impl ApplicationHandler<UserEvent> for App {
                 // (LineDelta x / PixelDelta x) is dropped and never forwarded.
                 // We only forward when the cursor is outside the page glass so
                 // scrolling inside a folder/over an app tile still belongs to
-                // the launcher (today: a no-op; horizontal drag-scroll lives on
-                // CursorMoved). PixelDelta (precision touchpads) is normalized
+                // the launcher. PixelDelta (precision touchpads) is normalized
                 // to lines at ~40 px/line, a middle-ground default.
+                //
+                // While a horizontal scroll-drag is in flight (scroller phase is
+                // Dragging) we never forward: the user is swiping the app grid,
+                // and the launcher should consume the wheel itself.
+                let scroller_dragging = self
+                    .scroller
+                    .as_ref()
+                    .map(|s| s.phase == crate::scroll::Phase::Dragging)
+                    .unwrap_or(false);
+                if scroller_dragging {
+                    return;
+                }
                 let dy_lines = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_x, y) => Some(y),
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
