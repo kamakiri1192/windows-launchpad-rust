@@ -104,6 +104,65 @@ pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
     true
 }
 
+/// Best-effort left-click passthrough for transparent launcher areas.
+///
+/// Mirrors the Windows path (`SendInput` of `MOUSEEVENTF_LEFTDOWN` then
+/// `LEFTUP`). The UI thread hides the launcher first, then calls this while
+/// the cursor is still at the user's release point. We synthesize a left
+/// mouse down + up at the current cursor location and post them at the HID
+/// event tap so the window now underneath receives the click the launcher
+/// itself consumed.
+///
+/// The cursor location is read from a scratch event (`CGEventCreate` +
+/// `CGEventGetLocation`), the standard idiom for "where is the mouse right
+/// now" on macOS when you don't have a real event in hand.
+pub fn replay_left_click_at_cursor() -> bool {
+    use objc2_core_graphics::{
+        CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType,
+        CGMouseButton,
+    };
+
+    let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+        Some(s) => s,
+        None => {
+            eprintln!("macos-click: CGEventSource::new failed");
+            return false;
+        }
+    };
+    // CGEventCreate with a source yields a "null" event whose location is the
+    // current mouse position — the idiomatic way to read the cursor without a
+    // real event in hand.
+    let scratch = match CGEvent::new(Some(&*source)) {
+        Some(e) => e,
+        None => {
+            eprintln!("macos-click: CGEvent::new (scratch) failed");
+            return false;
+        }
+    };
+    let cursor = CGEvent::location(Some(&*scratch));
+    let down = CGEvent::new_mouse_event(
+        Some(&*source),
+        CGEventType::LeftMouseDown,
+        cursor,
+        CGMouseButton::Left,
+    );
+    let up = CGEvent::new_mouse_event(
+        Some(&*source),
+        CGEventType::LeftMouseUp,
+        cursor,
+        CGMouseButton::Left,
+    );
+    let (Some(down), Some(up)) = (down, up) else {
+        eprintln!("macos-click: new_mouse_event failed");
+        return false;
+    };
+    // Post at the HID tap so the events are delivered as if from real hardware
+    // to whatever window is under the cursor now (the launcher is hidden).
+    CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&*down));
+    CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&*up));
+    true
+}
+
 /// Owns the menu-bar item and registered global shortcut for the process.
 pub struct MacOsIntegration {
     hotkey_manager: Option<GlobalHotKeyManager>,

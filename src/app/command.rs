@@ -122,13 +122,22 @@ impl App {
         self.request_redraw();
     }
 
-    /// Hide the launcher after a transparent-area click and, on Windows, send
-    /// a best-effort replacement click to whatever is now under the cursor.
+    /// Hide the launcher after a transparent-area click and, on Windows and
+    /// macOS, send a best-effort replacement click to whatever is now under
+    /// the cursor.
     pub(crate) fn hide_with_click_passthrough(&mut self) {
         self.hide();
         #[cfg(windows)]
         {
             if crate::platform::windows::replay_left_click_at_cursor() {
+                debug_log!("outside-click: replayed click to underlying window");
+            } else {
+                debug_log!("outside-click: failed to replay click to underlying window");
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if crate::platform::macos::integration::replay_left_click_at_cursor() {
                 debug_log!("outside-click: replayed click to underlying window");
             } else {
                 debug_log!("outside-click: failed to replay click to underlying window");
