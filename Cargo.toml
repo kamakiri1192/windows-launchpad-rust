@@ -68,7 +68,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSWorkspace",
     "objc2-core-graphics",
 ] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGImage"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGImage",
+] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSArray",
     "NSBundle",

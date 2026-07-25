@@ -245,7 +245,22 @@ impl App {
                         );
                     }
                 }
-                #[cfg(not(windows))]
+                #[cfg(target_os = "macos")]
+                {
+                    if crate::platform::macos::integration::replay_vertical_wheel_at_cursor(delta_y)
+                    {
+                        debug_log!(
+                            "outside-wheel: replayed vertical scroll (delta_y={}) to underlying window",
+                            delta_y
+                        );
+                    } else {
+                        debug_log!(
+                            "outside-wheel: failed to replay vertical scroll (delta_y={}) to underlying window",
+                            delta_y
+                        );
+                    }
+                }
+                #[cfg(not(any(windows, target_os = "macos")))]
                 {
                     let _ = delta_y;
                 }

@@ -37,6 +37,68 @@ pub fn activate_application() {
     NSApplication::sharedApplication(main_thread).activate();
 }
 
+/// Best-effort vertical wheel passthrough for transparent launcher areas.
+///
+/// Mirrors the Windows path (`SendInput` of `MOUSEEVENTF_WHEEL`): synthesize a
+/// one-axis scroll event via Core Graphics and post it to the system event
+/// stream at the current cursor location. The caller has already decided the
+/// pointer is over the transparent area. The launcher stays visible — unlike
+/// the click passthrough, the window does not need to get out of the way
+/// because CGEvent posting targets the live cursor position.
+///
+/// `delta_y_lines` is in "lines" (winit `MouseScrollDelta::LineDelta` units,
+/// where `+1.0` is one line up). We pass it straight to Core Graphics with
+/// `kCGScrollEventUnitLine`. Only a single vertical axis is created, so
+/// horizontal scroll is structurally never forwarded.
+pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
+    use objc2_core_graphics::{
+        CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGScrollEventUnit,
+    };
+
+    if delta_y_lines.abs() < f32::EPSILON {
+        return true; // nothing to do, treat as success
+    }
+    // unsafe: Core Graphics C calls. The source state HIDSystemState (1) is
+    // the standard "as if from the hardware" source used for synthesized
+    // input; it is the same state SendInput-equivalent tools use on macOS.
+    unsafe {
+        let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+            Some(s) => s,
+            None => {
+                eprintln!("macos-wheel: CGEventSource::new failed");
+                return false;
+            }
+        };
+        // One axis only (vertical). delta is in line units; macOS expects an
+        // i32 line count so we round and require at least one tick of intent.
+        let line_count = delta_y_lines.round() as i32;
+        if line_count == 0 {
+            return true;
+        }
+        // CGEvent::new_scroll_wheel_event2 mirrors the C ABI:
+        //   (source, unit, wheelCount, w1, w2, w3).
+        // wheel_count=1 → only the vertical axis (wheel1) is read; wheel2/wheel3
+        // must still be passed (0) but are ignored. Horizontal scroll is
+        // therefore structurally impossible here.
+        let event = CGEvent::new_scroll_wheel_event2(
+            /* source */ source.as_deref(),
+            CGScrollEventUnit::Line,
+            /* wheel_count */ 1,
+            /* wheel1 (vertical) */ line_count,
+            /* wheel2 (horizontal) */ 0,
+            /* wheel3 */ 0,
+        );
+        let Some(event) = event else {
+            eprintln!("macos-wheel: CGEvent::new_scroll_wheel_event2 failed");
+            return false;
+        };
+        // kCGHIDEventTap posts at the hardware tap so the event reaches the app
+        // under the cursor just like a real trackpad/wheel scroll.
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        true
+    }
+}
+
 /// Owns the menu-bar item and registered global shortcut for the process.
 pub struct MacOsIntegration {
     hotkey_manager: Option<GlobalHotKeyManager>,
