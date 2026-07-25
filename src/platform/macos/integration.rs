@@ -80,8 +80,12 @@ pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
         // wheel_count=1 → only the vertical axis (wheel1) is read; wheel2/wheel3
         // must still be passed (0) but are ignored. Horizontal scroll is
         // therefore structurally impossible here.
+        //
+        // `source` is a CFRetained<CGEventSource>; Deref it to &CGEventSource
+        // for the Option<&CGEventSource> the ABI expects (Option won't
+        // auto-coerce the inner reference).
         let event = CGEvent::new_scroll_wheel_event2(
-            /* source */ source.as_deref(),
+            Some(&*source),
             CGScrollEventUnit::Line,
             /* wheel_count */ 1,
             /* wheel1 (vertical) */ line_count,
@@ -94,7 +98,7 @@ pub fn replay_vertical_wheel_at_cursor(delta_y_lines: f32) -> bool {
         };
         // kCGHIDEventTap posts at the hardware tap so the event reaches the app
         // under the cursor just like a real trackpad/wheel scroll.
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&*event));
         true
     }
 }
