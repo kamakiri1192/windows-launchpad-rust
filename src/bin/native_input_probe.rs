@@ -274,7 +274,7 @@ mod windows_probe {
 
 #[cfg(target_os = "macos")]
 mod macos_probe {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::ptr::NonNull;
     use std::rc::Rc;
 
@@ -284,10 +284,16 @@ mod macos_probe {
     };
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::{MainThreadMarker, MainThreadOnly};
+    use objc2::{
+        define_class, msg_send, sel, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly,
+    };
     use objc2_app_kit::{
-        NSApplication, NSEvent, NSEventMask, NSEventPhase, NSEventType, NSScrollView, NSView,
-        NSWindow,
+        NSApplication, NSButton, NSEvent, NSEventMask, NSEventPhase, NSEventType, NSScrollView,
+        NSView, NSViewBoundsDidChangeNotification, NSWindow,
+    };
+    use objc2_foundation::{
+        ns_string, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint,
+        NSRect, NSSize,
     };
     use winit::application::ApplicationHandler;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -339,19 +345,126 @@ mod macos_probe {
             .map_or(0, |window| window.windowNumber() as u64)
     }
 
+    struct SemanticTargetIvars {
+        serial: Cell<u64>,
+        left_actions: Cell<u64>,
+        right_mouse_downs: Cell<u64>,
+        scroll_view: Retained<NSScrollView>,
+    }
+
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements and this class
+        // does not implement Drop.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = SemanticTargetIvars]
+        struct SemanticTarget;
+
+        unsafe impl NSObjectProtocol for SemanticTarget {}
+
+        impl SemanticTarget {
+            #[unsafe(method(probeClicked:))]
+            fn probe_clicked(&self, _sender: &AnyObject) {
+                self.ivars()
+                    .left_actions
+                    .set(self.ivars().left_actions.get() + 1);
+                self.emit_state();
+            }
+
+            #[unsafe(method(probeScrollChanged:))]
+            fn probe_scroll_changed(&self, _notification: &NSNotification) {
+                self.emit_state();
+            }
+        }
+    );
+
+    impl SemanticTarget {
+        fn new(
+            scroll_view: Retained<NSScrollView>,
+            main_thread: MainThreadMarker,
+        ) -> Retained<Self> {
+            let this = Self::alloc(main_thread).set_ivars(SemanticTargetIvars {
+                serial: Cell::new(0),
+                left_actions: Cell::new(0),
+                right_mouse_downs: Cell::new(0),
+                scroll_view,
+            });
+            unsafe { msg_send![super(this), init] }
+        }
+
+        fn emit_state(&self) {
+            let Some(window) = self.ivars().scroll_view.window() else {
+                return;
+            };
+            let origin = self.ivars().scroll_view.contentView().bounds().origin;
+            let serial = self.ivars().serial.get() + 1;
+            self.ivars().serial.set(serial);
+            emit(ProbeRecord::UiState {
+                serial,
+                pid: std::process::id(),
+                window: window.windowNumber() as u64,
+                left_actions: self.ivars().left_actions.get(),
+                right_mouse_downs: self.ivars().right_mouse_downs.get(),
+                scroll_offset_x: origin.x,
+                scroll_offset_y: origin.y,
+            });
+        }
+
+        fn record_right_mouse_down(&self) {
+            self.ivars()
+                .right_mouse_downs
+                .set(self.ivars().right_mouse_downs.get() + 1);
+            self.emit_state();
+        }
+    }
+
+    thread_local! {
+        static RIGHT_MOUSE_TARGET: RefCell<Option<Retained<SemanticTarget>>> =
+            const { RefCell::new(None) };
+    }
+
+    define_class!(
+        // SAFETY: NSButton supports subclassing. This subclass adds no ivars,
+        // and its override has the exact NSResponder method signature.
+        #[unsafe(super = NSButton)]
+        #[thread_kind = MainThreadOnly]
+        struct SemanticButton;
+
+        unsafe impl NSObjectProtocol for SemanticButton {}
+
+        impl SemanticButton {
+            #[unsafe(method(rightMouseDown:))]
+            fn right_mouse_down(&self, _event: &NSEvent) {
+                RIGHT_MOUSE_TARGET.with(|target| {
+                    if let Some(target) = target.borrow().as_ref() {
+                        target.record_right_mouse_down();
+                    }
+                });
+            }
+        }
+    );
+
+    impl SemanticButton {
+        fn new(
+            frame: NSRect,
+            target: Retained<SemanticTarget>,
+            main_thread: MainThreadMarker,
+        ) -> Retained<Self> {
+            let button = NSButton::initWithFrame(NSButton::alloc(main_thread), frame);
+            RIGHT_MOUSE_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
+            let old_class = unsafe { AnyObject::set_class(&button, Self::class()) };
+            assert_eq!(old_class, NSButton::class());
+            unsafe { Retained::cast_unchecked(button) }
+        }
+    }
+
     fn install_monitor(probe_window: Retained<NSWindow>) -> Option<Retained<AnyObject>> {
         let probe_window_number = probe_window.windowNumber();
         let serial = Rc::new(Cell::new(0u64));
         let callback_serial = serial.clone();
         let handler = RcBlock::new(move |event_ptr: NonNull<NSEvent>| -> *mut NSEvent {
             let event = unsafe { event_ptr.as_ref() };
-            let product_delivery = event.CGEvent().is_some_and(|cg_event| {
-                objc2_core_graphics::CGEvent::integer_value_field(
-                    Some(&cg_event),
-                    objc2_core_graphics::CGEventField::EventSourceUserData,
-                ) == launchpad_windows::input_probe_protocol::MACOS_PRODUCT_EVENT_TAG
-            });
-            if event.windowNumber() != probe_window_number && !product_delivery {
+            if event.windowNumber() != probe_window_number {
                 return event_ptr.as_ptr();
             }
             let event_type = event.r#type();
@@ -386,22 +499,8 @@ mod macos_probe {
                 let next = callback_serial.get() + 1;
                 callback_serial.set(next);
                 let screen = NSEvent::mouseLocation();
-                // CGEventPostToPid delivers to this process but AppKit retains
-                // the source NSEvent's windowNumber/locationInWindow metadata
-                // even when both CG window-under-pointer fields are updated.
-                // A tagged event was explicitly addressed to this probe PID,
-                // which has exactly one input window, so report that actual
-                // receiver and derive its local point from the preserved
-                // screen coordinate. Untagged generator events remain fully
-                // native and use their original NSEvent metadata.
-                let (target, local) = if product_delivery {
-                    (
-                        probe_window_number,
-                        probe_window.convertPointFromScreen(screen),
-                    )
-                } else {
-                    (event.windowNumber(), event.locationInWindow())
-                };
+                let target = event.windowNumber();
+                let local = event.locationInWindow();
                 emit(ProbeRecord::Input {
                     serial: next,
                     timestamp: (event.timestamp() * 1_000_000.0) as u64,
@@ -438,6 +537,8 @@ mod macos_probe {
         window: Option<Window>,
         _monitor: Option<Retained<AnyObject>>,
         _scroll_view: Option<Retained<NSScrollView>>,
+        _button: Option<Retained<SemanticButton>>,
+        _semantic_target: Option<Retained<SemanticTarget>>,
         ready: Option<ProbeRecord>,
     }
 
@@ -464,6 +565,7 @@ mod macos_probe {
             }
             let attributes = Window::default_attributes()
                 .with_title("Launchpad Native Input Probe")
+                .with_decorations(false)
                 .with_position(PhysicalPosition::new(100, 100))
                 .with_inner_size(PhysicalSize::new(1000, 700));
             let window = event_loop.create_window(attributes).expect("probe window");
@@ -474,14 +576,39 @@ mod macos_probe {
             let view = unsafe { &*(handle.ns_view.as_ptr() as *const NSView) };
             let ns_window = view.window().expect("probe NSWindow");
             let main_thread = MainThreadMarker::new().expect("probe main thread");
-            let scroll_view = ns_window.contentView().map(|content| {
+            let semantic_views = ns_window.contentView().map(|content| {
                 let scroll =
                     NSScrollView::initWithFrame(NSScrollView::alloc(main_thread), content.bounds());
+                let target = SemanticTarget::new(scroll.clone(), main_thread);
+                let document = SemanticButton::new(
+                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1000.0, 1400.0)),
+                    target.clone(),
+                    main_thread,
+                );
+                document.setTitle(ns_string!("Semantic native input receiver"));
+                unsafe {
+                    document.setTarget(Some(&target));
+                    document.setAction(Some(sel!(probeClicked:)));
+                }
+                scroll.setHasVerticalScroller(true);
+                scroll.setDocumentView(Some(document.as_super().as_super()));
+                let clip_view = scroll.contentView();
+                clip_view.setPostsBoundsChangedNotifications(true);
+                unsafe {
+                    NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                        &target,
+                        sel!(probeScrollChanged:),
+                        Some(NSViewBoundsDidChangeNotification),
+                        Some(&clip_view),
+                    );
+                }
                 content.addSubview(&scroll);
-                scroll
+                (scroll, document, target)
             });
             self._monitor = install_monitor(ns_window.clone());
-            self._scroll_view = scroll_view;
+            self._scroll_view = semantic_views.as_ref().map(|(scroll, _, _)| scroll.clone());
+            self._button = semantic_views.as_ref().map(|(_, button, _)| button.clone());
+            self._semantic_target = semantic_views.as_ref().map(|(_, _, target)| target.clone());
             self.ready = Some(ProbeRecord::Ready {
                 pid: std::process::id(),
                 top_level: ns_window.windowNumber() as u64,

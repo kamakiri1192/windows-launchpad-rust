@@ -69,6 +69,13 @@ impl App {
                 return;
             }
             self.input_qa_last_signature = Some(signature);
+            #[cfg(target_os = "macos")]
+            let (input_listen_permission, input_post_permission) = (
+                Some(objc2_core_graphics::CGPreflightListenEventAccess()),
+                Some(objc2_core_graphics::CGPreflightPostEventAccess()),
+            );
+            #[cfg(not(target_os = "macos"))]
+            let (input_listen_permission, input_post_permission) = (None, None);
             let record = crate::input_probe_protocol::ProbeRecord::LauncherSnapshot {
                 serial: snapshot.generation,
                 pid: std::process::id(),
@@ -82,6 +89,8 @@ impl App {
                 page_position,
                 pointer_x: self.pointer_phys_x,
                 pointer_y: self.pointer_phys_y,
+                input_listen_permission,
+                input_post_permission,
             };
             if let Ok(line) = record.to_json_line() {
                 println!("{line}");

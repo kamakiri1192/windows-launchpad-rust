@@ -66,21 +66,38 @@ Unrelated or later focus changes keep normal auto-hide behavior.
 
 ### macOS
 
-An AppKit local event monitor observes the original `NSEvent` before winit.
-It copies the corresponding `CGEvent`, resolves the window below the launcher
-with `windowNumberAtPoint:belowWindowWithWindowNumber:`, maps that window to
-its owner PID, writes that exact destination into the two native
-window-under-pointer fields, and posts the original event with
-`CGEventPostToPid`.
-The transparent launcher remains event-opaque (`ignoresMouseEvents = false`);
-otherwise AppKit would send the original button event directly to the window
-below before the router could distinguish a click from a page drag.
+The transparent launcher remains event-opaque (`ignoresMouseEvents = false`).
+This is required to distinguish a click from a page drag before a complete
+click is allowed to reach another application.
 
-Scroll phase, momentum phase, precise deltas, modifiers, and coordinates remain
-part of the copied event. A scroll sequence keeps one target PID. Click
-down/up events are retained while the pure router resolves click versus drag;
-only a confirmed click is posted. Posted events carry a private source tag and
-same-process targets are rejected.
+An AppKit local event monitor retains the original button down/up `CGEvent`
+while the pure router resolves click versus drag. It freezes the window below
+the launcher with
+`windowNumberAtPoint:belowWindowWithWindowNumber:`, maps that window to its
+owner PID, and rejects same-process targets. After a confirmed click hides the
+launcher, the adapter revalidates the cursor, target window, and PID, tags the
+original retained events, then posts the complete down/up pair at the Core
+Graphics HID event tap, before session annotation. This constrained global
+posting is used only after the launcher is hidden, so normal WindowServer/AppKit
+hit testing selects the now-exposed destination and the launcher cannot
+self-receive. The adapter does not synthesize a new coordinate-only mouse event
+and does not use `CGEventPostToPid`, whose delivery does not establish that an
+AppKit target window accepted the mouse action.
+
+Wheel forwarding uses an active session `CGEventTap`, installed for the
+launcher's lifetime. For an eligible outside vertical sequence, the callback
+resolves the window below the launcher and changes the original event's target
+PID and window-under-pointer fields before returning that event to the event
+system. The original precise delta, coordinates, modifiers, phase, momentum
+phase, timestamp, and device metadata remain intact. A phase/momentum sequence
+locks one target. Hover is outside the tap mask. If the tap is unavailable, an
+outside wheel is consumed by the local monitor instead of becoming launcher
+page input.
+
+Private tags prevent the confirmed click pair from being captured and delivered
+again. The session tap also verifies that the launcher is still the frontmost
+window at the event point before retargeting, so events already destined for
+another application are not rewritten.
 
 The macOS lifecycle records a requested-focus state for initial creation and
 re-summon. Only a `Focused(false)` received before the requested
@@ -88,25 +105,34 @@ re-summon. Only a `Focused(false)` received before the requested
 the normal auto-hide behavior. Native QA snapshots expose the real
 `NSWindow::windowNumber`, focused state, and Core Graphics Z-order.
 
-macOS targeted event posting requires Accessibility/Input Monitoring approval.
-Permission denial is reported as `DeliveryResult::PermissionDenied`; outside
-wheel events are still consumed and never become launcher page input.
+macOS delivery requires both event-listening and event-posting approval. The
+adapter uses `CGPreflightListenEventAccess` and
+`CGPreflightPostEventAccess`, requests the missing approval once with
+`CGRequestListenEventAccess` / `CGRequestPostEventAccess`, and emits an
+actionable System Settings message. Permission denial is reported as
+`DeliveryResult::PermissionDenied`; outside wheel events are still consumed
+and never become launcher page input.
 
 ## Automated verification
 
 `native_input_probe` creates a separate native GUI process:
 
 - Windows: top-level Win32 window plus nested child;
-- macOS: AppKit window plus `NSScrollView`;
+- macOS: an AppKit window containing a real `NSButton` document view inside an
+  `NSScrollView`;
 - JSONL records include order, button, native deltas, phase/momentum, screen and
   local coordinates, focus/activation, PID, and native window identity.
+- macOS UI-state records separately report the button action count,
+  `rightMouseDown:` count, and actual clip-view content offset.
 
 `input_routing_scenarios` generates physical-equivalent OS input through a path
 different from product delivery:
 
 - Windows generator: `SendInput`; product: targeted `PostMessageW` for wheel
   and separately tagged `SendInput` for confirmed clicks;
-- macOS generator: HID `CGEventPost`; product: `CGEventPostToPid`.
+- macOS generator: HID `CGEventPost`; product: an active session-tap
+  transformation for wheel and HID posting of retained click events only after
+  hide.
 
 The product scenarios cover:
 
@@ -125,11 +151,15 @@ The product scenarios cover:
 The runner also verifies exact wheel sink/root identity, coordinates, modifiers,
 launcher PID/window continuity, focus, and Z-order. Windows observes beyond
 the bounded receiver-activation interval; macOS compares the real on-screen
-window order and native key-window focus before and after wheel delivery. The
-macOS probe recognizes the private product tag as an event explicitly posted
-to its PID; because AppKit retains the source `NSEvent` window/local metadata,
-the single-window probe reports its actual receiver window and converts the
-preserved screen point to receiver-local coordinates.
+window order and native key-window focus before and after wheel delivery.
+macOS accepts a raw probe record only when AppKit reports the probe's actual
+window number; it no longer rewrites a tagged event's receiver or local
+coordinates. A left click must change the real `NSButton` action counter, a
+right click must invoke the real `rightMouseDown:`, and a wheel sequence must
+change the real `NSScrollView` content offset. Hover and cancelled drags must
+leave all semantic UI state unchanged. Raw event order, button, precise delta,
+coordinates, modifiers, phase, momentum, receiver PID, and receiver window are
+validated independently of those semantic effects.
 The
 one-shot target/time correlation and signed wheel-coordinate extraction are
 covered by pure Windows unit tests. The Windows runner temporarily selects
@@ -140,12 +170,21 @@ machine's real routing setting, opens a guest-mode isolated profile to avoid
 first-run/sync overlays, asserts `scrollY > 0`, and verifies the launcher's
 window region, style, HWND, PID, visibility, foreground status, and Z-order are
 unchanged. Both OS jobs run in
-`.github/workflows/input-routing-e2e.yml`.
+`.github/workflows/input-routing-e2e.yml`. A macOS machine without the required
+TCC approvals for both process identities cannot run the full path: the scenario runner needs
+post-event approval to generate independent input, while each Launchpad child
+must report its own listen-event and post-event preflight as granted in JSONL.
+A hosted runner without generator approval runs an explicit
+permission-boundary contract and records that full semantic E2E did not run;
+that result is never reported as successful product delivery. Full semantic
+native E2E must also be run on an approved macOS machine.
 
 Local commands:
 
 ```text
 cargo build --bins
+target/debug/input_routing_scenarios --request-permissions
+target/debug/input_routing_scenarios --permission-status
 target/debug/input_routing_scenarios
 target/debug/input_routing_scenarios --product
 target/debug/input_routing_scenarios --browser-compat
