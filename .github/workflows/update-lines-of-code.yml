@@ -158,5 +158,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md assets/lines-of-code.svg docs/CODE_STATS.md
-          git commit -m "chore: update Rust code statistics [skip ci]"
+          git commit -m "chore: update Rust code statistics"
           git push
