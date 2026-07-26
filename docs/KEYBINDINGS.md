@@ -60,12 +60,19 @@ the full state machine.
 | Input | Action |
 |-------|--------|
 | Click the search pill | Expand into the search field |
+| **Type anywhere** (field closed) | **Auto-expand the search field and feed the keystroke** (IME supported) — disabled when the debug shortcut toggle is on, so `M`/`R`/digits/Liquid Glass keys keep working |
 | Click the close (×) in the field | Clear the query and collapse back to the pill |
 | Type | Append to the query (IME supported) |
-| `Backspace` | Delete the character before the caret |
+| `Backspace` | Delete the character before the caret (or auto-open the field when closed, debug off) |
 | `←` / `→` | Move the caret one character |
 | `Esc` (while the field is open) | Collapse to the pill (does **not** quit) |
 | Page change (swipe) | Briefly show the page indicator, then return to the pill |
+
+> **Instant search & the debug toggle:** when `debug_keys_enabled` is on (the
+> settings → デバッグ toggle), typing with the field closed does **not**
+> auto-open search — every key is routed to the developer shortcuts below
+> instead. Turn the toggle off to get the macOS-style "type to search"
+> behavior.
 
 ## Edit mode (drag-to-reorder)
 
@@ -80,6 +87,17 @@ pair appears at the bottom center.
 | Click `完了` (Done) | Exit edit mode (persist reorder) |
 | Click `⚙` (gear) | Open the settings overlay |
 | `Esc` / click empty space | Exit edit mode |
+
+## Folders
+
+| Input | Action |
+|-------|--------|
+| Click a folder tile | Open the folder |
+| `Esc` (folder open, not renaming) | Close the folder |
+| **Type** (folder open, not renaming) | **Close the folder and start a search** with the typed character (disabled when the debug shortcut toggle is on) — matches macOS Launchpad |
+| Click the title while editing | Enter folder rename |
+| `Enter` (while renaming) | Commit the new name |
+| `Esc` (while renaming) | Cancel rename |
 
 ## Liquid Glass master switch
 
