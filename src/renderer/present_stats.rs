@@ -9,8 +9,10 @@
 //! The wgpu DX12 backend owns the swapchain; this module reaches it through
 //! `Surface::as_hal::<Dx12>()` (mirroring the existing
 //! `device.as_hal::<Dx12>()` precedent in `liquid_glass/windows_capture.rs`).
-
-#![cfg(target_os = "windows")]
+//!
+//! This module is gated by `#[cfg(target_os = "windows")]` at the `mod`
+//! declaration site (`renderer/mod.rs`); there is no inner `#![cfg]` here to
+//! avoid clippy's `duplicated_attributes` lint.
 
 use std::time::Instant;
 
