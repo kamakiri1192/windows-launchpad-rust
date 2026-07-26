@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 #[cfg(target_os = "macos")]
@@ -118,6 +118,11 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_min_inner_size(PhysicalSize::new(1, 1))
                 .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
             self.visible = false;
+        } else if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+            attrs = attrs
+                .with_min_inner_size(PhysicalSize::new(1, 1))
+                .with_inner_size(PhysicalSize::new(1000, 700))
+                .with_position(PhysicalPosition::new(100, 100));
         }
 
         if let Some(icon) = load_window_icon() {
@@ -133,6 +138,14 @@ impl ApplicationHandler<UserEvent> for App {
         let window = event_loop.create_window(attrs).expect("create window");
         #[cfg(target_os = "macos")]
         {
+            self._macos_input =
+                crate::platform::macos::input_passthrough::MacInputPassthrough::install(
+                    &window,
+                    self.input_routing_publisher.clone(),
+                );
+            if self._macos_input.is_none() {
+                eprintln!("input-routing: failed to install macOS local event monitor");
+            }
             crate::platform::macos::integration::activate_application();
             window.focus_window();
         }

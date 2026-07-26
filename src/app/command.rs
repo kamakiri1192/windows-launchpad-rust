@@ -130,12 +130,28 @@ impl App {
         button: crate::input_routing::PointerButton,
     ) {
         #[cfg(windows)]
-        let launcher_window = self.native_window_identity();
+        let click = crate::platform::windows::prepare_click_at_cursor(
+            self.native_window_identity(),
+            button,
+        );
         self.hide();
         #[cfg(windows)]
         {
-            let result = crate::platform::windows::replay_click_at_cursor(launcher_window, button);
+            let result = click.map_or(
+                crate::input_routing::DeliveryResult::NoTarget,
+                crate::platform::windows::deliver_prepared_click,
+            );
             debug_log!("outside-click: delivery result={result:?}");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let result = self
+                ._macos_input
+                .as_ref()
+                .map_or(crate::input_routing::DeliveryResult::NoTarget, |adapter| {
+                    adapter.deliver_click(button)
+                });
+            debug_log!("outside-click: macOS delivery result={result:?}");
         }
     }
 

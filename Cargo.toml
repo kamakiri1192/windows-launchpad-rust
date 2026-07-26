@@ -55,6 +55,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
 global-hotkey = "0.7.0"
 icns = "0.3.1"
 objc2 = "0.6.4"
@@ -65,10 +66,21 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSImage",
     "NSImageRep",
     "NSResponder",
+    "NSEvent",
+    "NSScrollView",
+    "NSView",
+    "NSWindow",
     "NSWorkspace",
+    "block2",
     "objc2-core-graphics",
 ] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGImage"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "CGEvent",
+    "CGEventTypes",
+    "CGGeometry",
+    "CGImage",
+    "libc",
+] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSArray",
     "NSBundle",

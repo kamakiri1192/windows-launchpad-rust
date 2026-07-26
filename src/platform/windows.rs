@@ -396,16 +396,17 @@ fn dummy_input(up: bool) -> INPUT {
     }
 }
 
-/// Best-effort click passthrough for transparent launcher areas.
-///
-/// The UI thread hides the launcher first, then calls this while the cursor is
-/// still at the user's release point. Sending a fresh down/up lets the window
-/// underneath receive the click that the launcher window itself consumed.
-pub fn replay_click_at_cursor(
+pub fn prepare_click_at_cursor(
     launcher_window: u64,
     button: crate::input_routing::PointerButton,
+) -> Option<input_passthrough::PreparedClick> {
+    input_passthrough::prepare_click_at_cursor(launcher_window, button)
+}
+
+pub fn deliver_prepared_click(
+    click: input_passthrough::PreparedClick,
 ) -> crate::input_routing::DeliveryResult {
-    input_passthrough::route_click_at_cursor(launcher_window, button)
+    input_passthrough::deliver_prepared_click(click)
 }
 
 /// `AtomicBool` guard set while we are inside our own `inject_dummy_key`

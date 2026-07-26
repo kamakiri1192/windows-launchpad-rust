@@ -63,9 +63,15 @@ pub enum ProbeEvent {
         button: ProbeButton,
     },
     VerticalWheel {
+        /// Legacy integral wheel delta (`WHEEL_DELTA` units on Windows).
         delta: i32,
+        /// Native horizontal/vertical deltas without quantization.
+        delta_x: f64,
+        delta_y: f64,
+        precise: bool,
         key_state: u16,
         phase: NativePhase,
+        momentum_phase: NativePhase,
     },
     FocusGained,
     FocusLost,
@@ -115,8 +121,12 @@ mod tests {
             timestamp: 99,
             event: ProbeEvent::VerticalWheel {
                 delta: -30,
+                delta_x: 0.0,
+                delta_y: -30.0,
+                precise: true,
                 key_state: 0x000c,
                 phase: NativePhase::Unavailable,
+                momentum_phase: NativePhase::Unavailable,
             },
             target: 0x1234,
             root: 0x1000,

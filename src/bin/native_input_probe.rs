@@ -144,8 +144,12 @@ mod windows_probe {
                 lparam,
                 ProbeEvent::VerticalWheel {
                     delta: ((wparam.0 >> 16) as u16 as i16) as i32,
+                    delta_x: 0.0,
+                    delta_y: ((wparam.0 >> 16) as u16 as i16) as f64,
+                    precise: ((wparam.0 >> 16) as u16 as i16).unsigned_abs() < 120,
                     key_state: wparam.0 as u16,
                     phase: NativePhase::Unavailable,
+                    momentum_phase: NativePhase::Unavailable,
                 },
                 true,
             ),
@@ -249,6 +253,212 @@ mod windows_probe {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod macos_probe {
+    use std::cell::Cell;
+    use std::ptr::NonNull;
+    use std::rc::Rc;
+
+    use block2::RcBlock;
+    use launchpad_windows::input_probe_protocol::{
+        NativePhase, NativePoint, NativeRect, ProbeButton, ProbeEvent, ProbeRecord,
+    };
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{
+        NSApplication, NSEvent, NSEventMask, NSEventPhase, NSEventType, NSScrollView, NSView,
+    };
+    use winit::application::ApplicationHandler;
+    use winit::dpi::{PhysicalPosition, PhysicalSize};
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use winit::window::{Window, WindowId};
+
+    fn emit(record: ProbeRecord) {
+        if let Ok(line) = record.to_json_line() {
+            println!("{line}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+    }
+
+    fn phase(value: NSEventPhase, momentum: bool) -> NativePhase {
+        if value.contains(NSEventPhase::Began) {
+            if momentum {
+                NativePhase::MomentumBegan
+            } else {
+                NativePhase::Began
+            }
+        } else if value.contains(NSEventPhase::Changed) || value.contains(NSEventPhase::Stationary)
+        {
+            if momentum {
+                NativePhase::MomentumChanged
+            } else {
+                NativePhase::Changed
+            }
+        } else if value.contains(NSEventPhase::Ended) {
+            if momentum {
+                NativePhase::MomentumEnded
+            } else {
+                NativePhase::Ended
+            }
+        } else if value.contains(NSEventPhase::Cancelled) {
+            NativePhase::Cancelled
+        } else {
+            NativePhase::Unavailable
+        }
+    }
+
+    fn foreground_window_number() -> u64 {
+        let Some(main_thread) = MainThreadMarker::new() else {
+            return 0;
+        };
+        NSApplication::sharedApplication(main_thread)
+            .keyWindow()
+            .map_or(0, |window| window.windowNumber() as u64)
+    }
+
+    fn install_monitor() -> Option<Retained<AnyObject>> {
+        let serial = Rc::new(Cell::new(0u64));
+        let callback_serial = serial.clone();
+        let handler = RcBlock::new(move |event_ptr: NonNull<NSEvent>| -> *mut NSEvent {
+            let event = unsafe { event_ptr.as_ref() };
+            let event_type = event.r#type();
+            let probe_event = match event_type {
+                NSEventType::MouseMoved
+                | NSEventType::LeftMouseDragged
+                | NSEventType::RightMouseDragged => Some(ProbeEvent::MouseMove),
+                NSEventType::LeftMouseDown => Some(ProbeEvent::ButtonDown {
+                    button: ProbeButton::Left,
+                }),
+                NSEventType::LeftMouseUp => Some(ProbeEvent::ButtonUp {
+                    button: ProbeButton::Left,
+                }),
+                NSEventType::RightMouseDown => Some(ProbeEvent::ButtonDown {
+                    button: ProbeButton::Right,
+                }),
+                NSEventType::RightMouseUp => Some(ProbeEvent::ButtonUp {
+                    button: ProbeButton::Right,
+                }),
+                NSEventType::ScrollWheel => Some(ProbeEvent::VerticalWheel {
+                    delta: event.deltaY().round() as i32,
+                    delta_x: event.scrollingDeltaX(),
+                    delta_y: event.scrollingDeltaY(),
+                    precise: event.hasPreciseScrollingDeltas(),
+                    key_state: (event.modifierFlags().bits() & 0xffff) as u16,
+                    phase: phase(event.phase(), false),
+                    momentum_phase: phase(event.momentumPhase(), true),
+                }),
+                _ => None,
+            };
+            if let Some(probe_event) = probe_event {
+                let next = callback_serial.get() + 1;
+                callback_serial.set(next);
+                let screen = NSEvent::mouseLocation();
+                let local = event.locationInWindow();
+                emit(ProbeRecord::Input {
+                    serial: next,
+                    timestamp: (event.timestamp() * 1_000_000.0) as u64,
+                    event: probe_event,
+                    target: event.windowNumber() as u64,
+                    root: event.windowNumber() as u64,
+                    pid: std::process::id(),
+                    screen: NativePoint {
+                        x: screen.x.round() as i32,
+                        y: screen.y.round() as i32,
+                    },
+                    local: NativePoint {
+                        x: local.x.round() as i32,
+                        y: local.y.round() as i32,
+                    },
+                    foreground: foreground_window_number(),
+                });
+            }
+            event_ptr.as_ptr()
+        });
+        let mask = NSEventMask::MouseMoved
+            | NSEventMask::LeftMouseDragged
+            | NSEventMask::RightMouseDragged
+            | NSEventMask::LeftMouseDown
+            | NSEventMask::LeftMouseUp
+            | NSEventMask::RightMouseDown
+            | NSEventMask::RightMouseUp
+            | NSEventMask::ScrollWheel;
+        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &handler) }
+    }
+
+    #[derive(Default)]
+    struct ProbeApp {
+        window: Option<Window>,
+        _monitor: Option<Retained<AnyObject>>,
+        _scroll_view: Option<Retained<NSScrollView>>,
+    }
+
+    impl ApplicationHandler for ProbeApp {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            if self.window.is_some() {
+                return;
+            }
+            let attributes = Window::default_attributes()
+                .with_title("Launchpad Native Input Probe")
+                .with_position(PhysicalPosition::new(100, 100))
+                .with_inner_size(PhysicalSize::new(1000, 700));
+            let window = event_loop.create_window(attributes).expect("probe window");
+            let handle = window.window_handle().expect("probe native window");
+            let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+                unreachable!()
+            };
+            let view = unsafe { &*(handle.ns_view.as_ptr() as *const NSView) };
+            let ns_window = view.window().expect("probe NSWindow");
+            let main_thread = MainThreadMarker::new().expect("probe main thread");
+            let scroll_view = ns_window.contentView().map(|content| {
+                let scroll =
+                    NSScrollView::initWithFrame(NSScrollView::alloc(main_thread), content.bounds());
+                content.addSubview(&scroll);
+                scroll
+            });
+            self._monitor = install_monitor();
+            self._scroll_view = scroll_view;
+            emit(ProbeRecord::Ready {
+                pid: std::process::id(),
+                top_level: ns_window.windowNumber() as u64,
+                child: self
+                    ._scroll_view
+                    .as_ref()
+                    .map_or(0, |view| (&**view as *const NSScrollView) as usize as u64),
+                rect: NativeRect {
+                    left: 100,
+                    top: 100,
+                    right: 1100,
+                    bottom: 800,
+                },
+            });
+            window.focus_window();
+            self.window = Some(window);
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            if matches!(event, WindowEvent::CloseRequested) {
+                event_loop.exit();
+            }
+        }
+    }
+
+    pub fn run() -> Result<(), String> {
+        let event_loop = EventLoop::new().map_err(|error| error.to_string())?;
+        let mut app = ProbeApp::default();
+        event_loop
+            .run_app(&mut app)
+            .map_err(|error| error.to_string())
+    }
+}
+
 fn main() {
     #[cfg(windows)]
     if let Err(error) = windows_probe::run() {
@@ -263,8 +473,8 @@ fn main() {
     }
 
     #[cfg(target_os = "macos")]
-    {
-        eprintln!("macOS native input probe is built by the macOS adapter commit");
-        std::process::exit(2);
+    if let Err(error) = macos_probe::run() {
+        eprintln!("native input probe: {error}");
+        std::process::exit(1);
     }
 }

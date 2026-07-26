@@ -84,25 +84,33 @@ fn route_wheel(message: &MSG) -> DeliveryResult {
     }
 }
 
-/// Enqueue one complete click to the window below the launcher without
-/// changing focus or Z-order and without injecting into the global input
-/// stream. The launcher has already consumed the physical gesture.
-pub fn route_click_at_cursor(launcher_window: u64, button: PointerButton) -> DeliveryResult {
+/// Target and client coordinates resolved while the launcher still has its
+/// original Z-order. Delivery happens only after the launcher hides.
+pub struct PreparedClick {
+    target: HWND,
+    coordinates: LPARAM,
+    down: u32,
+    up: u32,
+    down_keys: usize,
+}
+
+pub fn prepare_click_at_cursor(
+    launcher_window: u64,
+    button: PointerButton,
+) -> Option<PreparedClick> {
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) }.is_err() {
-        return DeliveryResult::Failed { os_error: 0 };
+        return None;
     }
     if launcher_window == 0 {
-        return DeliveryResult::NoTarget;
+        return None;
     }
     let launcher = HWND(launcher_window as usize as *mut c_void);
-    let Some((target, _)) = (unsafe { resolve_target(launcher, point) }) else {
-        return DeliveryResult::NoTarget;
-    };
+    let (target, _) = unsafe { resolve_target(launcher, point) }?;
 
     let mut local = point;
     if !unsafe { ScreenToClient(target, &mut local) }.as_bool() {
-        return DeliveryResult::Failed { os_error: 0 };
+        return None;
     }
     let coordinates = LPARAM(
         (local.x as i16 as u16 as usize | ((local.y as i16 as u16 as usize) << 16)) as isize,
@@ -111,12 +119,29 @@ pub fn route_click_at_cursor(launcher_window: u64, button: PointerButton) -> Del
         PointerButton::Left => (WM_LBUTTONDOWN, WM_LBUTTONUP, 0x0001usize),
         PointerButton::Right => (WM_RBUTTONDOWN, WM_RBUTTONUP, 0x0002usize),
     };
+    Some(PreparedClick {
+        target,
+        coordinates,
+        down,
+        up,
+        down_keys,
+    })
+}
 
-    let down_result = unsafe { PostMessageW(Some(target), down, WPARAM(down_keys), coordinates) };
+/// Enqueue one complete click without injecting into the global input stream.
+pub fn deliver_prepared_click(click: PreparedClick) -> DeliveryResult {
+    let down_result = unsafe {
+        PostMessageW(
+            Some(click.target),
+            click.down,
+            WPARAM(click.down_keys),
+            click.coordinates,
+        )
+    };
     if let Err(error) = down_result {
         return delivery_error(error);
     }
-    match unsafe { PostMessageW(Some(target), up, WPARAM(0), coordinates) } {
+    match unsafe { PostMessageW(Some(click.target), click.up, WPARAM(0), click.coordinates) } {
         Ok(()) => DeliveryResult::Queued,
         Err(error) => delivery_error(error),
     }

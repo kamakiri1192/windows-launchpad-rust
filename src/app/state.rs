@@ -318,6 +318,9 @@ pub struct App {
     /// Anchor keeping the macOS menu-bar item and global shortcut alive.
     #[cfg(target_os = "macos")]
     pub _macos: Option<crate::platform::macos::integration::MacOsIntegration>,
+    /// AppKit local event monitor and retained native click packets.
+    #[cfg(target_os = "macos")]
+    pub _macos_input: Option<crate::platform::macos::input_passthrough::MacInputPassthrough>,
 }
 
 use crate::domain::app_registry::AppLaunchInfo;
@@ -399,6 +402,8 @@ impl App {
             _os: None,
             #[cfg(target_os = "macos")]
             _macos: None,
+            #[cfg(target_os = "macos")]
+            _macos_input: None,
         }
     }
 }
