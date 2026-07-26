@@ -49,99 +49,23 @@ jobs:
           import re
           from pathlib import Path
 
-          source = Path(os.environ["WARLOC_JSON"])
-          data = json.loads(source.read_text())
-
-          def normalize(value):
-              return re.sub(r"[^a-z0-9]", "", str(value).lower())
-
-          def as_int(value):
-              if isinstance(value, bool):
-                  return None
-              if isinstance(value, int):
-                  return value
-              if isinstance(value, float) and value.is_integer():
-                  return int(value)
-              if isinstance(value, str):
-                  try:
-                      return int(value.replace(",", ""))
-                  except ValueError:
-                      return None
-              return None
-
-          metric_aliases = {
-              "code": {"code"},
-              "blank": {"blank", "blanks", "empty", "emptylines"},
-              "docs": {
-                  "docs",
-                  "doc",
-                  "doccomments",
-                  "documentation",
-                  "documentationcomments",
-              },
-              "comments": {"comment", "comments", "regularcomments"},
-          }
-          category_aliases = {
-              "main": "Main",
-              "production": "Main",
-              "tests": "Tests",
-              "test": "Tests",
-              "examples": "Examples",
-              "example": "Examples",
+          data = json.loads(Path(os.environ["WARLOC_JSON"]).read_text())
+          categories = {
+              "Main": data["main"],
+              "Tests": data["tests"],
+              "Examples": data["examples"],
           }
 
-          def metrics_from(mapping):
-              if not isinstance(mapping, dict):
-                  return None
-              normalized = {normalize(key): value for key, value in mapping.items()}
-              result = {}
-              for metric, aliases in metric_aliases.items():
-                  value = None
-                  for alias in aliases:
-                      if alias in normalized:
-                          value = as_int(normalized[alias])
-                          break
-                  result[metric] = 0 if value is None else value
-              return result if any(result.values()) or "code" in normalized else None
+          required_metrics = ("code", "whitespaces", "docs", "comments")
+          for category, values in categories.items():
+              missing = [metric for metric in required_metrics if metric not in values]
+              if missing:
+                  raise SystemExit(
+                      f"Missing cargo-warloc metrics for {category}: {', '.join(missing)}"
+                  )
 
-          rows = {}
-
-          def save(label, mapping):
-              category = category_aliases.get(normalize(label))
-              metrics = metrics_from(mapping)
-              if category and metrics is not None:
-                  rows[category] = metrics
-
-          def walk(node, parent_label=None):
-              if isinstance(node, dict):
-                  if parent_label is not None:
-                      save(parent_label, node)
-
-                  for label_key in ("type", "kind", "category", "name"):
-                      for key, value in node.items():
-                          if normalize(key) == label_key and isinstance(value, str):
-                              save(value, node)
-
-                  for key, value in node.items():
-                      save(key, value)
-                      walk(value, key)
-              elif isinstance(node, list):
-                  for value in node:
-                      walk(value, parent_label)
-
-          walk(data)
-
-          missing = [category for category in ("Main", "Tests") if category not in rows]
-          if missing:
-              print(json.dumps(data, indent=2))
-              raise SystemExit(
-                  "Could not find cargo-warloc aggregate rows: " + ", ".join(missing)
-              )
-
-          rows.setdefault("Examples", {metric: 0 for metric in metric_aliases})
-
-          def total(row):
-              return sum(row[metric] for metric in ("code", "blank", "docs", "comments"))
+          def row_total(values):
+              return sum(values[metric] for metric in required_metrics)
 
           def compact(value):
               if value >= 1_000_000:
@@ -150,8 +74,8 @@ jobs:
                   return f"{value / 1_000:.1f}k"
               return str(value)
 
-          main_value = compact(rows["Main"]["code"])
-          tests_value = compact(rows["Tests"]["code"])
+          main_value = compact(categories["Main"]["code"])
+          tests_value = compact(categories["Tests"]["code"])
           badge_value = f"main {main_value} · tests {tests_value}"
           escaped_badge_value = html.escape(badge_value)
 
@@ -184,10 +108,9 @@ jobs:
           '''
           Path("assets/lines-of-code.svg").write_text(svg)
 
-          categories = ("Main", "Tests", "Examples")
           totals = {
-              metric: sum(rows[category][metric] for category in categories)
-              for metric in ("code", "blank", "docs", "comments")
+              metric: sum(values[metric] for values in categories.values())
+              for metric in required_metrics
           }
 
           lines = [
@@ -199,16 +122,15 @@ jobs:
               "| 区分 | コード | 空行 | ドキュメントコメント | コメント | 合計 |",
               "| --- | ---: | ---: | ---: | ---: | ---: |",
           ]
-          for category in categories:
-              row = rows[category]
+          for category, values in categories.items():
               lines.append(
-                  f"| {category} | {row['code']:,} | {row['blank']:,} | "
-                  f"{row['docs']:,} | {row['comments']:,} | {total(row):,} |"
+                  f"| {category} | {values['code']:,} | {values['whitespaces']:,} | "
+                  f"{values['docs']:,} | {values['comments']:,} | {row_total(values):,} |"
               )
           lines.append(
-              f"| **Total** | **{totals['code']:,}** | **{totals['blank']:,}** | "
+              f"| **Total** | **{totals['code']:,}** | **{totals['whitespaces']:,}** | "
               f"**{totals['docs']:,}** | **{totals['comments']:,}** | "
-              f"**{total(totals):,}** |"
+              f"**{row_total(totals):,}** |"
           )
           lines.extend(
               [
@@ -241,6 +163,8 @@ jobs:
           test -s assets/lines-of-code.svg
           test -s docs/CODE_STATS.md
           grep -Fq '[![Rust LOC](assets/lines-of-code.svg)](docs/CODE_STATS.md)' README.md
+          grep -Fq '| Main |' docs/CODE_STATS.md
+          grep -Fq '| Tests |' docs/CODE_STATS.md
           git diff --check
 
       - name: Commit updated statistics
