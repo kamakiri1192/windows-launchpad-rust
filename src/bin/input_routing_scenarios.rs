@@ -2224,13 +2224,14 @@ mod macos_runner {
         Ok(())
     }
 
-    /// Verifies that synthetic wheel events are actually delivered on this
+    /// Verifies that synthetic wheel events are reliably delivered on this
     /// runner. Hosted macOS runners (e.g. `macos-14`) report post-event
-    /// permission as granted but silently drop scroll-wheel events, so the
-    /// static preflight in `assert_post_permission` is not enough to gate the
-    /// full E2E. We spin up a probe, post one precise scroll, and require the
-    /// matching record to arrive within the timeout.
+    /// permission as granted but drop scroll-wheel events probabilistically,
+    /// so a single success is not enough to gate the full E2E. We spin up a
+    /// probe and require several consecutive precise-scroll events to arrive
+    /// before treating the runner as capable of running the wheel scenarios.
     fn assert_wheel_delivery() -> Result<(), String> {
+        const REQUIRED_CONSECUTIVE: usize = 3;
         let (mut probe, rx) = start_process("native_input_probe", false, false)?;
         let result = (|| {
             let ready = wait_for(&rx, Duration::from_secs(10), |record| {
@@ -2245,32 +2246,45 @@ mod macos_runner {
                 unreachable!()
             };
             move_pointer(150.0, 150.0)?;
-            post_precise_scroll(-7, 1, 0)?;
-            let wheel = wait_for(&rx, Duration::from_secs(5), |record| {
-                matches!(
-                    record,
-                    ProbeRecord::Input {
-                        event: ProbeEvent::VerticalWheel {
-                            delta_y,
-                            precise: true,
+            // Require several back-to-back deliveries. Any miss resets the
+            // streak; if the streak never reaches the threshold before the
+            // overall deadline, the runner is considered unreliable for
+            // wheel-based scenarios.
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut streak = 0usize;
+            let mut attempts = 0usize;
+            while streak < REQUIRED_CONSECUTIVE {
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "only {streak}/{REQUIRED_CONSECUTIVE} consecutive wheel events arrived \
+                         in {attempts} attempts"
+                    ));
+                }
+                attempts += 1;
+                post_precise_scroll(-7, 1, 0)?;
+                let received = wait_for(&rx, Duration::from_secs(2), |record| {
+                    matches!(
+                        record,
+                        ProbeRecord::Input {
+                            event: ProbeEvent::VerticalWheel {
+                                delta_y,
+                                precise: true,
+                                ..
+                            },
+                            pid,
+                            target,
+                            root,
                             ..
-                        },
-                        ..
-                    } if (*delta_y + 7.0).abs() < 0.01
-                )
-            })?;
-            if !matches!(
-                wheel,
-                ProbeRecord::Input {
-                    pid,
-                    target,
-                    root,
-                    ..
-                } if pid == probe_pid && target == probe_window && root == probe_window
-            ) {
-                return Err(format!(
-                    "wheel prereq did not target the probe window: {wheel:?}"
-                ));
+                        } if (*delta_y + 7.0).abs() < 0.01
+                            && *pid == probe_pid
+                            && *target == probe_window
+                            && *root == probe_window
+                    )
+                });
+                match received {
+                    Ok(_) => streak += 1,
+                    Err(_) => streak = 0,
+                }
             }
             Ok(())
         })();
@@ -2278,7 +2292,7 @@ mod macos_runner {
         let _ = probe.wait();
         result.map_err(|error| {
             format!(
-                "wheel event delivery unavailable on this runner ({error}); \
+                "wheel event delivery unreliable on this runner ({error}); \
                  hosted runners drop scroll events even with post-event permission"
             )
         })
