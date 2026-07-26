@@ -1,89 +1,162 @@
-name: Update lines of code badge
+name: Update Rust code statistics
 
 on:
   push:
     branches:
       - main
     paths-ignore:
+      - README.md
       - assets/lines-of-code.svg
-  workflow_dispatch:
+      - docs/CODE_STATS.md
 
 permissions:
   contents: write
 
 concurrency:
-  group: lines-of-code-badge
+  group: rust-code-statistics-main
   cancel-in-progress: true
 
 jobs:
-  update-badge:
+  update-statistics:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Tokei
-        run: cargo install tokei --version 13.0.0 --locked
+      - name: Install cargo-warloc
+        run: cargo install cargo-warloc --version 0.1.1 --locked
 
-      - name: Count code lines
-        run: tokei --output json . > "$RUNNER_TEMP/tokei.json"
+      - name: Count Rust source lines
+        run: cargo warloc -o json > "$RUNNER_TEMP/warloc.json"
 
-      - name: Generate SVG badge
+      - name: Generate badge and detailed statistics
         env:
-          TOKEI_JSON: ${{ runner.temp }}/tokei.json
+          WARLOC_JSON: ${{ runner.temp }}/warloc.json
         run: |
           python3 <<'PY'
           import html
           import json
           import os
+          import re
           from pathlib import Path
 
-          data = json.loads(Path(os.environ["TOKEI_JSON"]).read_text())
-          total = data.get("Total")
-          if isinstance(total, dict) and isinstance(total.get("code"), int):
-              code_lines = total["code"]
-          else:
-              code_lines = sum(
-                  language.get("code", 0)
-                  for language in data.values()
-                  if isinstance(language, dict)
-              )
+          data = json.loads(Path(os.environ["WARLOC_JSON"]).read_text())
+          categories = {
+              "Main": data["main"],
+              "Tests": data["tests"],
+              "Examples": data["examples"],
+          }
 
-          value = f"{code_lines:,}"
-          escaped_value = html.escape(value)
-          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="170" height="20" role="img" aria-label="lines of code: {escaped_value}">
+          required_metrics = ("code", "whitespaces", "docs", "comments")
+          for category, values in categories.items():
+              missing = [metric for metric in required_metrics if metric not in values]
+              if missing:
+                  raise SystemExit(
+                      f"Missing cargo-warloc metrics for {category}: {', '.join(missing)}"
+                  )
+
+          def row_total(values):
+              return sum(values[metric] for metric in required_metrics)
+
+          def compact(value):
+              if value >= 1_000_000:
+                  return f"{value / 1_000_000:.1f}M"
+              if value >= 1_000:
+                  return f"{value / 1_000:.1f}k"
+              return str(value)
+
+          main_value = compact(categories["Main"]["code"])
+          tests_value = compact(categories["Tests"]["code"])
+          badge_value = f"main {main_value} · tests {tests_value}"
+          escaped_badge_value = html.escape(badge_value)
+
+          width = 210
+          label_width = 60
+          value_width = width - label_width
+          label_center = label_width / 2
+          value_center = label_width + value_width / 2
+
+          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="20" role="img" aria-label="Rust LOC: {escaped_badge_value}">
             <linearGradient id="s" x2="0" y2="100%">
               <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
               <stop offset="1" stop-opacity=".1"/>
             </linearGradient>
             <clipPath id="r">
-              <rect width="170" height="20" rx="3"/>
+              <rect width="{width}" height="20" rx="3"/>
             </clipPath>
             <g clip-path="url(#r)">
-              <rect width="100" height="20" fill="#555"/>
-              <rect x="100" width="70" height="20" fill="#007ec6"/>
-              <rect width="170" height="20" fill="url(#s)"/>
+              <rect width="{label_width}" height="20" fill="#555"/>
+              <rect x="{label_width}" width="{value_width}" height="20" fill="#007ec6"/>
+              <rect width="{width}" height="20" fill="url(#s)"/>
             </g>
             <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
-              <text aria-hidden="true" x="50" y="15" fill="#010101" fill-opacity=".3">lines of code</text>
-              <text x="50" y="14">lines of code</text>
-              <text aria-hidden="true" x="135" y="15" fill="#010101" fill-opacity=".3">{escaped_value}</text>
-              <text x="135" y="14">{escaped_value}</text>
+              <text aria-hidden="true" x="{label_center}" y="15" fill="#010101" fill-opacity=".3">Rust LOC</text>
+              <text x="{label_center}" y="14">Rust LOC</text>
+              <text aria-hidden="true" x="{value_center}" y="15" fill="#010101" fill-opacity=".3">{escaped_badge_value}</text>
+              <text x="{value_center}" y="14">{escaped_badge_value}</text>
             </g>
           </svg>
           '''
           Path("assets/lines-of-code.svg").write_text(svg)
+
+          totals = {
+              metric: sum(values[metric] for values in categories.values())
+              for metric in required_metrics
+          }
+
+          lines = [
+              "# コード統計",
+              "",
+              "Rustソースコードを`cargo-warloc` 0.1.1で集計しています。",
+              "製品コード、テストコード、examplesを分離し、正確な行数を掲載します。",
+              "",
+              "| 区分 | コード | 空行 | ドキュメントコメント | コメント | 合計 |",
+              "| --- | ---: | ---: | ---: | ---: | ---: |",
+          ]
+          for category, values in categories.items():
+              lines.append(
+                  f"| {category} | {values['code']:,} | {values['whitespaces']:,} | "
+                  f"{values['docs']:,} | {values['comments']:,} | {row_total(values):,} |"
+              )
+          lines.append(
+              f"| **Total** | **{totals['code']:,}** | **{totals['whitespaces']:,}** | "
+              f"**{totals['docs']:,}** | **{totals['comments']:,}** | "
+              f"**{row_total(totals):,}** |"
+          )
+          lines.extend(
+              [
+                  "",
+                  "`#[cfg(test)]`および`#[test]`内のコードはTestsとして集計されます。",
+                  "`.gitignore`で除外されたファイルは集計対象外です。",
+                  "",
+                  "このファイルとREADMEのバッジはGitHub Actionsによって自動更新されます。",
+                  "",
+              ]
+          )
+          Path("docs/CODE_STATS.md").write_text("\n".join(lines))
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text()
+          badge = "[![Rust LOC](assets/lines-of-code.svg)](docs/CODE_STATS.md)"
+          pattern = re.compile(
+              r"^\[!\[(?:Lines of Code|Rust LOC)\]\(assets/lines-of-code\.svg\)\]\([^\n]+\)$",
+              re.MULTILINE,
+          )
+          updated, replacements = pattern.subn(badge, readme, count=1)
+          if replacements != 1:
+              raise SystemExit("Could not find the existing lines-of-code badge in README.md")
+          readme_path.write_text(updated)
           PY
 
-      - name: Commit updated badge
+      - name: Commit updated statistics
         run: |
-          if git diff --quiet -- assets/lines-of-code.svg; then
+          if git diff --quiet -- README.md assets/lines-of-code.svg docs/CODE_STATS.md; then
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets/lines-of-code.svg
-          git commit -m "chore: update lines of code badge [skip ci]"
+          git add README.md assets/lines-of-code.svg docs/CODE_STATS.md
+          git commit -m "chore: update Rust code statistics [skip ci]"
           git push
