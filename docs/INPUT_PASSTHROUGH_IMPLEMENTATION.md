@@ -26,10 +26,27 @@ cloaked, transparent, and same-process windows, then selects the deepest
 eligible child. The unchanged `wParam` and `lParam` are queued once with
 `PostMessageW`.
 
-Confirmed clicks resolve and freeze the same target before the launcher hides,
-then queue exactly one button-down/button-up pair to that target. The adapter
+Confirmed clicks resolve and freeze the same target before the launcher hides.
+After hide, the adapter verifies that the cursor and frozen target are
+unchanged, then uses one private-tagged `SendInput` batch for the complete
+button-down/button-up pair. Unlike direct button messages, this preserves
+normal Win32 activation, capture, and `WM_CONTEXTMENU` behavior. Wheel delivery
 does not call `SetWindowPos`, toggle Z-order, inject a global mouse stream, or
-hide/show the launcher for wheel input.
+hide/show the launcher.
+
+Before click injection, a harmless targeted `WM_NULL` performs a structured
+UIPI preflight because `SendInput` itself does not identify UIPI blocking in
+its return value. A target or cursor change cancels delivery instead of
+clicking a different window.
+
+Some receivers explicitly activate themselves from their wheel handler. This
+is not handled by the rejected broad `forwarding_wheel` / summon-grace
+workaround. A successful wheel queue records a one-shot correlation containing
+the launcher foreground state, exact receiver root HWND, and queue time. A
+focus-loss auto-hide is suppressed only when the new foreground window is that
+exact receiver root within the bounded interval; the record is consumed on the
+first focus-loss check. Unrelated or later focus changes keep normal auto-hide
+behavior.
 
 ### macOS
 
@@ -60,20 +77,26 @@ wheel events are still consumed and never become launcher page input.
 `input_routing_scenarios` generates physical-equivalent OS input through a path
 different from product delivery:
 
-- Windows generator: `SendInput`; product: targeted `PostMessageW`;
+- Windows generator: `SendInput`; product: targeted `PostMessageW` for wheel
+  and separately tagged `SendInput` for confirmed clicks;
 - macOS generator: HID `CGEventPost`; product: `CGEventPostToPid`.
 
 The product scenarios cover:
 
 1. left click waits for physical up, hides, and delivers one ordered pair;
 2. left drag remains visible, moves the page, and delivers no button input;
-3. right click waits for physical up, hides, and delivers one ordered pair;
+3. right click waits for physical up, hides, delivers one ordered pair, and
+   produces native context-menu dispatch;
 4. right drag cancels and delivers nothing;
 5. precise vertical wheel remains visible and is delivered once;
-6. hover updates launcher classification and is not delivered.
+6. a test receiver that activates from its wheel handler cannot trigger
+   Launchpad auto-hide;
+7. hover updates launcher classification and is not delivered.
 
 The runner also verifies launcher PID/window continuity and, on Windows, wheel
-focus and Z-order stability. Both OS jobs run in
+focus and Z-order stability beyond the bounded receiver-activation interval.
+The one-shot target/time correlation is covered by a pure Windows unit test.
+Both OS jobs run in
 `.github/workflows/input-routing-e2e.yml`.
 
 Local commands:

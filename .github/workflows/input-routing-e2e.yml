@@ -14,6 +14,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: 1.89.0
+  LAUNCHPAD_INPUT_ROUTING_TRACE: 1
 
 jobs:
   windows:

@@ -883,6 +883,11 @@ impl App {
     fn handle_focus(&mut self, focused: bool) {
         debug_log!("window_event: Focused({})", focused);
         if !focused {
+            #[cfg(windows)]
+            let correlated_wheel_activation = crate::platform::windows::input_passthrough::
+                consume_correlated_wheel_receiver_activation();
+            #[cfg(not(windows))]
+            let correlated_wheel_activation = false;
             let in_grace = self
                 .last_summon
                 .map(|t| t.elapsed() < super::state::SUMMON_FOCUS_GRACE)
@@ -895,6 +900,10 @@ impl App {
                 == Some(std::ffi::OsStr::new("1"))
             {
                 debug_log!("window_event: Focused(false) ignored (profile mode)");
+            } else if correlated_wheel_activation {
+                debug_log!(
+                    "window_event: Focused(false) ignored (correlated wheel receiver activation)"
+                );
             } else if in_grace {
                 debug_log!("window_event: Focused(false) ignored (within summon grace)");
             } else {

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const INPUT_ROUTING_QA_ENV: &str = "LAUNCHPAD_INPUT_ROUTING_QA";
+pub const QA_WHEEL_RECEIVER_ACTIVATION_ENV: &str = "LAUNCHPAD_QA_WHEEL_RECEIVER_ACTIVATION";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "record", rename_all = "snake_case")]
@@ -62,6 +63,8 @@ pub enum ProbeEvent {
     ButtonUp {
         button: ProbeButton,
     },
+    /// Native context-menu request produced by normal right-click processing.
+    ContextMenu,
     VerticalWheel {
         /// Legacy integral wheel delta (`WHEEL_DELTA` units on Windows).
         delta: i32,

@@ -14,10 +14,11 @@ mod windows_probe {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetAncestor, GetForegroundWindow,
         GetMessageTime, GetMessageW, GetWindowRect, LoadCursorW, PostQuitMessage, RegisterClassW,
-        ShowWindow, TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GA_ROOT, HMENU,
-        IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_DESTROY, WM_KILLFOCUS,
-        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_RBUTTONDOWN,
-        WM_RBUTTONUP, WM_SETFOCUS, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        SetForegroundWindow, ShowWindow, TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
+        GA_ROOT, HMENU, IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE,
+        WM_CONTEXTMENU, WM_DESTROY, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        WM_MOUSEWHEEL, WM_NCCREATE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WNDCLASSW, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     static SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -131,28 +132,46 @@ mod windows_probe {
                 },
                 false,
             ),
-            WM_RBUTTONUP => log_event(
-                hwnd,
-                lparam,
-                ProbeEvent::ButtonUp {
-                    button: ProbeButton::Right,
-                },
-                false,
-            ),
-            WM_MOUSEWHEEL => log_event(
-                hwnd,
-                lparam,
-                ProbeEvent::VerticalWheel {
-                    delta: ((wparam.0 >> 16) as u16 as i16) as i32,
-                    delta_x: 0.0,
-                    delta_y: ((wparam.0 >> 16) as u16 as i16) as f64,
-                    precise: ((wparam.0 >> 16) as u16 as i16).unsigned_abs() < 120,
-                    key_state: wparam.0 as u16,
-                    phase: NativePhase::Unavailable,
-                    momentum_phase: NativePhase::Unavailable,
-                },
-                true,
-            ),
+            WM_RBUTTONUP => {
+                log_event(
+                    hwnd,
+                    lparam,
+                    ProbeEvent::ButtonUp {
+                        button: ProbeButton::Right,
+                    },
+                    false,
+                );
+                // Preserve default Win32 processing so a real right click also
+                // produces WM_CONTEXTMENU. Returning zero here made direct
+                // message delivery look successful while real apps did not
+                // receive normal context-menu semantics.
+                return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+            }
+            WM_CONTEXTMENU => log_event(hwnd, lparam, ProbeEvent::ContextMenu, true),
+            WM_MOUSEWHEEL => {
+                log_event(
+                    hwnd,
+                    lparam,
+                    ProbeEvent::VerticalWheel {
+                        delta: ((wparam.0 >> 16) as u16 as i16) as i32,
+                        delta_x: 0.0,
+                        delta_y: ((wparam.0 >> 16) as u16 as i16) as f64,
+                        precise: ((wparam.0 >> 16) as u16 as i16).unsigned_abs() < 120,
+                        key_state: wparam.0 as u16,
+                        phase: NativePhase::Unavailable,
+                        momentum_phase: NativePhase::Unavailable,
+                    },
+                    true,
+                );
+                if std::env::var_os(
+                    launchpad_windows::input_probe_protocol::QA_WHEEL_RECEIVER_ACTIVATION_ENV,
+                )
+                .is_some()
+                {
+                    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+                    let _ = unsafe { SetForegroundWindow(root) };
+                }
+            }
             WM_SETFOCUS => log_event(hwnd, LPARAM(0), ProbeEvent::FocusGained, false),
             WM_KILLFOCUS => log_event(hwnd, LPARAM(0), ProbeEvent::FocusLost, false),
             WM_ACTIVATE => log_event(
@@ -393,6 +412,15 @@ mod macos_probe {
         window: Option<Window>,
         _monitor: Option<Retained<AnyObject>>,
         _scroll_view: Option<Retained<NSScrollView>>,
+        ready: Option<ProbeRecord>,
+    }
+
+    impl ProbeApp {
+        fn emit_ready(&mut self) {
+            if let Some(ready) = self.ready.take() {
+                emit(ready);
+            }
+        }
     }
 
     impl ApplicationHandler for ProbeApp {
@@ -420,7 +448,7 @@ mod macos_probe {
             });
             self._monitor = install_monitor();
             self._scroll_view = scroll_view;
-            emit(ProbeRecord::Ready {
+            self.ready = Some(ProbeRecord::Ready {
                 pid: std::process::id(),
                 top_level: ns_window.windowNumber() as u64,
                 child: self
@@ -434,8 +462,12 @@ mod macos_probe {
                     bottom: 800,
                 },
             });
-            window.focus_window();
             self.window = Some(window);
+            NSApplication::sharedApplication(main_thread).activate();
+            self.window.as_ref().expect("probe window").focus_window();
+            if ns_window.isKeyWindow() {
+                self.emit_ready();
+            }
         }
 
         fn window_event(
@@ -444,8 +476,10 @@ mod macos_probe {
             _window_id: WindowId,
             event: WindowEvent,
         ) {
-            if matches!(event, WindowEvent::CloseRequested) {
-                event_loop.exit();
+            match event {
+                WindowEvent::Focused(true) => self.emit_ready(),
+                WindowEvent::CloseRequested => event_loop.exit(),
+                _ => {}
             }
         }
     }

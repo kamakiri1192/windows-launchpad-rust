@@ -20,7 +20,7 @@ mod windows_runner {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
         SetCursorPos, SetForegroundWindow, SetWindowPos, WindowFromPoint, GW_HWNDPREV,
-        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
     };
 
     fn sibling_binary(name: &str) -> Result<std::path::PathBuf, String> {
@@ -31,12 +31,18 @@ mod windows_runner {
             .ok_or_else(|| format!("missing sibling binary {}", path.display()))
     }
 
-    fn start_probe() -> Result<(Child, mpsc::Receiver<ProbeRecord>), String> {
-        let mut child = Command::new(sibling_binary("native_input_probe")?)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| error.to_string())?;
+    fn start_probe(
+        activate_on_wheel: bool,
+    ) -> Result<(Child, mpsc::Receiver<ProbeRecord>), String> {
+        let mut command = Command::new(sibling_binary("native_input_probe")?);
+        command.stdout(Stdio::piped()).stderr(Stdio::inherit());
+        if activate_on_wheel {
+            command.env(
+                launchpad_windows::input_probe_protocol::QA_WHEEL_RECEIVER_ACTIVATION_ENV,
+                "1",
+            );
+        }
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
         let stdout = child.stdout.take().ok_or("probe stdout unavailable")?;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -52,17 +58,25 @@ mod windows_runner {
         Ok((child, rx))
     }
 
-    fn start_launcher() -> Result<(Child, mpsc::Receiver<ProbeRecord>), String> {
-        let mut child = Command::new(sibling_binary("launchpad-windows")?)
+    fn start_launcher(
+        allow_receiver_activation: bool,
+    ) -> Result<(Child, mpsc::Receiver<ProbeRecord>), String> {
+        let mut command = Command::new(sibling_binary("launchpad-windows")?);
+        command
             .env(
                 launchpad_windows::input_probe_protocol::INPUT_ROUTING_QA_ENV,
                 "1",
             )
             .env("LAUNCHPAD_ALLOW_SCREENSHOT", "1")
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| error.to_string())?;
+            .stderr(Stdio::inherit());
+        if allow_receiver_activation {
+            command.env(
+                launchpad_windows::input_probe_protocol::QA_WHEEL_RECEIVER_ACTIVATION_ENV,
+                "1",
+            );
+        }
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
         let stdout = child.stdout.take().ok_or("launcher stdout unavailable")?;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -193,8 +207,32 @@ mod windows_runner {
         Ok(())
     }
 
+    fn assert_window_state_stable(
+        hwnd: HWND,
+        foreground: HWND,
+        z_order: usize,
+        duration: Duration,
+        case_name: &str,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + duration;
+        while Instant::now() < deadline {
+            if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                return Err(format!("{case_name}: launcher closed"));
+            }
+            if unsafe { GetForegroundWindow() } != foreground {
+                return Err(format!("{case_name}: foreground window changed"));
+            }
+            if z_order_index(hwnd) != z_order {
+                return Err(format!("{case_name}: launcher Z-order changed"));
+            }
+            std::thread::yield_now();
+        }
+        Ok(())
+    }
+
     fn run_product_case(case_name: &str) -> Result<(), String> {
-        let (mut probe, probe_rx) = start_probe()?;
+        let receiver_activation = case_name == "vertical_wheel_receiver_activation";
+        let (mut probe, probe_rx) = start_probe(receiver_activation)?;
         let mut launcher_slot: Option<Child> = None;
         let result = (|| {
             let ready = wait_for(&probe_rx, Duration::from_secs(10), |record| {
@@ -208,7 +246,7 @@ mod windows_runner {
             else {
                 unreachable!()
             };
-            let (launcher, launcher_rx) = start_launcher()?;
+            let (launcher, launcher_rx) = start_launcher(receiver_activation)?;
             launcher_slot = Some(launcher);
             let initial = wait_launcher_snapshot(&launcher_rx, |record| {
                 matches!(
@@ -234,6 +272,20 @@ mod windows_runner {
             let height = rect.bottom - rect.top;
             unsafe {
                 SetWindowPos(
+                    HWND(probe_window as usize as *mut _),
+                    Some(HWND_TOPMOST),
+                    rect.left,
+                    rect.top,
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                )
+                .map_err(|error| error.to_string())?;
+                // Put the launcher at the head of the same topmost band, with
+                // the probe immediately below it. This keeps unrelated
+                // user/runner windows from slipping between the frozen target
+                // and the launcher when the click scenario hides it.
+                SetWindowPos(
                     hwnd,
                     Some(HWND_TOPMOST),
                     rect.left,
@@ -241,16 +293,6 @@ mod windows_runner {
                     width,
                     height,
                     SWP_SHOWWINDOW,
-                )
-                .map_err(|error| error.to_string())?;
-                SetWindowPos(
-                    HWND(probe_window as usize as *mut _),
-                    Some(hwnd),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 )
                 .map_err(|error| error.to_string())?;
                 let _ = SetForegroundWindow(hwnd);
@@ -350,6 +392,31 @@ mod windows_runner {
                             } if *observed == button
                         )
                     })?;
+                    let context_menu = if case_name == "right_click" {
+                        let context_menu = wait_for(&probe_rx, Duration::from_secs(5), |record| {
+                            matches!(
+                                record,
+                                ProbeRecord::Input {
+                                    event: ProbeEvent::ContextMenu,
+                                    ..
+                                }
+                            )
+                        })?;
+                        if !matches!(
+                            context_menu,
+                            ProbeRecord::Input {
+                                pid: target_pid,
+                                ..
+                            } if target_pid != pid
+                        ) {
+                            return Err(
+                                "right_click: native context menu reached wrong PID".to_owned()
+                            );
+                        }
+                        Some(context_menu)
+                    } else {
+                        None
+                    };
                     let (
                         ProbeRecord::Input {
                             serial: down_serial,
@@ -369,6 +436,20 @@ mod windows_runner {
                     if down_serial >= up_serial || down_target != up_target {
                         return Err(format!("{case_name}: incomplete or misordered click"));
                     }
+                    if !matches!(
+                        context_menu.as_ref(),
+                        Some(&ProbeRecord::Input {
+                            serial: context_serial,
+                            target: context_target,
+                            ..
+                        }) if up_serial < context_serial && context_target == up_target
+                    ) && context_menu.is_some()
+                    {
+                        return Err(
+                            "right_click: context menu was misordered or reached another target"
+                                .to_owned(),
+                        );
+                    }
                     if target_pid == pid {
                         return Err(format!("{case_name}: click looped back to launcher"));
                     }
@@ -380,7 +461,8 @@ mod windows_runner {
                                 ProbeEvent::ButtonDown { button: observed }
                                     | ProbeEvent::ButtonUp { button: observed }
                                     if *observed == button
-                            )
+                            ) || (button == ProbeButton::Right
+                                && matches!(event, ProbeEvent::ContextMenu))
                         },
                         case_name,
                     )?;
@@ -449,7 +531,7 @@ mod windows_runner {
                         case_name,
                     )?;
                 }
-                "vertical_wheel" => {
+                "vertical_wheel" | "vertical_wheel_receiver_activation" => {
                     send(&[mouse_input(MOUSEEVENTF_WHEEL.0, 30)])?;
                     let wheel = wait_for(&probe_rx, Duration::from_secs(5), |record| {
                         matches!(
@@ -469,12 +551,37 @@ mod windows_runner {
                         |event| matches!(event, ProbeEvent::VerticalWheel { .. }),
                         case_name,
                     )?;
-                    if unsafe { GetForegroundWindow() } != foreground_before
-                        || z_order_index(hwnd) != z_before
-                    {
-                        return Err(
-                            "vertical_wheel: adapter changed focus or launcher Z-order".to_owned()
-                        );
+                    if receiver_activation {
+                        wait_until(
+                            Duration::from_secs(2),
+                            || unsafe { GetForegroundWindow() }
+                                == HWND(probe_window as usize as *mut _),
+                            "wheel receiver activation",
+                        )?;
+                        let deadline = Instant::now() + Duration::from_millis(750);
+                        while Instant::now() < deadline {
+                            if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                                return Err("vertical_wheel_receiver_activation: launcher closed"
+                                    .to_owned());
+                            }
+                            if z_order_index(hwnd) != z_before {
+                                return Err(
+                                    "vertical_wheel_receiver_activation: launcher Z-order changed"
+                                        .to_owned(),
+                                );
+                            }
+                            std::thread::yield_now();
+                        }
+                    } else {
+                        // Observe beyond the bounded receiver-activation
+                        // interval so a delayed focus-loss hide cannot pass.
+                        assert_window_state_stable(
+                            hwnd,
+                            foreground_before,
+                            z_before,
+                            Duration::from_millis(750),
+                            case_name,
+                        )?;
                     }
                 }
                 "hover" => {
@@ -514,7 +621,7 @@ mod windows_runner {
     }
 
     pub fn run_probe_self_test() -> Result<(), String> {
-        let (mut probe, rx) = start_probe()?;
+        let (mut probe, rx) = start_probe(false)?;
         let result = (|| {
             let ready = wait_for(&rx, Duration::from_secs(10), |record| {
                 matches!(record, ProbeRecord::Ready { .. })
@@ -600,6 +707,7 @@ mod windows_runner {
             "right_click",
             "right_drag_cancel",
             "vertical_wheel",
+            "vertical_wheel_receiver_activation",
             "hover",
         ] {
             run_product_case(case_name)?;
@@ -651,9 +759,13 @@ mod macos_runner {
             .map_err(|error| error.to_string())?;
         let stdout = child.stdout.take().ok_or("child stdout unavailable")?;
         let (tx, rx) = mpsc::channel();
+        let trace_name = name.to_owned();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if let Ok(record) = ProbeRecord::from_json_line(&line) {
+                    if std::env::var_os("LAUNCHPAD_INPUT_ROUTING_TRACE").is_some() {
+                        eprintln!("{trace_name}-record: {record:?}");
+                    }
                     let _ = tx.send(record);
                 }
             }
