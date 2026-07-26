@@ -249,6 +249,11 @@ impl App {
                 self.persist_settings();
                 self.request_redraw();
             }
+            SettingsPressTarget::FpsToggle => {
+                self.settings.show_fps = !self.settings.show_fps;
+                self.persist_settings();
+                self.request_redraw();
+            }
             SettingsPressTarget::ResetCache => {
                 self.reset_icons();
                 self.request_redraw();

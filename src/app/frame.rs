@@ -155,6 +155,9 @@ impl App {
         // Upload the settings overlay panel (if open).
         self.render_settings_panel();
         self.render_folder_panel();
+        // Upload the HUD FPS overlay (if enabled). Generated every frame so
+        // the counter keeps updating while the surface is presenting.
+        self.render_fps_overlay();
 
         // Sync the OS IME with the search field (on while focused,
         // parked at the caret) so Japanese / other IME input works.
@@ -222,6 +225,7 @@ impl App {
             || folder_scroller_animating
             || self.editing
             || self.profile_scroll.is_some()
+            || self.settings.show_fps
         {
             self.request_redraw();
         }

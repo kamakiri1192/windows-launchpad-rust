@@ -444,6 +444,14 @@ impl Renderer {
                     &mut self.counters,
                     Category::SettingsText,
                 ),
+                GlyphLane::Overlay => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.overlay_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::ControlText,
+                ),
             }
             self.prepared_model
                 .set_glyph_batch(batch.lane, batch.views.clone());

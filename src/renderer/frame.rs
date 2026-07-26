@@ -662,6 +662,44 @@ impl Renderer {
         self.queue.submit(std::iter::once(encoder.finish()));
         self.gpu_profiler.finish_frame(&self.queue);
 
+        // FPS overlay pass: drawn last, directly on the final surface view, so
+        // the counter sits above every glass/modal layer. Reuses the
+        // control-text pipeline (screen-fixed, no page-frame clip). It runs in
+        // its own command buffer after the scene submit so it can `Load` the
+        // presented image without disturbing the profiler's second submit.
+        if self.overlay_text_instance_buffer.len() > 0 {
+            if let Some(buf) = self.overlay_text_instance_buffer.as_ref() {
+                let mut overlay_encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("overlay encoder"),
+                        });
+                {
+                    let mut pass = overlay_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("fps overlay pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.control_text_pipeline);
+                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.overlay_text_instance_buffer.len());
+                }
+                self.queue.submit(std::iter::once(overlay_encoder.finish()));
+            }
+        }
+
         // Optional QA self-capture: copy the surface texture to a host-readable
         // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.
         if let Some(path) = self.qa_shot.take() {
@@ -669,6 +707,45 @@ impl Renderer {
         }
 
         frame.present();
+        self.note_presentation();
+    }
+
+    /// Feed the FPS tracker with the most authoritative presentation signal
+    /// available on this platform.
+    ///
+    /// On Windows we prefer DXGI frame statistics (`SyncQPCTime`) since they
+    /// reflect actual compositor scan-out; we fall back to the portable
+    /// `present()`-cadence EMA when the swapchain is unavailable (e.g. the
+    /// offscreen QA target, or non-DX12 backends). On all other platforms we
+    /// use the portable path exclusively.
+    fn note_presentation(&mut self) {
+        // The offscreen QA target has no real presentation cadence; skip so
+        // the reading doesn't drift on hosted runners.
+        if self.surface.is_none() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(surface) = self.surface.as_ref() {
+                // SAFETY: we only read the swapchain's frame statistics and
+                // do not retain or destroy any handle beyond the borrow.
+                let presented =
+                    unsafe { crate::renderer::present_stats::last_presented_instant(surface) };
+                if let Some(ts) = presented {
+                    self.fps_tracker.note_dxgi(ts);
+                } else {
+                    self.fps_tracker.note_presented(now);
+                }
+            } else {
+                self.fps_tracker.note_presented(now);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.fps_tracker.note_presented(now);
+        }
+        self.last_fps = self.fps_tracker.current();
     }
 
     /// Copy `src` (the current surface texture) into a host buffer and write it

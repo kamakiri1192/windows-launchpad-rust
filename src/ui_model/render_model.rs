@@ -216,6 +216,8 @@ pub enum GlyphLane {
     BottomControl,
     Settings,
     Modal,
+    /// FPS overlay text, drawn last so it sits above all modal content.
+    Overlay,
 }
 
 #[derive(Debug, Clone, PartialEq)]
