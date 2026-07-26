@@ -872,17 +872,10 @@ mod macos_runner {
     use launchpad_windows::input_probe_protocol::{
         NativePhase, ProbeButton, ProbeEvent, ProbeRecord,
     };
-    use objc2_app_kit::NSWorkspace;
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventTapLocation, CGEventType, CGMouseButton, CGScrollEventUnit,
     };
     use objc2_foundation::NSPoint;
-
-    fn frontmost_pid() -> Option<u32> {
-        NSWorkspace::sharedWorkspace()
-            .frontmostApplication()
-            .map(|application| application.processIdentifier() as u32)
-    }
 
     fn window_z_order(window_number: u32) -> Option<usize> {
         unsafe {
@@ -1155,9 +1148,6 @@ mod macos_runner {
                 Err(error) => return Err(error.to_string()),
             }
         }
-        if frontmost_pid() != Some(pid) {
-            return Err(format!("{case_name}: launcher lost foreground focus"));
-        }
         if window_z_order(window as u32) != Some(z_order) {
             return Err(format!("{case_name}: launcher Z-order changed"));
         }
@@ -1202,13 +1192,14 @@ mod macos_runner {
             else {
                 unreachable!()
             };
-            // The focused notification can precede NSWorkspace and Core
-            // Graphics publishing the matching global activation/order
-            // snapshots. Wait for those read-only views to converge.
+            // The focused notification can precede Core Graphics publishing
+            // the matching global window-order snapshot. Wait for that
+            // read-only view to converge. Focus itself is asserted from the
+            // launcher's native key-window notification in the JSONL record.
             wait_until(
                 Duration::from_secs(2),
-                || frontmost_pid() == Some(pid) && window_z_order(window as u32).is_some(),
-                "launcher macOS foreground/Z-order publication",
+                || window_z_order(window as u32).is_some(),
+                "launcher macOS Z-order publication",
             )?;
             let stable_z_order = window_z_order(window as u32)
                 .ok_or("launcher missing from macOS on-screen Z-order")?;

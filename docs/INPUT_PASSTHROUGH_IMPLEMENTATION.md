@@ -111,7 +111,7 @@ The product scenarios cover:
 The runner also verifies exact nested target identity, coordinates, modifiers,
 launcher PID/window continuity, focus, and Z-order. Windows observes beyond
 the bounded receiver-activation interval; macOS compares the real on-screen
-window order and frontmost process before and after wheel delivery. The
+window order and native key-window focus before and after wheel delivery. The
 macOS probe recognizes the private product tag as an event explicitly posted
 to its PID; because AppKit retains the source `NSEvent` window/local metadata,
 the single-window probe reports its actual receiver window and converts the
