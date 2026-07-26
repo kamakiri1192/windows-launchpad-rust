@@ -619,9 +619,9 @@ mod macos_runner {
         NativePhase, ProbeButton, ProbeEvent, ProbeRecord,
     };
     use objc2_core_graphics::{
-        CGEvent, CGEventField, CGEventTapLocation, CGEventType, CGMouseButton, CGPoint,
-        CGScrollEventUnit,
+        CGEvent, CGEventField, CGEventTapLocation, CGEventType, CGMouseButton, CGScrollEventUnit,
     };
+    use objc2_foundation::NSPoint;
 
     fn sibling_binary(name: &str) -> Result<std::path::PathBuf, String> {
         let current = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -684,7 +684,7 @@ mod macos_runner {
         x: f64,
         y: f64,
     ) -> Result<(), String> {
-        let event = CGEvent::new_mouse_event(None, event_type, CGPoint { x, y }, button)
+        let event = CGEvent::new_mouse_event(None, event_type, NSPoint { x, y }, button)
             .ok_or("CGEventCreateMouseEvent failed")?;
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
         Ok(())
