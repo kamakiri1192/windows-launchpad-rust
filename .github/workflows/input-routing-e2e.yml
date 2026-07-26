@@ -102,8 +102,8 @@ jobs:
         run: |
           if [[ "${{ steps.macos_permissions.outputs.full }}" == "true" ]]; then
             echo "### macOS native input routing" >> "$GITHUB_STEP_SUMMARY"
-            echo "Full semantic AppKit receiver E2E ran. The generator had post-event approval, and each Launchpad child reported its own Input Monitoring and Accessibility preflight as granted." >> "$GITHUB_STEP_SUMMARY"
+            echo "Full semantic AppKit receiver E2E ran. The generator delivered mouse buttons, clicks, and precise scroll-wheel events end to end, and each Launchpad child reported its own Input Monitoring and Accessibility preflight as granted." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### macOS native input routing" >> "$GITHUB_STEP_SUMMARY"
-            echo "Hosted runner lacks generator post-event approval. Full product delivery was not run or reported as passed; only the explicit permission boundary was validated." >> "$GITHUB_STEP_SUMMARY"
+            echo "Runner cannot deliver synthetic scroll-wheel events (hosted macOS runners report post-event permission but drop wheel events), so full product delivery was not run or reported as passed; only the explicit permission boundary was validated." >> "$GITHUB_STEP_SUMMARY"
           fi

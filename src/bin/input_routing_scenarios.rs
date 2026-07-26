@@ -2219,8 +2219,69 @@ mod macos_runner {
 
     pub fn permission_status() -> Result<(), String> {
         assert_post_permission()?;
+        assert_wheel_delivery()?;
         println!("input-routing-e2e: macOS generator post-event permission available");
         Ok(())
+    }
+
+    /// Verifies that synthetic wheel events are actually delivered on this
+    /// runner. Hosted macOS runners (e.g. `macos-14`) report post-event
+    /// permission as granted but silently drop scroll-wheel events, so the
+    /// static preflight in `assert_post_permission` is not enough to gate the
+    /// full E2E. We spin up a probe, post one precise scroll, and require the
+    /// matching record to arrive within the timeout.
+    fn assert_wheel_delivery() -> Result<(), String> {
+        let (mut probe, rx) = start_process("native_input_probe", false, false)?;
+        let result = (|| {
+            let ready = wait_for(&rx, Duration::from_secs(10), |record| {
+                matches!(record, ProbeRecord::Ready { .. })
+            })?;
+            let ProbeRecord::Ready {
+                pid: probe_pid,
+                top_level: probe_window,
+                ..
+            } = ready
+            else {
+                unreachable!()
+            };
+            move_pointer(150.0, 150.0)?;
+            post_precise_scroll(-7, 1, 0)?;
+            let wheel = wait_for(&rx, Duration::from_secs(5), |record| {
+                matches!(
+                    record,
+                    ProbeRecord::Input {
+                        event: ProbeEvent::VerticalWheel {
+                            delta_y,
+                            precise: true,
+                            ..
+                        },
+                        ..
+                    } if (*delta_y + 7.0).abs() < 0.01
+                )
+            })?;
+            if !matches!(
+                wheel,
+                ProbeRecord::Input {
+                    pid,
+                    target,
+                    root,
+                    ..
+                } if pid == probe_pid && target == probe_window && root == probe_window
+            ) {
+                return Err(format!(
+                    "wheel prereq did not target the probe window: {wheel:?}"
+                ));
+            }
+            Ok(())
+        })();
+        let _ = probe.kill();
+        let _ = probe.wait();
+        result.map_err(|error| {
+            format!(
+                "wheel event delivery unavailable on this runner ({error}); \
+                 hosted runners drop scroll events even with post-event permission"
+            )
+        })
     }
 
     pub fn request_generator_permission() -> Result<(), String> {
