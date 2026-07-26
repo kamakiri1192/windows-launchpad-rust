@@ -244,6 +244,11 @@ impl App {
                 self.persist_settings();
                 self.search_input_changed();
             }
+            SettingsPressTarget::DebugToggle => {
+                self.settings.debug_keys_enabled = !self.settings.debug_keys_enabled;
+                self.persist_settings();
+                self.request_redraw();
+            }
             SettingsPressTarget::ResetCache => {
                 self.reset_icons();
                 self.request_redraw();

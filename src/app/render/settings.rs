@@ -38,6 +38,7 @@ impl App {
                 frequent_apps_enabled: self.settings.frequent_apps_enabled,
                 show_steam_apps: self.settings.show_steam_apps,
                 search_includes_hidden: self.settings.search_includes_hidden,
+                debug_keys_enabled: self.settings.debug_keys_enabled,
                 hidden_count,
                 progress: self.settings_panel_progress,
             },
@@ -129,6 +130,7 @@ pub(crate) fn settings_category_id(
         SettingsCategory::Search => layout::settings_panel::SettingsCategoryId::Search,
         SettingsCategory::System => layout::settings_panel::SettingsCategoryId::System,
         SettingsCategory::About => layout::settings_panel::SettingsCategoryId::About,
+        SettingsCategory::Debug => layout::settings_panel::SettingsCategoryId::Debug,
     }
 }
 
@@ -140,6 +142,7 @@ pub(crate) fn settings_category_from_id(
         layout::settings_panel::SettingsCategoryId::Search => SettingsCategory::Search,
         layout::settings_panel::SettingsCategoryId::System => SettingsCategory::System,
         layout::settings_panel::SettingsCategoryId::About => SettingsCategory::About,
+        layout::settings_panel::SettingsCategoryId::Debug => SettingsCategory::Debug,
     }
 }
 
@@ -183,6 +186,10 @@ fn settings_panel_copy<'a>(
                 layout::settings_panel::SettingsCategoryId::About,
                 SettingsCategory::About.label(),
             ),
+            (
+                layout::settings_panel::SettingsCategoryId::Debug,
+                SettingsCategory::Debug.label(),
+            ),
         ],
         sort_orders: [
             (
@@ -211,6 +218,8 @@ fn settings_panel_copy<'a>(
         hidden_count_label,
         search_hidden_label: "検索時に非表示アプリを含める",
         search_hidden_detail: "検索中だけ、隠したアプリも結果に表示します",
+        debug_label: "デバッグ機能",
+        debug_detail: "開発用ショートカットキーを有効にします",
         reset_cache_label: "キャッシュをリセット",
         reset_cache_detail: "アイコンを再抽出します",
         reset_settings_label: "設定をリセット",
@@ -241,6 +250,9 @@ pub(crate) fn settings_press_target_from_layout_hit(
         }
         layout::settings_panel::SettingsPanelHit::SearchHiddenToggle => {
             crate::app::state::SettingsPressTarget::SearchHiddenToggle
+        }
+        layout::settings_panel::SettingsPanelHit::DebugToggle => {
+            crate::app::state::SettingsPressTarget::DebugToggle
         }
         layout::settings_panel::SettingsPanelHit::ResetCache => {
             crate::app::state::SettingsPressTarget::ResetCache
@@ -514,6 +526,15 @@ fn build_settings_panel_instances(
             toggle_instances(
                 [content_right - 28.0 * scale, first_top + row_h * 0.5],
                 settings.search_includes_hidden,
+                scale,
+                instances,
+            );
+        }
+        SettingsCategory::Debug => {
+            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 1);
+            toggle_instances(
+                [content_right - 28.0 * scale, first_top + row_h * 0.5],
+                settings.debug_keys_enabled,
                 scale,
                 instances,
             );

@@ -60,10 +60,17 @@ pub enum SettingsCategoryId {
     Search,
     System,
     About,
+    Debug,
 }
 
 impl SettingsCategoryId {
-    pub const ALL: [Self; 4] = [Self::Apps, Self::Search, Self::System, Self::About];
+    pub const ALL: [Self; 5] = [
+        Self::Apps,
+        Self::Search,
+        Self::System,
+        Self::About,
+        Self::Debug,
+    ];
 
     pub const fn key(self) -> &'static str {
         match self {
@@ -71,6 +78,7 @@ impl SettingsCategoryId {
             Self::Search => "search",
             Self::System => "system",
             Self::About => "about",
+            Self::Debug => "debug",
         }
     }
 }
@@ -104,6 +112,7 @@ pub enum SettingsPanelHit {
     FrequentToggle,
     SteamToggle,
     SearchHiddenToggle,
+    DebugToggle,
     ResetCache,
     ResetSettings,
     Inside,
@@ -121,6 +130,7 @@ impl SettingsPanelHit {
             Self::FrequentToggle => HitTarget::settings_toggle("frequent-apps"),
             Self::SteamToggle => HitTarget::settings_toggle("steam-apps"),
             Self::SearchHiddenToggle => HitTarget::settings_toggle("search-hidden"),
+            Self::DebugToggle => HitTarget::settings_toggle("debug"),
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
             Self::Inside => HitTarget::Settings {
@@ -192,6 +202,7 @@ pub struct SettingsPanelInput {
     pub frequent_apps_enabled: bool,
     pub show_steam_apps: bool,
     pub search_includes_hidden: bool,
+    pub debug_keys_enabled: bool,
     pub hidden_count: usize,
     pub progress: f32,
 }
@@ -199,7 +210,7 @@ pub struct SettingsPanelInput {
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsPanelCopy<'a> {
     pub title: &'a str,
-    pub categories: [(SettingsCategoryId, &'a str); 4],
+    pub categories: [(SettingsCategoryId, &'a str); 5],
     pub sort_orders: [(SortOrderId, &'a str); 4],
     pub sort_label: &'a str,
     pub frequent_apps_label: &'a str,
@@ -210,6 +221,8 @@ pub struct SettingsPanelCopy<'a> {
     pub hidden_count_label: &'a str,
     pub search_hidden_label: &'a str,
     pub search_hidden_detail: &'a str,
+    pub debug_label: &'a str,
+    pub debug_detail: &'a str,
     pub reset_cache_label: &'a str,
     pub reset_cache_detail: &'a str,
     pub reset_settings_label: &'a str,
@@ -332,6 +345,11 @@ pub fn hit_test(
                 return SettingsPanelHit::SearchHiddenToggle;
             }
         }
+        SettingsCategoryId::Debug => {
+            if point_in_row(point, content_left, first_top, row_w, row_h) {
+                return SettingsPanelHit::DebugToggle;
+            }
+        }
         SettingsCategoryId::System => {
             if point_in_row(point, content_left, first_top, row_w, row_h) {
                 return SettingsPanelHit::ResetCache;
@@ -356,6 +374,7 @@ pub fn build(input: SettingsPanelInput) -> SettingsPanelModel {
             (SettingsCategoryId::Search, "Search"),
             (SettingsCategoryId::System, "System"),
             (SettingsCategoryId::About, "About"),
+            (SettingsCategoryId::Debug, "Debug"),
         ],
         sort_orders: [
             (SortOrderId::Name, "Name"),
@@ -372,6 +391,8 @@ pub fn build(input: SettingsPanelInput) -> SettingsPanelModel {
         hidden_count_label: &hidden_count_label,
         search_hidden_label: "Include hidden apps in search",
         search_hidden_detail: "Show hidden apps only while searching.",
+        debug_label: "Developer shortcuts",
+        debug_detail: "Enable single-key debug shortcuts.",
         reset_cache_label: "Reset cache",
         reset_cache_detail: "Extract icons again.",
         reset_settings_label: "Reset settings",
@@ -738,6 +759,33 @@ fn push_text_views(
                 TextAlign::Start,
             );
         }
+        SettingsCategoryId::Debug => {
+            let y = first_top + row_h * 0.5;
+            push_text(
+                render,
+                "debug-label",
+                copy.debug_label,
+                content_left + 16.0 * scale,
+                y,
+                LABEL_SIZE,
+                LABEL_LINE * scale,
+                INK,
+                TextRole::SettingsRow,
+                TextAlign::Start,
+            );
+            push_text(
+                render,
+                "debug-detail",
+                copy.debug_detail,
+                content_left + 16.0 * scale,
+                y + 16.0 * scale,
+                DETAIL_SIZE,
+                DETAIL_LINE * scale,
+                MUTED,
+                TextRole::SettingsDetail,
+                TextAlign::Start,
+            );
+        }
         SettingsCategoryId::System => {
             let y0 = first_top + row_h * 0.5;
             push_text(
@@ -923,6 +971,14 @@ fn push_hit_regions(
                 Z_CONTROL + 1,
             ));
         }
+        SettingsCategoryId::Debug => {
+            hits.push(HitRegion::rect_inclusive(
+                UiId::settings_row("toggle-debug"),
+                Rect::new(content_left, first_top, row_w, row_h),
+                SettingsPanelHit::DebugToggle.target(),
+                Z_CONTROL + 1,
+            ));
+        }
         SettingsCategoryId::System => {
             hits.push(HitRegion::rect_inclusive(
                 UiId::settings_row("reset-cache"),
@@ -986,6 +1042,7 @@ mod tests {
                 (SettingsCategoryId::Search, "Search"),
                 (SettingsCategoryId::System, "System"),
                 (SettingsCategoryId::About, "About"),
+                (SettingsCategoryId::Debug, "Debug"),
             ],
             sort_orders: [
                 (SortOrderId::Name, "Name"),
@@ -1002,6 +1059,8 @@ mod tests {
             hidden_count_label,
             search_hidden_label: "Search hidden",
             search_hidden_detail: "Search hidden detail",
+            debug_label: "Developer shortcuts",
+            debug_detail: "Debug detail",
             reset_cache_label: "Reset cache",
             reset_cache_detail: "Reset cache detail",
             reset_settings_label: "Reset settings",
@@ -1020,6 +1079,7 @@ mod tests {
             frequent_apps_enabled: false,
             show_steam_apps: true,
             search_includes_hidden: false,
+            debug_keys_enabled: false,
             hidden_count: 0,
             progress: 1.0,
         }
@@ -1317,6 +1377,7 @@ mod tests {
                 frequent_apps_enabled: false,
                 show_steam_apps: true,
                 search_includes_hidden: false,
+                debug_keys_enabled: false,
                 hidden_count: 3,
                 progress: 1.0,
             },

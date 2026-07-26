@@ -246,6 +246,7 @@ impl ApplicationHandler<UserEvent> for App {
                         self.editing,
                         self.control.wants_keyboard(),
                         self.control.preedit.is_empty(),
+                        self.settings.debug_keys_enabled,
                         key_code,
                         event.text.as_deref(),
                     )
