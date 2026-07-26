@@ -219,7 +219,7 @@ mod windows_probe {
                 800,
                 500,
                 Some(top),
-                Some(HMENU(1usize as *mut _)),
+                Some(HMENU(std::ptr::dangling_mut())),
                 Some(instance.into()),
                 None,
             )
