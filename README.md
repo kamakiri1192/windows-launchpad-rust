@@ -4,7 +4,7 @@ macOS Launchpad 風の操作感と Liquid Glass 表現を、Rust / winit / wgpu 
 GPU アクセラレーション対応のネイティブアプリランチャーです。Windows を主対象に
 開発しており、macOS 14 以降の Apple Silicon にも対応しています。
 
-[![Lines of Code](https://tokei.rs/b1/github/kamakiri1192/windows-launchpad-rust?category=code)](https://github.com/kamakiri1192/windows-launchpad-rust)
+[![Lines of Code](assets/lines-of-code.svg)](https://github.com/kamakiri1192/windows-launchpad-rust)
 [![Rust](https://img.shields.io/badge/Rust-1.89.0-000000?logo=rust)](rust-toolchain.toml)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](#対応環境)
 [![Repository size](https://img.shields.io/github/repo-size/kamakiri1192/windows-launchpad-rust)](https://github.com/kamakiri1192/windows-launchpad-rust)

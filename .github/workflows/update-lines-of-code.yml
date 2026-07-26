@@ -1,0 +1,89 @@
+name: Update lines of code badge
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - assets/lines-of-code.svg
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lines-of-code-badge
+  cancel-in-progress: true
+
+jobs:
+  update-badge:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tokei
+        run: cargo install tokei --version 13.0.0 --locked
+
+      - name: Count code lines
+        run: tokei --output json . > "$RUNNER_TEMP/tokei.json"
+
+      - name: Generate SVG badge
+        env:
+          TOKEI_JSON: ${{ runner.temp }}/tokei.json
+        run: |
+          python3 <<'PY'
+          import html
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads(Path(os.environ["TOKEI_JSON"]).read_text())
+          total = data.get("Total")
+          if isinstance(total, dict) and isinstance(total.get("code"), int):
+              code_lines = total["code"]
+          else:
+              code_lines = sum(
+                  language.get("code", 0)
+                  for language in data.values()
+                  if isinstance(language, dict)
+              )
+
+          value = f"{code_lines:,}"
+          escaped_value = html.escape(value)
+          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="170" height="20" role="img" aria-label="lines of code: {escaped_value}">
+            <linearGradient id="s" x2="0" y2="100%">
+              <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+              <stop offset="1" stop-opacity=".1"/>
+            </linearGradient>
+            <clipPath id="r">
+              <rect width="170" height="20" rx="3"/>
+            </clipPath>
+            <g clip-path="url(#r)">
+              <rect width="100" height="20" fill="#555"/>
+              <rect x="100" width="70" height="20" fill="#007ec6"/>
+              <rect width="170" height="20" fill="url(#s)"/>
+            </g>
+            <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+              <text aria-hidden="true" x="50" y="15" fill="#010101" fill-opacity=".3">lines of code</text>
+              <text x="50" y="14">lines of code</text>
+              <text aria-hidden="true" x="135" y="15" fill="#010101" fill-opacity=".3">{escaped_value}</text>
+              <text x="135" y="14">{escaped_value}</text>
+            </g>
+          </svg>
+          '''
+          Path("assets/lines-of-code.svg").write_text(svg)
+          PY
+
+      - name: Commit updated badge
+        run: |
+          if git diff --quiet -- assets/lines-of-code.svg; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/lines-of-code.svg
+          git commit -m "chore: update lines of code badge [skip ci]"
+          git push
