@@ -57,7 +57,9 @@ Unrelated or later focus changes keep normal auto-hide behavior.
 An AppKit local event monitor observes the original `NSEvent` before winit.
 It copies the corresponding `CGEvent`, resolves the window below the launcher
 with `windowNumberAtPoint:belowWindowWithWindowNumber:`, maps that window to
-its owner PID, and posts the original event with `CGEventPostToPid`.
+its owner PID, writes that exact destination into the two native
+window-under-pointer fields, and posts the original event with
+`CGEventPostToPid`.
 The transparent launcher remains event-opaque (`ignoresMouseEvents = false`);
 otherwise AppKit would send the original button event directly to the window
 below before the router could distinguish a click from a page drag.
@@ -111,7 +113,10 @@ launcher PID/window continuity, focus, and Z-order. Windows observes beyond
 the bounded receiver-activation interval; macOS compares the real on-screen
 window order and frontmost process before and after wheel delivery. The
 one-shot target/time correlation and signed wheel-coordinate extraction are
-covered by pure Windows unit tests. Both OS jobs run in
+covered by pure Windows unit tests. The Windows runner temporarily selects
+focus-based OS wheel routing and restores the user's previous system setting,
+which removes hosted-desktop hover-routing races without sharing the product's
+targeted `PostMessageW` delivery path. Both OS jobs run in
 `.github/workflows/input-routing-e2e.yml`.
 
 Local commands:

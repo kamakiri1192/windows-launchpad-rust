@@ -18,10 +18,52 @@ mod windows_runner {
         MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
-        SetCursorPos, SetForegroundWindow, SetWindowPos, WindowFromPoint, GW_HWNDPREV,
-        HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+        GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow,
+        IsWindowVisible, SetCursorPos, SetForegroundWindow, SetWindowPos, SystemParametersInfoW,
+        WindowFromPoint, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, MOUSEWHEEL_ROUTING_FOCUS,
+        SPI_GETMOUSEWHEELROUTING, SPI_SETMOUSEWHEELROUTING, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WS_EX_TOPMOST,
     };
+
+    struct MouseWheelRoutingGuard {
+        previous: u32,
+    }
+
+    impl MouseWheelRoutingGuard {
+        fn focus() -> Result<Self, String> {
+            let mut previous = 0u32;
+            unsafe {
+                SystemParametersInfoW(
+                    SPI_GETMOUSEWHEELROUTING,
+                    0,
+                    Some((&mut previous as *mut u32).cast()),
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                )
+                .map_err(|error| error.to_string())?;
+                SystemParametersInfoW(
+                    SPI_SETMOUSEWHEELROUTING,
+                    MOUSEWHEEL_ROUTING_FOCUS,
+                    None,
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            Ok(Self { previous })
+        }
+    }
+
+    impl Drop for MouseWheelRoutingGuard {
+        fn drop(&mut self) {
+            let _ = unsafe {
+                SystemParametersInfoW(
+                    SPI_SETMOUSEWHEELROUTING,
+                    self.previous,
+                    None,
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                )
+            };
+        }
+    }
 
     fn sibling_binary(name: &str) -> Result<std::path::PathBuf, String> {
         let current = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -369,6 +411,7 @@ mod windows_runner {
             drain(&probe_rx);
             let foreground_before = unsafe { GetForegroundWindow() };
             let z_before = z_order_index(hwnd);
+            let ex_style_before = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
 
             match case_name {
                 "left_click" | "right_click" => {
@@ -600,15 +643,15 @@ mod windows_runner {
                             "{case_name}: launcher was not foreground before OS wheel generation"
                         ));
                     }
-                    // Use one canonical wheel detent for the product path.
-                    // The independent probe self-test separately proves that
-                    // partial high-resolution delta 30 survives OS generation.
-                    send(&[mouse_input(MOUSEEVENTF_WHEEL.0, 120)])?;
+                    // Use a partial high-resolution delta so the product path
+                    // proves that it preserves the original signed wParam
+                    // rather than rounding to a canonical wheel detent.
+                    send(&[mouse_input(MOUSEEVENTF_WHEEL.0, 30)])?;
                     let wheel = wait_for(&probe_rx, Duration::from_secs(5), |record| {
                         matches!(
                             record,
                             ProbeRecord::Input {
-                                event: ProbeEvent::VerticalWheel { delta: 120, .. },
+                                event: ProbeEvent::VerticalWheel { delta: 30, .. },
                                 ..
                             }
                         )
@@ -652,10 +695,18 @@ mod windows_runner {
                                 return Err("vertical_wheel_receiver_activation: launcher closed"
                                     .to_owned());
                             }
-                            if z_order_index(hwnd) != z_before {
+                            // The receiver deliberately calls
+                            // SetForegroundWindow and therefore legitimately
+                            // moves itself ahead of the launcher. Verify that
+                            // the launcher remains in its original topmost
+                            // band; the ordinary wheel case above retains the
+                            // exact absolute Z-order assertion.
+                            if unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } != ex_style_before
+                                || ex_style_before & WS_EX_TOPMOST.0 as isize == 0
+                            {
                                 return Err(
-                                    "vertical_wheel_receiver_activation: launcher Z-order changed"
-                                        .to_owned(),
+                                    "vertical_wheel_receiver_activation: launcher window band changed"
+                                        .to_owned()
                                 );
                             }
                             std::thread::yield_now();
@@ -789,6 +840,12 @@ mod windows_runner {
     }
 
     pub fn run_product() -> Result<(), String> {
+        // Hosted Windows desktops can use hover-based wheel routing, whose
+        // target selection races a newly positioned transparent test window.
+        // Focus routing makes SendInput deterministic while product delivery
+        // remains the independent targeted PostMessageW path. The prior user
+        // setting is restored even when a scenario fails.
+        let _wheel_routing = MouseWheelRoutingGuard::focus()?;
         for case_name in [
             "left_click",
             "left_drag",

@@ -21,9 +21,15 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::input_routing::{DeliveryResult, InputRoutingPublisher, PointerButton, RouterState};
 
+#[derive(Debug, Clone, Copy)]
+struct MacTarget {
+    window_number: isize,
+    pid: i32,
+}
+
 struct ClickCapture {
     button: PointerButton,
-    target_pid: i32,
+    target: MacTarget,
     down: Retained<CGEvent>,
     up: Option<Retained<CGEvent>>,
 }
@@ -31,7 +37,7 @@ struct ClickCapture {
 #[derive(Default)]
 struct MonitorState {
     click: Option<ClickCapture>,
-    scroll_target_pid: Option<i32>,
+    scroll_target: Option<MacTarget>,
 }
 
 /// Keeps the AppKit local monitor registered for the window lifetime.
@@ -64,7 +70,7 @@ impl MacInputPassthrough {
             let event_type = event.r#type();
             if event_type == NSEventType::ScrollWheel {
                 if !snapshot.forwards_vertical_scroll() {
-                    callback_state.borrow_mut().scroll_target_pid = None;
+                    callback_state.borrow_mut().scroll_target = None;
                     return original;
                 }
 
@@ -74,23 +80,23 @@ impl MacInputPassthrough {
                 if phase.contains(NSEventPhase::Began)
                     || phase.contains(NSEventPhase::MayBegin)
                     || (phase.is_empty() && momentum.is_empty())
-                    || state.scroll_target_pid.is_none()
+                    || state.scroll_target.is_none()
                 {
-                    state.scroll_target_pid =
-                        target_pid_below(launcher_window_number, NSEvent::mouseLocation());
+                    state.scroll_target =
+                        target_below(launcher_window_number, NSEvent::mouseLocation());
                 }
                 let result = state
-                    .scroll_target_pid
-                    .map_or(DeliveryResult::NoTarget, |pid| {
-                        post_original(pid, &cg_event)
+                    .scroll_target
+                    .map_or(DeliveryResult::NoTarget, |target| {
+                        post_original(target, &cg_event)
                     });
                 crate::debug_log!(
                     "input-routing: macos scroll result={result:?} target={:?} phase={phase:?} momentum={momentum:?}",
-                    state.scroll_target_pid
+                    state.scroll_target
                 );
                 if phase.contains(NSEventPhase::Cancelled) || momentum.contains(NSEventPhase::Ended)
                 {
-                    state.scroll_target_pid = None;
+                    state.scroll_target = None;
                 }
                 // Outside wheel input is never allowed to become launcher
                 // input, including explicit delivery-failure cases.
@@ -111,11 +117,10 @@ impl MacInputPassthrough {
                     } else {
                         PointerButton::Right
                     };
-                    let target_pid =
-                        target_pid_below(launcher_window_number, NSEvent::mouseLocation());
-                    callback_state.borrow_mut().click = target_pid.map(|target_pid| ClickCapture {
+                    let target = target_below(launcher_window_number, NSEvent::mouseLocation());
+                    callback_state.borrow_mut().click = target.map(|target| ClickCapture {
                         button,
-                        target_pid,
+                        target,
                         down: cg_event,
                         up: None,
                     });
@@ -176,11 +181,11 @@ impl MacInputPassthrough {
         let Some(up) = capture.up else {
             return DeliveryResult::Failed { os_error: 0 };
         };
-        let down_result = post_original(capture.target_pid, &capture.down);
+        let down_result = post_original(capture.target, &capture.down);
         if !matches!(down_result, DeliveryResult::Queued) {
             return down_result;
         }
-        post_original(capture.target_pid, &up)
+        post_original(capture.target, &up)
     }
 }
 
@@ -199,7 +204,7 @@ fn launcher_window_number(window: &winit::window::Window) -> Option<isize> {
     view.window().map(|window| window.windowNumber())
 }
 
-fn post_original(pid: i32, event: &CGEvent) -> DeliveryResult {
+fn post_original(target: MacTarget, event: &CGEvent) -> DeliveryResult {
     if !objc2_core_graphics::CGPreflightPostEventAccess() {
         return DeliveryResult::PermissionDenied;
     }
@@ -208,14 +213,29 @@ fn post_original(pid: i32, event: &CGEvent) -> DeliveryResult {
         CGEventField::EventSourceUserData,
         crate::input_probe_protocol::MACOS_PRODUCT_EVENT_TAG,
     );
-    CGEvent::post_to_pid(pid, Some(event));
+    // `CGEventPostToPid` selects the receiver process but otherwise retains
+    // the source event's window metadata. Point both native routing fields at
+    // the window resolved below the launcher so AppKit dispatches to that
+    // exact window and computes receiver-local coordinates from the original
+    // screen position.
+    CGEvent::set_integer_value_field(
+        Some(event),
+        CGEventField::MouseEventWindowUnderMousePointer,
+        target.window_number as i64,
+    );
+    CGEvent::set_integer_value_field(
+        Some(event),
+        CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+        target.window_number as i64,
+    );
+    CGEvent::post_to_pid(target.pid, Some(event));
     DeliveryResult::Queued
 }
 
-fn target_pid_below(
+fn target_below(
     launcher_window_number: isize,
     point: objc2_foundation::NSPoint,
-) -> Option<i32> {
+) -> Option<MacTarget> {
     let main_thread = MainThreadMarker::new()?;
     let target_window = NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(
         point,
@@ -226,7 +246,10 @@ fn target_pid_below(
         return None;
     }
     let pid = owner_pid_for_window(target_window as u32)?;
-    (pid != std::process::id() as i32).then_some(pid)
+    (pid != std::process::id() as i32).then_some(MacTarget {
+        window_number: target_window,
+        pid,
+    })
 }
 
 fn owner_pid_for_window(window_number: u32) -> Option<i32> {
