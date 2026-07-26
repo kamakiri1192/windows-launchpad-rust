@@ -26,6 +26,12 @@ pub struct Settings {
     pub search_includes_hidden: bool,
     #[serde(default = "default_show_steam_apps")]
     pub show_steam_apps: bool,
+    /// Enables single-key developer shortcuts (`M` decoration toggle, `R`
+    /// icon-cache reset, and the Liquid Glass parameter/debug keys). Off by
+    /// default and on upgrade so production builds ship with debug keys inert
+    /// until the user opts in from the settings panel.
+    #[serde(default)]
+    pub debug_keys_enabled: bool,
 }
 
 const fn default_show_steam_apps() -> bool {
@@ -39,6 +45,7 @@ impl Default for Settings {
             frequent_apps_enabled: false,
             search_includes_hidden: false,
             show_steam_apps: true,
+            debug_keys_enabled: false,
         }
     }
 }
@@ -55,10 +62,17 @@ pub enum SettingsCategory {
     Search,
     System,
     About,
+    Debug,
 }
 
 impl SettingsCategory {
-    pub const ALL: [Self; 4] = [Self::Apps, Self::Search, Self::System, Self::About];
+    pub const ALL: [Self; 5] = [
+        Self::Apps,
+        Self::Search,
+        Self::System,
+        Self::About,
+        Self::Debug,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -66,6 +80,7 @@ impl SettingsCategory {
             Self::Search => "表示と検索",
             Self::System => "システム",
             Self::About => "このアプリについて",
+            Self::Debug => "デバッグ",
         }
     }
 }
@@ -81,6 +96,7 @@ mod tests {
         assert!(!s.frequent_apps_enabled);
         assert!(!s.search_includes_hidden);
         assert!(s.show_steam_apps);
+        assert!(!s.debug_keys_enabled);
     }
 
     #[test]
@@ -90,6 +106,7 @@ mod tests {
             frequent_apps_enabled: true,
             search_includes_hidden: true,
             show_steam_apps: false,
+            debug_keys_enabled: true,
         };
         let bytes = serde_json::to_vec(&s).unwrap();
         let decoded: Settings = serde_json::from_slice(&bytes).unwrap();
@@ -105,6 +122,18 @@ mod tests {
         }"#;
         let decoded: Settings = serde_json::from_slice(json).unwrap();
         assert!(decoded.show_steam_apps);
+    }
+
+    #[test]
+    fn older_json_defaults_debug_keys_to_disabled() {
+        let json = br#"{
+            "sort_order":"Name",
+            "frequent_apps_enabled":false,
+            "search_includes_hidden":false,
+            "show_steam_apps":true
+        }"#;
+        let decoded: Settings = serde_json::from_slice(json).unwrap();
+        assert!(!decoded.debug_keys_enabled);
     }
 
     #[test]

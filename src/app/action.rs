@@ -201,11 +201,16 @@ fn folder_cursor_left_intent(editing: bool, folder_gesture_active: bool) -> Fold
 /// 4. Esc with nothing open → hide the launcher;
 /// 5. `M` → toggle decorations; `R` (field closed) → reset icon cache;
 ///    otherwise → Liquid Glass debug key delegation.
+///
+/// Steps 5–6 are gated on `debug_keys_enabled`: when the user has not opted in
+/// from the settings panel, every developer shortcut falls through to
+/// [`KeyAction::None`] so production builds ship with those keys inert.
 pub fn keyboard_action(
     settings_open: bool,
     editing: bool,
     control_wants_keyboard: bool,
     preedit_empty: bool,
+    debug_keys_enabled: bool,
     key_code: Option<KeyCode>,
     text: Option<&str>,
 ) -> KeyAction {
@@ -265,7 +270,10 @@ pub fn keyboard_action(
         return KeyAction::HideLauncher;
     }
 
-    // 5. Debug keys.
+    // 5. Debug keys — only when the user has opted in from the settings panel.
+    if !debug_keys_enabled {
+        return KeyAction::None;
+    }
     if key_code == Some(KeyCode::KeyM) {
         return KeyAction::ToggleDecorations;
     }
@@ -935,7 +943,7 @@ mod tests {
         wants_kb: bool,
         key: Option<KeyCode>,
     ) -> KeyAction {
-        keyboard_action(settings_open, editing, wants_kb, true, key, None)
+        keyboard_action(settings_open, editing, wants_kb, true, true, key, None)
     }
 
     // ---- keyboard precedence: settings Esc > edit Esc > search Esc > hide ----
@@ -1041,11 +1049,11 @@ mod tests {
     #[test]
     fn search_backspace_only_when_preedit_empty() {
         assert_eq!(
-            keyboard_action(false, false, true, true, Some(KeyCode::Backspace), None),
+            keyboard_action(false, false, true, true, false, Some(KeyCode::Backspace), None),
             KeyAction::SearchBackspace
         );
         assert_eq!(
-            keyboard_action(false, false, true, false, Some(KeyCode::Backspace), None),
+            keyboard_action(false, false, true, false, false, Some(KeyCode::Backspace), None),
             KeyAction::SearchBackspaceBlocked
         );
     }
@@ -1065,24 +1073,26 @@ mod tests {
     #[test]
     fn search_arrows_blocked_while_preedit_nonempty() {
         assert_eq!(
-            keyboard_action(false, false, true, false, Some(KeyCode::ArrowLeft), None),
+            keyboard_action(false, false, true, false, false, Some(KeyCode::ArrowLeft), None),
             KeyAction::SearchLeftBlocked
         );
         assert_eq!(
-            keyboard_action(false, false, true, false, Some(KeyCode::ArrowRight), None),
+            keyboard_action(false, false, true, false, false, Some(KeyCode::ArrowRight), None),
             KeyAction::SearchRightBlocked
         );
     }
 
     #[test]
     fn search_printable_char_routes_to_search_char() {
-        let action = keyboard_action(false, false, true, true, Some(KeyCode::KeyA), Some("a"));
+        let action =
+            keyboard_action(false, false, true, true, false, Some(KeyCode::KeyA), Some("a"));
         assert_eq!(action, KeyAction::SearchChar("a".to_string()));
     }
 
     #[test]
     fn search_char_blocked_while_preedit_nonempty() {
-        let action = keyboard_action(false, false, true, false, Some(KeyCode::KeyA), Some("a"));
+        let action =
+            keyboard_action(false, false, true, false, false, Some(KeyCode::KeyA), Some("a"));
         assert_eq!(action, KeyAction::None);
     }
 
@@ -1114,6 +1124,32 @@ mod tests {
             kb_action(false, false, false, Some(KeyCode::F1)),
             KeyAction::LiquidGlassKey(_)
         ));
+    }
+
+    #[test]
+    fn debug_keys_off_swallows_m_r_and_liquid_glass() {
+        // Debug keys disabled: M, R, and the Liquid Glass delegation key all
+        // fall through to None instead of triggering developer shortcuts.
+        for key in [KeyCode::KeyM, KeyCode::KeyR, KeyCode::KeyB, KeyCode::Digit1] {
+            assert_eq!(
+                keyboard_action(false, false, false, true, false, Some(key), None),
+                KeyAction::None,
+                "expected {key:?} to be swallowed when debug keys are disabled"
+            );
+        }
+        // Esc still hides the launcher even when debug keys are off.
+        assert_eq!(
+            keyboard_action(
+                false,
+                false,
+                false,
+                true,
+                false,
+                Some(KeyCode::Escape),
+                None
+            ),
+            KeyAction::HideLauncher
+        );
     }
 
     // ---- pointer press precedence: settings > control > edit/grid ----

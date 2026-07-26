@@ -88,6 +88,7 @@ pub enum SettingsPressTarget {
     FrequentToggle,
     SteamToggle,
     SearchHiddenToggle,
+    DebugToggle,
     ResetCache,
     ResetSettings,
     Inside,
