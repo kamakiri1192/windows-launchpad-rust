@@ -27,6 +27,18 @@ pub enum ProbeRecord {
         local: NativePoint,
         foreground: u64,
     },
+    /// Semantic AppKit state emitted by the macOS receiver after normal
+    /// responder/control dispatch. Unlike `Input`, this cannot be produced by
+    /// merely observing a process-addressed event in a local monitor.
+    UiState {
+        serial: u64,
+        pid: u32,
+        window: u64,
+        left_actions: u64,
+        right_mouse_downs: u64,
+        scroll_offset_x: f64,
+        scroll_offset_y: f64,
+    },
     LauncherSnapshot {
         serial: u64,
         pid: u32,
@@ -40,6 +52,10 @@ pub enum ProbeRecord {
         page_position: f32,
         pointer_x: f32,
         pointer_y: f32,
+        /// Permission state observed by the launcher process itself. `None`
+        /// on platforms where these macOS TCC services do not apply.
+        input_listen_permission: Option<bool>,
+        input_post_permission: Option<bool>,
     },
 }
 
@@ -144,6 +160,21 @@ mod tests {
         };
         let line = record.to_json_line().unwrap();
         assert!(!line.contains('\n'));
+        assert_eq!(ProbeRecord::from_json_line(&line).unwrap(), record);
+    }
+
+    #[test]
+    fn jsonl_round_trip_preserves_semantic_receiver_state() {
+        let record = ProbeRecord::UiState {
+            serial: 7,
+            pid: 42,
+            window: 9001,
+            left_actions: 1,
+            right_mouse_downs: 0,
+            scroll_offset_x: 0.0,
+            scroll_offset_y: 37.5,
+        };
+        let line = record.to_json_line().unwrap();
         assert_eq!(ProbeRecord::from_json_line(&line).unwrap(), record);
     }
 }

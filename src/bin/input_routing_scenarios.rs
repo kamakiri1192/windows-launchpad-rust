@@ -1289,7 +1289,7 @@ mod macos_runner {
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventTapLocation, CGEventType, CGMouseButton, CGScrollEventUnit,
     };
-    use objc2_foundation::NSPoint;
+    use objc2_foundation::{NSPoint, NSRect};
 
     fn window_z_order(window_number: u32) -> Option<usize> {
         unsafe {
@@ -1316,10 +1316,46 @@ mod macos_runner {
         }
     }
 
+    fn window_bounds(window_number: u32) -> Option<NSRect> {
+        unsafe {
+            let descriptions = CGWindowListCopyWindowInfo(1, 0);
+            if descriptions.is_null() {
+                return None;
+            }
+            let count = CFArrayGetCount(descriptions);
+            let mut result = None;
+            for index in 0..count {
+                let dictionary = CFArrayGetValueAtIndex(descriptions, index);
+                let number = CFDictionaryGetValue(dictionary, kCGWindowNumber);
+                let mut observed = 0i32;
+                if !number.is_null()
+                    && CFNumberGetValue(number, 3, (&mut observed as *mut i32).cast())
+                    && observed as u32 == window_number
+                {
+                    let bounds = CFDictionaryGetValue(dictionary, kCGWindowBounds);
+                    let mut rect = NSRect::ZERO;
+                    if !bounds.is_null()
+                        && CGRectMakeWithDictionaryRepresentation(bounds, &mut rect)
+                    {
+                        result = Some(rect);
+                    }
+                    break;
+                }
+            }
+            CFRelease(descriptions);
+            result
+        }
+    }
+
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
+        static kCGWindowBounds: *const c_void;
         static kCGWindowNumber: *const c_void;
         fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const c_void;
+        fn CGRectMakeWithDictionaryRepresentation(
+            dictionary: *const c_void,
+            rect: *mut NSRect,
+        ) -> bool;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -1475,12 +1511,14 @@ mod macos_runner {
     }
 
     fn assert_post_permission() -> Result<(), String> {
-        objc2_core_graphics::CGPreflightPostEventAccess()
-            .then_some(())
-            .ok_or_else(|| {
-                "macOS input-post permission is unavailable; use a dedicated runner with Accessibility permission"
-                    .to_owned()
-            })
+        if objc2_core_graphics::CGPreflightPostEventAccess() {
+            Ok(())
+        } else {
+            Err(
+                "macOS Accessibility/post-event permission is unavailable; use an explicitly approved real-machine runner"
+                    .to_owned(),
+            )
+        }
     }
 
     fn drain(rx: &mpsc::Receiver<ProbeRecord>) {
@@ -1497,6 +1535,28 @@ mod macos_runner {
             match rx.recv_timeout(remaining) {
                 Ok(ProbeRecord::Input { event, .. }) if predicate(&event) => {
                     return Err(format!("{case_name}: unexpected probe event {event:?}"));
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Ok(())
+    }
+
+    fn assert_no_receiver_effect(
+        rx: &mpsc::Receiver<ProbeRecord>,
+        predicate: impl Fn(&ProbeEvent) -> bool,
+        case_name: &str,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_millis(350);
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(ProbeRecord::Input { event, .. }) if predicate(&event) => {
+                    return Err(format!("{case_name}: unexpected probe event {event:?}"));
+                }
+                Ok(ProbeRecord::UiState { .. }) => {
+                    return Err(format!("{case_name}: receiver UI state changed"));
                 }
                 Ok(_) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => return Ok(()),
@@ -1532,6 +1592,75 @@ mod macos_runner {
             other => Err(format!(
                 "{case_name}: wrong PID/window/coordinate destination: {other:?}"
             )),
+        }
+    }
+
+    fn wait_for_wheel_step(
+        rx: &mpsc::Receiver<ProbeRecord>,
+        expected_delta_y: f64,
+        expected_phase: NativePhase,
+        expected_momentum: NativePhase,
+        semantic_effect: &mut Option<ProbeRecord>,
+    ) -> Result<ProbeRecord, String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let record = rx
+                .recv_timeout(remaining)
+                .map_err(|error| format!("wheel JSONL timeout: {error}"))?;
+            if matches!(
+                &record,
+                ProbeRecord::UiState {
+                    scroll_offset_y,
+                    ..
+                } if scroll_offset_y.abs() > f64::EPSILON
+            ) {
+                *semantic_effect = Some(record.clone());
+            }
+            if matches!(
+                &record,
+                ProbeRecord::Input {
+                    event: ProbeEvent::VerticalWheel {
+                        delta_y,
+                        precise: true,
+                        key_state: 0,
+                        phase,
+                        momentum_phase,
+                        ..
+                    },
+                    ..
+                } if (*delta_y - expected_delta_y).abs() < 0.01
+                    && *phase == expected_phase
+                    && *momentum_phase == expected_momentum
+            ) {
+                return Ok(record);
+            }
+        }
+    }
+
+    fn wait_for_button_up(
+        rx: &mpsc::Receiver<ProbeRecord>,
+        button: ProbeButton,
+        semantic_effect: &mut Option<ProbeRecord>,
+    ) -> Result<ProbeRecord, String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let record = rx
+                .recv_timeout(remaining)
+                .map_err(|error| format!("button-up JSONL timeout: {error}"))?;
+            if matches!(record, ProbeRecord::UiState { .. }) {
+                *semantic_effect = Some(record.clone());
+            }
+            if matches!(
+                &record,
+                ProbeRecord::Input {
+                    event: ProbeEvent::ButtonUp { button: observed },
+                    ..
+                } if *observed == button
+            ) {
+                return Ok(record);
+            }
         }
     }
 
@@ -1578,7 +1707,6 @@ mod macos_runner {
             let ProbeRecord::Ready {
                 pid: probe_pid,
                 top_level: probe_window,
-                rect,
                 ..
             } = ready
             else {
@@ -1600,12 +1728,19 @@ mod macos_runner {
             let ProbeRecord::LauncherSnapshot {
                 pid,
                 window,
-                generation,
+                input_listen_permission,
+                input_post_permission,
                 ..
             } = initial
             else {
                 unreachable!()
             };
+            if input_listen_permission != Some(true) || input_post_permission != Some(true) {
+                return Err(format!(
+                    "Launchpad process {pid} lacks required macOS permissions \
+                     (listen={input_listen_permission:?}, post={input_post_permission:?})"
+                ));
+            }
             // The focused notification can precede Core Graphics publishing
             // the matching global window-order snapshot. Wait for that
             // read-only view to converge. Focus itself is asserted from the
@@ -1624,9 +1759,45 @@ mod macos_runner {
                     "launcher was not above passive probe ({stable_z_order} >= {probe_z_order})"
                 ));
             }
-            move_pointer(150.0, 150.0)?;
-            let expected_local_x = 150 - rect.left;
-            let expected_local_y = rect.bottom - 150;
+            let launcher_bounds =
+                window_bounds(window as u32).ok_or("launcher bounds unavailable")?;
+            let probe_bounds =
+                window_bounds(probe_window as u32).ok_or("probe bounds unavailable")?;
+            let left = launcher_bounds.origin.x.max(probe_bounds.origin.x);
+            let top = launcher_bounds.origin.y.max(probe_bounds.origin.y);
+            let right = (launcher_bounds.origin.x + launcher_bounds.size.width)
+                .min(probe_bounds.origin.x + probe_bounds.size.width);
+            let bottom = (launcher_bounds.origin.y + launcher_bounds.size.height)
+                .min(probe_bounds.origin.y + probe_bounds.size.height);
+            if right - left < 40.0 || bottom - top < 40.0 {
+                return Err(format!(
+                    "launcher/probe bounds do not overlap: launcher={launcher_bounds:?} probe={probe_bounds:?}"
+                ));
+            }
+            let input_x = left + 12.0;
+            let input_y = top + 12.0;
+            move_pointer(input_x, input_y)?;
+            let outside = wait_for(&launcher_rx, Duration::from_secs(5), |record| {
+                matches!(
+                    record,
+                    ProbeRecord::LauncherSnapshot {
+                        region,
+                        visible: true,
+                        focused: true,
+                        ..
+                    } if region == "OutsideTransparent"
+                )
+            })?;
+            let ProbeRecord::LauncherSnapshot {
+                generation: outside_generation,
+                ..
+            } = outside
+            else {
+                unreachable!()
+            };
+            let expected_local_x = (input_x - probe_bounds.origin.x).round() as i32;
+            let expected_local_y =
+                (probe_bounds.size.height - (input_y - probe_bounds.origin.y)).round() as i32;
             drain(&probe_rx);
 
             match case_name {
@@ -1636,7 +1807,7 @@ mod macos_runner {
                     } else {
                         ProbeButton::Right
                     };
-                    click_event(button, true, 150.0, 150.0)?;
+                    click_event(button, true, input_x, input_y)?;
                     let pending = if button == ProbeButton::Left {
                         "LeftPending"
                     } else {
@@ -1650,10 +1821,10 @@ mod macos_runner {
                                 router_state,
                                 visible: true,
                                 ..
-                            } if *next > generation && router_state.starts_with(pending)
+                            } if *next > outside_generation && router_state.starts_with(pending)
                         )
                     })?;
-                    click_event(button, false, 150.0, 150.0)?;
+                    click_event(button, false, input_x, input_y)?;
                     wait_for(&launcher_rx, Duration::from_secs(5), |record| {
                         matches!(
                             record,
@@ -1674,15 +1845,8 @@ mod macos_runner {
                             } if *observed == button
                         )
                     })?;
-                    let up = wait_for(&probe_rx, Duration::from_secs(5), |record| {
-                        matches!(
-                            record,
-                            ProbeRecord::Input {
-                                event: ProbeEvent::ButtonUp { button: observed },
-                                ..
-                            } if *observed == button
-                        )
-                    })?;
+                    let mut semantic_effect = None;
+                    let up = wait_for_button_up(&probe_rx, button, &mut semantic_effect)?;
                     assert_probe_destination(
                         &down,
                         probe_pid,
@@ -1708,7 +1872,40 @@ mod macos_runner {
                     ) {
                         return Err(format!("{case_name}: click ordering failed"));
                     }
-                    assert_no_input(
+                    let semantic_matches = |record: &ProbeRecord| {
+                        matches!(
+                            record,
+                            ProbeRecord::UiState {
+                                left_actions: 1,
+                                right_mouse_downs: 0,
+                                ..
+                            } if button == ProbeButton::Left
+                        ) || matches!(
+                            record,
+                            ProbeRecord::UiState {
+                                left_actions: 0,
+                                right_mouse_downs: 1,
+                                ..
+                            } if button == ProbeButton::Right
+                        )
+                    };
+                    let semantic = match semantic_effect.filter(semantic_matches) {
+                        Some(record) => record,
+                        None => wait_for(&probe_rx, Duration::from_secs(5), semantic_matches)?,
+                    };
+                    if !matches!(
+                        semantic,
+                        ProbeRecord::UiState {
+                            pid: observed_pid,
+                            window: observed_window,
+                            ..
+                        } if observed_pid == probe_pid && observed_window == probe_window
+                    ) {
+                        return Err(format!(
+                            "{case_name}: semantic receiver identity changed: {semantic:?}"
+                        ));
+                    }
+                    assert_no_receiver_effect(
                         &probe_rx,
                         |event| {
                             matches!(
@@ -1727,8 +1924,8 @@ mod macos_runner {
                     } else {
                         ProbeButton::Right
                     };
-                    click_event(button, true, 150.0, 150.0)?;
-                    drag_event(button, 180.0, 150.0)?;
+                    click_event(button, true, input_x, input_y)?;
+                    drag_event(button, input_x + 30.0, input_y)?;
                     let expected = if button == ProbeButton::Left {
                         "PageDrag"
                     } else {
@@ -1744,7 +1941,7 @@ mod macos_runner {
                             } if router_state.starts_with(expected)
                         )
                     })?;
-                    click_event(button, false, 180.0, 150.0)?;
+                    click_event(button, false, input_x + 30.0, input_y)?;
                     assert_no_input(
                         &probe_rx,
                         |event| {
@@ -1757,44 +1954,78 @@ mod macos_runner {
                     )?;
                 }
                 "vertical_wheel" => {
-                    post_precise_scroll(-7, 1, 0)?;
-                    let wheel = wait_for(&probe_rx, Duration::from_secs(5), |record| {
-                        matches!(
-                            record,
-                            ProbeRecord::Input {
-                                event: ProbeEvent::VerticalWheel {
-                                    delta_y,
-                                    precise: true,
-                                    phase: NativePhase::Began,
-                                    ..
-                                },
-                                ..
-                            } if (*delta_y + 7.0).abs() < 0.01
-                        )
-                    })?;
-                    assert_probe_destination(
-                        &wheel,
-                        probe_pid,
-                        probe_window,
-                        expected_local_x,
-                        expected_local_y,
-                        case_name,
-                    )?;
+                    let steps = [
+                        (-7, 1, 0, NativePhase::Began, NativePhase::Unavailable),
+                        (-6, 2, 0, NativePhase::Changed, NativePhase::Unavailable),
+                        (0, 8, 0, NativePhase::Ended, NativePhase::Unavailable),
+                        (
+                            -5,
+                            0,
+                            1,
+                            NativePhase::Unavailable,
+                            NativePhase::MomentumBegan,
+                        ),
+                        (
+                            -4,
+                            0,
+                            2,
+                            NativePhase::Unavailable,
+                            NativePhase::MomentumChanged,
+                        ),
+                        (
+                            0,
+                            0,
+                            8,
+                            NativePhase::Unavailable,
+                            NativePhase::MomentumEnded,
+                        ),
+                    ];
+                    let mut semantic_effect = None;
+                    let mut previous_serial = None;
+                    for (delta, phase, momentum, expected_phase, expected_momentum) in steps {
+                        post_precise_scroll(delta, phase, momentum)?;
+                        let wheel = wait_for_wheel_step(
+                            &probe_rx,
+                            delta as f64,
+                            expected_phase,
+                            expected_momentum,
+                            &mut semantic_effect,
+                        )?;
+                        assert_probe_destination(
+                            &wheel,
+                            probe_pid,
+                            probe_window,
+                            expected_local_x,
+                            expected_local_y,
+                            case_name,
+                        )?;
+                        let ProbeRecord::Input { serial, .. } = wheel else {
+                            unreachable!()
+                        };
+                        if previous_serial.is_some_and(|previous| serial <= previous) {
+                            return Err(
+                                "vertical_wheel: receiver event order was not monotonic".to_owned()
+                            );
+                        }
+                        previous_serial = Some(serial);
+                    }
                     if probe_pid == pid {
                         return Err("vertical_wheel: self-delivery detected".to_owned());
                     }
+                    let semantic = semantic_effect.ok_or_else(|| {
+                        "vertical_wheel: NSScrollView content offset did not change".to_owned()
+                    })?;
                     if !matches!(
-                        &wheel,
-                        ProbeRecord::Input {
-                            event: ProbeEvent::VerticalWheel {
-                                key_state: 0,
-                                momentum_phase: NativePhase::Unavailable,
-                                ..
-                            },
+                        semantic,
+                        ProbeRecord::UiState {
+                            pid: observed_pid,
+                            window: observed_window,
                             ..
-                        }
+                        } if observed_pid == probe_pid && observed_window == probe_window
                     ) {
-                        return Err("vertical_wheel: modifiers/momentum changed".to_owned());
+                        return Err(format!(
+                            "vertical_wheel: semantic receiver identity changed: {semantic:?}"
+                        ));
                     }
                     assert_no_input(
                         &probe_rx,
@@ -1811,8 +2042,8 @@ mod macos_runner {
                     )?;
                 }
                 "hover" => {
-                    move_pointer(155.0, 155.0)?;
-                    assert_no_input(
+                    move_pointer(input_x + 5.0, input_y + 5.0)?;
+                    assert_no_receiver_effect(
                         &probe_rx,
                         |event| matches!(event, ProbeEvent::MouseMove),
                         case_name,
@@ -1844,13 +2075,32 @@ mod macos_runner {
         assert_post_permission()?;
         let (mut probe, rx) = start_process("native_input_probe", false, false)?;
         let result = (|| {
-            wait_for(&rx, Duration::from_secs(10), |record| {
+            let ready = wait_for(&rx, Duration::from_secs(10), |record| {
                 matches!(record, ProbeRecord::Ready { .. })
             })?;
+            let ProbeRecord::Ready {
+                pid: probe_pid,
+                top_level: probe_window,
+                ..
+            } = ready
+            else {
+                unreachable!()
+            };
             move_pointer(150.0, 150.0)?;
             click_event(ProbeButton::Left, true, 150.0, 150.0)?;
             click_event(ProbeButton::Left, false, 150.0, 150.0)?;
-            wait_for(&rx, Duration::from_secs(5), |record| {
+            let down = wait_for(&rx, Duration::from_secs(5), |record| {
+                matches!(
+                    record,
+                    ProbeRecord::Input {
+                        event: ProbeEvent::ButtonDown {
+                            button: ProbeButton::Left
+                        },
+                        ..
+                    }
+                )
+            })?;
+            let up = wait_for(&rx, Duration::from_secs(5), |record| {
                 matches!(
                     record,
                     ProbeRecord::Input {
@@ -1861,14 +2111,88 @@ mod macos_runner {
                     }
                 )
             })?;
-            post_precise_scroll(-7, 1, 0)?;
+            if !matches!(
+                (&down, &up),
+                (
+                    ProbeRecord::Input {
+                        serial: down_serial,
+                        pid: down_pid,
+                        target: down_window,
+                        ..
+                    },
+                    ProbeRecord::Input {
+                        serial: up_serial,
+                        pid: up_pid,
+                        target: up_window,
+                        ..
+                    }
+                ) if down_serial < up_serial
+                    && *down_pid == probe_pid
+                    && *up_pid == probe_pid
+                    && *down_window == probe_window
+                    && *up_window == probe_window
+            ) {
+                return Err(format!(
+                    "probe self-test click did not reach the real receiver in order: down={down:?} up={up:?}"
+                ));
+            }
             wait_for(&rx, Duration::from_secs(5), |record| {
                 matches!(
                     record,
-                    ProbeRecord::Input {
-                        event: ProbeEvent::VerticalWheel { precise: true, .. },
+                    ProbeRecord::UiState {
+                        pid,
+                        window,
+                        left_actions: 1,
+                        right_mouse_downs: 0,
                         ..
-                    }
+                    } if *pid == probe_pid && *window == probe_window
+                )
+            })?;
+            post_precise_scroll(-7, 1, 0)?;
+            let wheel = wait_for(&rx, Duration::from_secs(5), |record| {
+                matches!(
+                    record,
+                    ProbeRecord::Input {
+                        event: ProbeEvent::VerticalWheel {
+                            delta_y,
+                            precise: true,
+                            phase: NativePhase::Began,
+                            momentum_phase: NativePhase::Unavailable,
+                            ..
+                        },
+                        ..
+                    } if (*delta_y + 7.0).abs() < 0.01
+                )
+            })?;
+            if !matches!(
+                wheel,
+                ProbeRecord::Input {
+                    pid,
+                    target,
+                    root,
+                    local,
+                    ..
+                } if pid == probe_pid
+                    && target == probe_window
+                    && root == probe_window
+                    && local.x >= 0
+                    && local.y >= 0
+            ) {
+                return Err(format!(
+                    "probe self-test wheel receiver identity/coordinates were invalid: {wheel:?}"
+                ));
+            }
+            wait_for(&rx, Duration::from_secs(5), |record| {
+                matches!(
+                    record,
+                    ProbeRecord::UiState {
+                        pid,
+                        window,
+                        scroll_offset_y,
+                        ..
+                    } if *pid == probe_pid
+                        && *window == probe_window
+                        && scroll_offset_y.abs() > f64::EPSILON
                 )
             })?;
             Ok(())
@@ -1892,6 +2216,39 @@ mod macos_runner {
         }
         Ok(())
     }
+
+    pub fn permission_status() -> Result<(), String> {
+        assert_post_permission()?;
+        println!("input-routing-e2e: macOS generator post-event permission available");
+        Ok(())
+    }
+
+    pub fn request_generator_permission() -> Result<(), String> {
+        let granted = objc2_core_graphics::CGRequestPostEventAccess();
+        println!(
+            "input-routing-e2e: requested Accessibility/post-event approval for the scenario generator (granted={granted})"
+        );
+        if granted {
+            Ok(())
+        } else {
+            Err(
+                "enable input_routing_scenarios in System Settings > Privacy & Security > Accessibility, then rerun --permission-status"
+                    .to_owned(),
+            )
+        }
+    }
+
+    pub fn permission_denied_contract() -> Result<(), String> {
+        let post = objc2_core_graphics::CGPreflightPostEventAccess();
+        if post {
+            return Err("permission-denied contract requested on an approved generator".to_owned());
+        }
+        println!(
+            "input-routing-e2e: hosted runner lacks generator post-event permission \
+             (post={post}); semantic product E2E was not reported as passed"
+        );
+        Ok(())
+    }
 }
 
 fn main() {
@@ -1911,7 +2268,13 @@ fn main() {
     }
 
     #[cfg(target_os = "macos")]
-    let result = if std::env::args().any(|arg| arg == "--product") {
+    let result = if std::env::args().any(|arg| arg == "--permission-status") {
+        macos_runner::permission_status()
+    } else if std::env::args().any(|arg| arg == "--request-permissions") {
+        macos_runner::request_generator_permission()
+    } else if std::env::args().any(|arg| arg == "--permission-denied-contract") {
+        macos_runner::permission_denied_contract()
+    } else if std::env::args().any(|arg| arg == "--product") {
         macos_runner::run_product()
     } else {
         macos_runner::run_probe_self_test()
