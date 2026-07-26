@@ -990,6 +990,21 @@ mod macos_runner {
         }
     }
 
+    fn wait_until(
+        timeout: Duration,
+        mut predicate: impl FnMut() -> bool,
+        description: &str,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if predicate() {
+                return Ok(());
+            }
+            std::thread::yield_now();
+        }
+        Err(format!("timed out waiting for {description}"))
+    }
+
     fn post_mouse(
         event_type: CGEventType,
         button: CGMouseButton,
@@ -1182,27 +1197,31 @@ mod macos_runner {
                 pid,
                 window,
                 generation,
-                z_order,
                 ..
             } = initial
             else {
                 unreachable!()
             };
-            if z_order < 0 || frontmost_pid() != Some(pid) {
-                return Err("launcher did not acquire macOS focus/Z-order".to_owned());
-            }
+            // The focused notification can precede NSWorkspace and Core
+            // Graphics publishing the matching global activation/order
+            // snapshots. Wait for those read-only views to converge.
+            wait_until(
+                Duration::from_secs(2),
+                || frontmost_pid() == Some(pid) && window_z_order(window as u32).is_some(),
+                "launcher macOS foreground/Z-order publication",
+            )?;
+            let stable_z_order = window_z_order(window as u32)
+                .ok_or("launcher missing from macOS on-screen Z-order")?;
             let probe_z_order = window_z_order(probe_window as u32)
                 .ok_or("passive probe missing from macOS on-screen Z-order")?;
-            if z_order as usize >= probe_z_order {
+            if stable_z_order >= probe_z_order {
                 return Err(format!(
-                    "launcher was not above passive probe ({z_order} >= {probe_z_order})"
+                    "launcher was not above passive probe ({stable_z_order} >= {probe_z_order})"
                 ));
             }
             move_pointer(150.0, 150.0)?;
             let expected_local_x = 150 - rect.left;
             let expected_local_y = rect.bottom - 150;
-            let stable_z_order = usize::try_from(z_order)
-                .map_err(|_| "launcher missing from macOS on-screen Z-order".to_owned())?;
             drain(&probe_rx);
 
             match case_name {
