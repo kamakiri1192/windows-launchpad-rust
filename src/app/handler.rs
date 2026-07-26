@@ -132,7 +132,9 @@ impl ApplicationHandler<UserEvent> for App {
             attrs = attrs.with_window_icon(Some(icon));
         }
 
-        if !self.qa_enabled() {
+        if !self.qa_enabled()
+            && std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_none()
+        {
             if let Some(position) = initial_window_position(event_loop) {
                 attrs = attrs.with_position(position);
             }
