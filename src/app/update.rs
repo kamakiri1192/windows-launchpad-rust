@@ -16,6 +16,95 @@ use crate::app::render::{settings_category_id, settings_press_target_from_layout
 use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
 
 impl App {
+    pub(crate) fn input_region_at(&self, x: f32, y: f32) -> crate::input_routing::InputRegion {
+        let modal_active = self.settings_panel_active() || self.folders.is_active();
+        let page_dragging = self
+            .scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging);
+        let viewport_owned = modal_active
+            || self.editing
+            || self.drag_item.is_some()
+            || page_dragging
+            || !self.input_router.is_idle();
+        let page_frame_contains = self.pointer_over_page_glass(x, y);
+        let bottom_control_contains = !matches!(
+            self.bottom_control_intent(x, y),
+            crate::layout::bottom_control::BottomControlPointerIntent::None
+        );
+        crate::input_routing::classify_region(
+            viewport_owned,
+            false,
+            page_frame_contains,
+            bottom_control_contains,
+        )
+    }
+
+    pub(crate) fn publish_input_routing_snapshot(&mut self) {
+        self.input_routing_generation = self.input_routing_generation.wrapping_add(1).max(1);
+        self.input_routing_publisher
+            .publish(crate::input_routing::InputRoutingSnapshot {
+                visible: self.visible,
+                region: self.input_region_at(self.pointer_phys_x, self.pointer_phys_y),
+                router_state: self.input_router.state(),
+                generation: self.input_routing_generation,
+            });
+    }
+
+    pub(crate) fn handle_routed_pointer_button(
+        &mut self,
+        button: crate::input_routing::PointerButton,
+        pressed: bool,
+    ) {
+        use crate::input_routing::{PhysicalPoint, RouterAction};
+
+        let point = PhysicalPoint::new(self.pointer_phys_x, self.pointer_phys_y);
+        if pressed {
+            let region = self.input_region_at(point.x, point.y);
+            let decision = self.input_router.press(button, point, region);
+            if button == crate::input_routing::PointerButton::Left
+                && matches!(
+                    decision,
+                    RouterAction::LaunchpadOwns | RouterAction::BeginPending { .. }
+                )
+            {
+                let action = self.classify_pointer_press(point.x, point.y);
+                self.handle_pointer_press(action);
+            }
+            return;
+        }
+
+        match self.input_router.release(button, point) {
+            RouterAction::DeliverClick { button, .. } => {
+                self.pending_press = None;
+                self.execute_command(crate::app::event::AppCommand::HideWithClickPassthrough(
+                    button,
+                ));
+            }
+            RouterAction::FinishPageDrag { press, current } => {
+                self.pending_press = None;
+                self.handle_drag_start(press.x, press.y);
+                self.handle_drag_move(current.x);
+                self.handle_drag_end();
+            }
+            RouterAction::EndPageDrag | RouterAction::LaunchpadOwns
+                if button == crate::input_routing::PointerButton::Left =>
+            {
+                let action = self.classify_pointer_release(point.x, point.y);
+                self.handle_pointer_release(action);
+            }
+            RouterAction::CancelRightGesture
+            | RouterAction::Consume
+            | RouterAction::None
+            | RouterAction::BeginPending { .. }
+            | RouterAction::BeginPageDrag { .. }
+            | RouterAction::ContinuePageDrag { .. }
+            | RouterAction::ForwardVerticalScroll
+            | RouterAction::EndPageDrag
+            | RouterAction::LaunchpadOwns => {}
+        }
+    }
+
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
         let layout = self.settings_panel_layout();
         let hit = crate::layout::settings_panel::hit_test(

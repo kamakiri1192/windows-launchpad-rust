@@ -32,6 +32,7 @@ mod features;
 mod grid;
 mod icon_cache;
 mod icons;
+mod input_routing;
 mod layout;
 mod liquid_glass;
 mod platform;
@@ -196,6 +197,7 @@ fn main() {
     let inbox: Arc<Inbox> = Arc::new(Mutex::new(Vec::new()));
 
     let mut event_loop_builder = EventLoop::<UserEvent>::with_user_event();
+    let input_routing_publisher = input_routing::InputRoutingPublisher::default();
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
@@ -261,7 +263,7 @@ fn main() {
     let macos = (std::env::var_os(qa::SCENARIO_ENV).is_none())
         .then(|| platform::macos::integration::MacOsIntegration::install(proxy.clone()));
 
-    let mut app = App::new(proxy, timer, cache, inbox, worker);
+    let mut app = App::new(proxy, timer, cache, inbox, worker, input_routing_publisher);
     // Anchor the OS-integration thread for the whole process lifetime.
     #[cfg(windows)]
     {

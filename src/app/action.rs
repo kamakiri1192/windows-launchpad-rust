@@ -72,6 +72,10 @@ pub enum AppAction {
         x: f32,
         y: f32,
     },
+    PointerButton {
+        button: crate::input_routing::PointerButton,
+        pressed: bool,
+    },
     PointerRelease(ReleaseAction),
     CursorLeft,
 }
@@ -461,6 +465,9 @@ impl App {
             AppAction::PointerMoved { x, y } => {
                 self.handle_pointer_moved(x, y);
             }
+            AppAction::PointerButton { button, pressed } => {
+                self.handle_routed_pointer_button(button, pressed);
+            }
             AppAction::PointerRelease(release_action) => {
                 self.handle_pointer_release(release_action);
             }
@@ -617,7 +624,7 @@ impl App {
     }
 
     /// Handle a classified pointer press.
-    fn handle_pointer_press(&mut self, press_action: PressAction) {
+    pub(crate) fn handle_pointer_press(&mut self, press_action: PressAction) {
         let px = self.pointer_phys_x;
         let py = self.pointer_phys_y;
         match press_action {
@@ -670,6 +677,9 @@ impl App {
     fn handle_pointer_moved(&mut self, x: f32, y: f32) {
         self.pointer_phys_x = x;
         self.pointer_phys_y = y;
+        let _ = self
+            .input_router
+            .pointer_moved(crate::input_routing::PhysicalPoint::new(x, y));
         // Edit-mode drag: follow the pointer and live-reorder.
         if self.editing && self.drag_item.is_some() {
             self.handle_edit_drag_move();
@@ -695,7 +705,7 @@ impl App {
     }
 
     /// Handle a classified pointer release.
-    fn handle_pointer_release(&mut self, release_action: ReleaseAction) {
+    pub(crate) fn handle_pointer_release(&mut self, release_action: ReleaseAction) {
         let px = self.pointer_phys_x;
         let py = self.pointer_phys_y;
         // Always clear the control-press flag on release — it was set by the
@@ -730,7 +740,9 @@ impl App {
             }
             ReleaseAction::PendingOutsidePassthrough => {
                 self.pending_press = None;
-                self.execute_command(AppCommand::HideWithClickPassthrough);
+                self.execute_command(AppCommand::HideWithClickPassthrough(
+                    crate::input_routing::PointerButton::Left,
+                ));
             }
             ReleaseAction::PendingLaunch => {
                 if let Some(press) = self.pending_press.take() {
@@ -807,6 +819,7 @@ impl App {
         }
         self.pending_press = None;
         self.pressed_on_control = false;
+        self.input_router.reset();
     }
 
     /// Handle an about-to-wait tick: long-press check and redraw gating.
@@ -1208,10 +1221,17 @@ mod tests {
     #[test]
     fn modal_dismiss_is_distinct_from_click_passthrough() {
         let plain_hide = AppCommand::HideWindow;
-        let passthrough = AppCommand::HideWithClickPassthrough;
+        let passthrough =
+            AppCommand::HideWithClickPassthrough(crate::input_routing::PointerButton::Left);
         assert!(matches!(plain_hide, AppCommand::HideWindow));
-        assert!(matches!(passthrough, AppCommand::HideWithClickPassthrough));
-        assert!(!matches!(plain_hide, AppCommand::HideWithClickPassthrough));
+        assert!(matches!(
+            passthrough,
+            AppCommand::HideWithClickPassthrough(_)
+        ));
+        assert!(!matches!(
+            plain_hide,
+            AppCommand::HideWithClickPassthrough(_)
+        ));
     }
 
     #[test]

@@ -65,6 +65,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ToggleSettings => AppAction::ToggleSettings,
         };
         self.handle_action(action);
+        self.publish_input_routing_snapshot();
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -176,6 +177,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.request_redraw();
         self.start_qa(Instant::now());
         self.timer.mark(prefix::STARTUP, "first redraw requested");
+        self.publish_input_routing_snapshot();
     }
 
     fn window_event(
@@ -232,20 +234,14 @@ impl ApplicationHandler<UserEvent> for App {
                 y: position.y as f32,
             },
             WindowEvent::MouseInput { state, button, .. } => {
-                if button != MouseButton::Left {
-                    return;
-                }
-                let px = self.pointer_phys_x;
-                let py = self.pointer_phys_y;
-                match state {
-                    ElementState::Pressed => {
-                        let action = self.classify_pointer_press(px, py);
-                        AppAction::PointerPress(action)
-                    }
-                    ElementState::Released => {
-                        let action = self.classify_pointer_release(px, py);
-                        AppAction::PointerRelease(action)
-                    }
+                let button = match button {
+                    MouseButton::Left => crate::input_routing::PointerButton::Left,
+                    MouseButton::Right => crate::input_routing::PointerButton::Right,
+                    _ => return,
+                };
+                AppAction::PointerButton {
+                    button,
+                    pressed: state == ElementState::Pressed,
                 }
             }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
@@ -253,6 +249,7 @@ impl ApplicationHandler<UserEvent> for App {
             _ => return,
         };
         self.handle_action(action);
+        self.publish_input_routing_snapshot();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -266,6 +263,7 @@ impl ApplicationHandler<UserEvent> for App {
         // Dispatch a tick action (long-press check + animation-gated redraw).
         let now = Instant::now();
         self.handle_action(AppAction::Tick { now });
+        self.publish_input_routing_snapshot();
         if self.qa_capture_due(now) {
             // Windows does not deliver RedrawRequested for a hidden window.
             // QA therefore advances the exact production frame path from its

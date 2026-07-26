@@ -35,7 +35,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+    MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
@@ -398,10 +399,14 @@ fn dummy_input(up: bool) -> INPUT {
 /// The UI thread hides the launcher first, then calls this while the cursor is
 /// still at the user's release point. Sending a fresh down/up lets the window
 /// underneath receive the click that the launcher window itself consumed.
-pub fn replay_left_click_at_cursor() -> bool {
+pub fn replay_click_at_cursor(button: crate::input_routing::PointerButton) -> bool {
+    let (down, up) = match button {
+        crate::input_routing::PointerButton::Left => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+        crate::input_routing::PointerButton::Right => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+    };
     let inputs = [
-        mouse_input(MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTDOWN.0)),
-        mouse_input(MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTUP.0)),
+        mouse_input(MOUSE_EVENT_FLAGS(down.0)),
+        mouse_input(MOUSE_EVENT_FLAGS(up.0)),
     ];
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     sent as usize == inputs.len()
@@ -417,7 +422,7 @@ fn mouse_input(flags: MOUSE_EVENT_FLAGS) -> INPUT {
                 mouseData: 0,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: INJECT_MAGIC,
             },
         },
     }

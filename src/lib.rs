@@ -15,5 +15,6 @@
 //! or the `windows` crate.
 
 pub mod domain;
+pub mod input_routing;
 pub mod layout;
 pub mod ui_model;

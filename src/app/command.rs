@@ -107,6 +107,7 @@ impl App {
         self.folders = crate::features::folders::FolderFeatureState::default();
         self.folder_layout = None;
         self.pending_press = None;
+        self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
         self.control.press_close();
@@ -124,11 +125,14 @@ impl App {
 
     /// Hide the launcher after a transparent-area click and, on Windows, send
     /// a best-effort replacement click to whatever is now under the cursor.
-    pub(crate) fn hide_with_click_passthrough(&mut self) {
+    pub(crate) fn hide_with_click_passthrough(
+        &mut self,
+        button: crate::input_routing::PointerButton,
+    ) {
         self.hide();
         #[cfg(windows)]
         {
-            if crate::platform::windows::replay_left_click_at_cursor() {
+            if crate::platform::windows::replay_click_at_cursor(button) {
                 debug_log!("outside-click: replayed click to underlying window");
             } else {
                 debug_log!("outside-click: failed to replay click to underlying window");
@@ -181,7 +185,9 @@ impl App {
         match command {
             AppCommand::RequestRedraw => self.request_redraw(),
             AppCommand::HideWindow => self.hide(),
-            AppCommand::HideWithClickPassthrough => self.hide_with_click_passthrough(),
+            AppCommand::HideWithClickPassthrough(button) => {
+                self.hide_with_click_passthrough(button)
+            }
             AppCommand::Summon => self.summon(),
             AppCommand::LaunchApp(info) => {
                 let link_path = info.link_path.clone();

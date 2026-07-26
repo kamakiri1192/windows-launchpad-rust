@@ -37,7 +37,7 @@ use crate::app::event::UserEvent;
 
 /// Press slop (physical px). A press that moves more than this is not a click
 /// and not a long-press (it becomes a scroll drag).
-pub const CLICK_SLOP_PHYS: f32 = 8.0;
+pub use crate::input_routing::CLICK_SLOP_PHYS;
 pub const INITIAL_WINDOW_WIDTH: f64 = 1280.0;
 pub const INITIAL_WINDOW_HEIGHT: f64 = 800.0;
 pub const MIN_WINDOW_WIDTH: f64 = 640.0;
@@ -216,6 +216,9 @@ pub struct App {
     pub scale_factor: f32,
     pub pointer_phys_x: f32,
     pub pointer_phys_y: f32,
+    pub input_router: crate::input_routing::InputRouter,
+    pub input_routing_publisher: crate::input_routing::InputRoutingPublisher,
+    pub input_routing_generation: u64,
     pub drag_start_x: f32,
     pub drag_start_y: f32,
     pub first_frame_rendered: bool,
@@ -325,6 +328,7 @@ impl App {
         cache: Arc<IconCache>,
         inbox: Arc<Inbox>,
         worker: WorkerHandle,
+        input_routing_publisher: crate::input_routing::InputRoutingPublisher,
     ) -> Self {
         let profile_edit = std::env::var_os("LAUNCHPAD_PROFILE_EDIT").as_deref()
             == Some(std::ffi::OsStr::new("1"));
@@ -352,6 +356,9 @@ impl App {
             scale_factor: 1.0,
             pointer_phys_x: 0.0,
             pointer_phys_y: 0.0,
+            input_router: crate::input_routing::InputRouter::default(),
+            input_routing_publisher,
+            input_routing_generation: 0,
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
