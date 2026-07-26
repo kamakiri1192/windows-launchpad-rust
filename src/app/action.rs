@@ -114,6 +114,19 @@ pub enum KeyAction {
     SearchRightBlocked,
     /// A printable character typed into the search field.
     SearchChar(String),
+    /// A printable character typed while the search field is closed → auto-open
+    /// the field and feed this text into the query. Only produced when
+    /// `debug_keys_enabled == false`.
+    OpenSearchAndChar(String),
+    /// Backspace typed while the search field is closed → auto-open the field
+    /// (the query is empty so nothing is deleted, but the field expands).
+    /// Only produced when `debug_keys_enabled == false`.
+    OpenSearchAndBackspace,
+    /// A printable character typed while a folder is open (and not renaming) →
+    /// close the folder, open the search field, and feed this text in. Mirrors
+    /// the macOS Launchpad behavior. Only produced when
+    /// `debug_keys_enabled == false`.
+    CloseFolderAndSearch(String),
     /// Esc with nothing open → hide the launcher (stay resident).
     HideLauncher,
     /// `M` debug key → toggle OS window decorations.
@@ -199,12 +212,15 @@ fn folder_cursor_left_intent(editing: bool, folder_gesture_active: bool) -> Fold
 /// 2. editing + Esc → exit edit mode;
 /// 3. search field wants keyboard → Esc/Backspace/Left/Right/char handling;
 /// 4. Esc with nothing open → hide the launcher;
-/// 5. `M` → toggle decorations; `R` (field closed) → reset icon cache;
+/// 5. With the search field closed and `debug_keys_enabled` off, a printable
+///    char or Backspace auto-opens the field (instant search);
+/// 6. `M` → toggle decorations; `R` (field closed) → reset icon cache;
 ///    otherwise → Liquid Glass debug key delegation.
 ///
-/// Steps 5–6 are gated on `debug_keys_enabled`: when the user has not opted in
+/// Steps 6–7 are gated on `debug_keys_enabled`: when the user has not opted in
 /// from the settings panel, every developer shortcut falls through to
-/// [`KeyAction::None`] so production builds ship with those keys inert.
+/// [`KeyAction::None`] (or step 5 takes over for printable text) so production
+/// builds ship with those keys inert.
 pub fn keyboard_action(
     settings_open: bool,
     editing: bool,
@@ -270,10 +286,25 @@ pub fn keyboard_action(
         return KeyAction::HideLauncher;
     }
 
-    // 5. Debug keys — only when the user has opted in from the settings panel.
+    // 5. Instant search: while the search field is closed, auto-open it on a
+    //    printable char or Backspace so the user can start typing from
+    //    anywhere. Suppressed when `debug_keys_enabled` is on so the developer
+    //    shortcuts (M/R/digits/Liquid Glass keys) keep working.
     if !debug_keys_enabled {
+        if key_code == Some(KeyCode::Backspace) {
+            return KeyAction::OpenSearchAndBackspace;
+        }
+        if preedit_empty {
+            if let Some(t) = text {
+                if !t.is_empty() {
+                    return KeyAction::OpenSearchAndChar(t.to_string());
+                }
+            }
+        }
         return KeyAction::None;
     }
+
+    // 6. Debug keys — only when the user has opted in from the settings panel.
     if key_code == Some(KeyCode::KeyM) {
         return KeyAction::ToggleDecorations;
     }
@@ -281,7 +312,7 @@ pub fn keyboard_action(
         return KeyAction::ResetIcons;
     }
 
-    // 6. Otherwise, delegate to the Liquid Glass debug key handler.
+    // 7. Otherwise, delegate to the Liquid Glass debug key handler.
     match key_code {
         Some(k) => KeyAction::LiquidGlassKey(k),
         None => KeyAction::None,
@@ -292,19 +323,27 @@ pub fn folder_keyboard_action(
     rename_active: bool,
     editing: bool,
     preedit_empty: bool,
+    debug_keys_enabled: bool,
     key_code: Option<KeyCode>,
     text: Option<&str>,
 ) -> KeyAction {
     if !rename_active {
-        return if key_code == Some(KeyCode::Escape) {
-            if editing {
+        if key_code == Some(KeyCode::Escape) {
+            return if editing {
                 KeyAction::ExitEditMode
             } else {
                 KeyAction::CloseFolder
+            };
+        }
+        // Instant search from a folder: typing a printable char closes the
+        // folder and starts a search (macOS Launchpad behavior). Suppressed
+        // when `debug_keys_enabled` is on so developer shortcuts win.
+        if !debug_keys_enabled && preedit_empty {
+            if let Some(value) = text.filter(|v| !v.is_empty()) {
+                return KeyAction::CloseFolderAndSearch(value.to_owned());
             }
-        } else {
-            KeyAction::None
-        };
+        }
+        return KeyAction::None;
     }
     match key_code {
         Some(KeyCode::Escape) => KeyAction::CancelFolderRename,
@@ -558,6 +597,35 @@ impl App {
                     self.search_input_changed();
                 }
             }
+            KeyAction::OpenSearchAndChar(text) => {
+                self.control.open_search();
+                let mut any = false;
+                for ch in text.chars() {
+                    if self.control.handle_char(ch) {
+                        any = true;
+                    }
+                }
+                if any {
+                    self.search_input_changed();
+                }
+            }
+            KeyAction::OpenSearchAndBackspace => {
+                self.control.open_search();
+                self.search_input_changed();
+            }
+            KeyAction::CloseFolderAndSearch(text) => {
+                self.close_folder();
+                self.control.open_search();
+                let mut any = false;
+                for ch in text.chars() {
+                    if self.control.handle_char(ch) {
+                        any = true;
+                    }
+                }
+                if any {
+                    self.search_input_changed();
+                }
+            }
             KeyAction::HideLauncher => {
                 self.execute_command(AppCommand::HideWindow);
             }
@@ -604,7 +672,17 @@ impl App {
             return;
         }
         if !self.control.wants_keyboard() {
-            return;
+            // IME input with the search field closed: auto-open it so Japanese
+            // composition (preedit/commit) can drive instant search too.
+            // Suppressed when debug shortcuts are enabled (developer keys win).
+            if self.settings.debug_keys_enabled {
+                return;
+            }
+            // Close a viewing folder first so the search reflects the grid.
+            if self.folders.is_active() {
+                self.close_folder();
+            }
+            self.control.open_search();
         }
         match ime {
             Ime::Preedit(s, _) => {
@@ -1007,7 +1085,7 @@ mod tests {
     #[test]
     fn folder_esc_closes_folder_when_not_renaming() {
         assert_eq!(
-            folder_keyboard_action(false, false, true, Some(KeyCode::Escape), None),
+            folder_keyboard_action(false, false, true, false, Some(KeyCode::Escape), None),
             KeyAction::CloseFolder
         );
     }
@@ -1015,7 +1093,7 @@ mod tests {
     #[test]
     fn folder_esc_exits_edit_mode_before_closing_folder() {
         assert_eq!(
-            folder_keyboard_action(false, true, true, Some(KeyCode::Escape), None),
+            folder_keyboard_action(false, true, true, false, Some(KeyCode::Escape), None),
             KeyAction::ExitEditMode
         );
     }
@@ -1023,7 +1101,7 @@ mod tests {
     #[test]
     fn folder_rename_esc_cancels_before_folder_close() {
         assert_eq!(
-            folder_keyboard_action(true, true, true, Some(KeyCode::Escape), None),
+            folder_keyboard_action(true, true, true, false, Some(KeyCode::Escape), None),
             KeyAction::CancelFolderRename
         );
     }
@@ -1031,15 +1109,15 @@ mod tests {
     #[test]
     fn folder_rename_enter_commits_and_preedit_blocks_edits() {
         assert_eq!(
-            folder_keyboard_action(true, true, true, Some(KeyCode::Enter), None),
+            folder_keyboard_action(true, true, true, false, Some(KeyCode::Enter), None),
             KeyAction::CommitFolderRename
         );
         assert_eq!(
-            folder_keyboard_action(true, true, false, Some(KeyCode::Backspace), None),
+            folder_keyboard_action(true, true, false, false, Some(KeyCode::Backspace), None),
             KeyAction::None
         );
         assert_eq!(
-            folder_keyboard_action(true, true, true, Some(KeyCode::KeyA), Some("あ")),
+            folder_keyboard_action(true, true, true, false, Some(KeyCode::KeyA), Some("あ")),
             KeyAction::FolderRenameChar("あ".to_owned())
         );
     }
@@ -1195,6 +1273,121 @@ mod tests {
                 None
             ),
             KeyAction::HideLauncher
+        );
+    }
+
+    // ---- instant search (issue #110) ----
+
+    #[test]
+    fn instant_search_printable_char_when_field_closed_and_debug_off() {
+        // Field closed + printable char + debug off → auto-open + feed the char.
+        assert_eq!(
+            keyboard_action(
+                false,
+                false,
+                false,
+                true,
+                false,
+                Some(KeyCode::KeyA),
+                Some("a")
+            ),
+            KeyAction::OpenSearchAndChar("a".to_string())
+        );
+    }
+
+    #[test]
+    fn instant_search_backspace_when_field_closed_and_debug_off() {
+        // Field closed + Backspace + debug off → auto-open the field.
+        assert_eq!(
+            keyboard_action(
+                false,
+                false,
+                false,
+                true,
+                false,
+                Some(KeyCode::Backspace),
+                None
+            ),
+            KeyAction::OpenSearchAndBackspace
+        );
+    }
+
+    #[test]
+    fn instant_search_disabled_when_debug_on() {
+        // debug on → printable KeyA falls through to the Liquid Glass debug
+        // delegation instead of auto-opening search.
+        assert!(matches!(
+            keyboard_action(
+                false,
+                false,
+                false,
+                true,
+                true,
+                Some(KeyCode::KeyA),
+                Some("a")
+            ),
+            KeyAction::LiquidGlassKey(_)
+        ));
+        // Backspace is also delegated to Liquid Glass (which ignores it) when
+        // debug is on, instead of auto-opening the search field.
+        assert!(matches!(
+            keyboard_action(
+                false,
+                false,
+                false,
+                true,
+                true,
+                Some(KeyCode::Backspace),
+                None
+            ),
+            KeyAction::LiquidGlassKey(_)
+        ));
+    }
+
+    #[test]
+    fn instant_search_esc_still_hides_launcher() {
+        // Esc has higher precedence than the instant-search branch.
+        assert_eq!(
+            keyboard_action(
+                false,
+                false,
+                false,
+                true,
+                false,
+                Some(KeyCode::Escape),
+                None
+            ),
+            KeyAction::HideLauncher
+        );
+    }
+
+    #[test]
+    fn folder_typing_closes_folder_and_searches_when_debug_off() {
+        // Folder open (not renaming) + printable char + debug off → close &
+        // search.
+        assert_eq!(
+            folder_keyboard_action(false, false, true, false, Some(KeyCode::KeyA), Some("a")),
+            KeyAction::CloseFolderAndSearch("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn folder_typing_disabled_when_debug_on() {
+        // debug on → no instant search from a folder; non-Esc, non-rename keys
+        // fall through to None.
+        assert_eq!(
+            folder_keyboard_action(false, false, true, true, Some(KeyCode::KeyA), Some("a")),
+            KeyAction::None
+        );
+    }
+
+    #[test]
+    fn folder_rename_still_works_with_debug_off() {
+        // Renaming takes precedence over instant search: the char still feeds
+        // the rename editor.
+        assert_eq!(
+            folder_keyboard_action(true, true, true, false, Some(KeyCode::KeyA), Some("あ")),
+            KeyAction::FolderRenameChar("あ".to_owned())
         );
     }
 

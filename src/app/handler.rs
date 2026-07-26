@@ -237,6 +237,7 @@ impl ApplicationHandler<UserEvent> for App {
                             .rename
                             .as_ref()
                             .is_none_or(|editor| editor.preedit.is_empty()),
+                        self.settings.debug_keys_enabled,
                         key_code,
                         event.text.as_deref(),
                     )

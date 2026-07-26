@@ -97,12 +97,17 @@ The renderer pieces:
 | Input | Action |
 |-------|--------|
 | Click the search pill | Expand into the search field |
+| **Type anywhere** (field closed, debug off) | **Auto-expand the field and feed the keystroke** (instant search; IME supported) |
 | Click the close (×) in the field | Clear the query and collapse back to the pill |
 | `Esc` while the field is open | Collapse to the pill (does **not** quit) |
 | Type | Append to the query (IME supported via `Ime::Commit`) |
-| `Backspace` | Delete the character before the caret |
+| `Backspace` | Delete the character before the caret (or auto-open the field when closed, debug off) |
 | `←` / `→` | Move the caret one character |
 | Swipe / page change | Briefly show the page indicator, then return to the pill |
+
+> When `debug_keys_enabled` is on, typing with the field closed does not
+> auto-open search (developer shortcuts win). Typing while a folder is open
+> (and not renaming) closes the folder and starts a search instead.
 
 ## Edit mode: Done + Settings gear
 
