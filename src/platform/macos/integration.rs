@@ -26,6 +26,7 @@ const SUMMON_MESSAGE: &[u8] = b"show";
 /// Make the accessory application active before asking its window to become
 /// key. `Window::focus_window` alone does not reliably activate an unbundled
 /// accessory process launched from a terminal or profiling harness.
+#[allow(deprecated)]
 pub fn activate_application() {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSApplication;
@@ -34,7 +35,15 @@ pub fn activate_application() {
         eprintln!("macos-integration: activation requested off the main thread");
         return;
     };
-    NSApplication::sharedApplication(main_thread).activate();
+    let application = NSApplication::sharedApplication(main_thread);
+    if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+        // The product E2E starts behind an already-key AppKit probe. The
+        // legacy force flag is intentionally test-only and makes the
+        // activation deterministic on hosted runners.
+        application.activateIgnoringOtherApps(true);
+    } else {
+        application.activate();
+    }
 }
 
 /// Owns the menu-bar item and registered global shortcut for the process.

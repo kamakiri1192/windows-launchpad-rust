@@ -742,6 +742,7 @@ mod macos_runner {
     fn start_process(
         name: &str,
         qa_product: bool,
+        passive_probe: bool,
     ) -> Result<(Child, mpsc::Receiver<ProbeRecord>), String> {
         let mut command = Command::new(sibling_binary(name)?);
         if qa_product {
@@ -751,6 +752,12 @@ mod macos_runner {
                     "1",
                 )
                 .env_remove("LAUNCHPAD_QA_SCENARIO");
+        }
+        if passive_probe {
+            command.env(
+                launchpad_windows::input_probe_protocol::QA_PASSIVE_MACOS_PROBE_ENV,
+                "1",
+            );
         }
         let mut child = command
             .stdout(Stdio::piped())
@@ -885,13 +892,13 @@ mod macos_runner {
     }
 
     fn run_product_case(case_name: &str) -> Result<(), String> {
-        let (mut probe, probe_rx) = start_process("native_input_probe", false)?;
+        let (mut probe, probe_rx) = start_process("native_input_probe", false, true)?;
         let mut launcher_slot: Option<Child> = None;
         let result = (|| {
             wait_for(&probe_rx, Duration::from_secs(10), |record| {
                 matches!(record, ProbeRecord::Ready { .. })
             })?;
-            let (launcher, launcher_rx) = start_process("launchpad-windows", true)?;
+            let (launcher, launcher_rx) = start_process("launchpad-windows", true, false)?;
             launcher_slot = Some(launcher);
             let initial = wait_for(&launcher_rx, Duration::from_secs(45), |record| {
                 matches!(
@@ -1091,7 +1098,7 @@ mod macos_runner {
 
     pub fn run_probe_self_test() -> Result<(), String> {
         assert_post_permission()?;
-        let (mut probe, rx) = start_process("native_input_probe", false)?;
+        let (mut probe, rx) = start_process("native_input_probe", false, false)?;
         let result = (|| {
             wait_for(&rx, Duration::from_secs(10), |record| {
                 matches!(record, ProbeRecord::Ready { .. })

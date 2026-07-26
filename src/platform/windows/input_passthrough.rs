@@ -20,9 +20,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, ChildWindowFromPointEx, GetAncestor, GetCursorPos,
     GetForegroundWindow, GetMessageExtraInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, CWP_SKIPDISABLED,
-    CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT, MSG, WM_MOUSEWHEEL,
-    WM_NULL, WS_EX_TRANSPARENT,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, WindowFromPoint,
+    CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT,
+    MSG, WM_MOUSEWHEEL, WM_NULL, WS_EX_TRANSPARENT,
 };
 
 use crate::input_routing::{DeliveryResult, InputRoutingPublisher, PointerButton};
@@ -159,7 +159,7 @@ fn pending_focus_loss_matches(pending: PendingWheelFocusLoss, now: u64, foregrou
 /// original Z-order. Delivery happens only after the launcher hides.
 pub struct PreparedClick {
     launcher: HWND,
-    target: HWND,
+    target_root: HWND,
     target_pid: u32,
     point: POINT,
     button: PointerButton,
@@ -178,9 +178,15 @@ pub fn prepare_click_at_cursor(
     }
     let launcher = HWND(launcher_window as usize as *mut c_void);
     let (target, target_pid) = unsafe { resolve_target(launcher, point) }?;
+    let target_root = unsafe { GetAncestor(target, GA_ROOT) };
+    let target_root = if target_root.is_invalid() {
+        target
+    } else {
+        target_root
+    };
     Some(PreparedClick {
         launcher,
-        target,
+        target_root,
         target_pid,
         point,
         button,
@@ -204,12 +210,19 @@ pub fn deliver_prepared_click(click: PreparedClick) -> DeliveryResult {
     {
         return DeliveryResult::NoTarget;
     }
-    let Some((current_target, current_pid)) =
-        (unsafe { resolve_target(click.launcher, click.point) })
-    else {
+    let current_target = unsafe { WindowFromPoint(click.point) };
+    if current_target.is_invalid() {
         return DeliveryResult::NoTarget;
+    }
+    let current_root = unsafe { GetAncestor(current_target, GA_ROOT) };
+    let current_root = if current_root.is_invalid() {
+        current_target
+    } else {
+        current_root
     };
-    if current_target != click.target || current_pid != click.target_pid {
+    let mut current_pid = 0;
+    unsafe { GetWindowThreadProcessId(current_root, Some(&mut current_pid)) };
+    if current_root != click.target_root || current_pid != click.target_pid {
         return DeliveryResult::NoTarget;
     }
 

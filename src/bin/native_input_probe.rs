@@ -419,6 +419,14 @@ mod macos_probe {
         fn emit_ready(&mut self) {
             if let Some(ready) = self.ready.take() {
                 emit(ready);
+                if std::env::var_os(
+                    launchpad_windows::input_probe_protocol::QA_PASSIVE_MACOS_PROBE_ENV,
+                )
+                .is_some()
+                {
+                    let main_thread = MainThreadMarker::new().expect("probe main thread");
+                    NSApplication::sharedApplication(main_thread).deactivate();
+                }
             }
         }
     }
