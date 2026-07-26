@@ -600,12 +600,15 @@ mod windows_runner {
                             "{case_name}: launcher was not foreground before OS wheel generation"
                         ));
                     }
-                    send(&[mouse_input(MOUSEEVENTF_WHEEL.0, 30)])?;
+                    // Use one canonical wheel detent for the product path.
+                    // The independent probe self-test separately proves that
+                    // partial high-resolution delta 30 survives OS generation.
+                    send(&[mouse_input(MOUSEEVENTF_WHEEL.0, 120)])?;
                     let wheel = wait_for(&probe_rx, Duration::from_secs(5), |record| {
                         matches!(
                             record,
                             ProbeRecord::Input {
-                                event: ProbeEvent::VerticalWheel { delta: 30, .. },
+                                event: ProbeEvent::VerticalWheel { delta: 120, .. },
                                 ..
                             }
                         )
