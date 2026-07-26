@@ -1134,6 +1134,13 @@ mod macos_runner {
             if z_order < 0 || frontmost_pid() != Some(pid) {
                 return Err("launcher did not acquire macOS focus/Z-order".to_owned());
             }
+            let probe_z_order = window_z_order(probe_window as u32)
+                .ok_or("passive probe missing from macOS on-screen Z-order")?;
+            if z_order as usize >= probe_z_order {
+                return Err(format!(
+                    "launcher was not above passive probe ({z_order} >= {probe_z_order})"
+                ));
+            }
             move_pointer(150.0, 150.0)?;
             let expected_local_x = 150 - rect.left;
             let expected_local_y = rect.bottom - 150;

@@ -185,6 +185,11 @@ impl ApplicationHandler<UserEvent> for App {
             // activation only after the window can process the resulting
             // events.
             crate::platform::macos::integration::activate_application();
+            if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+                let _ = crate::platform::macos::integration::order_window_front_for_qa(
+                    &renderer.window,
+                );
+            }
             renderer.window.focus_window();
         }
         self.timer.mark(prefix::STARTUP, "renderer initialization");

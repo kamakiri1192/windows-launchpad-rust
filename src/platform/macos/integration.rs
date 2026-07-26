@@ -58,6 +58,28 @@ pub fn window_z_order(window_number: u32) -> Option<usize> {
     }
 }
 
+/// Deterministically place the native QA window above its passive probe.
+/// This is a startup-only harness operation; product input delivery never
+/// changes window order.
+pub fn order_window_front_for_qa(window: &winit::window::Window) -> bool {
+    use objc2_app_kit::NSView;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return false;
+    };
+    let view = unsafe { &*(handle.ns_view.as_ptr() as *const NSView) };
+    let Some(window) = view.window() else {
+        return false;
+    };
+    window.orderFrontRegardless();
+    window.makeKeyAndOrderFront(None);
+    true
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     static kCGWindowNumber: *const c_void;
