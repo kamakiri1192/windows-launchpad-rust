@@ -17,8 +17,8 @@ mod windows_probe {
         SetForegroundWindow, ShowWindow, TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
         GA_ROOT, HMENU, IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE,
         WM_CONTEXTMENU, WM_DESTROY, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-        WM_MOUSEWHEEL, WM_NCCREATE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WNDCLASSW, WS_CHILD,
-        WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        WM_MOUSEWHEEL, WM_NCCREATE, WM_POINTERWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
+        WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     static SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -148,7 +148,7 @@ mod windows_probe {
                 return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
             }
             WM_CONTEXTMENU => log_event(hwnd, lparam, ProbeEvent::ContextMenu, true),
-            WM_MOUSEWHEEL => {
+            WM_MOUSEWHEEL | WM_POINTERWHEEL => {
                 log_event(
                     hwnd,
                     lparam,

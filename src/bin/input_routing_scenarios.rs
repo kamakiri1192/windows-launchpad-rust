@@ -6,22 +6,27 @@
 
 #[cfg(windows)]
 mod windows_runner {
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::process::{Child, Command, Stdio};
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+    use std::sync::{mpsc, Arc};
     use std::time::{Duration, Instant};
 
     use launchpad_windows::input_probe_protocol::{ProbeButton, ProbeEvent, ProbeRecord};
-    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT};
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, GetWindowRgn, HGDIOBJ};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_TYPE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
         MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible, SetCursorPos, SetForegroundWindow, SetWindowPos, SystemParametersInfoW,
-        WindowFromPoint, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, MOUSEWHEEL_ROUTING_FOCUS,
-        SPI_GETMOUSEWHEELROUTING, SPI_SETMOUSEWHEELROUTING, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+        EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
+        GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetCursorPos,
+        SetForegroundWindow, SetWindowPos, SystemParametersInfoW, WindowFromPoint, GWL_EXSTYLE,
+        GW_HWNDPREV, HWND_TOPMOST, MOUSEWHEEL_ROUTING_FOCUS, SPI_GETMOUSEWHEELROUTING,
+        SPI_SETMOUSEWHEELROUTING, SWP_NOACTIVATE, SWP_SHOWWINDOW,
         SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WS_EX_TOPMOST,
     };
 
@@ -63,6 +68,206 @@ mod windows_runner {
                 )
             };
         }
+    }
+
+    const EDGE_PAGE_TITLE: &str = "Launchpad Input Routing Scroll Compatibility";
+    const EDGE_PAGE: &str = r#"<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Launchpad Input Routing Scroll Compatibility</title>
+  <style>
+    html, body { margin: 0; min-height: 6000px; }
+    body { background: linear-gradient(#fff, #ddd); }
+  </style>
+</head>
+<body>
+  <script>
+    const report = () => fetch(`/position?y=${window.scrollY}`, {
+      cache: "no-store"
+    }).catch(() => {});
+    window.scrollTo(0, 0);
+    window.addEventListener("load", report);
+    window.addEventListener("scroll", report, { passive: true });
+    setInterval(report, 250);
+  </script>
+</body>
+</html>
+"#;
+
+    struct ScrollServer {
+        address: SocketAddr,
+        scroll_y: Arc<AtomicI64>,
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl ScrollServer {
+        fn start() -> Result<Self, String> {
+            let listener = TcpListener::bind(("127.0.0.1", 0))
+                .map_err(|error| format!("bind Edge compatibility server: {error}"))?;
+            let address = listener
+                .local_addr()
+                .map_err(|error| format!("read Edge compatibility address: {error}"))?;
+            listener
+                .set_nonblocking(true)
+                .map_err(|error| format!("configure Edge compatibility server: {error}"))?;
+            let scroll_y = Arc::new(AtomicI64::new(-1));
+            let thread_scroll_y = Arc::clone(&scroll_y);
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_stop = Arc::clone(&stop);
+            let thread = std::thread::spawn(move || {
+                while !thread_stop.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            if let Err(error) = serve_scroll_request(stream, &thread_scroll_y) {
+                                if !matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::BrokenPipe
+                                        | std::io::ErrorKind::ConnectionAborted
+                                        | std::io::ErrorKind::ConnectionReset
+                                        | std::io::ErrorKind::UnexpectedEof
+                                ) {
+                                    eprintln!("browser-compat server request failed: {error}");
+                                }
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => {
+                            eprintln!("browser-compat server accept failed: {error}");
+                            break;
+                        }
+                    }
+                }
+            });
+            Ok(Self {
+                address,
+                scroll_y,
+                stop,
+                thread: Some(thread),
+            })
+        }
+
+        fn url(&self) -> String {
+            format!("http://{}/", self.address)
+        }
+
+        fn scroll_y(&self) -> i64 {
+            self.scroll_y.load(Ordering::Acquire)
+        }
+    }
+
+    impl Drop for ScrollServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            let _ = TcpStream::connect_timeout(&self.address, Duration::from_millis(100));
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn serve_scroll_request(
+        mut stream: TcpStream,
+        scroll_y: &AtomicI64,
+    ) -> Result<(), std::io::Error> {
+        // Accepted sockets inherit the listener's nonblocking mode on
+        // Windows. Requests are tiny, so restore blocking reads with a tight
+        // timeout instead of racing the first browser write.
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut request_line = String::new();
+        BufReader::new(stream.try_clone()?).read_line(&mut request_line)?;
+        let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+        if let Some(value) = path.strip_prefix("/position?y=") {
+            if let Ok(value) = value.parse::<f64>() {
+                scroll_y.store(value.round() as i64, Ordering::Release);
+            }
+            write_http_response(&mut stream, "text/plain", b"ok")
+        } else {
+            write_http_response(
+                &mut stream,
+                "text/html; charset=utf-8",
+                EDGE_PAGE.as_bytes(),
+            )
+        }
+    }
+
+    fn write_http_response(
+        stream: &mut TcpStream,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<(), std::io::Error> {
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            body.len()
+        )?;
+        stream.write_all(body)?;
+        stream.flush()
+    }
+
+    fn edge_executable() -> Result<std::path::PathBuf, String> {
+        if let Some(path) = std::env::var_os("LAUNCHPAD_EDGE_EXE").map(std::path::PathBuf::from) {
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "LAUNCHPAD_EDGE_EXE does not name a file: {}",
+                path.display()
+            ));
+        }
+        for root in ["ProgramFiles(x86)", "ProgramFiles"] {
+            if let Some(root) = std::env::var_os(root) {
+                let path = std::path::PathBuf::from(root)
+                    .join("Microsoft")
+                    .join("Edge")
+                    .join("Application")
+                    .join("msedge.exe");
+                if path.is_file() {
+                    return Ok(path);
+                }
+            }
+        }
+        Err("Microsoft Edge executable not found".to_owned())
+    }
+
+    struct WindowTitleSearch<'a> {
+        title_fragment: &'a str,
+        found: Option<HWND>,
+    }
+
+    unsafe extern "system" fn find_window_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(lparam.0 as *mut WindowTitleSearch<'_>) };
+        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            let title_length = unsafe { GetWindowTextLengthW(hwnd) };
+            if title_length > 0 {
+                let mut title = vec![0_u16; title_length as usize + 1];
+                let copied = unsafe { GetWindowTextW(hwnd, &mut title) };
+                let title = String::from_utf16_lossy(&title[..copied.max(0) as usize]);
+                if title.contains(search.title_fragment) {
+                    search.found = Some(hwnd);
+                    return BOOL(0);
+                }
+            }
+        }
+        BOOL(1)
+    }
+
+    fn find_window_by_title(title_fragment: &str) -> Option<HWND> {
+        let mut search = WindowTitleSearch {
+            title_fragment,
+            found: None,
+        };
+        let _ = unsafe {
+            EnumWindows(
+                Some(find_window_callback),
+                LPARAM((&mut search as *mut WindowTitleSearch<'_>) as isize),
+            )
+        };
+        search.found
     }
 
     fn sibling_binary(name: &str) -> Result<std::path::PathBuf, String> {
@@ -205,6 +410,16 @@ mod windows_runner {
             }
         }
         index
+    }
+
+    fn window_region_type(hwnd: HWND) -> Result<i32, String> {
+        let region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+        if region.is_invalid() {
+            return Err("CreateRectRgn failed".to_owned());
+        }
+        let region_type = unsafe { GetWindowRgn(hwnd, region) }.0;
+        let _ = unsafe { DeleteObject(HGDIOBJ(region.0)) };
+        Ok(region_type)
     }
 
     fn assert_same_window(hwnd: HWND, pid: u32) -> Result<(), String> {
@@ -656,10 +871,14 @@ mod windows_runner {
                             }
                         )
                     })?;
+                    // Wheel delivery uses the receiver's stable top-level
+                    // framework sink. Clicks still use the spatial child so
+                    // normal hit-testing and context-menu semantics remain
+                    // unchanged.
                     assert_probe_destination(
                         &wheel,
                         probe_pid,
-                        probe_child,
+                        probe_window,
                         probe_window,
                         point_x,
                         point_y,
@@ -756,6 +975,196 @@ mod windows_runner {
         }
         let _ = probe.kill();
         let _ = probe.wait();
+        result
+    }
+
+    pub fn run_browser_compatibility() -> Result<(), String> {
+        let server = ScrollServer::start()?;
+        let profile = std::env::temp_dir().join(format!(
+            "launchpad-input-routing-edge-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&profile)
+            .map_err(|error| format!("create isolated Edge profile: {error}"))?;
+        let mut edge = Command::new(edge_executable()?)
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .arg("--guest")
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg("--disable-extensions")
+            .arg("--disable-gpu")
+            .arg("--disable-backgrounding-occluded-windows")
+            .arg("--disable-renderer-backgrounding")
+            .arg("--disable-background-timer-throttling")
+            .arg("--window-position=100,100")
+            .arg("--window-size=1000,700")
+            .arg(server.url())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|error| format!("start isolated Edge: {error}"))?;
+        let mut launcher_slot: Option<Child> = None;
+        let result = (|| {
+            wait_until(
+                Duration::from_secs(30),
+                || find_window_by_title(EDGE_PAGE_TITLE).is_some(),
+                "Edge compatibility window",
+            )?;
+            wait_until(
+                Duration::from_secs(10),
+                || server.scroll_y() == 0,
+                "Edge page initial scroll position",
+            )?;
+            let edge_hwnd = find_window_by_title(EDGE_PAGE_TITLE)
+                .ok_or("Edge compatibility window disappeared")?;
+            let mut edge_pid = 0;
+            unsafe { GetWindowThreadProcessId(edge_hwnd, Some(&mut edge_pid)) };
+            if edge_pid == 0 {
+                return Err("Edge compatibility window had no PID".to_owned());
+            }
+
+            unsafe {
+                // Deterministically keep the compatibility receiver directly
+                // below the launcher. This setup-only ordering does not
+                // participate in product delivery.
+                SetWindowPos(
+                    edge_hwnd,
+                    Some(HWND_TOPMOST),
+                    100,
+                    100,
+                    1000,
+                    700,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                )
+                .map_err(|error| format!("position Edge compatibility window: {error}"))?;
+            }
+
+            let (launcher, launcher_rx) = start_launcher(false)?;
+            launcher_slot = Some(launcher);
+            let initial = wait_launcher_snapshot(&launcher_rx, |record| {
+                matches!(
+                    record,
+                    ProbeRecord::LauncherSnapshot {
+                        window,
+                        visible: true,
+                        focused: true,
+                        ..
+                    } if *window != 0
+                )
+            })?;
+            let ProbeRecord::LauncherSnapshot {
+                pid,
+                window,
+                generation,
+                ..
+            } = initial
+            else {
+                unreachable!()
+            };
+            let hwnd = HWND(window as usize as *mut _);
+            let point_x = 150;
+            // Stay below Edge's browser chrome while remaining horizontally
+            // outside the centered Launchpad page frame.
+            let point_y = 400;
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    100,
+                    100,
+                    1000,
+                    700,
+                    SWP_SHOWWINDOW,
+                )
+                .map_err(|error| format!("position launcher for Edge compatibility: {error}"))?;
+                let _ = SetForegroundWindow(hwnd);
+                SetCursorPos(point_x + 200, point_y).map_err(|error| error.to_string())?;
+                SetCursorPos(point_x, point_y).map_err(|error| error.to_string())?;
+                let hit = WindowFromPoint(POINT {
+                    x: point_x,
+                    y: point_y,
+                });
+                if hit != hwnd {
+                    return Err(format!(
+                        "browser-compat: launcher did not own outside point (expected {window:#x}, got {:#x})",
+                        hit.0 as usize
+                    ));
+                }
+            }
+            wait_launcher_snapshot(&launcher_rx, |record| {
+                matches!(
+                    record,
+                    ProbeRecord::LauncherSnapshot {
+                        generation: next_generation,
+                        region,
+                        visible: true,
+                        focused: true,
+                        ..
+                    } if *next_generation > generation && region == "OutsideTransparent"
+                )
+            })?;
+
+            if unsafe { GetForegroundWindow() } != hwnd {
+                return Err("browser-compat: launcher was not foreground before wheel".to_owned());
+            }
+            let foreground_before = unsafe { GetForegroundWindow() };
+            let z_before = z_order_index(hwnd);
+            let ex_style_before = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+            let region_before = window_region_type(hwnd)?;
+            if ex_style_before & WS_EX_TOPMOST.0 as isize == 0 {
+                return Err("browser-compat: launcher was not in the topmost band".to_owned());
+            }
+
+            // Preserve the machine's real wheel-routing setting. Unlike the
+            // native-probe scenarios, this compatibility path intentionally
+            // does not construct a MouseWheelRoutingGuard.
+            send(&[mouse_input(MOUSEEVENTF_WHEEL.0, (-120_i32) as u32)])?;
+            wait_until(
+                Duration::from_secs(10),
+                || server.scroll_y() > 0,
+                "Edge page scrollY to increase",
+            )?;
+            assert_window_state_stable(
+                hwnd,
+                foreground_before,
+                z_before,
+                Duration::from_millis(750),
+                "browser-compat",
+            )?;
+            assert_same_window(hwnd, pid)?;
+            if unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } != ex_style_before {
+                return Err("browser-compat: launcher window style changed".to_owned());
+            }
+            if window_region_type(hwnd)? != region_before {
+                return Err("browser-compat: launcher window region changed".to_owned());
+            }
+            if !unsafe { IsWindow(Some(edge_hwnd)) }.as_bool() {
+                return Err("browser-compat: Edge receiver window was destroyed".to_owned());
+            }
+            let mut current_edge_pid = 0;
+            unsafe { GetWindowThreadProcessId(edge_hwnd, Some(&mut current_edge_pid)) };
+            if current_edge_pid != edge_pid {
+                return Err(format!(
+                    "browser-compat: Edge window PID changed: {edge_pid} -> {current_edge_pid}"
+                ));
+            }
+            println!(
+                "input-routing-e2e: browser-compat passed (scrollY={})",
+                server.scroll_y()
+            );
+            Ok(())
+        })();
+        if let Some(mut launcher) = launcher_slot {
+            let _ = launcher.kill();
+            let _ = launcher.wait();
+        }
+        let _ = edge.kill();
+        let _ = edge.wait();
+        let _ = std::fs::remove_dir_all(&profile);
         result
     }
 
@@ -1482,7 +1891,9 @@ mod macos_runner {
 
 fn main() {
     #[cfg(windows)]
-    let result = if std::env::args().any(|arg| arg == "--product") {
+    let result = if std::env::args().any(|arg| arg == "--browser-compat") {
+        windows_runner::run_browser_compatibility()
+    } else if std::env::args().any(|arg| arg == "--product") {
         windows_runner::run_product()
     } else {
         windows_runner::run_probe_self_test()

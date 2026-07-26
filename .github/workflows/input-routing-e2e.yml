@@ -42,6 +42,20 @@ jobs:
       - name: Run product routing scenarios
         run: .\target\debug\input_routing_scenarios.exe --product
 
+      - name: Verify scrolling in headful Microsoft Edge
+        shell: pwsh
+        run: |
+          $edgeKey = Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe' -ErrorAction SilentlyContinue
+          $edge = if ($edgeKey) { $edgeKey.GetValue('') } else { $null }
+          if (-not $edge) {
+            $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+          }
+          if (-not (Test-Path -LiteralPath $edge -PathType Leaf)) {
+            throw "Microsoft Edge executable not found: $edge"
+          }
+          $env:LAUNCHPAD_EDGE_EXE = $edge
+          .\target\debug\input_routing_scenarios.exe --browser-compat
+
   macos:
     name: macOS native input routing
     runs-on: macos-14

@@ -1,28 +1,30 @@
 //! Native Windows wheel capture and targeted delivery.
 //!
 //! The launcher stays visible and retains focus/Z-order. We walk downward from
-//! its HWND, select exactly one visible hit-testable target, and enqueue the
-//! original `WM_MOUSEWHEEL` packet without normalizing delta, flags, or screen
-//! coordinates.
+//! its HWND, select exactly one visible hit-testable target, and deliver the
+//! original `WM_MOUSEWHEEL` / `WM_POINTERWHEEL` packet without normalizing
+//! delta, flags, pointer identity, or screen coordinates.
 
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Graphics::Gdi::{
+    CreateRectRgn, DeleteObject, GetWindowRgn, ScreenToClient, SetWindowRgn, HGDIOBJ,
+};
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_TYPE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEINPUT,
+    IsWindowEnabled, SendInput, INPUT, INPUT_TYPE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, ChildWindowFromPointEx, GetAncestor, GetCursorPos,
+    AllowSetForegroundWindow, ChildWindowFromPointEx, GetAncestor, GetClassNameW, GetCursorPos,
     GetForegroundWindow, GetMessageExtraInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, WindowFromPoint,
-    CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT,
-    MSG, WM_MOUSEWHEEL, WM_NULL, WS_EX_TRANSPARENT,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, SendMessageTimeoutW,
+    WindowFromPoint, CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT,
+    GWL_EXSTYLE, GW_HWNDNEXT, MSG, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT, WM_MOUSEWHEEL, WM_NULL,
+    WM_POINTERWHEEL, WS_EX_TRANSPARENT,
 };
 
 use crate::input_routing::{DeliveryResult, InputRoutingPublisher, PointerButton};
@@ -33,6 +35,7 @@ const FOCUS_GUARD_MS: u64 = 500;
 #[derive(Debug, Clone, Copy)]
 struct LockedTarget {
     hwnd: isize,
+    root: isize,
     pid: u32,
     last_time: u32,
 }
@@ -60,7 +63,7 @@ pub fn handle_message(raw_message: *const c_void, publisher: &InputRoutingPublis
         return false;
     }
     let message = unsafe { &*(raw_message as *const MSG) };
-    if message.message != WM_MOUSEWHEEL {
+    if message.message != WM_MOUSEWHEEL && message.message != WM_POINTERWHEEL {
         return false;
     }
     if unsafe { GetMessageExtraInfo() }.0 as usize == super::INJECT_MAGIC {
@@ -74,13 +77,23 @@ pub fn handle_message(raw_message: *const c_void, publisher: &InputRoutingPublis
     if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
         let root = unsafe { GetAncestor(message.hwnd, GA_ROOT) };
         let point = wheel_screen_point(message.lParam);
+        let target = locked_or_resolve_target(root, point, message.time);
         eprintln!(
-            "input-routing-qa: wheel source={:?} root={root:?} point=({}, {}) result={result:?}",
-            message.hwnd, point.x, point.y
+            "input-routing-qa: wheel message=0x{:x} source={:?} root={root:?} point=({}, {}) target={:?} class={} result={result:?}",
+            message.message,
+            message.hwnd,
+            point.x,
+            point.y,
+            target.map(|value| value.hwnd),
+            target.map_or_else(
+                || "<none>".to_owned(),
+                |value| window_class_name(HWND(value.hwnd as *mut c_void))
+            )
         );
     }
     crate::debug_log!(
-        "input-routing: windows wheel result={result:?} source={:?} wparam=0x{:x} lparam=0x{:x}",
+        "input-routing: windows wheel message=0x{:x} result={result:?} source={:?} wparam=0x{:x} lparam=0x{:x}",
+        message.message,
         message.hwnd,
         message.wParam.0,
         message.lParam.0
@@ -105,8 +118,8 @@ pub fn consume_correlated_wheel_receiver_activation() -> bool {
 }
 
 fn route_wheel(message: &MSG) -> DeliveryResult {
-    // `WM_MOUSEWHEEL` follows keyboard focus and may therefore be addressed to
-    // a focused child/input sink rather than the launcher's top-level HWND.
+    // Wheel messages may be addressed to a focused child/input sink rather
+    // than the launcher's top-level HWND.
     // Z-order traversal is meaningful only between top-level windows.
     let launcher = unsafe { GetAncestor(message.hwnd, GA_ROOT) };
     let launcher = if launcher.is_invalid() {
@@ -114,34 +127,33 @@ fn route_wheel(message: &MSG) -> DeliveryResult {
     } else {
         launcher
     };
-    // WM_MOUSEWHEEL owns its screen-space point in lParam. `MSG.pt` is the
-    // queue metadata point and can be DPI-virtualized differently (observed
-    // on mixed-scale desktops), which can select the wrong underlying window.
+    // Both supported wheel messages own their screen-space point in lParam.
+    // `MSG.pt` is queue metadata and can be DPI-virtualized differently
+    // (observed on mixed-scale desktops), selecting the wrong window.
     let target =
         locked_or_resolve_target(launcher, wheel_screen_point(message.lParam), message.time);
     let Some(target) = target else {
         return DeliveryResult::NoTarget;
     };
+    crate::debug_log!(
+        "input-routing: windows wheel target root={:?} ({}) dispatch={:?} ({}) pid={}",
+        HWND(target.root as *mut c_void),
+        window_class_name(HWND(target.root as *mut c_void)),
+        HWND(target.hwnd as *mut c_void),
+        window_class_name(HWND(target.hwnd as *mut c_void)),
+        target.pid
+    );
     if std::env::var_os(crate::input_probe_protocol::QA_WHEEL_RECEIVER_ACTIVATION_ENV).is_some() {
         // Test-only: let the probe emulate receivers that explicitly activate
-        // themselves from WM_MOUSEWHEEL so the correlated lifecycle path is
+        // themselves from a wheel handler so the correlated lifecycle path is
         // exercised without relying on foreground-lock timing.
         let _ = unsafe { AllowSetForegroundWindow(target.pid) };
     }
     let launcher_was_foreground = unsafe { GetForegroundWindow() } == launcher;
-    let pending = launcher_was_foreground.then(|| {
-        let target = HWND(target.hwnd as *mut c_void);
-        let target_root = unsafe { GetAncestor(target, GA_ROOT) };
-        let target_root = if target_root.is_invalid() {
-            target
-        } else {
-            target_root
-        };
-        PendingWheelFocusLoss {
-            launcher: launcher.0 as isize,
-            target_root: target_root.0 as isize,
-            queued_at: unsafe { windows::Win32::System::SystemInformation::GetTickCount64() },
-        }
+    let pending = launcher_was_foreground.then(|| PendingWheelFocusLoss {
+        launcher: launcher.0 as isize,
+        target_root: target.root,
+        queued_at: unsafe { windows::Win32::System::SystemInformation::GetTickCount64() },
     });
     if let Some(pending) = pending {
         // Arm before posting: the receiver processes its queue on another
@@ -153,35 +165,104 @@ fn route_wheel(message: &MSG) -> DeliveryResult {
             *guard = Some(pending);
         }
     }
-    match unsafe {
-        PostMessageW(
-            Some(HWND(target.hwnd as *mut c_void)),
-            message.message,
-            message.wParam,
-            message.lParam,
-        )
-    } {
-        Ok(()) => DeliveryResult::Queued,
-        Err(error) => {
-            // Do not clear a newer token or one already consumed by a
-            // receiver-triggered focus transition.
-            if let Some(pending) = pending {
-                if let Ok(mut guard) = PENDING_WHEEL_FOCUS_LOSS
-                    .get_or_init(|| Mutex::new(None))
-                    .lock()
-                {
-                    if guard.as_ref() == Some(&pending) {
-                        *guard = None;
+    let target_hwnd = HWND(target.hwnd as *mut c_void);
+    let result = if window_class_name(target_hwnd) == "Chrome_WidgetWin_1" {
+        send_chromium_wheel(launcher, target_hwnd, message)
+    } else {
+        match unsafe {
+            PostMessageW(
+                Some(target_hwnd),
+                message.message,
+                message.wParam,
+                message.lParam,
+            )
+        } {
+            Ok(()) => DeliveryResult::Queued,
+            Err(error) => {
+                if error.code().0 as u32 == 5 {
+                    DeliveryResult::PermissionDenied
+                } else {
+                    DeliveryResult::Failed {
+                        os_error: error.code().0 as i64,
                     }
                 }
             }
-            if error.code().0 as u32 == 5 {
-                DeliveryResult::PermissionDenied
-            } else {
-                DeliveryResult::Failed {
-                    os_error: error.code().0 as i64,
+        }
+    };
+    if !matches!(result, DeliveryResult::Queued | DeliveryResult::Delivered) {
+        // Do not clear a newer token or one already consumed by a
+        // receiver-triggered focus transition.
+        if let Some(pending) = pending {
+            if let Ok(mut guard) = PENDING_WHEEL_FOCUS_LOSS
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+            {
+                if guard.as_ref() == Some(&pending) {
+                    *guard = None;
                 }
             }
+        }
+    }
+    result
+}
+
+fn send_chromium_wheel(launcher: HWND, target: HWND, message: &MSG) -> DeliveryResult {
+    // Chromium performs a second WindowFromPoint check before handing wheel
+    // input to its view tree. Exclude only the launcher from spatial hit
+    // testing while Chromium processes this exact packet synchronously.
+    // Restoring the default region before returning leaves rendering,
+    // visibility, focus, activation, window styles, and Z-order unchanged.
+    let saved_region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+    if saved_region.is_invalid() || unsafe { GetWindowRgn(launcher, saved_region) }.0 != 0 {
+        if !saved_region.is_invalid() {
+            let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
+        }
+        return DeliveryResult::Unsupported;
+    }
+    let empty_region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+    if empty_region.is_invalid()
+        || unsafe { SetWindowRgn(launcher, Some(empty_region), false) } == 0
+    {
+        let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
+        if !empty_region.is_invalid() {
+            let _ = unsafe { DeleteObject(HGDIOBJ(empty_region.0)) };
+        }
+        return DeliveryResult::Failed {
+            os_error: unsafe { GetLastError() }.0 as i64,
+        };
+    }
+    if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+        eprintln!(
+            "input-routing-qa: chromium compatibility WindowFromPoint={:?}",
+            unsafe { WindowFromPoint(wheel_screen_point(message.lParam)) }
+        );
+    }
+    let mut receiver_result = 0usize;
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            target,
+            message.message,
+            message.wParam,
+            message.lParam,
+            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
+            100,
+            Some(&mut receiver_result),
+        )
+    };
+    // Successful SetWindowRgn transfers empty_region to the system. Passing
+    // None restores the original default rectangular region.
+    let restored = unsafe { SetWindowRgn(launcher, None, false) } != 0;
+    let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
+    if !restored {
+        return DeliveryResult::Failed {
+            os_error: unsafe { GetLastError() }.0 as i64,
+        };
+    }
+    if sent.0 != 0 {
+        DeliveryResult::Delivered
+    } else {
+        DeliveryResult::Failed {
+            os_error: unsafe { GetLastError() }.0 as i64,
         }
     }
 }
@@ -216,13 +297,8 @@ pub fn prepare_click_at_cursor(
         return None;
     }
     let launcher = HWND(launcher_window as usize as *mut c_void);
-    let (target, target_pid) = unsafe { resolve_target(launcher, point) }?;
-    let target_root = unsafe { GetAncestor(target, GA_ROOT) };
-    let target_root = if target_root.is_invalid() {
-        target
-    } else {
-        target_root
-    };
+    let (_, target_root, target_pid) = unsafe { resolve_target(launcher, point) }?;
+    let target = unsafe { deepest_child_at(target_root, point) };
     Some(PreparedClick {
         launcher,
         target,
@@ -346,37 +422,58 @@ fn locked_or_resolve_target(
             return Some(refreshed);
         }
     }
-    let resolved = unsafe { resolve_target(launcher, point) }.map(|(hwnd, pid)| LockedTarget {
-        hwnd: hwnd.0 as isize,
-        pid,
-        last_time: message_time,
-    });
+    let resolved =
+        unsafe { resolve_target(launcher, point) }.map(|(hwnd, root, pid)| LockedTarget {
+            hwnd: hwnd.0 as isize,
+            root: root.0 as isize,
+            pid,
+            last_time: message_time,
+        });
     *current = resolved;
     resolved
 }
 
 fn target_is_still_valid(target: LockedTarget) -> bool {
     let hwnd = HWND(target.hwnd as *mut c_void);
-    if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+    let root = HWND(target.root as *mut c_void);
+    if !unsafe { IsWindow(Some(hwnd)) }.as_bool() || !unsafe { IsWindow(Some(root)) }.as_bool() {
         return false;
     }
     let mut pid = 0;
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    pid == target.pid
+    unsafe { GetWindowThreadProcessId(root, Some(&mut pid)) };
+    pid == target.pid && unsafe { GetAncestor(hwnd, GA_ROOT) } == root
 }
 
-unsafe fn resolve_target(launcher: HWND, point: POINT) -> Option<(HWND, u32)> {
+unsafe fn resolve_target(launcher: HWND, point: POINT) -> Option<(HWND, HWND, u32)> {
     let own_pid = GetCurrentProcessId();
     let mut current = GetWindow(launcher, GW_HWNDNEXT).ok();
     while let Some(hwnd) = current {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid != own_pid && top_level_candidate(hwnd, point) {
-            return Some((deepest_child_at(hwnd, point), pid));
+            // Post the wheel packet to the target application's top-level
+            // sink. In modern frameworks (Chromium/Electron in particular),
+            // a spatial child may accept a posted message without forwarding
+            // it into the framework's input pipeline. Native mouse wheel input
+            // is addressed to a focus sink and bubbles through DefWindowProc;
+            // after the launcher takes foreground, however, the covered
+            // thread no longer has a usable focus HWND to query. The stable
+            // top-level sink preserves the packet and its target process
+            // without changing focus or Z-order.
+            return Some((hwnd, hwnd, pid));
         }
         current = GetWindow(hwnd, GW_HWNDNEXT).ok();
     }
     None
+}
+
+fn window_class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 128];
+    let length = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    if length <= 0 {
+        return "<unknown>".to_owned();
+    }
+    String::from_utf16_lossy(&buffer[..length as usize])
 }
 
 unsafe fn top_level_candidate(hwnd: HWND, point: POINT) -> bool {

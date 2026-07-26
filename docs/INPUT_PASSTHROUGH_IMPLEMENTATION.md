@@ -20,14 +20,25 @@ mutable app, renderer, layout, or window state.
 
 ### Windows
 
-The winit message hook intercepts the original `WM_MOUSEWHEEL`. It walks
+The winit message hook intercepts the original `WM_MOUSEWHEEL` and
+`WM_POINTERWHEEL`. It walks
 downward from the launcher's `GA_ROOT` HWND with `GW_HWNDNEXT`, filters
 invisible, disabled, cloaked, transparent, and same-process windows, then
-selects the deepest eligible child. Resolving from `GA_ROOT` also covers wheel
-messages addressed to a focused child/input sink. Hit testing uses the signed
-screen point carried by wheel `lParam`, not the separately DPI-virtualized
-`MSG.pt`. The unchanged `wParam` and `lParam` are queued once with
-`PostMessageW`.
+selects one eligible top-level application sink. Resolving from `GA_ROOT` also
+covers wheel messages addressed to a focused child/input sink. Hit testing uses
+the signed screen point carried by wheel `lParam`, not the separately
+DPI-virtualized `MSG.pt`. The unchanged message, `wParam`, and `lParam` are
+delivered once. Confirmed clicks continue to use the deepest spatial child.
+
+Chromium and Electron perform their own `WindowFromPoint` check after receiving
+`WM_MOUSEWHEEL`; a successful `PostMessageW` can therefore be discarded when
+the opaque launcher is still at that point. For the `Chrome_WidgetWin_1`
+framework sink, the adapter uses a bounded `SendMessageTimeoutW` dispatch. Only
+during that synchronous call, the launcher has an empty hit-test region; its
+default region is restored before returning. This does not hide, deactivate,
+move, reorder, recreate, or restyle the launcher. If a future launcher window
+has a custom region, the compatibility path returns `Unsupported` instead of
+overwriting it.
 
 Confirmed clicks resolve and freeze the same target before the launcher hides.
 After hide, the adapter verifies that the cursor, root HWND, PID, and deepest
@@ -106,9 +117,11 @@ The product scenarios cover:
 5. precise vertical wheel remains visible and is delivered once;
 6. a test receiver that activates from its wheel handler cannot trigger
    Launchpad auto-hide;
-7. hover updates launcher classification and is not delivered.
+7. hover updates launcher classification and is not delivered;
+8. a headful Microsoft Edge page receives a downward wheel and reports an
+   actual positive `scrollY`.
 
-The runner also verifies exact nested target identity, coordinates, modifiers,
+The runner also verifies exact wheel sink/root identity, coordinates, modifiers,
 launcher PID/window continuity, focus, and Z-order. Windows observes beyond
 the bounded receiver-activation interval; macOS compares the real on-screen
 window order and native key-window focus before and after wheel delivery. The
@@ -121,7 +134,11 @@ one-shot target/time correlation and signed wheel-coordinate extraction are
 covered by pure Windows unit tests. The Windows runner temporarily selects
 focus-based OS wheel routing and restores the user's previous system setting,
 which removes hosted-desktop hover-routing races without sharing the product's
-targeted `PostMessageW` delivery path. Both OS jobs run in
+targeted delivery path. The separate Edge compatibility scenario keeps the
+machine's real routing setting, opens a guest-mode isolated profile to avoid
+first-run/sync overlays, asserts `scrollY > 0`, and verifies the launcher's
+window region, style, HWND, PID, visibility, foreground status, and Z-order are
+unchanged. Both OS jobs run in
 `.github/workflows/input-routing-e2e.yml`.
 
 Local commands:
@@ -130,6 +147,7 @@ Local commands:
 cargo build --bins
 target/debug/input_routing_scenarios
 target/debug/input_routing_scenarios --product
+target/debug/input_routing_scenarios --browser-compat
 cargo fmt --check
 cargo test
 cargo clippy --all-targets --all-features
