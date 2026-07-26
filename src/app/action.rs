@@ -1049,11 +1049,27 @@ mod tests {
     #[test]
     fn search_backspace_only_when_preedit_empty() {
         assert_eq!(
-            keyboard_action(false, false, true, true, false, Some(KeyCode::Backspace), None),
+            keyboard_action(
+                false,
+                false,
+                true,
+                true,
+                false,
+                Some(KeyCode::Backspace),
+                None
+            ),
             KeyAction::SearchBackspace
         );
         assert_eq!(
-            keyboard_action(false, false, true, false, false, Some(KeyCode::Backspace), None),
+            keyboard_action(
+                false,
+                false,
+                true,
+                false,
+                false,
+                Some(KeyCode::Backspace),
+                None
+            ),
             KeyAction::SearchBackspaceBlocked
         );
     }
@@ -1073,26 +1089,56 @@ mod tests {
     #[test]
     fn search_arrows_blocked_while_preedit_nonempty() {
         assert_eq!(
-            keyboard_action(false, false, true, false, false, Some(KeyCode::ArrowLeft), None),
+            keyboard_action(
+                false,
+                false,
+                true,
+                false,
+                false,
+                Some(KeyCode::ArrowLeft),
+                None
+            ),
             KeyAction::SearchLeftBlocked
         );
         assert_eq!(
-            keyboard_action(false, false, true, false, false, Some(KeyCode::ArrowRight), None),
+            keyboard_action(
+                false,
+                false,
+                true,
+                false,
+                false,
+                Some(KeyCode::ArrowRight),
+                None
+            ),
             KeyAction::SearchRightBlocked
         );
     }
 
     #[test]
     fn search_printable_char_routes_to_search_char() {
-        let action =
-            keyboard_action(false, false, true, true, false, Some(KeyCode::KeyA), Some("a"));
+        let action = keyboard_action(
+            false,
+            false,
+            true,
+            true,
+            false,
+            Some(KeyCode::KeyA),
+            Some("a"),
+        );
         assert_eq!(action, KeyAction::SearchChar("a".to_string()));
     }
 
     #[test]
     fn search_char_blocked_while_preedit_nonempty() {
-        let action =
-            keyboard_action(false, false, true, false, false, Some(KeyCode::KeyA), Some("a"));
+        let action = keyboard_action(
+            false,
+            false,
+            true,
+            false,
+            false,
+            Some(KeyCode::KeyA),
+            Some("a"),
+        );
         assert_eq!(action, KeyAction::None);
     }
 
