@@ -32,6 +32,12 @@ pub struct Settings {
     /// until the user opts in from the settings panel.
     #[serde(default)]
     pub debug_keys_enabled: bool,
+    /// Shows the on-screen FPS overlay (top-right). The frame rate is
+    /// measured from real presentation statistics where the platform exposes
+    /// them (DXGI `GetFrameStatistics` on Windows) and from a
+    /// `frame.present()` cadence EMA otherwise. Off by default.
+    #[serde(default)]
+    pub show_fps: bool,
 }
 
 const fn default_show_steam_apps() -> bool {
@@ -46,6 +52,7 @@ impl Default for Settings {
             search_includes_hidden: false,
             show_steam_apps: true,
             debug_keys_enabled: false,
+            show_fps: false,
         }
     }
 }
@@ -97,6 +104,7 @@ mod tests {
         assert!(!s.search_includes_hidden);
         assert!(s.show_steam_apps);
         assert!(!s.debug_keys_enabled);
+        assert!(!s.show_fps);
     }
 
     #[test]
@@ -107,6 +115,7 @@ mod tests {
             search_includes_hidden: true,
             show_steam_apps: false,
             debug_keys_enabled: true,
+            show_fps: true,
         };
         let bytes = serde_json::to_vec(&s).unwrap();
         let decoded: Settings = serde_json::from_slice(&bytes).unwrap();
@@ -134,6 +143,19 @@ mod tests {
         }"#;
         let decoded: Settings = serde_json::from_slice(json).unwrap();
         assert!(!decoded.debug_keys_enabled);
+    }
+
+    #[test]
+    fn older_json_defaults_show_fps_to_disabled() {
+        let json = br#"{
+            "sort_order":"Name",
+            "frequent_apps_enabled":false,
+            "search_includes_hidden":false,
+            "show_steam_apps":true,
+            "debug_keys_enabled":false
+        }"#;
+        let decoded: Settings = serde_json::from_slice(json).unwrap();
+        assert!(!decoded.show_fps);
     }
 
     #[test]

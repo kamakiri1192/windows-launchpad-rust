@@ -39,6 +39,7 @@ impl App {
                 show_steam_apps: self.settings.show_steam_apps,
                 search_includes_hidden: self.settings.search_includes_hidden,
                 debug_keys_enabled: self.settings.debug_keys_enabled,
+                show_fps: self.settings.show_fps,
                 hidden_count,
                 progress: self.settings_panel_progress,
             },
@@ -220,6 +221,8 @@ fn settings_panel_copy<'a>(
         search_hidden_detail: "検索中だけ、隠したアプリも結果に表示します",
         debug_label: "デバッグ機能",
         debug_detail: "開発用ショートカットキーを有効にします",
+        show_fps_label: "FPSを表示",
+        show_fps_detail: "画面右上にフレームレートを表示します",
         reset_cache_label: "キャッシュをリセット",
         reset_cache_detail: "アイコンを再抽出します",
         reset_settings_label: "設定をリセット",
@@ -253,6 +256,9 @@ pub(crate) fn settings_press_target_from_layout_hit(
         }
         layout::settings_panel::SettingsPanelHit::DebugToggle => {
             crate::app::state::SettingsPressTarget::DebugToggle
+        }
+        layout::settings_panel::SettingsPanelHit::FpsToggle => {
+            crate::app::state::SettingsPressTarget::FpsToggle
         }
         layout::settings_panel::SettingsPanelHit::ResetCache => {
             crate::app::state::SettingsPressTarget::ResetCache
@@ -540,11 +546,28 @@ fn build_settings_panel_instances(
             );
         }
         SettingsCategory::System => {
-            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 2);
+            // Row 0: FPS overlay toggle (switch, no chevron).
+            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 1);
+            toggle_instances(
+                [content_right - 28.0 * scale, first_top + row_h * 0.5],
+                settings.show_fps,
+                scale,
+                instances,
+            );
+            // Rows 1-2: Reset cache / reset settings (chevron action rows).
+            settings_row_backgrounds(
+                content_left,
+                first_top + SETTINGS_ROW_STEP * scale,
+                row_w,
+                row_h,
+                scale,
+                instances,
+                2,
+            );
             for i in 0..2 {
                 instances.push(control_icon(
                     content_right - 14.0 * scale,
-                    first_top + i as f32 * SETTINGS_ROW_STEP * scale + row_h * 0.5,
+                    first_top + (i + 1) as f32 * SETTINGS_ROW_STEP * scale + row_h * 0.5,
                     9.0 * scale,
                     ControlKind::Chevron,
                     SETTINGS_MUTED,

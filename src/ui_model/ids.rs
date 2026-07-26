@@ -78,6 +78,11 @@ impl UiId {
         Self::new(format!("backdrop:{}", key.as_ref()))
     }
 
+    /// The HUD-style FPS overlay (top-right corner), drawn above all content.
+    pub fn fps_overlay() -> Self {
+        Self::new("fps-overlay")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

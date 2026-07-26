@@ -7,6 +7,7 @@
 //! - [`settings`]: settings panel ink, text, and animation.
 //! - [`grid`]: grid relayout, tile springs, edit-mode animation.
 //! - [`icons`]: icon cache integration, worker results, app-list diff.
+//! - [`overlay`]: HUD-style overlays (FPS counter).
 //! - [`helpers`]: shared utilities (color blend, SpringPos trait, animation).
 
 mod controls;
@@ -14,6 +15,7 @@ mod folders;
 mod grid;
 mod helpers;
 mod icons;
+mod overlay;
 mod settings;
 
 pub(crate) use settings::{settings_category_id, settings_press_target_from_layout_hit};

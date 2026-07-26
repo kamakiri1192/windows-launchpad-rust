@@ -113,6 +113,7 @@ pub enum SettingsPanelHit {
     SteamToggle,
     SearchHiddenToggle,
     DebugToggle,
+    FpsToggle,
     ResetCache,
     ResetSettings,
     Inside,
@@ -131,6 +132,7 @@ impl SettingsPanelHit {
             Self::SteamToggle => HitTarget::settings_toggle("steam-apps"),
             Self::SearchHiddenToggle => HitTarget::settings_toggle("search-hidden"),
             Self::DebugToggle => HitTarget::settings_toggle("debug"),
+            Self::FpsToggle => HitTarget::settings_toggle("show-fps"),
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
             Self::Inside => HitTarget::Settings {
@@ -203,6 +205,7 @@ pub struct SettingsPanelInput {
     pub show_steam_apps: bool,
     pub search_includes_hidden: bool,
     pub debug_keys_enabled: bool,
+    pub show_fps: bool,
     pub hidden_count: usize,
     pub progress: f32,
 }
@@ -223,6 +226,8 @@ pub struct SettingsPanelCopy<'a> {
     pub search_hidden_detail: &'a str,
     pub debug_label: &'a str,
     pub debug_detail: &'a str,
+    pub show_fps_label: &'a str,
+    pub show_fps_detail: &'a str,
     pub reset_cache_label: &'a str,
     pub reset_cache_detail: &'a str,
     pub reset_settings_label: &'a str,
@@ -351,11 +356,18 @@ pub fn hit_test(
             }
         }
         SettingsCategoryId::System => {
+            // Row 0: FPS overlay toggle.
             if point_in_row(point, content_left, first_top, row_w, row_h) {
+                return SettingsPanelHit::FpsToggle;
+            }
+            // Row 1: Reset cache action.
+            let reset_cache_top = first_top + ROW_STEP * scale;
+            if point_in_row(point, content_left, reset_cache_top, row_w, row_h) {
                 return SettingsPanelHit::ResetCache;
             }
-            let reset_top = first_top + ROW_STEP * scale;
-            if point_in_row(point, content_left, reset_top, row_w, row_h) {
+            // Row 2: Reset settings action.
+            let reset_settings_top = first_top + ROW_STEP * scale * 2.0;
+            if point_in_row(point, content_left, reset_settings_top, row_w, row_h) {
                 return SettingsPanelHit::ResetSettings;
             }
         }
@@ -393,6 +405,8 @@ pub fn build(input: SettingsPanelInput) -> SettingsPanelModel {
         search_hidden_detail: "Show hidden apps only while searching.",
         debug_label: "Developer shortcuts",
         debug_detail: "Enable single-key debug shortcuts.",
+        show_fps_label: "Show FPS",
+        show_fps_detail: "Display the frame rate in the top-right corner.",
         reset_cache_label: "Reset cache",
         reset_cache_detail: "Extract icons again.",
         reset_settings_label: "Reset settings",
@@ -787,13 +801,41 @@ fn push_text_views(
             );
         }
         SettingsCategoryId::System => {
+            // Row 0: FPS overlay toggle.
             let y0 = first_top + row_h * 0.5;
+            push_text(
+                render,
+                "show-fps-label",
+                copy.show_fps_label,
+                content_left + 16.0 * scale,
+                y0,
+                LABEL_SIZE,
+                LABEL_LINE * scale,
+                INK,
+                TextRole::SettingsRow,
+                TextAlign::Start,
+            );
+            push_text(
+                render,
+                "show-fps-detail",
+                copy.show_fps_detail,
+                content_left + 16.0 * scale,
+                y0 + 16.0 * scale,
+                DETAIL_SIZE,
+                DETAIL_LINE * scale,
+                MUTED,
+                TextRole::SettingsDetail,
+                TextAlign::Start,
+            );
+
+            // Row 1: Reset cache action.
+            let y1 = first_top + ROW_STEP * scale + row_h * 0.5;
             push_text(
                 render,
                 "reset-cache-label",
                 copy.reset_cache_label,
                 content_left + 16.0 * scale,
-                y0,
+                y1,
                 LABEL_SIZE,
                 LABEL_LINE * scale,
                 INK,
@@ -805,7 +847,7 @@ fn push_text_views(
                 "reset-cache-detail",
                 copy.reset_cache_detail,
                 content_left + 16.0 * scale,
-                y0 + 16.0 * scale,
+                y1 + 16.0 * scale,
                 DETAIL_SIZE,
                 DETAIL_LINE * scale,
                 MUTED,
@@ -813,13 +855,14 @@ fn push_text_views(
                 TextAlign::Start,
             );
 
-            let y1 = first_top + ROW_STEP * scale + row_h * 0.5;
+            // Row 2: Reset settings action.
+            let y2 = first_top + ROW_STEP * scale * 2.0 + row_h * 0.5;
             push_text(
                 render,
                 "reset-settings-label",
                 copy.reset_settings_label,
                 content_left + 16.0 * scale,
-                y1,
+                y2,
                 LABEL_SIZE,
                 LABEL_LINE * scale,
                 INK,
@@ -831,7 +874,7 @@ fn push_text_views(
                 "reset-settings-detail",
                 copy.reset_settings_detail,
                 content_left + 16.0 * scale,
-                y1 + 16.0 * scale,
+                y2 + 16.0 * scale,
                 DETAIL_SIZE,
                 DETAIL_LINE * scale,
                 MUTED,
@@ -981,14 +1024,25 @@ fn push_hit_regions(
         }
         SettingsCategoryId::System => {
             hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("reset-cache"),
+                UiId::settings_row("toggle-show-fps"),
                 Rect::new(content_left, first_top, row_w, row_h),
+                SettingsPanelHit::FpsToggle.target(),
+                Z_CONTROL + 1,
+            ));
+            hits.push(HitRegion::rect_inclusive(
+                UiId::settings_row("reset-cache"),
+                Rect::new(content_left, first_top + ROW_STEP * scale, row_w, row_h),
                 SettingsPanelHit::ResetCache.target(),
                 Z_CONTROL + 1,
             ));
             hits.push(HitRegion::rect_inclusive(
                 UiId::settings_row("reset-settings"),
-                Rect::new(content_left, first_top + ROW_STEP * scale, row_w, row_h),
+                Rect::new(
+                    content_left,
+                    first_top + ROW_STEP * scale * 2.0,
+                    row_w,
+                    row_h,
+                ),
                 SettingsPanelHit::ResetSettings.target(),
                 Z_CONTROL + 1,
             ));
@@ -1061,6 +1115,8 @@ mod tests {
             search_hidden_detail: "Search hidden detail",
             debug_label: "Developer shortcuts",
             debug_detail: "Debug detail",
+            show_fps_label: "Show FPS",
+            show_fps_detail: "Show FPS detail",
             reset_cache_label: "Reset cache",
             reset_cache_detail: "Reset cache detail",
             reset_settings_label: "Reset settings",
@@ -1080,6 +1136,7 @@ mod tests {
             show_steam_apps: true,
             search_includes_hidden: false,
             debug_keys_enabled: false,
+            show_fps: false,
             hidden_count: 0,
             progress: 1.0,
         }
@@ -1268,6 +1325,7 @@ mod tests {
         let x = layout.content_left(1.0) + 10.0;
         let y0 = layout.first_row_top(1.0) + ROW_H * 0.5;
         let y1 = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
+        let y2 = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
 
         assert_eq!(
             hit_test(&layout, 1.0, SettingsCategoryId::Search, Point::new(x, y0)),
@@ -1275,10 +1333,14 @@ mod tests {
         );
         assert_eq!(
             hit_test(&layout, 1.0, SettingsCategoryId::System, Point::new(x, y0)),
-            SettingsPanelHit::ResetCache
+            SettingsPanelHit::FpsToggle
         );
         assert_eq!(
             hit_test(&layout, 1.0, SettingsCategoryId::System, Point::new(x, y1)),
+            SettingsPanelHit::ResetCache
+        );
+        assert_eq!(
+            hit_test(&layout, 1.0, SettingsCategoryId::System, Point::new(x, y2)),
             SettingsPanelHit::ResetSettings
         );
     }
@@ -1378,6 +1440,7 @@ mod tests {
                 show_steam_apps: true,
                 search_includes_hidden: false,
                 debug_keys_enabled: false,
+                show_fps: false,
                 hidden_count: 3,
                 progress: 1.0,
             },
