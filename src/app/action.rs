@@ -882,7 +882,17 @@ impl App {
     /// with the historical grace-period / edit-mode / settings exceptions.
     fn handle_focus(&mut self, focused: bool) {
         debug_log!("window_event: Focused({})", focused);
+        self.window_focused = focused;
+        if focused {
+            self.awaiting_initial_focus = false;
+            return;
+        }
         if !focused {
+            #[cfg(target_os = "macos")]
+            if self.awaiting_initial_focus {
+                debug_log!("window_event: initial Focused(false) ignored until focus acquisition");
+                return;
+            }
             #[cfg(windows)]
             let correlated_wheel_activation = crate::platform::windows::input_passthrough::
                 consume_correlated_wheel_receiver_activation();

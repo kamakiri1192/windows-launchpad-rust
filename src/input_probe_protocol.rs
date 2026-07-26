@@ -31,6 +31,8 @@ pub enum ProbeRecord {
         pid: u32,
         window: u64,
         visible: bool,
+        focused: bool,
+        z_order: i64,
         generation: u64,
         region: String,
         router_state: String,

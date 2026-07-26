@@ -301,6 +301,14 @@ pub struct App {
     /// so we track it ourselves to make `hide()` idempotent (avoids a hide
     /// storm when a focus-loss event races an app-launch hide).
     pub visible: bool,
+    /// Last focus state reported by winit. Native input QA publishes this so
+    /// focus stability is machine-verifiable rather than inferred from
+    /// visibility.
+    pub window_focused: bool,
+    /// macOS can queue an initial `Focused(false)` while a newly created
+    /// window's renderer is still initializing. Until the requested
+    /// `Focused(true)` arrives, that stale transition must not hide the window.
+    pub awaiting_initial_focus: bool,
     /// When the most recent `summon()` happened. A `Focused(false)` that
     /// arrives within `SUMMON_FOCUS_GRACE` of a summon is treated as a
     /// focus-transition artifact (SetForegroundWindow can briefly lose and
@@ -396,6 +404,8 @@ impl App {
             last_redraw: None,
             last_frame_dt_ms: 0.0,
             visible: true,
+            window_focused: false,
+            awaiting_initial_focus: cfg!(target_os = "macos"),
             last_summon: None,
             should_quit: false,
             #[cfg(windows)]

@@ -2,6 +2,7 @@
 //! per-user single-instance handoff.
 
 use std::collections::hash_map::DefaultHasher;
+use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::os::unix::net::UnixDatagram;
@@ -22,6 +23,55 @@ const MENU_SHOW: &str = "launchpad.show";
 const MENU_SETTINGS: &str = "launchpad.settings";
 const MENU_QUIT: &str = "launchpad.quit";
 const SUMMON_MESSAGE: &[u8] = b"show";
+
+/// Current on-screen ordering index for a real `NSWindow::windowNumber`.
+/// Lower values are closer to the front. This is used only for native QA
+/// snapshots; product routing never mutates or depends on the result.
+pub fn window_z_order(window_number: u32) -> Option<usize> {
+    if window_number == 0 {
+        return None;
+    }
+    unsafe {
+        const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
+        const K_CG_NULL_WINDOW_ID: u32 = 0;
+        let descriptions =
+            CGWindowListCopyWindowInfo(K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY, K_CG_NULL_WINDOW_ID);
+        if descriptions.is_null() {
+            return None;
+        }
+        let count = CFArrayGetCount(descriptions);
+        let mut result = None;
+        for index in 0..count {
+            let dictionary = CFArrayGetValueAtIndex(descriptions, index);
+            let number = CFDictionaryGetValue(dictionary, kCGWindowNumber);
+            let mut observed = 0i32;
+            if !number.is_null()
+                && CFNumberGetValue(number, 3, (&mut observed as *mut i32).cast())
+                && observed as u32 == window_number
+            {
+                result = Some(index as usize);
+                break;
+            }
+        }
+        CFRelease(descriptions);
+        result
+    }
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    static kCGWindowNumber: *const c_void;
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFArrayGetCount(array: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
+    fn CFDictionaryGetValue(dictionary: *const c_void, key: *const c_void) -> *const c_void;
+    fn CFNumberGetValue(number: *const c_void, number_type: isize, value: *mut c_void) -> bool;
+    fn CFRelease(value: *const c_void);
+}
 
 /// Make the accessory application active before asking its window to become
 /// key. `Window::focus_window` alone does not reliably activate an unbundled

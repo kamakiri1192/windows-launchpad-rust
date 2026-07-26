@@ -55,13 +55,15 @@ impl App {
                 .as_ref()
                 .map_or(0.0, |scroller| scroller.position);
             let signature = format!(
-                "{}|{:?}|{:?}|{:.3}|{:.3}|{:.3}",
+                "{}|{:?}|{:?}|{:.3}|{:.3}|{:.3}|{}|{}",
                 snapshot.visible,
                 snapshot.region,
                 snapshot.router_state,
                 page_position,
                 self.pointer_phys_x,
-                self.pointer_phys_y
+                self.pointer_phys_y,
+                self.window_focused,
+                self.native_window_z_order(),
             );
             if self.input_qa_last_signature.as_deref() == Some(&signature) {
                 return;
@@ -72,6 +74,8 @@ impl App {
                 pid: std::process::id(),
                 window: self.native_window_identity(),
                 visible: snapshot.visible,
+                focused: self.window_focused,
+                z_order: self.native_window_z_order(),
                 generation: snapshot.generation,
                 region: format!("{:?}", snapshot.region),
                 router_state: format!("{:?}", snapshot.router_state),
@@ -97,8 +101,33 @@ impl App {
         };
         match handle.as_raw() {
             RawWindowHandle::Win32(handle) => handle.hwnd.get() as u64,
-            RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as usize as u64,
+            RawWindowHandle::AppKit(handle) => {
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2_app_kit::NSView;
+                    let view = unsafe { &*(handle.ns_view.as_ptr() as *const NSView) };
+                    view.window()
+                        .map_or(0, |window| window.windowNumber() as u64)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    handle.ns_view.as_ptr() as usize as u64
+                }
+            }
             _ => 0,
+        }
+    }
+
+    pub(crate) fn native_window_z_order(&self) -> i64 {
+        #[cfg(target_os = "macos")]
+        {
+            let window = self.native_window_identity();
+            return crate::platform::macos::integration::window_z_order(window as u32)
+                .map_or(-1, |index| index as i64);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            -1
         }
     }
 

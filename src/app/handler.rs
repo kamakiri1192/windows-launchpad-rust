@@ -100,11 +100,14 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_accepts_first_mouse(true);
             if std::env::var_os("LAUNCHPAD_PROFILE_KEEP_VISIBLE").as_deref()
                 == Some(std::ffi::OsStr::new("1"))
+                || std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some()
             {
                 // Keep performance runs genuinely visible even while the
                 // automation process samples logs in another app. Otherwise
                 // Core Animation throttles an occluded CAMetalLayer and the
-                // result measures window occlusion instead of rendering.
+                // result measures window occlusion instead of rendering. The
+                // native input QA window likewise must stay directly above its
+                // passive probe so target resolution is deterministic.
                 attrs = attrs.with_window_level(WindowLevel::AlwaysOnTop);
             }
         }
@@ -146,8 +149,6 @@ impl ApplicationHandler<UserEvent> for App {
             if self._macos_input.is_none() {
                 eprintln!("input-routing: failed to install macOS local event monitor");
             }
-            crate::platform::macos::integration::activate_application();
-            window.focus_window();
         }
         #[cfg(windows)]
         {
@@ -175,6 +176,15 @@ impl ApplicationHandler<UserEvent> for App {
             !self.qa_enabled(),
         ))
         .expect("init renderer");
+        #[cfg(target_os = "macos")]
+        {
+            // Renderer initialization may block the event loop long enough for
+            // AppKit's initial focus notification to become stale. Reassert
+            // activation only after the window can process the resulting
+            // events.
+            crate::platform::macos::integration::activate_application();
+            renderer.window.focus_window();
+        }
         self.timer.mark(prefix::STARTUP, "renderer initialization");
         let bounds = self.layout.bounds(w as f32);
         let scroller = Scroller::new(bounds);

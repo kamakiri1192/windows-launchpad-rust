@@ -177,6 +177,36 @@ mod windows_runner {
         Ok(())
     }
 
+    fn assert_probe_destination(
+        record: &ProbeRecord,
+        expected_pid: u32,
+        expected_target: u64,
+        expected_root: u64,
+        expected_x: i32,
+        expected_y: i32,
+        case_name: &str,
+    ) -> Result<(), String> {
+        match record {
+            ProbeRecord::Input {
+                target,
+                root,
+                pid,
+                screen,
+                ..
+            } if *pid == expected_pid
+                && *target == expected_target
+                && *root == expected_root
+                && screen.x == expected_x
+                && screen.y == expected_y =>
+            {
+                Ok(())
+            }
+            other => Err(format!(
+                "{case_name}: wrong PID/window/coordinate destination: {other:?}"
+            )),
+        }
+    }
+
     fn drain(receiver: &mpsc::Receiver<ProbeRecord>) {
         while receiver.try_recv().is_ok() {}
     }
@@ -239,7 +269,9 @@ mod windows_runner {
                 matches!(record, ProbeRecord::Ready { .. })
             })?;
             let ProbeRecord::Ready {
+                pid: probe_pid,
                 top_level: probe_window,
+                child: probe_child,
                 rect,
                 ..
             } = ready
@@ -254,6 +286,7 @@ mod windows_runner {
                     ProbeRecord::LauncherSnapshot {
                         window,
                         visible: true,
+                        focused: true,
                         ..
                     } if *window != 0
                 )
@@ -270,6 +303,11 @@ mod windows_runner {
             let hwnd = HWND(window as usize as *mut _);
             let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
+            // This lies inside the probe's nested child but remains outside
+            // the launcher's page frame. The observed product snapshot below
+            // is the authoritative geometry check.
+            let point_x = rect.left + 50;
+            let point_y = rect.top + 50;
             unsafe {
                 SetWindowPos(
                     HWND(probe_window as usize as *mut _),
@@ -297,10 +335,10 @@ mod windows_runner {
                 .map_err(|error| error.to_string())?;
                 let _ = SetForegroundWindow(hwnd);
                 SetCursorPos(rect.left + 300, rect.top + 300).map_err(|error| error.to_string())?;
-                SetCursorPos(rect.left + 50, rect.top + 50).map_err(|error| error.to_string())?;
+                SetCursorPos(point_x, point_y).map_err(|error| error.to_string())?;
                 let hit = WindowFromPoint(POINT {
-                    x: rect.left + 50,
-                    y: rect.top + 50,
+                    x: point_x,
+                    y: point_y,
                 });
                 if hit != hwnd {
                     return Err(format!(
@@ -392,6 +430,24 @@ mod windows_runner {
                             } if *observed == button
                         )
                     })?;
+                    assert_probe_destination(
+                        &down_event,
+                        probe_pid,
+                        probe_child,
+                        probe_window,
+                        point_x,
+                        point_y,
+                        case_name,
+                    )?;
+                    assert_probe_destination(
+                        &up_event,
+                        probe_pid,
+                        probe_child,
+                        probe_window,
+                        point_x,
+                        point_y,
+                        case_name,
+                    )?;
                     let context_menu = if case_name == "right_click" {
                         let context_menu = wait_for(&probe_rx, Duration::from_secs(5), |record| {
                             matches!(
@@ -402,6 +458,15 @@ mod windows_runner {
                                 }
                             )
                         })?;
+                        assert_probe_destination(
+                            &context_menu,
+                            probe_pid,
+                            probe_child,
+                            probe_window,
+                            point_x,
+                            point_y,
+                            case_name,
+                        )?;
                         if !matches!(
                             context_menu,
                             ProbeRecord::Input {
@@ -470,8 +535,7 @@ mod windows_runner {
                 "left_drag" => {
                     send(&[mouse_input(MOUSEEVENTF_LEFTDOWN.0, 0)])?;
                     unsafe {
-                        SetCursorPos(rect.left + 80, rect.top + 50)
-                            .map_err(|error| error.to_string())?;
+                        SetCursorPos(point_x + 30, point_y).map_err(|error| error.to_string())?;
                     }
                     let drag = wait_launcher_snapshot(&launcher_rx, |record| {
                         matches!(
@@ -504,8 +568,7 @@ mod windows_runner {
                 "right_drag_cancel" => {
                     send(&[mouse_input(MOUSEEVENTF_RIGHTDOWN.0, 0)])?;
                     unsafe {
-                        SetCursorPos(rect.left + 80, rect.top + 50)
-                            .map_err(|error| error.to_string())?;
+                        SetCursorPos(point_x + 30, point_y).map_err(|error| error.to_string())?;
                     }
                     wait_launcher_snapshot(&launcher_rx, |record| {
                         matches!(
@@ -532,6 +595,11 @@ mod windows_runner {
                     )?;
                 }
                 "vertical_wheel" | "vertical_wheel_receiver_activation" => {
+                    if unsafe { GetForegroundWindow() } != hwnd {
+                        return Err(format!(
+                            "{case_name}: launcher was not foreground before OS wheel generation"
+                        ));
+                    }
                     send(&[mouse_input(MOUSEEVENTF_WHEEL.0, 30)])?;
                     let wheel = wait_for(&probe_rx, Duration::from_secs(5), |record| {
                         matches!(
@@ -542,8 +610,25 @@ mod windows_runner {
                             }
                         )
                     })?;
-                    if !matches!(wheel, ProbeRecord::Input { pid: target_pid, .. } if target_pid != pid)
-                    {
+                    assert_probe_destination(
+                        &wheel,
+                        probe_pid,
+                        probe_child,
+                        probe_window,
+                        point_x,
+                        point_y,
+                        case_name,
+                    )?;
+                    if !matches!(
+                        &wheel,
+                        ProbeRecord::Input {
+                            event: ProbeEvent::VerticalWheel { key_state: 0, .. },
+                            ..
+                        }
+                    ) {
+                        return Err(format!("{case_name}: modifier/key state changed"));
+                    }
+                    if probe_pid == pid {
                         return Err("vertical_wheel: wrong target PID".to_owned());
                     }
                     assert_no_probe_input(
@@ -586,7 +671,7 @@ mod windows_runner {
                 }
                 "hover" => {
                     unsafe {
-                        SetCursorPos(rect.left + 55, rect.top + 55)
+                        SetCursorPos(point_x + 5, point_y + 5)
                             .map_err(|error| error.to_string())?;
                     }
                     wait_launcher_snapshot(&launcher_rx, |record| {
@@ -718,6 +803,7 @@ mod windows_runner {
 
 #[cfg(target_os = "macos")]
 mod macos_runner {
+    use std::ffi::c_void;
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
     use std::sync::mpsc;
@@ -726,10 +812,57 @@ mod macos_runner {
     use launchpad_windows::input_probe_protocol::{
         NativePhase, ProbeButton, ProbeEvent, ProbeRecord,
     };
+    use objc2_app_kit::NSWorkspace;
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventTapLocation, CGEventType, CGMouseButton, CGScrollEventUnit,
     };
     use objc2_foundation::NSPoint;
+
+    fn frontmost_pid() -> Option<u32> {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|application| application.processIdentifier() as u32)
+    }
+
+    fn window_z_order(window_number: u32) -> Option<usize> {
+        unsafe {
+            let descriptions = CGWindowListCopyWindowInfo(1, 0);
+            if descriptions.is_null() {
+                return None;
+            }
+            let count = CFArrayGetCount(descriptions);
+            let mut result = None;
+            for index in 0..count {
+                let dictionary = CFArrayGetValueAtIndex(descriptions, index);
+                let number = CFDictionaryGetValue(dictionary, kCGWindowNumber);
+                let mut observed = 0i32;
+                if !number.is_null()
+                    && CFNumberGetValue(number, 3, (&mut observed as *mut i32).cast())
+                    && observed as u32 == window_number
+                {
+                    result = Some(index as usize);
+                    break;
+                }
+            }
+            CFRelease(descriptions);
+            result
+        }
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        static kCGWindowNumber: *const c_void;
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFArrayGetCount(array: *const c_void) -> isize;
+        fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
+        fn CFDictionaryGetValue(dictionary: *const c_void, key: *const c_void) -> *const c_void;
+        fn CFNumberGetValue(number: *const c_void, number_type: isize, value: *mut c_void) -> bool;
+        fn CFRelease(value: *const c_void);
+    }
 
     fn sibling_binary(name: &str) -> Result<std::path::PathBuf, String> {
         let current = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -891,13 +1024,87 @@ mod macos_runner {
         Ok(())
     }
 
+    fn assert_probe_destination(
+        record: &ProbeRecord,
+        expected_pid: u32,
+        expected_window: u64,
+        expected_local_x: i32,
+        expected_local_y: i32,
+        case_name: &str,
+    ) -> Result<(), String> {
+        match record {
+            ProbeRecord::Input {
+                target,
+                root,
+                pid,
+                local,
+                ..
+            } if *pid == expected_pid
+                && *target == expected_window
+                && *root == expected_window
+                && local.x == expected_local_x
+                && local.y == expected_local_y =>
+            {
+                Ok(())
+            }
+            other => Err(format!(
+                "{case_name}: wrong PID/window/coordinate destination: {other:?}"
+            )),
+        }
+    }
+
+    fn assert_launcher_stable(
+        rx: &mpsc::Receiver<ProbeRecord>,
+        pid: u32,
+        window: u64,
+        z_order: usize,
+        duration: Duration,
+        case_name: &str,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + duration;
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(ProbeRecord::LauncherSnapshot {
+                    pid: observed_pid,
+                    window: observed_window,
+                    visible,
+                    focused,
+                    ..
+                }) if observed_pid != pid || observed_window != window || !visible || !focused => {
+                    return Err(format!(
+                        "{case_name}: launcher identity/visibility/focus changed"
+                    ));
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        if frontmost_pid() != Some(pid) {
+            return Err(format!("{case_name}: launcher lost foreground focus"));
+        }
+        if window_z_order(window as u32) != Some(z_order) {
+            return Err(format!("{case_name}: launcher Z-order changed"));
+        }
+        Ok(())
+    }
+
     fn run_product_case(case_name: &str) -> Result<(), String> {
         let (mut probe, probe_rx) = start_process("native_input_probe", false, true)?;
         let mut launcher_slot: Option<Child> = None;
         let result = (|| {
-            wait_for(&probe_rx, Duration::from_secs(10), |record| {
+            let ready = wait_for(&probe_rx, Duration::from_secs(10), |record| {
                 matches!(record, ProbeRecord::Ready { .. })
             })?;
+            let ProbeRecord::Ready {
+                pid: probe_pid,
+                top_level: probe_window,
+                rect,
+                ..
+            } = ready
+            else {
+                unreachable!()
+            };
             let (launcher, launcher_rx) = start_process("launchpad-windows", true, false)?;
             launcher_slot = Some(launcher);
             let initial = wait_for(&launcher_rx, Duration::from_secs(45), |record| {
@@ -906,6 +1113,7 @@ mod macos_runner {
                     ProbeRecord::LauncherSnapshot {
                         window,
                         visible: true,
+                        focused: true,
                         ..
                     } if *window != 0
                 )
@@ -914,11 +1122,15 @@ mod macos_runner {
                 pid,
                 window,
                 generation,
+                z_order,
                 ..
             } = initial
             else {
                 unreachable!()
             };
+            if z_order < 0 || frontmost_pid() != Some(pid) {
+                return Err("launcher did not acquire macOS focus/Z-order".to_owned());
+            }
             move_pointer(150.0, 150.0)?;
             let outside = wait_for(&launcher_rx, Duration::from_secs(10), |record| {
                 matches!(
@@ -927,17 +1139,23 @@ mod macos_runner {
                         generation: next,
                         region,
                         visible: true,
+                        focused: true,
                         ..
                     } if *next > generation && region == "OutsideTransparent"
                 )
             })?;
             let ProbeRecord::LauncherSnapshot {
                 generation: outside_generation,
+                z_order: outside_z_order,
                 ..
             } = outside
             else {
                 unreachable!()
             };
+            let expected_local_x = 150 - rect.left;
+            let expected_local_y = rect.bottom - 150;
+            let stable_z_order = usize::try_from(outside_z_order)
+                .map_err(|_| "launcher missing from macOS on-screen Z-order".to_owned())?;
             drain(&probe_rx);
 
             match case_name {
@@ -994,8 +1212,24 @@ mod macos_runner {
                             } if *observed == button
                         )
                     })?;
+                    assert_probe_destination(
+                        &down,
+                        probe_pid,
+                        probe_window,
+                        expected_local_x,
+                        expected_local_y,
+                        case_name,
+                    )?;
+                    assert_probe_destination(
+                        &up,
+                        probe_pid,
+                        probe_window,
+                        expected_local_x,
+                        expected_local_y,
+                        case_name,
+                    )?;
                     if !matches!(
-                        (down, up),
+                        (&down, &up),
                         (
                             ProbeRecord::Input { serial: a, .. },
                             ProbeRecord::Input { serial: b, .. }
@@ -1003,6 +1237,18 @@ mod macos_runner {
                     ) {
                         return Err(format!("{case_name}: click ordering failed"));
                     }
+                    assert_no_input(
+                        &probe_rx,
+                        |event| {
+                            matches!(
+                                event,
+                                ProbeEvent::ButtonDown { button: observed }
+                                    | ProbeEvent::ButtonUp { button: observed }
+                                    if *observed == button
+                            )
+                        },
+                        case_name,
+                    )?;
                 }
                 "left_drag" | "right_drag_cancel" => {
                     let button = if case_name == "left_drag" {
@@ -1055,12 +1301,41 @@ mod macos_runner {
                             } if (*delta_y + 7.0).abs() < 0.01
                         )
                     })?;
-                    if !matches!(wheel, ProbeRecord::Input { pid: target, .. } if target != pid) {
+                    assert_probe_destination(
+                        &wheel,
+                        probe_pid,
+                        probe_window,
+                        expected_local_x,
+                        expected_local_y,
+                        case_name,
+                    )?;
+                    if probe_pid == pid {
                         return Err("vertical_wheel: self-delivery detected".to_owned());
+                    }
+                    if !matches!(
+                        &wheel,
+                        ProbeRecord::Input {
+                            event: ProbeEvent::VerticalWheel {
+                                key_state: 0,
+                                momentum_phase: NativePhase::Unavailable,
+                                ..
+                            },
+                            ..
+                        }
+                    ) {
+                        return Err("vertical_wheel: modifiers/momentum changed".to_owned());
                     }
                     assert_no_input(
                         &probe_rx,
                         |event| matches!(event, ProbeEvent::VerticalWheel { .. }),
+                        case_name,
+                    )?;
+                    assert_launcher_stable(
+                        &launcher_rx,
+                        pid,
+                        window,
+                        stable_z_order,
+                        Duration::from_millis(750),
                         case_name,
                     )?;
                 }

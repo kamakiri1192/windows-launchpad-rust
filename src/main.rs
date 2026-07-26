@@ -212,8 +212,16 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        let activation_policy =
+            if std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+                // A regular QA process can become the active application on a
+                // headless hosted desktop. Production remains an accessory.
+                ActivationPolicy::Regular
+            } else {
+                ActivationPolicy::Accessory
+            };
         event_loop_builder
-            .with_activation_policy(ActivationPolicy::Accessory)
+            .with_activation_policy(activation_policy)
             .with_default_menu(false);
     }
     let event_loop = event_loop_builder.build().expect("create event loop");
@@ -221,7 +229,9 @@ fn main() {
     let proxy = event_loop.create_proxy();
 
     #[cfg(target_os = "macos")]
-    let mut _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some() {
+    let mut _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some()
+        || std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some()
+    {
         None
     } else {
         match platform::macos::integration::SingleInstanceGuard::acquire() {
@@ -272,8 +282,9 @@ fn main() {
     .then(|| platform::windows::OsIntegrationHandle::spawn(proxy.clone()));
 
     #[cfg(target_os = "macos")]
-    let macos = (std::env::var_os(qa::SCENARIO_ENV).is_none())
-        .then(|| platform::macos::integration::MacOsIntegration::install(proxy.clone()));
+    let macos = (std::env::var_os(qa::SCENARIO_ENV).is_none()
+        && std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_none())
+    .then(|| platform::macos::integration::MacOsIntegration::install(proxy.clone()));
 
     let mut app = App::new(proxy, timer, cache, inbox, worker, input_routing_publisher);
     // Anchor the OS-integration thread for the whole process lifetime.

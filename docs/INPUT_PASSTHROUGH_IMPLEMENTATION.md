@@ -21,18 +21,21 @@ mutable app, renderer, layout, or window state.
 ### Windows
 
 The winit message hook intercepts the original `WM_MOUSEWHEEL`. It walks
-downward from the launcher with `GW_HWNDNEXT`, filters invisible, disabled,
-cloaked, transparent, and same-process windows, then selects the deepest
-eligible child. The unchanged `wParam` and `lParam` are queued once with
+downward from the launcher's `GA_ROOT` HWND with `GW_HWNDNEXT`, filters
+invisible, disabled, cloaked, transparent, and same-process windows, then
+selects the deepest eligible child. Resolving from `GA_ROOT` also covers wheel
+messages addressed to a focused child/input sink. Hit testing uses the signed
+screen point carried by wheel `lParam`, not the separately DPI-virtualized
+`MSG.pt`. The unchanged `wParam` and `lParam` are queued once with
 `PostMessageW`.
 
 Confirmed clicks resolve and freeze the same target before the launcher hides.
-After hide, the adapter verifies that the cursor and frozen target are
-unchanged, then uses one private-tagged `SendInput` batch for the complete
-button-down/button-up pair. Unlike direct button messages, this preserves
-normal Win32 activation, capture, and `WM_CONTEXTMENU` behavior. Wheel delivery
-does not call `SetWindowPos`, toggle Z-order, inject a global mouse stream, or
-hide/show the launcher.
+After hide, the adapter verifies that the cursor, root HWND, PID, and deepest
+child HWND are unchanged, then uses one private-tagged `SendInput` batch for
+the complete button-down/button-up pair. Unlike direct button messages, this
+preserves normal Win32 activation, capture, and `WM_CONTEXTMENU` behavior.
+Wheel delivery does not call `SetWindowPos`, toggle Z-order, inject a global
+mouse stream, or hide/show the launcher.
 
 Before click injection, a harmless targeted `WM_NULL` performs a structured
 UIPI preflight because `SendInput` itself does not identify UIPI blocking in
@@ -41,12 +44,13 @@ clicking a different window.
 
 Some receivers explicitly activate themselves from their wheel handler. This
 is not handled by the rejected broad `forwarding_wheel` / summon-grace
-workaround. A successful wheel queue records a one-shot correlation containing
-the launcher foreground state, exact receiver root HWND, and queue time. A
-focus-loss auto-hide is suppressed only when the new foreground window is that
-exact receiver root within the bounded interval; the record is consumed on the
-first focus-loss check. Unrelated or later focus changes keep normal auto-hide
-behavior.
+workaround. A wheel queue arms a one-shot correlation before `PostMessageW`
+(and removes it again if posting fails), so an immediately activating receiver
+cannot race the guard. The correlation contains the launcher foreground state,
+exact receiver root HWND, and queue time. A focus-loss auto-hide is suppressed
+only when the new foreground window is that exact receiver root within the
+bounded interval; the record is consumed on the first focus-loss check.
+Unrelated or later focus changes keep normal auto-hide behavior.
 
 ### macOS
 
@@ -60,6 +64,12 @@ part of the copied event. A scroll sequence keeps one target PID. Click
 down/up events are retained while the pure router resolves click versus drag;
 only a confirmed click is posted. Posted events carry a private source tag and
 same-process targets are rejected.
+
+The macOS lifecycle records a requested-focus state for initial creation and
+re-summon. Only a `Focused(false)` received before the requested
+`Focused(true)` is ignored; after acquisition, unrelated focus loss retains
+the normal auto-hide behavior. Native QA snapshots expose the real
+`NSWindow::windowNumber`, focused state, and Core Graphics Z-order.
 
 macOS targeted event posting requires Accessibility/Input Monitoring approval.
 Permission denial is reported as `DeliveryResult::PermissionDenied`; outside
@@ -93,10 +103,12 @@ The product scenarios cover:
    Launchpad auto-hide;
 7. hover updates launcher classification and is not delivered.
 
-The runner also verifies launcher PID/window continuity and, on Windows, wheel
-focus and Z-order stability beyond the bounded receiver-activation interval.
-The one-shot target/time correlation is covered by a pure Windows unit test.
-Both OS jobs run in
+The runner also verifies exact nested target identity, coordinates, modifiers,
+launcher PID/window continuity, focus, and Z-order. Windows observes beyond
+the bounded receiver-activation interval; macOS compares the real on-screen
+window order and frontmost process before and after wheel delivery. The
+one-shot target/time correlation and signed wheel-coordinate extraction are
+covered by pure Windows unit tests. Both OS jobs run in
 `.github/workflows/input-routing-e2e.yml`.
 
 Local commands:

@@ -165,6 +165,11 @@ impl App {
         debug_log!("summon: showing window (visible was {})", self.visible);
         r.window.set_visible(true);
         r.set_backdrop_capture_active(true);
+        #[cfg(target_os = "macos")]
+        {
+            self.awaiting_initial_focus = true;
+            self.window_focused = false;
+        }
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
         // so we also allow-set-foreground + re-assert focus. If it still fails

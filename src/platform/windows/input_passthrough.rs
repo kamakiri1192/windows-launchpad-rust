@@ -71,6 +71,14 @@ pub fn handle_message(raw_message: *const c_void, publisher: &InputRoutingPublis
     }
 
     let result = route_wheel(message);
+    if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+        let root = unsafe { GetAncestor(message.hwnd, GA_ROOT) };
+        let point = wheel_screen_point(message.lParam);
+        eprintln!(
+            "input-routing-qa: wheel source={:?} root={root:?} point=({}, {}) result={result:?}",
+            message.hwnd, point.x, point.y
+        );
+    }
     crate::debug_log!(
         "input-routing: windows wheel result={result:?} source={:?} wparam=0x{:x} lparam=0x{:x}",
         message.hwnd,
@@ -97,7 +105,20 @@ pub fn consume_correlated_wheel_receiver_activation() -> bool {
 }
 
 fn route_wheel(message: &MSG) -> DeliveryResult {
-    let target = locked_or_resolve_target(message.hwnd, message.pt, message.time);
+    // `WM_MOUSEWHEEL` follows keyboard focus and may therefore be addressed to
+    // a focused child/input sink rather than the launcher's top-level HWND.
+    // Z-order traversal is meaningful only between top-level windows.
+    let launcher = unsafe { GetAncestor(message.hwnd, GA_ROOT) };
+    let launcher = if launcher.is_invalid() {
+        message.hwnd
+    } else {
+        launcher
+    };
+    // WM_MOUSEWHEEL owns its screen-space point in lParam. `MSG.pt` is the
+    // queue metadata point and can be DPI-virtualized differently (observed
+    // on mixed-scale desktops), which can select the wrong underlying window.
+    let target =
+        locked_or_resolve_target(launcher, wheel_screen_point(message.lParam), message.time);
     let Some(target) = target else {
         return DeliveryResult::NoTarget;
     };
@@ -107,7 +128,31 @@ fn route_wheel(message: &MSG) -> DeliveryResult {
         // exercised without relying on foreground-lock timing.
         let _ = unsafe { AllowSetForegroundWindow(target.pid) };
     }
-    let launcher_was_foreground = unsafe { GetForegroundWindow() } == message.hwnd;
+    let launcher_was_foreground = unsafe { GetForegroundWindow() } == launcher;
+    let pending = launcher_was_foreground.then(|| {
+        let target = HWND(target.hwnd as *mut c_void);
+        let target_root = unsafe { GetAncestor(target, GA_ROOT) };
+        let target_root = if target_root.is_invalid() {
+            target
+        } else {
+            target_root
+        };
+        PendingWheelFocusLoss {
+            launcher: launcher.0 as isize,
+            target_root: target_root.0 as isize,
+            queued_at: unsafe { windows::Win32::System::SystemInformation::GetTickCount64() },
+        }
+    });
+    if let Some(pending) = pending {
+        // Arm before posting: the receiver processes its queue on another
+        // thread and may activate itself before PostMessageW returns.
+        if let Ok(mut guard) = PENDING_WHEEL_FOCUS_LOSS
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+        {
+            *guard = Some(pending);
+        }
+    }
     match unsafe {
         PostMessageW(
             Some(HWND(target.hwnd as *mut c_void)),
@@ -116,35 +161,28 @@ fn route_wheel(message: &MSG) -> DeliveryResult {
             message.lParam,
         )
     } {
-        Ok(()) => {
-            if launcher_was_foreground {
-                let target = HWND(target.hwnd as *mut c_void);
-                let target_root = unsafe { GetAncestor(target, GA_ROOT) };
-                let target_root = if target_root.is_invalid() {
-                    target
-                } else {
-                    target_root
-                };
-                let pending = PendingWheelFocusLoss {
-                    launcher: message.hwnd.0 as isize,
-                    target_root: target_root.0 as isize,
-                    queued_at: unsafe {
-                        windows::Win32::System::SystemInformation::GetTickCount64()
-                    },
-                };
+        Ok(()) => DeliveryResult::Queued,
+        Err(error) => {
+            // Do not clear a newer token or one already consumed by a
+            // receiver-triggered focus transition.
+            if let Some(pending) = pending {
                 if let Ok(mut guard) = PENDING_WHEEL_FOCUS_LOSS
                     .get_or_init(|| Mutex::new(None))
                     .lock()
                 {
-                    *guard = Some(pending);
+                    if guard.as_ref() == Some(&pending) {
+                        *guard = None;
+                    }
                 }
             }
-            DeliveryResult::Queued
+            if error.code().0 as u32 == 5 {
+                DeliveryResult::PermissionDenied
+            } else {
+                DeliveryResult::Failed {
+                    os_error: error.code().0 as i64,
+                }
+            }
         }
-        Err(error) if error.code().0 as u32 == 5 => DeliveryResult::PermissionDenied,
-        Err(error) => DeliveryResult::Failed {
-            os_error: error.code().0 as i64,
-        },
     }
 }
 
@@ -159,6 +197,7 @@ fn pending_focus_loss_matches(pending: PendingWheelFocusLoss, now: u64, foregrou
 /// original Z-order. Delivery happens only after the launcher hides.
 pub struct PreparedClick {
     launcher: HWND,
+    target: HWND,
     target_root: HWND,
     target_pid: u32,
     point: POINT,
@@ -186,6 +225,7 @@ pub fn prepare_click_at_cursor(
     };
     Some(PreparedClick {
         launcher,
+        target,
         target_root,
         target_pid,
         point,
@@ -220,9 +260,13 @@ pub fn deliver_prepared_click(click: PreparedClick) -> DeliveryResult {
     } else {
         current_root
     };
+    let current_target = unsafe { deepest_child_at(current_root, click.point) };
     let mut current_pid = 0;
     unsafe { GetWindowThreadProcessId(current_root, Some(&mut current_pid)) };
-    if current_root != click.target_root || current_pid != click.target_pid {
+    if current_root != click.target_root
+        || current_target != click.target
+        || current_pid != click.target_pid
+    {
         return DeliveryResult::NoTarget;
     }
 
@@ -365,6 +409,14 @@ fn rect_contains(rect: RECT, point: POINT) -> bool {
     point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }
 
+fn wheel_screen_point(lparam: LPARAM) -> POINT {
+    let packed = lparam.0 as u32;
+    POINT {
+        x: (packed as u16 as i16) as i32,
+        y: ((packed >> 16) as u16 as i16) as i32,
+    }
+}
+
 unsafe fn deepest_child_at(root: HWND, screen_point: POINT) -> HWND {
     let mut current = root;
     for _ in 0..64 {
@@ -408,6 +460,20 @@ mod tests {
         let previous: u32 = u32::MAX - 20;
         let next: u32 = 10;
         assert!(next.wrapping_sub(previous) <= BURST_LOCK_MS);
+    }
+
+    #[test]
+    fn wheel_lparam_preserves_signed_virtual_screen_coordinates() {
+        let x = -1_200i16;
+        let y = 340i16;
+        let packed = (x as u16 as u32) | ((y as u16 as u32) << 16);
+        assert_eq!(
+            wheel_screen_point(LPARAM(packed as isize)),
+            POINT {
+                x: x as i32,
+                y: y as i32
+            }
+        );
     }
 
     #[test]
