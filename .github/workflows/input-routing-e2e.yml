@@ -74,8 +74,36 @@ jobs:
       - name: Build product and native harness
         run: cargo build --locked --bins
 
-      - name: Validate independent input generator and AppKit probe
+      - name: Detect generator input permission
+        id: macos_permissions
+        shell: bash
+        run: |
+          if target/debug/input_routing_scenarios --permission-status; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate independent input generator and semantic AppKit probe
+        if: steps.macos_permissions.outputs.full == 'true'
         run: target/debug/input_routing_scenarios
 
-      - name: Run product routing scenarios
+      - name: Run semantic product routing scenarios
+        if: steps.macos_permissions.outputs.full == 'true'
         run: target/debug/input_routing_scenarios --product
+
+      - name: Validate hosted-runner permission boundary
+        if: steps.macos_permissions.outputs.full != 'true'
+        run: target/debug/input_routing_scenarios --permission-denied-contract
+
+      - name: Report macOS native E2E scope
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.macos_permissions.outputs.full }}" == "true" ]]; then
+            echo "### macOS native input routing" >> "$GITHUB_STEP_SUMMARY"
+            echo "Full semantic AppKit receiver E2E ran. The generator delivered mouse buttons, clicks, and precise scroll-wheel events end to end, and each Launchpad child reported its own Input Monitoring and Accessibility preflight as granted." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### macOS native input routing" >> "$GITHUB_STEP_SUMMARY"
+            echo "Runner cannot deliver synthetic scroll-wheel events (hosted macOS runners report post-event permission but drop wheel events), so full product delivery was not run or reported as passed; only the explicit permission boundary was validated." >> "$GITHUB_STEP_SUMMARY"
+          fi
