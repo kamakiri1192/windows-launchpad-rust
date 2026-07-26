@@ -6,6 +6,10 @@
   Feature-ready refactor plan and migration phases.
 - [GLASS_FOCUS_VEIL.md](GLASS_FOCUS_VEIL.md) - フォルダ表示時に下層シーンを
   ぼかすGlass Focus Veilの目的、描画順、GPU構成、調整方法、視覚QA項目。
+- [INPUT_PASSTHROUGH_REQUIREMENTS.md](INPUT_PASSTHROUGH_REQUIREMENTS.md) —
+  ページフレーム外のクリック、ドラッグ、縦スクロール、ホバーの入力要件。
+- [INPUT_PASSTHROUGH_TECHNICAL_RESEARCH.md](INPUT_PASSTHROUGH_TECHNICAL_RESEARCH.md) —
+  Windows / macOS の実現方式調査、推奨アーキテクチャ、native probe を使う自動検証計画。
 
 - [KEYBINDINGS.md](KEYBINDINGS.md) — runtime debug / tuning keys, the
   `blur_radius` → pyramid depth mapping, and Windows transparency notes.
