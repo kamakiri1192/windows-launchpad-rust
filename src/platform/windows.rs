@@ -35,7 +35,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    VIRTUAL_KEY,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
@@ -52,6 +52,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{app_icon, UserEvent};
+
+#[path = "windows/input_passthrough.rs"]
+pub mod input_passthrough;
 
 /// App-private window message used by the shell to deliver tray notifications.
 /// Anything in the `WM_APP`..`WM_APP+0x7FFF` range is safe for this.
@@ -393,34 +396,17 @@ fn dummy_input(up: bool) -> INPUT {
     }
 }
 
-/// Best-effort click passthrough for transparent launcher areas.
-///
-/// The UI thread hides the launcher first, then calls this while the cursor is
-/// still at the user's release point. Sending a fresh down/up lets the window
-/// underneath receive the click that the launcher window itself consumed.
-pub fn replay_left_click_at_cursor() -> bool {
-    let inputs = [
-        mouse_input(MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTDOWN.0)),
-        mouse_input(MOUSE_EVENT_FLAGS(MOUSEEVENTF_LEFTUP.0)),
-    ];
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    sent as usize == inputs.len()
+pub fn prepare_click_at_cursor(
+    launcher_window: u64,
+    button: crate::input_routing::PointerButton,
+) -> Option<input_passthrough::PreparedClick> {
+    input_passthrough::prepare_click_at_cursor(launcher_window, button)
 }
 
-fn mouse_input(flags: MOUSE_EVENT_FLAGS) -> INPUT {
-    INPUT {
-        r#type: INPUT_TYPE(0), // INPUT_MOUSE
-        Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-            mi: MOUSEINPUT {
-                dx: 0,
-                dy: 0,
-                mouseData: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    }
+pub fn deliver_prepared_click(
+    click: input_passthrough::PreparedClick,
+) -> crate::input_routing::DeliveryResult {
+    input_passthrough::deliver_prepared_click(click)
 }
 
 /// `AtomicBool` guard set while we are inside our own `inject_dummy_key`

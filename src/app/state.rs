@@ -37,7 +37,7 @@ use crate::app::event::UserEvent;
 
 /// Press slop (physical px). A press that moves more than this is not a click
 /// and not a long-press (it becomes a scroll drag).
-pub const CLICK_SLOP_PHYS: f32 = 8.0;
+pub use crate::input_routing::CLICK_SLOP_PHYS;
 pub const INITIAL_WINDOW_WIDTH: f64 = 1280.0;
 pub const INITIAL_WINDOW_HEIGHT: f64 = 800.0;
 pub const MIN_WINDOW_WIDTH: f64 = 640.0;
@@ -216,6 +216,10 @@ pub struct App {
     pub scale_factor: f32,
     pub pointer_phys_x: f32,
     pub pointer_phys_y: f32,
+    pub input_router: crate::input_routing::InputRouter,
+    pub input_routing_publisher: crate::input_routing::InputRoutingPublisher,
+    pub input_routing_generation: u64,
+    pub input_qa_last_signature: Option<String>,
     pub drag_start_x: f32,
     pub drag_start_y: f32,
     pub first_frame_rendered: bool,
@@ -297,6 +301,14 @@ pub struct App {
     /// so we track it ourselves to make `hide()` idempotent (avoids a hide
     /// storm when a focus-loss event races an app-launch hide).
     pub visible: bool,
+    /// Last focus state reported by winit. Native input QA publishes this so
+    /// focus stability is machine-verifiable rather than inferred from
+    /// visibility.
+    pub window_focused: bool,
+    /// macOS can queue an initial `Focused(false)` while a newly created
+    /// window's renderer is still initializing. Until the requested
+    /// `Focused(true)` arrives, that stale transition must not hide the window.
+    pub awaiting_initial_focus: bool,
     /// When the most recent `summon()` happened. A `Focused(false)` that
     /// arrives within `SUMMON_FOCUS_GRACE` of a summon is treated as a
     /// focus-transition artifact (SetForegroundWindow can briefly lose and
@@ -314,6 +326,9 @@ pub struct App {
     /// Anchor keeping the macOS menu-bar item and global shortcut alive.
     #[cfg(target_os = "macos")]
     pub _macos: Option<crate::platform::macos::integration::MacOsIntegration>,
+    /// AppKit local event monitor and retained native click packets.
+    #[cfg(target_os = "macos")]
+    pub _macos_input: Option<crate::platform::macos::input_passthrough::MacInputPassthrough>,
 }
 
 use crate::domain::app_registry::AppLaunchInfo;
@@ -325,6 +340,7 @@ impl App {
         cache: Arc<IconCache>,
         inbox: Arc<Inbox>,
         worker: WorkerHandle,
+        input_routing_publisher: crate::input_routing::InputRoutingPublisher,
     ) -> Self {
         let profile_edit = std::env::var_os("LAUNCHPAD_PROFILE_EDIT").as_deref()
             == Some(std::ffi::OsStr::new("1"));
@@ -352,6 +368,10 @@ impl App {
             scale_factor: 1.0,
             pointer_phys_x: 0.0,
             pointer_phys_y: 0.0,
+            input_router: crate::input_routing::InputRouter::default(),
+            input_routing_publisher,
+            input_routing_generation: 0,
+            input_qa_last_signature: None,
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
@@ -384,12 +404,16 @@ impl App {
             last_redraw: None,
             last_frame_dt_ms: 0.0,
             visible: true,
+            window_focused: false,
+            awaiting_initial_focus: cfg!(target_os = "macos"),
             last_summon: None,
             should_quit: false,
             #[cfg(windows)]
             _os: None,
             #[cfg(target_os = "macos")]
             _macos: None,
+            #[cfg(target_os = "macos")]
+            _macos_input: None,
         }
     }
 }

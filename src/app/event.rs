@@ -83,7 +83,7 @@ pub enum AppCommand {
     /// Hide the launcher, then replay a left click to the underlying window
     /// (transparent-area click passthrough). Order: hide *before* the click
     /// replay.
-    HideWithClickPassthrough,
+    HideWithClickPassthrough(crate::input_routing::PointerButton),
     /// Show the launcher window and steal focus.
     Summon,
     /// Launch `info`'s shortcut. The launcher is hidden first, then the
@@ -157,11 +157,18 @@ mod tests {
     #[test]
     fn modal_dismiss_is_distinct_from_click_passthrough() {
         let plain_hide = AppCommand::HideWindow;
-        let passthrough = AppCommand::HideWithClickPassthrough;
+        let passthrough =
+            AppCommand::HideWithClickPassthrough(crate::input_routing::PointerButton::Left);
         assert!(matches!(plain_hide, AppCommand::HideWindow));
-        assert!(matches!(passthrough, AppCommand::HideWithClickPassthrough));
+        assert!(matches!(
+            passthrough,
+            AppCommand::HideWithClickPassthrough(_)
+        ));
         // The two must not be the same command — modal dismiss never replays
         // the click.
-        assert!(!matches!(plain_hide, AppCommand::HideWithClickPassthrough));
+        assert!(!matches!(
+            plain_hide,
+            AppCommand::HideWithClickPassthrough(_)
+        ));
     }
 }

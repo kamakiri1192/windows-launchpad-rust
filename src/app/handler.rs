@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 #[cfg(target_os = "macos")]
@@ -65,6 +65,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ToggleSettings => AppAction::ToggleSettings,
         };
         self.handle_action(action);
+        self.publish_input_routing_snapshot();
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -99,11 +100,14 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_accepts_first_mouse(true);
             if std::env::var_os("LAUNCHPAD_PROFILE_KEEP_VISIBLE").as_deref()
                 == Some(std::ffi::OsStr::new("1"))
+                || std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some()
             {
                 // Keep performance runs genuinely visible even while the
                 // automation process samples logs in another app. Otherwise
                 // Core Animation throttles an occluded CAMetalLayer and the
-                // result measures window occlusion instead of rendering.
+                // result measures window occlusion instead of rendering. The
+                // native input QA window likewise must stay directly above its
+                // passive probe so target resolution is deterministic.
                 attrs = attrs.with_window_level(WindowLevel::AlwaysOnTop);
             }
         }
@@ -117,13 +121,20 @@ impl ApplicationHandler<UserEvent> for App {
                 .with_min_inner_size(PhysicalSize::new(1, 1))
                 .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
             self.visible = false;
+        } else if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+            attrs = attrs
+                .with_min_inner_size(PhysicalSize::new(1, 1))
+                .with_inner_size(PhysicalSize::new(1000, 700))
+                .with_position(PhysicalPosition::new(100, 100));
         }
 
         if let Some(icon) = load_window_icon() {
             attrs = attrs.with_window_icon(Some(icon));
         }
 
-        if !self.qa_enabled() {
+        if !self.qa_enabled()
+            && std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_none()
+        {
             if let Some(position) = initial_window_position(event_loop) {
                 attrs = attrs.with_position(position);
             }
@@ -132,8 +143,17 @@ impl ApplicationHandler<UserEvent> for App {
         let window = event_loop.create_window(attrs).expect("create window");
         #[cfg(target_os = "macos")]
         {
-            crate::platform::macos::integration::activate_application();
-            window.focus_window();
+            if !crate::platform::macos::integration::enable_window_mouse_events(&window) {
+                eprintln!("input-routing: failed to enable macOS launcher mouse events");
+            }
+            self._macos_input =
+                crate::platform::macos::input_passthrough::MacInputPassthrough::install(
+                    &window,
+                    self.input_routing_publisher.clone(),
+                );
+            if self._macos_input.is_none() {
+                eprintln!("input-routing: failed to install macOS local event monitor");
+            }
         }
         #[cfg(windows)]
         {
@@ -161,6 +181,20 @@ impl ApplicationHandler<UserEvent> for App {
             !self.qa_enabled(),
         ))
         .expect("init renderer");
+        #[cfg(target_os = "macos")]
+        {
+            // Renderer initialization may block the event loop long enough for
+            // AppKit's initial focus notification to become stale. Reassert
+            // activation only after the window can process the resulting
+            // events.
+            crate::platform::macos::integration::activate_application();
+            if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+                let _ = crate::platform::macos::integration::order_window_front_for_qa(
+                    &renderer.window,
+                );
+            }
+            renderer.window.focus_window();
+        }
         self.timer.mark(prefix::STARTUP, "renderer initialization");
         let bounds = self.layout.bounds(w as f32);
         let scroller = Scroller::new(bounds);
@@ -176,6 +210,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.request_redraw();
         self.start_qa(Instant::now());
         self.timer.mark(prefix::STARTUP, "first redraw requested");
+        self.publish_input_routing_snapshot();
     }
 
     fn window_event(
@@ -232,20 +267,14 @@ impl ApplicationHandler<UserEvent> for App {
                 y: position.y as f32,
             },
             WindowEvent::MouseInput { state, button, .. } => {
-                if button != MouseButton::Left {
-                    return;
-                }
-                let px = self.pointer_phys_x;
-                let py = self.pointer_phys_y;
-                match state {
-                    ElementState::Pressed => {
-                        let action = self.classify_pointer_press(px, py);
-                        AppAction::PointerPress(action)
-                    }
-                    ElementState::Released => {
-                        let action = self.classify_pointer_release(px, py);
-                        AppAction::PointerRelease(action)
-                    }
+                let button = match button {
+                    MouseButton::Left => crate::input_routing::PointerButton::Left,
+                    MouseButton::Right => crate::input_routing::PointerButton::Right,
+                    _ => return,
+                };
+                AppAction::PointerButton {
+                    button,
+                    pressed: state == ElementState::Pressed,
                 }
             }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
@@ -253,6 +282,7 @@ impl ApplicationHandler<UserEvent> for App {
             _ => return,
         };
         self.handle_action(action);
+        self.publish_input_routing_snapshot();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -266,6 +296,7 @@ impl ApplicationHandler<UserEvent> for App {
         // Dispatch a tick action (long-press check + animation-gated redraw).
         let now = Instant::now();
         self.handle_action(AppAction::Tick { now });
+        self.publish_input_routing_snapshot();
         if self.qa_capture_due(now) {
             // Windows does not deliver RedrawRequested for a hidden window.
             // QA therefore advances the exact production frame path from its

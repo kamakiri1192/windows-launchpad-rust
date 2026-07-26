@@ -16,6 +16,175 @@ use crate::app::render::{settings_category_id, settings_press_target_from_layout
 use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
 
 impl App {
+    pub(crate) fn input_region_at(&self, x: f32, y: f32) -> crate::input_routing::InputRegion {
+        let modal_active = self.settings_panel_active() || self.folders.is_active();
+        let page_dragging = self
+            .scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging);
+        let viewport_owned = modal_active
+            || self.editing
+            || self.drag_item.is_some()
+            || page_dragging
+            || !self.input_router.is_idle();
+        let page_frame_contains = self.pointer_over_page_glass(x, y);
+        let bottom_control_contains = !matches!(
+            self.bottom_control_intent(x, y),
+            crate::layout::bottom_control::BottomControlPointerIntent::None
+        );
+        crate::input_routing::classify_region(
+            viewport_owned,
+            false,
+            page_frame_contains,
+            bottom_control_contains,
+        )
+    }
+
+    pub(crate) fn publish_input_routing_snapshot(&mut self) {
+        self.input_routing_generation = self.input_routing_generation.wrapping_add(1).max(1);
+        let snapshot = crate::input_routing::InputRoutingSnapshot {
+            visible: self.visible,
+            region: self.input_region_at(self.pointer_phys_x, self.pointer_phys_y),
+            router_state: self.input_router.state(),
+            generation: self.input_routing_generation,
+        };
+        self.input_routing_publisher.publish(snapshot);
+        if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+            let page_position = self
+                .scroller
+                .as_ref()
+                .map_or(0.0, |scroller| scroller.position);
+            let signature = format!(
+                "{}|{:?}|{:?}|{:.3}|{:.3}|{:.3}|{}|{}",
+                snapshot.visible,
+                snapshot.region,
+                snapshot.router_state,
+                page_position,
+                self.pointer_phys_x,
+                self.pointer_phys_y,
+                self.window_focused,
+                self.native_window_z_order(),
+            );
+            if self.input_qa_last_signature.as_deref() == Some(&signature) {
+                return;
+            }
+            self.input_qa_last_signature = Some(signature);
+            let record = crate::input_probe_protocol::ProbeRecord::LauncherSnapshot {
+                serial: snapshot.generation,
+                pid: std::process::id(),
+                window: self.native_window_identity(),
+                visible: snapshot.visible,
+                focused: self.window_focused,
+                z_order: self.native_window_z_order(),
+                generation: snapshot.generation,
+                region: format!("{:?}", snapshot.region),
+                router_state: format!("{:?}", snapshot.router_state),
+                page_position,
+                pointer_x: self.pointer_phys_x,
+                pointer_y: self.pointer_phys_y,
+            };
+            if let Ok(line) = record.to_json_line() {
+                println!("{line}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+        }
+    }
+
+    pub(crate) fn native_window_identity(&self) -> u64 {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Some(window) = self.renderer.as_ref().map(|renderer| &renderer.window) else {
+            return 0;
+        };
+        let Ok(handle) = window.window_handle() else {
+            return 0;
+        };
+        match handle.as_raw() {
+            RawWindowHandle::Win32(handle) => handle.hwnd.get() as u64,
+            RawWindowHandle::AppKit(handle) => {
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2_app_kit::NSView;
+                    let view = unsafe { &*(handle.ns_view.as_ptr() as *const NSView) };
+                    view.window()
+                        .map_or(0, |window| window.windowNumber() as u64)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    handle.ns_view.as_ptr() as usize as u64
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn native_window_z_order(&self) -> i64 {
+        #[cfg(target_os = "macos")]
+        {
+            let window = self.native_window_identity();
+            crate::platform::macos::integration::window_z_order(window as u32)
+                .map_or(-1, |index| index as i64)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            -1
+        }
+    }
+
+    pub(crate) fn handle_routed_pointer_button(
+        &mut self,
+        button: crate::input_routing::PointerButton,
+        pressed: bool,
+    ) {
+        use crate::input_routing::{PhysicalPoint, RouterAction};
+
+        let point = PhysicalPoint::new(self.pointer_phys_x, self.pointer_phys_y);
+        if pressed {
+            let region = self.input_region_at(point.x, point.y);
+            let decision = self.input_router.press(button, point, region);
+            if button == crate::input_routing::PointerButton::Left
+                && matches!(
+                    decision,
+                    RouterAction::LaunchpadOwns | RouterAction::BeginPending { .. }
+                )
+            {
+                let action = self.classify_pointer_press(point.x, point.y);
+                self.handle_pointer_press(action);
+            }
+            return;
+        }
+
+        match self.input_router.release(button, point) {
+            RouterAction::DeliverClick { button, .. } => {
+                self.pending_press = None;
+                self.execute_command(crate::app::event::AppCommand::HideWithClickPassthrough(
+                    button,
+                ));
+            }
+            RouterAction::FinishPageDrag { press, current } => {
+                self.pending_press = None;
+                self.handle_drag_start(press.x, press.y);
+                self.handle_drag_move(current.x);
+                self.handle_drag_end();
+            }
+            RouterAction::EndPageDrag | RouterAction::LaunchpadOwns
+                if button == crate::input_routing::PointerButton::Left =>
+            {
+                let action = self.classify_pointer_release(point.x, point.y);
+                self.handle_pointer_release(action);
+            }
+            RouterAction::CancelRightGesture
+            | RouterAction::Consume
+            | RouterAction::None
+            | RouterAction::BeginPending { .. }
+            | RouterAction::BeginPageDrag { .. }
+            | RouterAction::ContinuePageDrag { .. }
+            | RouterAction::ForwardVerticalScroll
+            | RouterAction::EndPageDrag
+            | RouterAction::LaunchpadOwns => {}
+        }
+    }
+
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
         let layout = self.settings_panel_layout();
         let hit = crate::layout::settings_panel::hit_test(

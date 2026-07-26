@@ -107,6 +107,7 @@ impl App {
         self.folders = crate::features::folders::FolderFeatureState::default();
         self.folder_layout = None;
         self.pending_press = None;
+        self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
         self.control.press_close();
@@ -124,15 +125,33 @@ impl App {
 
     /// Hide the launcher after a transparent-area click and, on Windows, send
     /// a best-effort replacement click to whatever is now under the cursor.
-    pub(crate) fn hide_with_click_passthrough(&mut self) {
+    pub(crate) fn hide_with_click_passthrough(
+        &mut self,
+        button: crate::input_routing::PointerButton,
+    ) {
+        #[cfg(windows)]
+        let click = crate::platform::windows::prepare_click_at_cursor(
+            self.native_window_identity(),
+            button,
+        );
         self.hide();
         #[cfg(windows)]
         {
-            if crate::platform::windows::replay_left_click_at_cursor() {
-                debug_log!("outside-click: replayed click to underlying window");
-            } else {
-                debug_log!("outside-click: failed to replay click to underlying window");
-            }
+            let result = click.map_or(
+                crate::input_routing::DeliveryResult::NoTarget,
+                crate::platform::windows::deliver_prepared_click,
+            );
+            debug_log!("outside-click: delivery result={result:?}");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let result = self
+                ._macos_input
+                .as_ref()
+                .map_or(crate::input_routing::DeliveryResult::NoTarget, |adapter| {
+                    adapter.deliver_click(button)
+                });
+            debug_log!("outside-click: macOS delivery result={result:?}");
         }
     }
 
@@ -146,6 +165,11 @@ impl App {
         debug_log!("summon: showing window (visible was {})", self.visible);
         r.window.set_visible(true);
         r.set_backdrop_capture_active(true);
+        #[cfg(target_os = "macos")]
+        {
+            self.awaiting_initial_focus = true;
+            self.window_focused = false;
+        }
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
         // so we also allow-set-foreground + re-assert focus. If it still fails
@@ -181,7 +205,9 @@ impl App {
         match command {
             AppCommand::RequestRedraw => self.request_redraw(),
             AppCommand::HideWindow => self.hide(),
-            AppCommand::HideWithClickPassthrough => self.hide_with_click_passthrough(),
+            AppCommand::HideWithClickPassthrough(button) => {
+                self.hide_with_click_passthrough(button)
+            }
             AppCommand::Summon => self.summon(),
             AppCommand::LaunchApp(info) => {
                 let link_path = info.link_path.clone();

@@ -1,0 +1,81 @@
+name: Native input routing E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: input-routing-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+  LAUNCHPAD_INPUT_ROUTING_TRACE: 1
+
+jobs:
+  windows:
+    name: Windows native input routing
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          rustup default $env:RUST_VERSION
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build product and native harness
+        run: cargo build --locked --bins
+
+      - name: Validate independent input generator and probe
+        run: .\target\debug\input_routing_scenarios.exe
+
+      - name: Run product routing scenarios
+        run: .\target\debug\input_routing_scenarios.exe --product
+
+      - name: Verify scrolling in headful Microsoft Edge
+        shell: pwsh
+        run: |
+          $edgeKey = Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe' -ErrorAction SilentlyContinue
+          $edge = if ($edgeKey) { $edgeKey.GetValue('') } else { $null }
+          if (-not $edge) {
+            $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+          }
+          if (-not (Test-Path -LiteralPath $edge -PathType Leaf)) {
+            throw "Microsoft Edge executable not found: $edge"
+          }
+          $env:LAUNCHPAD_EDGE_EXE = $edge
+          .\target\debug\input_routing_scenarios.exe --browser-compat
+
+  macos:
+    name: macOS native input routing
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build product and native harness
+        run: cargo build --locked --bins
+
+      - name: Validate independent input generator and AppKit probe
+        run: target/debug/input_routing_scenarios
+
+      - name: Run product routing scenarios
+        run: target/debug/input_routing_scenarios --product
