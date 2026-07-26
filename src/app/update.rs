@@ -122,8 +122,8 @@ impl App {
         #[cfg(target_os = "macos")]
         {
             let window = self.native_window_identity();
-            return crate::platform::macos::integration::window_z_order(window as u32)
-                .map_or(-1, |index| index as i64);
+            crate::platform::macos::integration::window_z_order(window as u32)
+                .map_or(-1, |index| index as i64)
         }
         #[cfg(not(target_os = "macos"))]
         {
