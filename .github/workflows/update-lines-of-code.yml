@@ -4,8 +4,14 @@ on:
   push:
     branches:
       - main
-      - agent/use-cargo-warloc-stats
     paths-ignore:
+      - README.md
+      - assets/lines-of-code.svg
+      - docs/CODE_STATS.md
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - .github/workflows/update-lines-of-code.yml
       - README.md
       - assets/lines-of-code.svg
       - docs/CODE_STATS.md
@@ -229,7 +235,16 @@ jobs:
           readme_path.write_text(updated)
           PY
 
+      - name: Verify generated statistics
+        if: github.event_name == 'pull_request'
+        run: |
+          test -s assets/lines-of-code.svg
+          test -s docs/CODE_STATS.md
+          grep -Fq '[![Rust LOC](assets/lines-of-code.svg)](docs/CODE_STATS.md)' README.md
+          git diff --check
+
       - name: Commit updated statistics
+        if: github.event_name != 'pull_request'
         run: |
           if git diff --quiet -- README.md assets/lines-of-code.svg docs/CODE_STATS.md; then
             exit 0
