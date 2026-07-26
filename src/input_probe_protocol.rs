@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const INPUT_ROUTING_QA_ENV: &str = "LAUNCHPAD_INPUT_ROUTING_QA";
 pub const QA_WHEEL_RECEIVER_ACTIVATION_ENV: &str = "LAUNCHPAD_QA_WHEEL_RECEIVER_ACTIVATION";
 pub const QA_PASSIVE_MACOS_PROBE_ENV: &str = "LAUNCHPAD_QA_PASSIVE_MACOS_PROBE";
+pub const MACOS_PRODUCT_EVENT_TAG: i64 = 0x4c50_5f49_504f; // "LP_IPO"
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "record", rename_all = "snake_case")]

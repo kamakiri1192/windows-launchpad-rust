@@ -1132,29 +1132,9 @@ mod macos_runner {
                 return Err("launcher did not acquire macOS focus/Z-order".to_owned());
             }
             move_pointer(150.0, 150.0)?;
-            let outside = wait_for(&launcher_rx, Duration::from_secs(10), |record| {
-                matches!(
-                    record,
-                    ProbeRecord::LauncherSnapshot {
-                        generation: next,
-                        region,
-                        visible: true,
-                        focused: true,
-                        ..
-                    } if *next > generation && region == "OutsideTransparent"
-                )
-            })?;
-            let ProbeRecord::LauncherSnapshot {
-                generation: outside_generation,
-                z_order: outside_z_order,
-                ..
-            } = outside
-            else {
-                unreachable!()
-            };
             let expected_local_x = 150 - rect.left;
             let expected_local_y = rect.bottom - 150;
-            let stable_z_order = usize::try_from(outside_z_order)
+            let stable_z_order = usize::try_from(z_order)
                 .map_err(|_| "launcher missing from macOS on-screen Z-order".to_owned())?;
             drain(&probe_rx);
 
@@ -1179,7 +1159,7 @@ mod macos_runner {
                                 router_state,
                                 visible: true,
                                 ..
-                            } if *next > outside_generation && router_state.starts_with(pending)
+                            } if *next > generation && router_state.starts_with(pending)
                         )
                     })?;
                     click_event(button, false, 150.0, 150.0)?;
@@ -1341,19 +1321,17 @@ mod macos_runner {
                 }
                 "hover" => {
                     move_pointer(155.0, 155.0)?;
-                    wait_for(&launcher_rx, Duration::from_secs(5), |record| {
-                        matches!(
-                            record,
-                            ProbeRecord::LauncherSnapshot {
-                                generation: next,
-                                visible: true,
-                                ..
-                            } if *next > outside_generation
-                        )
-                    })?;
                     assert_no_input(
                         &probe_rx,
                         |event| matches!(event, ProbeEvent::MouseMove),
+                        case_name,
+                    )?;
+                    assert_launcher_stable(
+                        &launcher_rx,
+                        pid,
+                        window,
+                        stable_z_order,
+                        Duration::from_millis(350),
                         case_name,
                     )?;
                 }

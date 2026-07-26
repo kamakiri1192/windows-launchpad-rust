@@ -21,8 +21,6 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::input_routing::{DeliveryResult, InputRoutingPublisher, PointerButton, RouterState};
 
-const EVENT_TAG: i64 = 0x4c50_5f49_504f; // "LP_IPO"
-
 struct ClickCapture {
     button: PointerButton,
     target_pid: i32,
@@ -57,7 +55,7 @@ impl MacInputPassthrough {
                 return original;
             };
             if CGEvent::integer_value_field(Some(&cg_event), CGEventField::EventSourceUserData)
-                == EVENT_TAG
+                == crate::input_probe_protocol::MACOS_PRODUCT_EVENT_TAG
             {
                 return original;
             }
@@ -205,7 +203,11 @@ fn post_original(pid: i32, event: &CGEvent) -> DeliveryResult {
     if !objc2_core_graphics::CGPreflightPostEventAccess() {
         return DeliveryResult::PermissionDenied;
     }
-    CGEvent::set_integer_value_field(Some(event), CGEventField::EventSourceUserData, EVENT_TAG);
+    CGEvent::set_integer_value_field(
+        Some(event),
+        CGEventField::EventSourceUserData,
+        crate::input_probe_protocol::MACOS_PRODUCT_EVENT_TAG,
+    );
     CGEvent::post_to_pid(pid, Some(event));
     DeliveryResult::Queued
 }

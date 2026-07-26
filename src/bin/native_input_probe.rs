@@ -338,11 +338,20 @@ mod macos_probe {
             .map_or(0, |window| window.windowNumber() as u64)
     }
 
-    fn install_monitor() -> Option<Retained<AnyObject>> {
+    fn install_monitor(probe_window_number: isize) -> Option<Retained<AnyObject>> {
         let serial = Rc::new(Cell::new(0u64));
         let callback_serial = serial.clone();
         let handler = RcBlock::new(move |event_ptr: NonNull<NSEvent>| -> *mut NSEvent {
             let event = unsafe { event_ptr.as_ref() };
+            let product_delivery = event.CGEvent().is_some_and(|cg_event| {
+                objc2_core_graphics::CGEvent::integer_value_field(
+                    Some(&cg_event),
+                    objc2_core_graphics::CGEventField::EventSourceUserData,
+                ) == launchpad_windows::input_probe_protocol::MACOS_PRODUCT_EVENT_TAG
+            });
+            if event.windowNumber() != probe_window_number && !product_delivery {
+                return event_ptr.as_ptr();
+            }
             let event_type = event.r#type();
             let probe_event = match event_type {
                 NSEventType::MouseMoved
@@ -454,7 +463,7 @@ mod macos_probe {
                 content.addSubview(&scroll);
                 scroll
             });
-            self._monitor = install_monitor();
+            self._monitor = install_monitor(ns_window.windowNumber());
             self._scroll_view = scroll_view;
             self.ready = Some(ProbeRecord::Ready {
                 pid: std::process::id(),
