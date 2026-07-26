@@ -11,7 +11,8 @@ use std::sync::{Mutex, OnceLock};
 use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
-    CreateRectRgn, DeleteObject, GetWindowRgn, ScreenToClient, SetWindowRgn, HGDIOBJ,
+    CombineRgn, CreateRectRgn, DeleteObject, GetWindowRgn, ScreenToClient, SetWindowRgn, HGDIOBJ,
+    RGN_DIFF, RGN_ERROR,
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -208,10 +209,10 @@ fn route_wheel(message: &MSG) -> DeliveryResult {
 
 fn send_chromium_wheel(launcher: HWND, target: HWND, message: &MSG) -> DeliveryResult {
     // Chromium performs a second WindowFromPoint check before handing wheel
-    // input to its view tree. Exclude only the launcher from spatial hit
-    // testing while Chromium processes this exact packet synchronously.
-    // Restoring the default region before returning leaves rendering,
-    // visibility, focus, activation, window styles, and Z-order unchanged.
+    // input to its view tree. Punch one physical-pixel hit-test hole at the
+    // original wheel point while Chromium processes this exact packet
+    // synchronously. Keeping every other pixel in the region avoids the
+    // visible whole-window flash caused by an empty temporary region.
     let saved_region = unsafe { CreateRectRgn(0, 0, 0, 0) };
     if saved_region.is_invalid() || unsafe { GetWindowRgn(launcher, saved_region) }.0 != 0 {
         if !saved_region.is_invalid() {
@@ -219,13 +220,51 @@ fn send_chromium_wheel(launcher: HWND, target: HWND, message: &MSG) -> DeliveryR
         }
         return DeliveryResult::Unsupported;
     }
-    let empty_region = unsafe { CreateRectRgn(0, 0, 0, 0) };
-    if empty_region.is_invalid()
-        || unsafe { SetWindowRgn(launcher, Some(empty_region), false) } == 0
-    {
+    let mut window_rect = RECT::default();
+    if unsafe { GetWindowRect(launcher, &mut window_rect) }.is_err() {
         let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
-        if !empty_region.is_invalid() {
-            let _ = unsafe { DeleteObject(HGDIOBJ(empty_region.0)) };
+        return DeliveryResult::Failed {
+            os_error: unsafe { GetLastError() }.0 as i64,
+        };
+    }
+    let point = wheel_screen_point(message.lParam);
+    let Some(hole_rect) = one_pixel_window_hole(window_rect, point) else {
+        let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
+        return DeliveryResult::NoTarget;
+    };
+    let passthrough_region = unsafe {
+        CreateRectRgn(
+            0,
+            0,
+            window_rect.right - window_rect.left,
+            window_rect.bottom - window_rect.top,
+        )
+    };
+    let hole_region = unsafe {
+        CreateRectRgn(
+            hole_rect.left,
+            hole_rect.top,
+            hole_rect.right,
+            hole_rect.bottom,
+        )
+    };
+    let combined = !passthrough_region.is_invalid()
+        && !hole_region.is_invalid()
+        && unsafe {
+            CombineRgn(
+                Some(passthrough_region),
+                Some(passthrough_region),
+                Some(hole_region),
+                RGN_DIFF,
+            )
+        } != RGN_ERROR;
+    if !hole_region.is_invalid() {
+        let _ = unsafe { DeleteObject(HGDIOBJ(hole_region.0)) };
+    }
+    if !combined || unsafe { SetWindowRgn(launcher, Some(passthrough_region), false) } == 0 {
+        let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
+        if !passthrough_region.is_invalid() {
+            let _ = unsafe { DeleteObject(HGDIOBJ(passthrough_region.0)) };
         }
         return DeliveryResult::Failed {
             os_error: unsafe { GetLastError() }.0 as i64,
@@ -249,8 +288,8 @@ fn send_chromium_wheel(launcher: HWND, target: HWND, message: &MSG) -> DeliveryR
             Some(&mut receiver_result),
         )
     };
-    // Successful SetWindowRgn transfers empty_region to the system. Passing
-    // None restores the original default rectangular region.
+    // Successful SetWindowRgn transfers passthrough_region to the system.
+    // Passing None restores the original default rectangular region.
     let restored = unsafe { SetWindowRgn(launcher, None, false) } != 0;
     let _ = unsafe { DeleteObject(HGDIOBJ(saved_region.0)) };
     if !restored {
@@ -265,6 +304,20 @@ fn send_chromium_wheel(launcher: HWND, target: HWND, message: &MSG) -> DeliveryR
             os_error: unsafe { GetLastError() }.0 as i64,
         }
     }
+}
+
+fn one_pixel_window_hole(window: RECT, point: POINT) -> Option<RECT> {
+    if !rect_contains(window, point) {
+        return None;
+    }
+    let left = point.x - window.left;
+    let top = point.y - window.top;
+    Some(RECT {
+        left,
+        top,
+        right: left + 1,
+        bottom: top + 1,
+    })
 }
 
 fn pending_focus_loss_matches(pending: PendingWheelFocusLoss, now: u64, foreground: isize) -> bool {
@@ -570,6 +623,29 @@ mod tests {
                 x: x as i32,
                 y: y as i32
             }
+        );
+    }
+
+    #[test]
+    fn chromium_passthrough_hole_is_one_physical_pixel_at_window_local_point() {
+        let window = RECT {
+            left: -300,
+            top: 200,
+            right: 700,
+            bottom: 900,
+        };
+        assert_eq!(
+            one_pixel_window_hole(window, POINT { x: -250, y: 425 }),
+            Some(RECT {
+                left: 50,
+                top: 225,
+                right: 51,
+                bottom: 226,
+            })
+        );
+        assert_eq!(
+            one_pixel_window_hole(window, POINT { x: 700, y: 425 }),
+            None
         );
     }
 

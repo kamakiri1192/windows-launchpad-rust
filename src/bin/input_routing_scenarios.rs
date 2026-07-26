@@ -1121,8 +1121,13 @@ mod windows_runner {
 
             // Preserve the machine's real wheel-routing setting. Unlike the
             // native-probe scenarios, this compatibility path intentionally
-            // does not construct a MouseWheelRoutingGuard.
-            send(&[mouse_input(MOUSEEVENTF_WHEEL.0, (-120_i32) as u32)])?;
+            // does not construct a MouseWheelRoutingGuard. A burst exercises
+            // repeated Chromium hit-hole creation/restoration, which is the
+            // path that previously made the whole launcher visibly flash.
+            let wheel_burst = (0..8)
+                .map(|_| mouse_input(MOUSEEVENTF_WHEEL.0, (-120_i32) as u32))
+                .collect::<Vec<_>>();
+            send(&wheel_burst)?;
             wait_until(
                 Duration::from_secs(10),
                 || server.scroll_y() > 0,

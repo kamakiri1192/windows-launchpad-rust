@@ -34,11 +34,12 @@ Chromium and Electron perform their own `WindowFromPoint` check after receiving
 `WM_MOUSEWHEEL`; a successful `PostMessageW` can therefore be discarded when
 the opaque launcher is still at that point. For the `Chrome_WidgetWin_1`
 framework sink, the adapter uses a bounded `SendMessageTimeoutW` dispatch. Only
-during that synchronous call, the launcher has an empty hit-test region; its
-default region is restored before returning. This does not hide, deactivate,
-move, reorder, recreate, or restyle the launcher. If a future launcher window
-has a custom region, the compatibility path returns `Unsupported` instead of
-overwriting it.
+during that synchronous call, the launcher region has a one-physical-pixel
+hit-test hole at the original wheel point; every other pixel remains composed
+to avoid visible flashing. Its default region is restored before returning.
+This does not hide, deactivate, move, reorder, recreate, or restyle the
+launcher. If a future launcher window has a custom region, the compatibility
+path returns `Unsupported` instead of overwriting it.
 
 Confirmed clicks resolve and freeze the same target before the launcher hides.
 After hide, the adapter verifies that the cursor, root HWND, PID, and deepest
