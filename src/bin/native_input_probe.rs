@@ -287,6 +287,7 @@ mod macos_probe {
     use objc2::{MainThreadMarker, MainThreadOnly};
     use objc2_app_kit::{
         NSApplication, NSEvent, NSEventMask, NSEventPhase, NSEventType, NSScrollView, NSView,
+        NSWindow,
     };
     use winit::application::ApplicationHandler;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -338,7 +339,8 @@ mod macos_probe {
             .map_or(0, |window| window.windowNumber() as u64)
     }
 
-    fn install_monitor(probe_window_number: isize) -> Option<Retained<AnyObject>> {
+    fn install_monitor(probe_window: Retained<NSWindow>) -> Option<Retained<AnyObject>> {
+        let probe_window_number = probe_window.windowNumber();
         let serial = Rc::new(Cell::new(0u64));
         let callback_serial = serial.clone();
         let handler = RcBlock::new(move |event_ptr: NonNull<NSEvent>| -> *mut NSEvent {
@@ -384,13 +386,28 @@ mod macos_probe {
                 let next = callback_serial.get() + 1;
                 callback_serial.set(next);
                 let screen = NSEvent::mouseLocation();
-                let local = event.locationInWindow();
+                // CGEventPostToPid delivers to this process but AppKit retains
+                // the source NSEvent's windowNumber/locationInWindow metadata
+                // even when both CG window-under-pointer fields are updated.
+                // A tagged event was explicitly addressed to this probe PID,
+                // which has exactly one input window, so report that actual
+                // receiver and derive its local point from the preserved
+                // screen coordinate. Untagged generator events remain fully
+                // native and use their original NSEvent metadata.
+                let (target, local) = if product_delivery {
+                    (
+                        probe_window_number,
+                        probe_window.convertPointFromScreen(screen),
+                    )
+                } else {
+                    (event.windowNumber(), event.locationInWindow())
+                };
                 emit(ProbeRecord::Input {
                     serial: next,
                     timestamp: (event.timestamp() * 1_000_000.0) as u64,
                     event: probe_event,
-                    target: event.windowNumber() as u64,
-                    root: event.windowNumber() as u64,
+                    target: target as u64,
+                    root: target as u64,
                     pid: std::process::id(),
                     screen: NativePoint {
                         x: screen.x.round() as i32,
@@ -463,7 +480,7 @@ mod macos_probe {
                 content.addSubview(&scroll);
                 scroll
             });
-            self._monitor = install_monitor(ns_window.windowNumber());
+            self._monitor = install_monitor(ns_window.clone());
             self._scroll_view = scroll_view;
             self.ready = Some(ProbeRecord::Ready {
                 pid: std::process::id(),
