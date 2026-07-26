@@ -129,14 +129,13 @@ impl App {
         &mut self,
         button: crate::input_routing::PointerButton,
     ) {
+        #[cfg(windows)]
+        let launcher_window = self.native_window_identity();
         self.hide();
         #[cfg(windows)]
         {
-            if crate::platform::windows::replay_click_at_cursor(button) {
-                debug_log!("outside-click: replayed click to underlying window");
-            } else {
-                debug_log!("outside-click: failed to replay click to underlying window");
-            }
+            let result = crate::platform::windows::replay_click_at_cursor(launcher_window, button);
+            debug_log!("outside-click: delivery result={result:?}");
         }
     }
 

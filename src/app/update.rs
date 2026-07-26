@@ -42,13 +42,64 @@ impl App {
 
     pub(crate) fn publish_input_routing_snapshot(&mut self) {
         self.input_routing_generation = self.input_routing_generation.wrapping_add(1).max(1);
-        self.input_routing_publisher
-            .publish(crate::input_routing::InputRoutingSnapshot {
-                visible: self.visible,
-                region: self.input_region_at(self.pointer_phys_x, self.pointer_phys_y),
-                router_state: self.input_router.state(),
-                generation: self.input_routing_generation,
-            });
+        let snapshot = crate::input_routing::InputRoutingSnapshot {
+            visible: self.visible,
+            region: self.input_region_at(self.pointer_phys_x, self.pointer_phys_y),
+            router_state: self.input_router.state(),
+            generation: self.input_routing_generation,
+        };
+        self.input_routing_publisher.publish(snapshot);
+        if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
+            let page_position = self
+                .scroller
+                .as_ref()
+                .map_or(0.0, |scroller| scroller.position);
+            let signature = format!(
+                "{}|{:?}|{:?}|{:.3}|{:.3}|{:.3}",
+                snapshot.visible,
+                snapshot.region,
+                snapshot.router_state,
+                page_position,
+                self.pointer_phys_x,
+                self.pointer_phys_y
+            );
+            if self.input_qa_last_signature.as_deref() == Some(&signature) {
+                return;
+            }
+            self.input_qa_last_signature = Some(signature);
+            let record = crate::input_probe_protocol::ProbeRecord::LauncherSnapshot {
+                serial: snapshot.generation,
+                pid: std::process::id(),
+                window: self.native_window_identity(),
+                visible: snapshot.visible,
+                generation: snapshot.generation,
+                region: format!("{:?}", snapshot.region),
+                router_state: format!("{:?}", snapshot.router_state),
+                page_position,
+                pointer_x: self.pointer_phys_x,
+                pointer_y: self.pointer_phys_y,
+            };
+            if let Ok(line) = record.to_json_line() {
+                println!("{line}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+        }
+    }
+
+    pub(crate) fn native_window_identity(&self) -> u64 {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Some(window) = self.renderer.as_ref().map(|renderer| &renderer.window) else {
+            return 0;
+        };
+        let Ok(handle) = window.window_handle() else {
+            return 0;
+        };
+        match handle.as_raw() {
+            RawWindowHandle::Win32(handle) => handle.hwnd.get() as u64,
+            RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as usize as u64,
+            _ => 0,
+        }
     }
 
     pub(crate) fn handle_routed_pointer_button(

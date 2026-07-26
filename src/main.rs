@@ -32,6 +32,7 @@ mod features;
 mod grid;
 mod icon_cache;
 mod icons;
+mod input_probe_protocol;
 mod input_routing;
 mod layout;
 mod liquid_glass;
@@ -144,7 +145,9 @@ pub(crate) fn dump_atlas_png(atlas: &IconAtlas) {
 
 fn main() {
     #[cfg(windows)]
-    let _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some() {
+    let _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some()
+        || std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some()
+    {
         // Hidden deterministic QA must be able to run beside the user's
         // foreground launcher (and beside other branch worktrees). It owns no
         // tray/hotkey/persistence state, so the production singleton does not
@@ -198,6 +201,14 @@ fn main() {
 
     let mut event_loop_builder = EventLoop::<UserEvent>::with_user_event();
     let input_routing_publisher = input_routing::InputRoutingPublisher::default();
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        let publisher = input_routing_publisher.clone();
+        event_loop_builder.with_msg_hook(move |message| {
+            platform::windows::input_passthrough::handle_message(message, &publisher)
+        });
+    }
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
@@ -256,8 +267,9 @@ fn main() {
     // OS integration: global hot key (Win+Space) + tray icon. Spawned before
     // the event loop so the hot key works even during the very first frame.
     #[cfg(windows)]
-    let os = (std::env::var_os(qa::SCENARIO_ENV).is_none())
-        .then(|| platform::windows::OsIntegrationHandle::spawn(proxy.clone()));
+    let os = (std::env::var_os(qa::SCENARIO_ENV).is_none()
+        && std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_none())
+    .then(|| platform::windows::OsIntegrationHandle::spawn(proxy.clone()));
 
     #[cfg(target_os = "macos")]
     let macos = (std::env::var_os(qa::SCENARIO_ENV).is_none())

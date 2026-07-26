@@ -35,8 +35,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    VIRTUAL_KEY,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, NOTIFY_ICON_DATA_FLAGS,
@@ -53,6 +52,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{app_icon, UserEvent};
+
+#[path = "windows/input_passthrough.rs"]
+pub mod input_passthrough;
 
 /// App-private window message used by the shell to deliver tray notifications.
 /// Anything in the `WM_APP`..`WM_APP+0x7FFF` range is safe for this.
@@ -399,33 +401,11 @@ fn dummy_input(up: bool) -> INPUT {
 /// The UI thread hides the launcher first, then calls this while the cursor is
 /// still at the user's release point. Sending a fresh down/up lets the window
 /// underneath receive the click that the launcher window itself consumed.
-pub fn replay_click_at_cursor(button: crate::input_routing::PointerButton) -> bool {
-    let (down, up) = match button {
-        crate::input_routing::PointerButton::Left => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
-        crate::input_routing::PointerButton::Right => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
-    };
-    let inputs = [
-        mouse_input(MOUSE_EVENT_FLAGS(down.0)),
-        mouse_input(MOUSE_EVENT_FLAGS(up.0)),
-    ];
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    sent as usize == inputs.len()
-}
-
-fn mouse_input(flags: MOUSE_EVENT_FLAGS) -> INPUT {
-    INPUT {
-        r#type: INPUT_TYPE(0), // INPUT_MOUSE
-        Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-            mi: MOUSEINPUT {
-                dx: 0,
-                dy: 0,
-                mouseData: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: INJECT_MAGIC,
-            },
-        },
-    }
+pub fn replay_click_at_cursor(
+    launcher_window: u64,
+    button: crate::input_routing::PointerButton,
+) -> crate::input_routing::DeliveryResult {
+    input_passthrough::route_click_at_cursor(launcher_window, button)
 }
 
 /// `AtomicBool` guard set while we are inside our own `inject_dummy_key`

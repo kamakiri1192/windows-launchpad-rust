@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const INPUT_ROUTING_QA_ENV: &str = "LAUNCHPAD_INPUT_ROUTING_QA";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum ProbeRecord {
@@ -21,6 +23,18 @@ pub enum ProbeRecord {
         screen: NativePoint,
         local: NativePoint,
         foreground: u64,
+    },
+    LauncherSnapshot {
+        serial: u64,
+        pid: u32,
+        window: u64,
+        visible: bool,
+        generation: u64,
+        region: String,
+        router_state: String,
+        page_position: f32,
+        pointer_x: f32,
+        pointer_y: f32,
     },
 }
 
