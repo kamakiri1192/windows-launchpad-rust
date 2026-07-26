@@ -1,0 +1,19 @@
+name: Debug cargo-warloc output
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/debug-warloc-output.yml
+
+permissions:
+  contents: read
+
+jobs:
+  print-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-warloc
+        run: cargo install cargo-warloc --version 0.1.1 --locked
+      - name: Print JSON output
+        run: cargo warloc -o json
