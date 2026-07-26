@@ -143,6 +143,9 @@ impl ApplicationHandler<UserEvent> for App {
         let window = event_loop.create_window(attrs).expect("create window");
         #[cfg(target_os = "macos")]
         {
+            if !crate::platform::macos::integration::enable_window_mouse_events(&window) {
+                eprintln!("input-routing: failed to enable macOS launcher mouse events");
+            }
             self._macos_input =
                 crate::platform::macos::input_passthrough::MacInputPassthrough::install(
                     &window,

@@ -58,6 +58,9 @@ An AppKit local event monitor observes the original `NSEvent` before winit.
 It copies the corresponding `CGEvent`, resolves the window below the launcher
 with `windowNumberAtPoint:belowWindowWithWindowNumber:`, maps that window to
 its owner PID, and posts the original event with `CGEventPostToPid`.
+The transparent launcher remains event-opaque (`ignoresMouseEvents = false`);
+otherwise AppKit would send the original button event directly to the window
+below before the router could distinguish a click from a page drag.
 
 Scroll phase, momentum phase, precise deltas, modifiers, and coordinates remain
 part of the copied event. A scroll sequence keeps one target PID. Click

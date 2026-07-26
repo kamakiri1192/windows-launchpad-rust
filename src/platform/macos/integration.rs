@@ -80,6 +80,27 @@ pub fn order_window_front_for_qa(window: &winit::window::Window) -> bool {
     true
 }
 
+/// Keep the transparent launcher event-opaque. Rendering alpha must not turn
+/// the outer area into an AppKit click-through window because the router needs
+/// the original down/up sequence to decide click versus page drag.
+pub fn enable_window_mouse_events(window: &winit::window::Window) -> bool {
+    use objc2_app_kit::NSView;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return false;
+    };
+    let view = unsafe { &*(handle.ns_view.as_ptr() as *const NSView) };
+    let Some(window) = view.window() else {
+        return false;
+    };
+    window.setIgnoresMouseEvents(false);
+    true
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     static kCGWindowNumber: *const c_void;
