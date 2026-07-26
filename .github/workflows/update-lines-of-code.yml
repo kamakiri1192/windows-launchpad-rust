@@ -71,7 +71,7 @@ jobs:
           badge_value = f"main {main_value} · tests {tests_value}"
           escaped_badge_value = html.escape(badge_value)
 
-          width = 292
+          width = 240
           label_width = 68
           value_width = width - label_width
           label_center = label_width / 2
