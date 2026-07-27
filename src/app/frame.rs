@@ -225,7 +225,13 @@ impl App {
             || folder_scroller_animating
             || self.editing
             || self.profile_scroll.is_some()
-            || self.settings.show_fps
+            // FPS counter drives a continuous redraw, but only while the
+            // launcher is actually visible. Without `self.visible` here the
+            // loop keeps rendering the hidden window at vsync rate after
+            // hide(), which makes the whole machine sluggish and eventually
+            // destabilizes the GPU driver (crash). `show_fps` itself stays
+            // persisted so the counter returns on the next summon.
+            || (self.settings.show_fps && self.visible)
         {
             self.request_redraw();
         }
