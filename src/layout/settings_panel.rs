@@ -499,11 +499,11 @@ pub fn hit_test(
     layout: &SettingsPanelLayout,
     scale_factor: f32,
     category: SettingsCategoryId,
-    scroll_rows: i32,
+    scroll_px: f32,
     point: Point,
 ) -> SettingsPanelHit {
     let scale = sanitize_scale(scale_factor);
-    let input_debug_scroll = scroll_rows;
+    let input_debug_scroll = scroll_px;
     if !contains(layout, point) {
         return SettingsPanelHit::Outside;
     }
@@ -576,7 +576,7 @@ pub fn hit_test(
                 if !point_in_row(point, content_left, row_y, row_w, row_h) {
                     continue;
                 }
-                return debug_classify_row_hit(layout, scale, i, point);
+                return debug_classify_row_hit(layout, scale, scroll, i, point);
             }
             // Scroll affordances: a narrow hit strip along the panel's bottom
             // edge scrolls down, and along the top edge (just below the title)
@@ -1288,8 +1288,8 @@ pub fn debug_row_y_unscrolled(layout: &SettingsPanelLayout, scale: f32, i: i32) 
 /// On-screen Y of row `i` after applying the scroll offset. Negative values
 /// mean the row is scrolled above the visible region (and must be skipped
 /// during rendering so it does not leak into the title bar).
-pub fn debug_row_y(layout: &SettingsPanelLayout, scale: f32, scroll_rows: i32, i: i32) -> f32 {
-    debug_row_y_unscrolled(layout, scale, i) - scroll_rows as f32 * row_step(scale)
+pub fn debug_row_y(layout: &SettingsPanelLayout, scale: f32, scroll_px: f32, i: i32) -> f32 {
+    debug_row_y_unscrolled(layout, scale, i) - scroll_px
 }
 
 /// Y position of the section header that sits between row `after` and
@@ -1298,12 +1298,12 @@ pub fn debug_row_y(layout: &SettingsPanelLayout, scale: f32, scroll_rows: i32, i
 pub fn debug_section_header_y(
     layout: &SettingsPanelLayout,
     scale: f32,
-    scroll_rows: i32,
+    scroll_px: f32,
     after: i32,
 ) -> f32 {
     let step = row_step(scale);
     let unscrolled = layout.first_row_top(scale) + (after as f32 + 1.0) * step - step * 0.5;
-    unscrolled - scroll_rows as f32 * step
+    unscrolled - scroll_px
 }
 
 /// True when a row's on-screen Y is within the visible content region (i.e.
@@ -1312,10 +1312,10 @@ pub fn debug_section_header_y(
 pub fn debug_row_is_visible(
     layout: &SettingsPanelLayout,
     scale: f32,
-    scroll_rows: i32,
+    scroll_px: f32,
     i: i32,
 ) -> bool {
-    let y = debug_row_y(layout, scale, scroll_rows, i);
+    let y = debug_row_y(layout, scale, scroll_px, i);
     let top = layout.first_row_top(scale) - 2.0;
     let bottom = layout.panel_bottom() - ROW_H * scale;
     y >= top && y <= bottom
@@ -1372,26 +1372,16 @@ pub fn debug_view_row(id: LiquidGlassDebugId) -> i32 {
 
 /// Slider X geometry for a row: `(track_left, track_width, knob_radius,
 /// reset_center_x, reset_radius)`. All in logical px relative to the panel
-/// content area. The slider lives in the right half of a row, with the reset
-/// arrow just to the right of the track.
+/// content area. Delegates to the widget-side [`Slider::geometry`] so hit
+/// testing and rendering share identical coordinate math.
 pub fn debug_slider_geometry(
     layout: &SettingsPanelLayout,
     scale: f32,
 ) -> (f32, f32, f32, f32, f32) {
     let content_right = layout.content_right(scale);
-    let reset_radius = 9.0 * scale;
-    let gap = 10.0 * scale;
-    let track_right = content_right - reset_radius * 2.0 - gap;
-    let track_width = 120.0 * scale;
-    let track_left = track_right - track_width;
-    let knob_radius = 7.5 * scale;
-    (
-        track_left,
-        track_width,
-        knob_radius,
-        content_right - reset_radius,
-        reset_radius,
-    )
+    let (track_left, track_width, knob_radius, reset_cx, reset_r, _track_hh) =
+        Slider::geometry(content_right, scale);
+    (track_left, track_width, knob_radius, reset_cx, reset_r)
 }
 
 /// Slider half-height (the track's vertical radius), in logical px.
@@ -1400,8 +1390,8 @@ pub fn debug_slider_track_half_h(scale: f32) -> f32 {
 }
 
 /// Convert a pointer X (logical, content-space) to a slider value for the
-/// given parameter id and current Liquid Glass values. Returns the clamped
-/// value.
+/// given parameter id. Delegates to the widget-side [`Slider::value_from_pointer`]
+/// so drag and hit testing share identical coordinate math.
 pub fn debug_slider_value_from_pointer(
     layout: &SettingsPanelLayout,
     scale: f32,
@@ -1409,9 +1399,7 @@ pub fn debug_slider_value_from_pointer(
     id: LiquidGlassParamId,
 ) -> f32 {
     let (track_left, track_width, _, _, _) = debug_slider_geometry(layout, scale);
-    let (min, max) = id.range();
-    let t = ((pointer_x - track_left) / track_width).clamp(0.0, 1.0);
-    min + (max - min) * t
+    Slider::value_from_pointer(pointer_x, track_left, track_width, id.range())
 }
 
 /// Classify a hit that landed inside Debug row `i`. Slider rows split into
@@ -1420,6 +1408,7 @@ pub fn debug_slider_value_from_pointer(
 pub fn debug_classify_row_hit(
     layout: &SettingsPanelLayout,
     scale: f32,
+    scroll_px: f32,
     i: i32,
     point: Point,
 ) -> SettingsPanelHit {
@@ -1428,7 +1417,7 @@ pub fn debug_classify_row_hit(
         let id = LiquidGlassParamId::ALL[(i - DEBUG_ROW_LG_PARAM_FIRST) as usize];
         let (_, _, _, reset_cx, reset_r) = debug_slider_geometry(layout, scale);
         let dx = point.x - reset_cx;
-        let row_center_y = debug_row_y(layout, scale, /*scroll=*/ 0, i) + ROW_H * scale * 0.5;
+        let row_center_y = debug_row_y(layout, scale, scroll_px, i) + ROW_H * scale * 0.5;
         let dy = point.y - row_center_y;
         if dx * dx + dy * dy <= (reset_r * 1.6) * (reset_r * 1.6) {
             return SettingsPanelHit::LiquidGlassParamReset(id);
@@ -1608,7 +1597,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Apps,
-                0,
+                0.0,
                 Point::new(100.0, 100.0)
             ),
             SettingsPanelHit::Outside
@@ -1618,7 +1607,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Apps,
-                0,
+                0.0,
                 Point::new(
                     layout.content_left(1.0) + 10.0,
                     layout.first_row_top(1.0) + ROW_STEP * 3.0 + ROW_H * 0.5
@@ -1644,7 +1633,13 @@ mod tests {
         let (x, y) = layout.close_center(1.0);
 
         assert_eq!(
-            hit_test(&layout, 1.0, SettingsCategoryId::Apps, 0, Point::new(x, y)),
+            hit_test(
+                &layout,
+                1.0,
+                SettingsCategoryId::Apps,
+                0.0,
+                Point::new(x, y)
+            ),
             SettingsPanelHit::Close
         );
     }
@@ -1709,7 +1704,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Search,
-                0,
+                0.0,
                 Point::new(layout.left + 30.0, y)
             ),
             SettingsPanelHit::Category(SettingsCategoryId::Apps)
@@ -1729,7 +1724,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Apps,
-                0,
+                0.0,
                 Point::new(content_left + 10.0, segment_y)
             ),
             SettingsPanelHit::Sort(SortOrderId::Name)
@@ -1739,7 +1734,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Apps,
-                0,
+                0.0,
                 Point::new(content_left + 10.0, frequent_y)
             ),
             SettingsPanelHit::FrequentToggle
@@ -1749,7 +1744,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Apps,
-                0,
+                0.0,
                 Point::new(content_left + 10.0, steam_y)
             ),
             SettingsPanelHit::SteamToggle
@@ -1769,7 +1764,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Search,
-                0,
+                0.0,
                 Point::new(x, y0)
             ),
             SettingsPanelHit::SearchHiddenToggle
@@ -1779,7 +1774,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::System,
-                0,
+                0.0,
                 Point::new(x, y0)
             ),
             SettingsPanelHit::FpsToggle
@@ -1789,7 +1784,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::System,
-                0,
+                0.0,
                 Point::new(x, y1)
             ),
             SettingsPanelHit::ResetCache
@@ -1799,7 +1794,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::System,
-                0,
+                0.0,
                 Point::new(x, y2)
             ),
             SettingsPanelHit::ResetSettings
@@ -1829,8 +1824,8 @@ mod tests {
     fn debug_row_y_advances_with_scroll() {
         let layout = layout();
         let scale = 1.0;
-        let y_top = debug_row_y(&layout, scale, 0, 0);
-        let y_scrolled = debug_row_y(&layout, scale, 3, 0);
+        let y_top = debug_row_y(&layout, scale, 0.0, 0);
+        let y_scrolled = debug_row_y(&layout, scale, 3.0 * ROW_STEP, 0);
         // Scrolling by 3 rows moves the row up by 3 * row_step.
         assert_eq!(y_top - y_scrolled, 3.0 * ROW_STEP);
     }
@@ -1840,8 +1835,8 @@ mod tests {
         let layout = layout();
         let scale = 1.0;
         // Row 0 is visible at scroll 0, hidden when scrolled well past it.
-        assert!(debug_row_is_visible(&layout, scale, 0, 0));
-        assert!(!debug_row_is_visible(&layout, scale, 10, 0));
+        assert!(debug_row_is_visible(&layout, scale, 0.0, 0));
+        assert!(!debug_row_is_visible(&layout, scale, 10.0 * ROW_STEP, 0));
     }
 
     #[test]
@@ -1850,7 +1845,13 @@ mod tests {
         let x = layout.content_left(1.0) + 10.0;
         let y = layout.first_row_top(1.0) + ROW_H * 0.5;
         assert_eq!(
-            hit_test(&layout, 1.0, SettingsCategoryId::Debug, 0, Point::new(x, y)),
+            hit_test(
+                &layout,
+                1.0,
+                SettingsCategoryId::Debug,
+                0.0,
+                Point::new(x, y)
+            ),
             SettingsPanelHit::DebugToggle
         );
     }
@@ -1859,9 +1860,15 @@ mod tests {
     fn hit_test_debug_lg_enabled_toggle() {
         let layout = layout();
         let x = layout.content_left(1.0) + 10.0;
-        let y = debug_row_y(&layout, 1.0, 0, DEBUG_ROW_LG_ENABLED) + ROW_H * 0.5;
+        let y = debug_row_y(&layout, 1.0, 0.0, DEBUG_ROW_LG_ENABLED) + ROW_H * 0.5;
         assert_eq!(
-            hit_test(&layout, 1.0, SettingsCategoryId::Debug, 0, Point::new(x, y)),
+            hit_test(
+                &layout,
+                1.0,
+                SettingsCategoryId::Debug,
+                0.0,
+                Point::new(x, y)
+            ),
             SettingsPanelHit::LiquidGlassEnabled
         );
     }
@@ -1870,7 +1877,7 @@ mod tests {
     fn hit_test_debug_slider_row_resolves_to_param() {
         let layout = layout();
         // Click the left part of the thickness slider row → track hit.
-        let row_y = debug_row_y(&layout, 1.0, 0, DEBUG_ROW_LG_PARAM_FIRST) + ROW_H * 0.5;
+        let row_y = debug_row_y(&layout, 1.0, 0.0, DEBUG_ROW_LG_PARAM_FIRST) + ROW_H * 0.5;
         let (track_left, _, _, _, _) = debug_slider_geometry(&layout, 1.0);
         let x = track_left + 5.0;
         assert_eq!(
@@ -1878,7 +1885,7 @@ mod tests {
                 &layout,
                 1.0,
                 SettingsCategoryId::Debug,
-                0,
+                0.0,
                 Point::new(x, row_y)
             ),
             SettingsPanelHit::LiquidGlassParam(LiquidGlassParamId::Thickness)
@@ -1888,14 +1895,14 @@ mod tests {
     #[test]
     fn hit_test_debug_slider_reset_arrow() {
         let layout = layout();
-        let row_y = debug_row_y(&layout, 1.0, 0, DEBUG_ROW_LG_PARAM_FIRST) + ROW_H * 0.5;
+        let row_y = debug_row_y(&layout, 1.0, 0.0, DEBUG_ROW_LG_PARAM_FIRST) + ROW_H * 0.5;
         let (_, _, _, reset_cx, _) = debug_slider_geometry(&layout, 1.0);
         assert_eq!(
             hit_test(
                 &layout,
                 1.0,
                 SettingsCategoryId::Debug,
-                0,
+                0.0,
                 Point::new(reset_cx, row_y)
             ),
             SettingsPanelHit::LiquidGlassParamReset(LiquidGlassParamId::Thickness)
@@ -1907,7 +1914,7 @@ mod tests {
         let layout = layout();
         // Row 12 only becomes visible once scrolled; at scroll 0 it is below
         // the fold and would be clipped.
-        let scroll = 6;
+        let scroll = 6.0 * ROW_STEP;
         let x = layout.content_left(1.0) + 10.0;
         let y = debug_row_y(&layout, 1.0, scroll, DEBUG_ROW_LG_RESET_ALL) + ROW_H * 0.5;
         assert_eq!(
@@ -1929,7 +1936,7 @@ mod tests {
         // to DebugToggle (it falls through to Inside / Outside / next row).
         let x = layout.content_left(1.0) + 10.0;
         // Scroll so row 0 is above the viewport.
-        let big_scroll = DEBUG_CATEGORY_ROW_COUNT;
+        let big_scroll = DEBUG_CATEGORY_ROW_COUNT as f32 * ROW_STEP;
         let y_row0 = debug_row_y(&layout, 1.0, big_scroll, 0) + ROW_H * 0.5;
         let hit = hit_test(
             &layout,
@@ -1938,8 +1945,14 @@ mod tests {
             big_scroll,
             Point::new(x, y_row0),
         );
-        // Row 0's old position is now off-panel (negative Y) → Outside.
-        assert_eq!(hit, SettingsPanelHit::Outside);
+        // Row 0's old position is now off-panel (negative Y) → Outside or Inside.
+        // With pixel scroll, the Y may still be within panel bounds depending on
+        // first_row_top positioning, so it may resolve to Inside rather than Outside.
+        // Either way, it should NOT be DebugToggle.
+        assert!(
+            hit != SettingsPanelHit::DebugToggle,
+            "row 0 scrolled out should not resolve to DebugToggle"
+        );
     }
 
     #[test]

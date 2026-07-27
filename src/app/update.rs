@@ -196,21 +196,15 @@ impl App {
 
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
         let layout = self.settings_panel_layout();
-        // Derive the row-based scroll offset used by the legacy hit_test from
-        // the pixel-precise continuous scroller position, so hit testing stays
-        // in sync with the rendered (pixel) layout instead of drifting from
-        // accumulated integer-row rounding.
-        let row_step = crate::layout::settings_panel::row_step(self.scale_factor);
-        let scroll_rows = if row_step > 0.0 {
-            (self.settings_scroll.position / row_step).round() as i32
-        } else {
-            0
-        };
+        // Pass the pixel-precise continuous scroller position directly so
+        // hit testing stays in sync with the rendered (pixel) layout instead
+        // of drifting from accumulated integer-row rounding.
+        let scroll_px = self.settings_scroll.position;
         let hit = crate::layout::settings_panel::hit_test(
             &layout,
             self.scale_factor,
             settings_category_id(self.settings_category),
-            scroll_rows,
+            scroll_px,
             crate::ui_model::geometry::Point::new(x, y),
         );
         settings_press_target_from_layout_hit(hit)

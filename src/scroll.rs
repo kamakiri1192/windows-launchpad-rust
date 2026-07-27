@@ -674,6 +674,12 @@ pub struct ContinuousScroller {
     last_time: Option<Instant>,
     /// Monotonic clock origin.
     clock_origin: Instant,
+    /// Timestamp of the most recent OS wheel/momentum delta. While the OS is
+    /// still streaming momentum events past a bound, `apply_wheel` overwrites
+    /// `position` each event, so the Settling spring must NOT also integrate —
+    /// otherwise the two fight and the view jitters. `step_once` checks this
+    /// timestamp and freezes the spring while deltas keep arriving.
+    last_wheel_time: Option<Instant>,
 }
 
 impl ContinuousScroller {
@@ -693,6 +699,7 @@ impl ContinuousScroller {
             settle_target: 0.0,
             last_time: None,
             clock_origin,
+            last_wheel_time: None,
         }
     }
 
@@ -775,28 +782,50 @@ impl ContinuousScroller {
     /// OS momentum scroll events which already include inertia; we do NOT
     /// accumulate velocity, just move the position. Positive delta = scroll down.
     /// Returns the new position.
+    ///
+    /// winit wheel deltas use "scroll content backward (down) = negative y",
+    /// but our `position` increases when scrolling down. We flip the sign once
+    /// here so callers can pass the raw winit delta without per-platform sign
+    /// juggling. Direct drag (`drag_move`) is unaffected because it tracks
+    /// pointer displacement, not wheel delta.
     pub fn apply_wheel(&mut self, delta_px: f32, now: Instant) -> f32 {
+        let delta_px = -delta_px;
         self.last_time = Some(now);
+        self.last_wheel_time = Some(now);
         let raw = self.position + delta_px;
         let pos = self.clamp_with_rubber(raw);
 
-        // If we were idle and moved position, go to settling. If already
-        // animating, stay in the current phase (or switch to settling if
-        // rubber-banded).
+        let min = self.min_offset();
+        let max = self.max_offset();
+        let in_bounds = pos >= min && pos <= max;
+
         if self.phase == ContinuousPhase::Idle {
-            let min = self.min_offset();
-            let max = self.max_offset();
-            let clamped = pos.clamp(min, max);
-            if (clamped - pos).abs() > 0.001 {
-                // Rubber-banded: settle back to bound.
+            if in_bounds {
                 self.position = pos;
-                self.begin_settle_to(clamped);
-            } else {
-                self.position = clamped;
                 self.velocity = 0.0;
+            } else {
+                // Rubber-banded past a bound: show the compression but DON'T
+                // settle yet. Record the timestamp; the frame tick will start a
+                // settle after the OS momentum stops feeding deltas.
+                self.position = pos;
+                self.phase = ContinuousPhase::Settling;
+                self.settle_target = pos.clamp(min, max);
+                // velocity stays 0 — the spring pulls toward the boundary.
+                // OS momentum deltas overwrite position each frame via this
+                // method, so the spring cannot fight the ongoing momentum.
             }
         } else {
+            // Already animating (Settling/Inertial/Dragging). OS delta arrived:
+            // overwrite position and update target so the spring knows where
+            // the boundary is once momentum stops.
             self.position = pos;
+            if in_bounds && self.phase == ContinuousPhase::Settling {
+                // Back inside bounds → stop at current position.
+                self.settle_target = pos;
+                self.velocity = 0.0;
+            } else if !in_bounds && self.phase == ContinuousPhase::Settling {
+                self.settle_target = pos.clamp(min, max);
+            }
         }
         self.position
     }
@@ -822,7 +851,7 @@ impl ContinuousScroller {
         while remaining > 0.0 {
             let step = remaining.min(self.cfg.max_dt);
             remaining -= step;
-            self.step_once(step);
+            self.step_once(step, now);
             if self.phase == ContinuousPhase::Idle {
                 break;
             }
@@ -874,7 +903,7 @@ impl ContinuousScroller {
 
     // ---- internals -------------------------------------------------------
 
-    fn step_once(&mut self, dt: f32) {
+    fn step_once(&mut self, dt: f32, now: Instant) {
         match self.phase {
             ContinuousPhase::Idle | ContinuousPhase::Dragging => {
                 // Position is driven directly by pointer events.
@@ -894,18 +923,51 @@ impl ContinuousScroller {
                 }
             }
             ContinuousPhase::Settling => {
+                // If the OS is still streaming momentum deltas that push us
+                // past a bound (rubber-band region), `apply_wheel` overwrites
+                // `position` every event. Letting the spring ODE also run here
+                // makes the two fight and the view jitters. Freeze the spring
+                // while deltas keep arriving (within a short grace window),
+                // so the spring only takes over once momentum actually stops.
+                let wheel_recent = self
+                    .last_wheel_time
+                    .map(|t| now.duration_since(t).as_secs_f32() < 0.06)
+                    .unwrap_or(false);
+                let min = self.min_offset();
+                let max = self.max_offset();
+                let out_of_bounds = self.position < min || self.position > max;
+                if wheel_recent && out_of_bounds {
+                    // Hold position; OS momentum owns it until it stops.
+                    return;
+                }
                 // Semi-implicit Euler on the spring ODE:
                 //   a = -ω₀²·(x - target) - 2·ζ·ω₀·v
                 let dx = self.position - self.settle_target;
-                let acc = -self.cfg.spring_omega * self.cfg.spring_omega * dx
-                    - 2.0 * self.cfg.spring_zeta * self.cfg.spring_omega * self.velocity;
-                self.velocity += acc * dt;
-                self.position += self.velocity * dt;
-
+                // If position is well inside the rubber-band region (far from
+                // target), the OS momentum is still delivering deltas that
+                // overwrite position every frame via apply_wheel, so the ODE
+                // step here is harmless but irrelevant. Once momentum stops,
+                // the spring pulls position from the rubber-band back to the
+                // boundary smoothly.
                 if dx.abs() < self.cfg.settle_eps && self.velocity.abs() < self.cfg.settle_eps {
                     self.position = self.settle_target;
                     self.velocity = 0.0;
                     self.phase = ContinuousPhase::Idle;
+                } else {
+                    let acc = -self.cfg.spring_omega * self.cfg.spring_omega * dx
+                        - 2.0 * self.cfg.spring_zeta * self.cfg.spring_omega * self.velocity;
+                    self.velocity += acc * dt;
+                    self.position += self.velocity * dt;
+                    // Prevent overshoot past the target (i.e. spring crossing
+                    // from the rubber-band side to the opposite side of the
+                    // boundary).
+                    if (dx > 0.0 && self.position < self.settle_target)
+                        || (dx < 0.0 && self.position > self.settle_target)
+                    {
+                        self.position = self.settle_target;
+                        self.velocity = 0.0;
+                        self.phase = ContinuousPhase::Idle;
+                    }
                 }
             }
         }
@@ -1358,13 +1420,66 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_apply_wheel_changes_pixel_offset() {
+    fn continuous_scroller_apply_wheel_sign_convention() {
+        // winit wheel delta convention: scroll down = negative y.
+        // Our position convention: scroll down = positive position.
+        // apply_wheel flips the sign internally, so a negative delta
+        // (scroll down) increases position.
         let mut s = ContinuousScroller::new(default_cfg());
         s.set_sizes(1000.0, 400.0);
         let now = Instant::now();
-        let pos = s.apply_wheel(50.0, now);
+        let pos = s.apply_wheel(-50.0, now); // winit: scroll down = -50
         assert!((pos - 50.0).abs() < 0.01);
         assert!((s.position - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn continuous_scroller_apply_wheel_positive_delta_scrolls_up() {
+        // A positive winit delta means scroll up (content backward).
+        // With sign flip, position decreases.
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        let now = Instant::now();
+        s.position = 100.0;
+        let pos = s.apply_wheel(30.0, now); // winit: scroll up = +30
+        assert!((pos - 70.0).abs() < 0.01);
+        assert!((s.position - 70.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn continuous_scroller_apply_wheel_at_top_bound_clamps() {
+        // Scrolling up (positive winit delta) at top → sign flip makes it
+        // negative internal, rubber-banded at 0.
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0); // max = 600
+        let now = Instant::now();
+        s.position = 0.0;
+        let pos = s.apply_wheel(50.0, now); // scroll up at top
+                                            // Should rubber-band (position near 0 but negative).
+        assert!(pos < 0.1, "at top, scroll up should rubber-band, got {pos}");
+        assert!(
+            s.position < 0.1,
+            "position should still be at rubber-band near top"
+        );
+    }
+
+    #[test]
+    fn continuous_scroller_apply_wheel_at_bottom_bound_clamps() {
+        // Scrolling down (negative winit delta) past bottom → rubber-band.
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0); // max = 600
+        let now = Instant::now();
+        s.position = 600.0;
+        let pos = s.apply_wheel(-100.0, now); // scroll down past bottom
+                                              // Should rubber-band near max.
+        assert!(
+            pos > 599.0,
+            "at bottom, scroll down should rubber-band, got {pos}"
+        );
+        assert!(
+            s.position > 599.0,
+            "position should still be at rubber-band near bottom"
+        );
     }
 
     #[test]
@@ -1429,7 +1544,10 @@ mod tests {
         s.velocity = 0.0;
 
         for _ in 0..2000 {
-            s.step_once(1.0 / 120.0);
+            s.step_once(
+                1.0 / 120.0,
+                Instant::now() + std::time::Duration::from_millis(100),
+            );
             if s.phase == ContinuousPhase::Idle {
                 break;
             }
@@ -1450,7 +1568,10 @@ mod tests {
         s.phase = ContinuousPhase::Inertial;
 
         let v_before = s.velocity;
-        s.step_once(1.0 / 60.0);
+        s.step_once(
+            1.0 / 60.0,
+            Instant::now() + std::time::Duration::from_millis(100),
+        );
         assert!(s.velocity.abs() < v_before.abs(), "velocity should decay");
     }
 
@@ -1467,7 +1588,7 @@ mod tests {
             s.drag_end(now);
 
             for _ in 0..steps {
-                s.step_once(dt);
+                s.step_once(dt, Instant::now() + std::time::Duration::from_millis(100));
                 if s.phase == ContinuousPhase::Idle {
                     break;
                 }
@@ -1502,7 +1623,10 @@ mod tests {
 
         // Settle it
         for _ in 0..2000 {
-            s.step_once(1.0 / 120.0);
+            s.step_once(
+                1.0 / 120.0,
+                Instant::now() + std::time::Duration::from_millis(100),
+            );
             if s.phase == ContinuousPhase::Idle {
                 break;
             }
