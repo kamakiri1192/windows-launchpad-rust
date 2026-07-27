@@ -29,3 +29,6 @@ Desktop.ini
 # codex review intermediate artifacts (never commit)
 /diff.patch
 /old_main*.rs
+
+# Local icon analysis
+/tmp_icon_analysis/

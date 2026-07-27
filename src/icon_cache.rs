@@ -27,11 +27,12 @@ use crate::domain::app_id::AppId;
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
 use crate::icons::normalize::DecodedIcon;
+use crate::icons::sizing::IconCategory;
 use crate::startup_timer::{self, prefix};
 
 /// Bumped on any breaking change to the on-disk layout. A mismatch invalidates
 /// every cached icon (they are all re-extracted).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Bumped when the *extraction* itself changes (new normalization target size,
 /// different alpha handling, a different extraction strategy, etc.) so
@@ -46,10 +47,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// at 256px before normalizing them into the launcher atlas.
 /// v5: resolves macOS app icons through Launch Services so asset catalogs and
 /// modern ICNS encodings render consistently with Finder.
+/// v6/v5: Issue #48 アイコンサイズ自動正規化（solid_fill 分類 + カテゴリ別 scale）
 #[cfg(target_os = "macos")]
-pub const EXTRACTION_VERSION: u32 = 5;
+pub const EXTRACTION_VERSION: u32 = 6;
 #[cfg(not(target_os = "macos"))]
-pub const EXTRACTION_VERSION: u32 = 4;
+pub const EXTRACTION_VERSION: u32 = 5;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).
@@ -70,6 +72,8 @@ pub struct CachedIcon {
     pub icon_index: i32,
     pub image: DecodedIcon,
     pub extracted_at_version: u32,
+    pub category: IconCategory,
+    pub scale: f32,
 }
 
 /// The fields the caller already knows about a shortcut (from the latest scan),
@@ -147,13 +151,15 @@ impl IconCache {
             .query_row(
                 "SELECT link_path, display_name, link_mtime, target_path, target_mtime,
                         icon_location, icon_index, image_w, image_h, image_rgba,
-                        extraction_version
+                        extraction_version, category, scale
                  FROM icons WHERE app_id = ?1",
                 params![probe.app_id.as_ref()],
                 |r| {
                     let image_w: u32 = r.get::<_, i64>("image_w")? as u32;
                     let image_h: u32 = r.get::<_, i64>("image_h")? as u32;
                     let rgba: Vec<u8> = r.get("image_rgba")?;
+                    let cat_str: String = r.get("category")?;
+                    let cat = IconCategory::from_str_lossy(&cat_str);
                     Ok(CachedIcon {
                         app_id: probe.app_id.clone(),
                         link_path: r.get::<_, String>("link_path")?,
@@ -169,6 +175,8 @@ impl IconCache {
                             h: image_h,
                         },
                         extracted_at_version: r.get::<_, i64>("extraction_version")? as u32,
+                        category: cat,
+                        scale: r.get::<_, f64>("scale")? as f32,
                     })
                 },
             )
@@ -190,8 +198,9 @@ impl IconCache {
         tx.execute(
             "INSERT INTO icons (app_id, link_path, display_name, link_mtime, target_path,
                                 target_mtime, icon_location, icon_index, image_w, image_h,
-                                image_rgba, extraction_version, last_seen_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                                image_rgba, extraction_version, category, scale,
+                                last_seen_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
              ON CONFLICT(app_id) DO UPDATE SET
                link_path=excluded.link_path,
                display_name=excluded.display_name,
@@ -204,6 +213,8 @@ impl IconCache {
                image_h=excluded.image_h,
                image_rgba=excluded.image_rgba,
                extraction_version=excluded.extraction_version,
+               category=excluded.category,
+               scale=excluded.scale,
                last_seen_at=excluded.last_seen_at",
             params![
                 entry.app_id.as_ref(),
@@ -218,6 +229,8 @@ impl IconCache {
                 entry.image.h as i64,
                 entry.image.rgba,
                 entry.extracted_at_version as i64,
+                entry.category.as_str(),
+                entry.scale as f64,
                 now_unix(),
             ],
         )?;
@@ -537,6 +550,8 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             image_h            INTEGER NOT NULL,
             image_rgba         BLOB NOT NULL,
             extraction_version INTEGER NOT NULL,
+            category           TEXT NOT NULL DEFAULT 'fullbleed',
+            scale              REAL NOT NULL DEFAULT 1.0,
             last_seen_at       INTEGER NOT NULL,
             deleted_at         INTEGER
         );
@@ -610,6 +625,8 @@ mod tests {
             icon_index: 0,
             image: fake_icon([1, 2, 3, 255]),
             extracted_at_version: EXTRACTION_VERSION,
+            category: IconCategory::FullBleed,
+            scale: 1.0,
         }
     }
 
