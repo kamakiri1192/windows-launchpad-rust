@@ -6,6 +6,16 @@ impl UiId {
         Self(value.into())
     }
 
+    /// Creates a [`UiId`] from an arbitrary stable identifier string.
+    ///
+    /// Unlike the named-scope constructors (e.g. [`Self::launcher_item`],
+    /// [`Self::settings_row`]) which prefix the value with a namespace, this
+    /// stores `name` verbatim. Useful for Liquid Glass component identifiers
+    /// such as `"settings.liquid-glass.enabled"`.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
     pub fn launcher_item(key: impl AsRef<str>) -> Self {
         Self::new(format!("launcher-item:{}", key.as_ref()))
     }

@@ -1,4 +1,4 @@
-use crate::ui_model::geometry::{Point, Rect, UvRect};
+use crate::ui_model::geometry::{ClipRegion, Point, Rect, UvRect};
 use crate::ui_model::grid::TileAnim;
 use crate::ui_model::ids::UiId;
 use crate::ui_model::text::TextView;
@@ -70,6 +70,7 @@ pub struct GlassSurface {
     pub material: GlassMaterial,
     pub behavior: GlassBehavior,
     pub z: i16,
+    pub clip: Option<ClipRegion>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,6 +215,7 @@ pub struct InkView {
     pub color: Color,
     pub kind: ControlKind,
     pub z: i16,
+    pub clip: Option<ClipRegion>,
 }
 
 /// Draw-order lane for already-shaped glyph geometry.
@@ -240,6 +242,7 @@ pub struct GlyphView {
     pub uv: UvRect,
     pub color: Color,
     pub z: i16,
+    pub clip: Option<ClipRegion>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

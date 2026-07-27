@@ -494,6 +494,7 @@ mod tests {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z,
+            clip: None,
         }
     }
 
@@ -573,6 +574,7 @@ mod tests {
             color: Color::rgba(1.0, 0.9, 0.8, 0.7),
             kind: ControlKind::CloseButton,
             z: 3,
+            clip: None,
         };
         let packed = ink_instance(&view).unwrap();
         assert_eq!(packed.center, [12.25, 34.5]);
@@ -594,6 +596,7 @@ mod tests {
             },
             color: Color::rgba(0.5, 0.6, 0.7, 0.8),
             z: 2,
+            clip: None,
         };
         let packed = glyph_quad(&view);
         assert_eq!(

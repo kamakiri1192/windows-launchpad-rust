@@ -468,6 +468,7 @@ fn ink_view(
         color: Color::rgba(color[0], color[1], color[2], color[3]),
         kind,
         z: 0,
+        clip: None,
     }
 }
 
@@ -485,6 +486,7 @@ fn glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 0,
+            clip: None,
         })
         .collect()
 }
@@ -757,6 +759,7 @@ fn build_settings_panel_instances(
                     color: Color::rgba(1.0, 1.0, 1.0, 0.16),
                     kind: ControlKind::SliderTrack,
                     z: 0,
+                    clip: None,
                 });
                 // Knob (kind 11): filled disk positioned at the value t.
                 instances.push(InkView {
@@ -770,6 +773,7 @@ fn build_settings_panel_instances(
                     color: Color::rgba(1.0, 1.0, 1.0, 0.92),
                     kind: ControlKind::SliderKnob,
                     z: 0,
+                    clip: None,
                 });
                 // Reset arrow (kind 12) on the right.
                 instances.push(InkView {
@@ -783,6 +787,7 @@ fn build_settings_panel_instances(
                     color: Color::rgba(1.0, 1.0, 1.0, 0.7),
                     kind: ControlKind::ResetIcon,
                     z: 0,
+                    clip: None,
                 });
             }
             // Rows 9..12: disable toggles.

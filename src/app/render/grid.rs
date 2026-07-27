@@ -258,6 +258,7 @@ impl App {
                 material: GlassMaterial::Regular,
                 behavior: GlassBehavior::Control,
                 z: 20,
+                clip: None,
             },
             GlassSurface {
                 id: UiId::backdrop("folder-hover-drag"),
@@ -271,6 +272,7 @@ impl App {
                 material: GlassMaterial::Regular,
                 behavior: GlassBehavior::Control,
                 z: 21,
+                clip: None,
             },
         ]);
         surfaces
@@ -295,6 +297,7 @@ impl App {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z: 22,
+            clip: None,
         })
     }
 
@@ -529,6 +532,7 @@ fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<Gl
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 0,
+            clip: None,
         })
         .collect()
 }
@@ -572,6 +576,7 @@ mod tests {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z: 22,
+            clip: None,
         };
         let mut surfaces = vec![surface(10.0)];
         upsert_glass_surface(&mut surfaces, surface(240.0));
@@ -590,6 +595,7 @@ mod tests {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::FixedFrame,
             z: -10,
+            clip: None,
         };
         let app_id = UiId::launcher_item("app");
         let app = GlassSurface {
@@ -599,6 +605,7 @@ mod tests {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Scrolling,
             z: 0,
+            clip: None,
         };
         let folder_surface = GlassSurface {
             id: folder_id.clone(),

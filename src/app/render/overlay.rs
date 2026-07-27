@@ -102,6 +102,7 @@ fn overlay_glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 0,
+            clip: None,
         })
         .collect()
 }

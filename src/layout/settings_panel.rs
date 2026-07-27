@@ -700,6 +700,7 @@ pub fn build_with_copy(
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z: Z_PANEL,
+            clip: None,
         }],
     });
 
@@ -991,6 +992,7 @@ fn debug_section_text(
             align: TextAlign::Start,
         },
         z: Z_CONTROL + 1,
+        clip: None,
     });
 }
 
@@ -1719,6 +1721,7 @@ fn push_text(
             align,
         ),
         z: Z_CONTROL + 1,
+        clip: None,
     });
 }
 

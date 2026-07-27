@@ -71,6 +71,7 @@ impl GridLayout {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::FixedFrame,
             z: -10,
+            clip: None,
         });
         for (index, item) in items.iter().take(self.total_tiles()).enumerate() {
             let (x, y) = self.tile_position(viewport_w, index);
@@ -87,6 +88,7 @@ impl GridLayout {
                 material: GlassMaterial::Regular,
                 behavior: GlassBehavior::Scrolling,
                 z: 0,
+                clip: None,
             });
         }
         surfaces

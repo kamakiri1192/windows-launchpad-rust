@@ -162,6 +162,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z: 100,
+            clip: None,
         }],
     );
 
@@ -181,6 +182,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         color: Color::rgba(0.12, 0.15, 0.20, 1.0),
         kind: ControlKind::RowBackground,
         z: 90,
+        clip: None,
     };
     render.set_ink_batch(InkLane::Backdrop, vec![backdrop]);
 
@@ -204,6 +206,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             kind: ControlKind::RowBackground,
             z: 128,
+            clip: None,
         });
     }
     if title_alpha > 0.001 {
@@ -219,6 +222,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 TextAlign::Center,
             ),
             z: 130,
+            clip: None,
         });
     }
 
@@ -322,6 +326,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                     TextAlign::Center,
                 ),
                 z: 125,
+                clip: None,
             });
         }
     }
@@ -358,6 +363,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 color: Color::rgba(1.0, 1.0, 1.0, if dot == page { 0.9 } else { 0.42 }),
                 kind: ControlKind::Dot,
                 z: 130,
+                clip: None,
             });
         }
     }

@@ -353,6 +353,7 @@ fn ink_view(
         color: Color::rgba(color[0], color[1], color[2], color[3]),
         kind,
         z: 0,
+        clip: None,
     }
 }
 
@@ -370,6 +371,7 @@ fn glyph_views(id: UiId, quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 0,
+            clip: None,
         })
         .collect()
 }
@@ -387,6 +389,7 @@ fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSu
         material: GlassMaterial::Regular,
         behavior: GlassBehavior::Control,
         z: 0,
+        clip: None,
     })
 }
 
@@ -402,7 +405,8 @@ fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometr
         radius: geom.glass_radius,
         material: GlassMaterial::Regular,
         behavior: GlassBehavior::Control,
-        z: 1,
+        z: 10,
+        clip: None,
     }
 }
 
