@@ -38,7 +38,6 @@ jobs:
           import html
           import json
           import os
-          import re
           from pathlib import Path
 
           data = json.loads(Path(os.environ["WARLOC_JSON"]).read_text())
@@ -135,28 +134,64 @@ jobs:
               ]
           )
           Path("docs/CODE_STATS.md").write_text("\n".join(lines))
-
-          readme_path = Path("README.md")
-          readme = readme_path.read_text()
-          badge = "[![Rust LOC](assets/lines-of-code.svg)](docs/CODE_STATS.md)"
-          pattern = re.compile(
-              r"^\[!\[(?:Lines of Code|Rust LOC)\]\(assets/lines-of-code\.svg\)\]\([^\n]+\)$",
-              re.MULTILINE,
-          )
-          updated, replacements = pattern.subn(badge, readme, count=1)
-          if replacements != 1:
-              raise SystemExit("Could not find the existing lines-of-code badge in README.md")
-          readme_path.write_text(updated)
           PY
 
       - name: Commit updated statistics
+        id: commit-statistics
         run: |
-          if git diff --quiet -- README.md assets/lines-of-code.svg docs/CODE_STATS.md; then
+          if git diff --quiet -- assets/lines-of-code.svg docs/CODE_STATS.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md assets/lines-of-code.svg docs/CODE_STATS.md
+          git add assets/lines-of-code.svg docs/CODE_STATS.md
           git commit -m "chore: update Rust code statistics [skip ci]"
           git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Purge Rust LOC badge cache
+        if: steps.commit-statistics.outputs.changed == 'true'
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          page_file="$RUNNER_TEMP/repository-page.html"
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 2 \
+            "https://github.com/${REPOSITORY}" > "$page_file"
+
+          camo_url="$(python3 - "$page_file" <<'PY'
+          import sys
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          class RustLocImageParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.url = None
+
+              def handle_starttag(self, tag, attrs):
+                  if tag != "img" or self.url is not None:
+                      return
+                  attributes = dict(attrs)
+                  if attributes.get("alt") != "Rust LOC":
+                      return
+                  source = attributes.get("src", "")
+                  if urlparse(source).netloc == "camo.githubusercontent.com":
+                      self.url = source
+
+          parser = RustLocImageParser()
+          parser.feed(Path(sys.argv[1]).read_text())
+          if parser.url:
+              print(parser.url)
+          PY
+          )"
+
+          if [ -z "$camo_url" ]; then
+            echo "::warning::Rust LOC badge is not served through Camo; cache purge was skipped."
+            exit 0
+          fi
+
+          curl --fail --silent --show-error --request PURGE "$camo_url"
