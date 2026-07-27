@@ -9,6 +9,9 @@ Thumbs.db
 Desktop.ini
 /nul
 
+# macOS cruft
+.DS_Store
+
 # Editor settings
 .vscode/
 .idea/
