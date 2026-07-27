@@ -41,6 +41,7 @@ mod qa;
 mod renderer;
 mod scroll;
 mod startup_timer;
+mod ui;
 mod ui_model;
 mod workers;
 

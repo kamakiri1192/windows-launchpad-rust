@@ -13,14 +13,21 @@ pub mod response;
 pub mod theme;
 pub mod widgets;
 
-// Re-export the most commonly used types.
+// Re-export the most commonly used types (used by external crate consumers
+// via the lib crate; the bin crate imports from sub-modules directly).
+#[allow(unused_imports)]
 pub use context::{LayoutDirection, Ui};
+#[allow(unused_imports)]
 pub use interaction::{ElementState, InteractionPhase};
+#[allow(unused_imports)]
 pub use registry::Registry;
+#[allow(unused_imports)]
 pub use response::Response;
+#[allow(unused_imports)]
 pub use theme::{ControlSize, ScrollbarStyle, Theme, ToggleMotionStyle};
 
 // Re-export widget types.
+#[allow(unused_imports)]
 pub use widgets::{
     Button, ButtonStyle, Divider, Heading, IconButton, Label, Slider, SliderResponse, Toggle,
     ToggleResponse, ToggleStyle,

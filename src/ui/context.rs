@@ -152,6 +152,29 @@ impl Ui {
         self.focused_id = id;
     }
 
+    /// Set the layout cursor position for manual/absolute positioning.
+    pub fn set_cursor(&mut self, x: f32, y: f32) {
+        self.cursor_x = x;
+        self.cursor_y = y;
+    }
+
+    /// Reset spacing and first-in-container before a manually-positioned
+    /// widget so that `begin_widget()` is a no-op (no extra spacing is added).
+    pub fn begin_absolute_placement(&mut self) {
+        self.spacing = 0.0;
+        self.first_in_container = true;
+    }
+
+    /// Set the available content width for the next widget/container.
+    pub fn set_available_width(&mut self, w: f32) {
+        self.available_width = w;
+    }
+
+    /// Set the available content height (None = unbounded).
+    pub fn set_available_height(&mut self, h: Option<f32>) {
+        self.available_height = h;
+    }
+
     /// Current pointer position, if any.
     pub fn pointer_pos(&self) -> Option<Point> {
         self.pointer_pos

@@ -59,8 +59,24 @@ impl App {
                 layout::settings_panel::LiquidGlassDebugState::default(),
             ));
         let lg = self.settings.liquid_glass;
-        let model = layout::settings_panel::build_with_copy(
-            layout::settings_panel::SettingsPanelInput {
+
+        // Current pointer position in logical pixels (for widget hover/press states)
+        let pointer_logical = if scale > 0.0 {
+            Some(ui_model::geometry::Point::new(
+                self.pointer_phys_x,
+                self.pointer_phys_y,
+            ))
+        } else {
+            None
+        };
+        let pointer_pressed = self.pressed_on_settings.is_some()
+            || self.pending_press.is_some()
+            || self.settings_slider_drag.is_some();
+        // Capture the settings_scroll into a local ref for the builder.
+        // We use a trick: split borrow of settings_scroll while we still need
+        // other fields of self. Build the input first, then pass &mut scroll.
+        let model = {
+            let input = layout::settings_panel::SettingsPanelInput {
                 viewport: self.viewport_phys(),
                 scale_factor: scale,
                 category: settings_category_id(self.settings_category),
@@ -83,41 +99,32 @@ impl App {
                     blur_radius: lg.blur_radius,
                 },
                 liquid_glass_debug: lg_debug_state,
-            },
-            &copy,
-        );
+                pointer_pos: pointer_logical,
+                pointer_pressed,
+            };
+            layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
+        };
         let panel = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
 
-        let btn_r = layout::settings_panel::CLOSE_HALF * scale;
-        let close = control_icon(
-            panel.left + panel.hw * 2.0 - btn_r * 2.0,
-            panel.top + btn_r * 2.0,
-            btn_r,
-            ControlKind::CloseButton,
-            layout::settings_panel::INK,
-        );
+        // Extract ink instances from the builder's output.
+        let mut instances: Vec<InkView> = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|b| b.lane == InkLane::Settings)
+            .map(|b| b.views.clone())
+            .unwrap_or_default();
 
-        let mut instances = Vec::new();
+        // Text views from the builder → glyph quads.
         let mut quads = Vec::new();
-        build_settings_panel_instances(
-            &panel,
-            scale,
-            self.settings_category,
-            &self.settings,
-            self.settings_scroll_rows,
-            window_decorated,
-            lg_debug_state,
-            hidden_count,
-            &mut instances,
-        );
-        instances.push(close);
-
         if let Some(text) = self.text.as_mut() {
             build_settings_panel_text_views(text, &model.result.render.text, scale, &mut quads);
         }
 
+        // Transform for pop animation.
         transform_settings_instances(
             &mut instances,
             [panel.cx, panel.cy],
@@ -126,6 +133,7 @@ impl App {
         );
         transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
 
+        // Glass from the builder's output.
         let modal = model
             .result
             .render
