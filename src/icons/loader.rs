@@ -45,7 +45,7 @@ pub fn load_all_icons() -> LoadedIcons {
             Some(raw) => {
                 let normalized = normalize(&raw);
                 icon_idx_for.push(Some(icons.len()));
-                icons.push(normalized);
+                icons.push(normalized.image);
             }
             None => {
                 icon_idx_for.push(None);

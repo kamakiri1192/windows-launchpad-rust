@@ -6,6 +6,7 @@
 //!
 //! - [`domain`]: durable launcher data and pure rules (app IDs, registry,
 //!   settings, diffs).
+//! - [`icons`]: icon normalization, visual-size analysis, and atlas packing.
 //! - [`layout`]: renderer-neutral layout builders that emit `LayoutResult`.
 //! - [`ui_model`]: renderer-neutral primitives (`RenderModel`, `HitMap`,
 //!   `UiId`, geometry).
@@ -15,6 +16,7 @@
 //! or the `windows` crate.
 
 pub mod domain;
+pub mod icons;
 pub mod input_probe_protocol;
 pub mod input_routing;
 pub mod layout;

@@ -21,12 +21,15 @@ pub mod extract;
 #[cfg(windows)]
 pub mod loader;
 pub mod normalize;
+pub mod sizing;
 
 #[allow(unused_imports)] // legacy pipeline surface; kept for reference/tests
 #[cfg(windows)]
 pub use loader::{load_all_icons, LoadedIcons};
 #[allow(unused_imports)] // public API surface for icon decoding callers
 pub use normalize::{normalize, DecodedIcon, TARGET};
+#[allow(unused_imports)] // consumed by normalize / icon_cache in Phase 2
+pub use sizing::{analyze, classify, scale_for, IconCategory, IconMetrics};
 
 /// Re-exported from [`crate::ui_model::geometry`]. `UvRect` is renderer-neutral
 /// data (texture coordinates carry no feature semantics), so the canonical

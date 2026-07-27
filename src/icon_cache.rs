@@ -27,11 +27,12 @@ use crate::domain::app_id::AppId;
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
 use crate::icons::normalize::DecodedIcon;
+use crate::icons::sizing::IconCategory;
 use crate::startup_timer::{self, prefix};
 
 /// Bumped on any breaking change to the on-disk layout. A mismatch invalidates
 /// every cached icon (they are all re-extracted).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Bumped when the *extraction* itself changes (new normalization target size,
 /// different alpha handling, a different extraction strategy, etc.) so
@@ -46,10 +47,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// at 256px before normalizing them into the launcher atlas.
 /// v5: resolves macOS app icons through Launch Services so asset catalogs and
 /// modern ICNS encodings render consistently with Finder.
+/// v6/v5: Issue #48 アイコンサイズ自動正規化（solid_fill 分類 + カテゴリ別 scale）
 #[cfg(target_os = "macos")]
-pub const EXTRACTION_VERSION: u32 = 5;
+pub const EXTRACTION_VERSION: u32 = 6;
 #[cfg(not(target_os = "macos"))]
-pub const EXTRACTION_VERSION: u32 = 4;
+pub const EXTRACTION_VERSION: u32 = 5;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).
@@ -70,6 +72,8 @@ pub struct CachedIcon {
     pub icon_index: i32,
     pub image: DecodedIcon,
     pub extracted_at_version: u32,
+    pub category: IconCategory,
+    pub scale: f32,
 }
 
 /// The fields the caller already knows about a shortcut (from the latest scan),
@@ -147,13 +151,15 @@ impl IconCache {
             .query_row(
                 "SELECT link_path, display_name, link_mtime, target_path, target_mtime,
                         icon_location, icon_index, image_w, image_h, image_rgba,
-                        extraction_version
+                        extraction_version, category, scale
                  FROM icons WHERE app_id = ?1",
                 params![probe.app_id.as_ref()],
                 |r| {
                     let image_w: u32 = r.get::<_, i64>("image_w")? as u32;
                     let image_h: u32 = r.get::<_, i64>("image_h")? as u32;
                     let rgba: Vec<u8> = r.get("image_rgba")?;
+                    let cat_str: String = r.get("category")?;
+                    let cat = IconCategory::from_str_lossy(&cat_str);
                     Ok(CachedIcon {
                         app_id: probe.app_id.clone(),
                         link_path: r.get::<_, String>("link_path")?,
@@ -169,6 +175,8 @@ impl IconCache {
                             h: image_h,
                         },
                         extracted_at_version: r.get::<_, i64>("extraction_version")? as u32,
+                        category: cat,
+                        scale: r.get::<_, f64>("scale")? as f32,
                     })
                 },
             )
@@ -190,8 +198,9 @@ impl IconCache {
         tx.execute(
             "INSERT INTO icons (app_id, link_path, display_name, link_mtime, target_path,
                                 target_mtime, icon_location, icon_index, image_w, image_h,
-                                image_rgba, extraction_version, last_seen_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                                image_rgba, extraction_version, category, scale,
+                                last_seen_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
              ON CONFLICT(app_id) DO UPDATE SET
                link_path=excluded.link_path,
                display_name=excluded.display_name,
@@ -204,6 +213,8 @@ impl IconCache {
                image_h=excluded.image_h,
                image_rgba=excluded.image_rgba,
                extraction_version=excluded.extraction_version,
+               category=excluded.category,
+               scale=excluded.scale,
                last_seen_at=excluded.last_seen_at",
             params![
                 entry.app_id.as_ref(),
@@ -218,6 +229,8 @@ impl IconCache {
                 entry.image.h as i64,
                 entry.image.rgba,
                 entry.extracted_at_version as i64,
+                entry.category.as_str(),
+                entry.scale as f64,
                 now_unix(),
             ],
         )?;
@@ -537,6 +550,8 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             image_h            INTEGER NOT NULL,
             image_rgba         BLOB NOT NULL,
             extraction_version INTEGER NOT NULL,
+            category           TEXT NOT NULL DEFAULT 'fullbleed',
+            scale              REAL NOT NULL DEFAULT 1.0,
             last_seen_at       INTEGER NOT NULL,
             deleted_at         INTEGER
         );
@@ -569,8 +584,39 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
         )
         .unwrap_or(0);
     if stored as u32 != SCHEMA_VERSION {
-        // Version mismatch: wipe icons so everything is re-extracted.
+        // Schema version mismatch: run any pending column migrations
+        // before wiping cached rows so that subsequent INSERTs succeed.
+        migrate_icons_schema(conn)?;
+        // Wipe icons so everything is re-extracted.
         conn.execute("DELETE FROM icons", [])?;
+    }
+    Ok(())
+}
+
+/// Add any columns that may be missing in an older icons table schema.
+///
+/// This handles the v1→v2 migration where `category` and `scale` columns were
+/// added. SQLite does not support `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so
+/// we query `PRAGMA table_info` to check for column existence first.
+fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
+    // Collect existing column names.
+    let mut stmt = conn.prepare("PRAGMA table_info(icons)")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))? // column 1 = name
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if !existing.iter().any(|c| c == "category") {
+        conn.execute(
+            "ALTER TABLE icons ADD COLUMN category TEXT NOT NULL DEFAULT 'fullbleed'",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|c| c == "scale") {
+        conn.execute(
+            "ALTER TABLE icons ADD COLUMN scale REAL NOT NULL DEFAULT 1.0",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -610,6 +656,8 @@ mod tests {
             icon_index: 0,
             image: fake_icon([1, 2, 3, 255]),
             extracted_at_version: EXTRACTION_VERSION,
+            category: IconCategory::FullBleed,
+            scale: 1.0,
         }
     }
 
@@ -843,5 +891,139 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
         // open_at on a fresh memory DB still works:
         let _ = cache();
+    }
+
+    // -- schema migration (v1 → v2) ---------------------------------------------
+
+    /// Regression test (Bug #48): opening a v1 database (icons table without
+    /// `category` / `scale` columns) must add those columns via ALTER TABLE
+    /// before clearing rows for re-extraction. Without this, the schema version
+    /// is bumped to 2 but the columns remain missing, and subsequent INSERTs
+    /// fail silently because the new column names are not recognised.
+    #[test]
+    fn migration_adds_category_and_scale_columns_to_v1_db() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Create v1-style schema (without category/scale columns).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_meta (
+                key   TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS icons (
+                app_id             TEXT PRIMARY KEY,
+                link_path          TEXT NOT NULL,
+                display_name       TEXT NOT NULL,
+                link_mtime         INTEGER NOT NULL,
+                target_path        TEXT NOT NULL,
+                target_mtime       INTEGER NOT NULL,
+                icon_location      TEXT NOT NULL,
+                icon_index         INTEGER NOT NULL,
+                image_w            INTEGER NOT NULL,
+                image_h            INTEGER NOT NULL,
+                image_rgba         BLOB NOT NULL,
+                extraction_version INTEGER NOT NULL,
+                last_seen_at       INTEGER NOT NULL,
+                deleted_at         INTEGER
+            );
+            INSERT INTO schema_meta(key, value) VALUES ('schema_version', 1);
+        ",
+        )
+        .unwrap();
+
+        // Insert a dummy row — it will be wiped by check_schema_version.
+        conn.execute(
+            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, \
+             target_path, target_mtime, icon_location, icon_index, image_w, image_h, \
+             image_rgba, extraction_version, last_seen_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                "test-app",
+                "",
+                "",
+                0i64,
+                "",
+                0i64,
+                "",
+                0i64,
+                128i64,
+                128i64,
+                vec![0u8; 128 * 128 * 4],
+                5i64,
+                0i64,
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM icons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        // Run the full version-check path (migration + wipe).
+        check_schema_version(&conn).unwrap();
+
+        // Columns must now exist.
+        let mut stmt = conn.prepare("PRAGMA table_info(icons)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"category".to_string()),
+            "category column should exist after migration; got {:?}",
+            cols
+        );
+        assert!(
+            cols.contains(&"scale".to_string()),
+            "scale column should exist after migration; got {:?}",
+            cols
+        );
+
+        // The old row should have been wiped by the version mismatch.
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM icons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "v1 rows should be wiped for re-extraction"
+        );
+
+        // Insert a new row using the migrated columns to confirm they work.
+        conn.execute(
+            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, \
+             target_path, target_mtime, icon_location, icon_index, image_w, image_h, \
+             image_rgba, extraction_version, category, scale, last_seen_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            params![
+                "re-extracted",
+                "",
+                "",
+                0i64,
+                "",
+                0i64,
+                "",
+                0i64,
+                128i64,
+                128i64,
+                vec![0u8; 128 * 128 * 4],
+                EXTRACTION_VERSION as i64,
+                "solid",
+                0.74f64,
+                0i64,
+            ],
+        )
+        .unwrap();
+
+        let (cat, scl): (String, f64) = conn
+            .query_row(
+                "SELECT category, scale FROM icons WHERE app_id = 're-extracted'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cat, "solid");
+        assert!((scl - 0.74).abs() < 0.001);
     }
 }

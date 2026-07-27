@@ -215,14 +215,16 @@ fn process_one(
         target_mtime: req.target_mtime,
         icon_location: req.icon_location.clone(),
         icon_index: req.icon_index,
-        image: image.clone(),
+        image: image.image.clone(),
         extracted_at_version: icon_cache::EXTRACTION_VERSION,
+        category: image.category,
+        scale: image.scale as f32,
     };
     if let Err(e) = cache.put(&entry) {
         eprintln!("icon-cache: write failed for app_id={}: {e}", req.app_id);
     }
 
-    Ok(image)
+    Ok(image.image)
 }
 
 fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {

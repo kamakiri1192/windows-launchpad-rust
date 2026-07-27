@@ -863,6 +863,7 @@ impl ComScope {
     /// Initialize COM for the current thread. The returned guard uninitializes
     /// on drop; if you don't need teardown, the `Ok(())` branch is harmless to
     /// drop immediately (we hold it explicitly to keep the scope explicit).
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let r = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         // S_OK (0) or S_FALSE (already init) are fine; RPC_E_CHANGED_MODE means
