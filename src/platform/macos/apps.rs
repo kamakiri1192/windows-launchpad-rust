@@ -55,10 +55,20 @@ fn scan_root(
             let Ok(file_type) = child.file_type() else {
                 continue;
             };
-            if !file_type.is_dir() || file_type.is_symlink() {
+            let is_app_bundle = path.extension().is_some_and(|ext| ext == "app");
+            // Follow symlinks for `.app` bundles so that linked system apps
+            // are discovered (e.g. Safari on macOS Ventura+ is a symlink
+            // inside /Applications pointing into the Cryptexes volume).
+            // Skip symlinks for plain directories to avoid traversal cycles.
+            let is_dir = if file_type.is_symlink() {
+                is_app_bundle && path.is_dir()
+            } else {
+                file_type.is_dir()
+            };
+            if !is_dir {
                 continue;
             }
-            if path.extension().is_some_and(|ext| ext == "app") {
+            if is_app_bundle {
                 if let Some(entry) = snapshot_entry(&path, preferred_languages) {
                     applications.entry(entry.app_id.clone()).or_insert(entry);
                 }
@@ -314,6 +324,14 @@ fn file_mtime(path: &Path) -> u64 {
 
 /// Decode the highest-resolution usable icon exposed by an app bundle.
 pub fn extract_icon(bundle_path: &Path, icon_location: &str) -> Option<DecodedIcon> {
+    // Resolve symlinks so that NSWorkspace returns the real application icon
+    // without a shortcut/alias badge. On macOS Ventura+ Safari.app inside
+    // /Applications is a symlink into the Cryptexes volume; passing the
+    // symlink path to `iconForFile` produces a generic icon with a symlink
+    // overlay instead of the true Safari icon.
+    let resolved = std::fs::canonicalize(bundle_path).unwrap_or_else(|_| bundle_path.to_path_buf());
+    let bundle_path = resolved.as_path();
+
     // Ask Launch Services first. This is the same icon resolution path Finder
     // uses, so it handles asset-catalog-only system apps (for example
     // Calendar), custom file icons, and ICNS encodings our portable decoder
@@ -578,6 +596,116 @@ mod tests {
             .expect("installed Premiere should be included in the application scan");
         assert_eq!(entry.name, "Adobe Premiere Pro 2026");
         assert_eq!(Path::new(&entry.link_path), bundle);
+    }
+
+    #[test]
+    fn symlinked_app_bundle_is_discovered() {
+        let root = temporary_directory("symlinked-bundle");
+        let real_dir = root.join("real");
+        let scan_dir = root.join("scan");
+        let bundle = real_dir.join("Linked.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        std::fs::create_dir_all(&scan_dir).unwrap();
+
+        let mut info = Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            Value::String("com.example.linked".into()),
+        );
+        info.insert("CFBundleName".into(), Value::String("Linked".into()));
+        info.insert("CFBundleExecutable".into(), Value::String("Linked".into()));
+        Value::Dictionary(info)
+            .to_file_xml(bundle.join("Contents/Info.plist"))
+            .unwrap();
+        std::fs::write(bundle.join("Contents/MacOS/Linked"), []).unwrap();
+
+        // Create a symlink inside the scan directory pointing to the real bundle.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&bundle, scan_dir.join("Linked.app")).unwrap();
+
+        let mut applications = BTreeMap::new();
+        scan_root(&scan_dir, &["en".to_owned()], &mut applications);
+        assert!(
+            !applications.is_empty(),
+            "symlinked .app bundle should be discovered"
+        );
+        let entry = applications.values().next().unwrap();
+        assert_eq!(entry.name, "Linked");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn symlinked_non_app_directory_is_not_traversed() {
+        let root = temporary_directory("symlinked-non-app");
+        let real_dir = root.join("real");
+        let scan_dir = root.join("scan");
+        let bundle = real_dir.join("Hidden.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        std::fs::create_dir_all(&scan_dir).unwrap();
+
+        let mut info = Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            Value::String("com.example.hidden".into()),
+        );
+        info.insert("CFBundleName".into(), Value::String("Hidden".into()));
+        info.insert("CFBundleExecutable".into(), Value::String("Hidden".into()));
+        Value::Dictionary(info)
+            .to_file_xml(bundle.join("Contents/Info.plist"))
+            .unwrap();
+        std::fs::write(bundle.join("Contents/MacOS/Hidden"), []).unwrap();
+
+        // Symlink a plain directory (not an .app bundle) — the scanner should
+        // skip it to avoid potential traversal cycles.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_dir, scan_dir.join("linked_folder")).unwrap();
+
+        let mut applications = BTreeMap::new();
+        scan_root(&scan_dir, &["en".to_owned()], &mut applications);
+        assert!(
+            applications.is_empty(),
+            "apps behind a symlinked non-.app directory should not be traversed"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn safari_is_discovered_by_application_scan() {
+        // Safari lives at /Applications/Safari.app, which on macOS Ventura+
+        // is a symlink into the Cryptexes volume.
+        let bundle = Path::new("/Applications/Safari.app");
+        if !bundle.exists() {
+            return;
+        }
+        let applications = scan_applications();
+        let safari = applications
+            .values()
+            .find(|entry| entry.link_path == bundle.to_string_lossy());
+        assert!(
+            safari.is_some(),
+            "Safari should appear in the application scan"
+        );
+    }
+
+    #[test]
+    fn symlinked_safari_extracts_icon_without_badge() {
+        // Safari.app in /Applications is a symlink on macOS Ventura+.
+        // `extract_icon` should resolve the symlink so that NSWorkspace
+        // returns the real Safari icon instead of one with a symlink badge.
+        let bundle = Path::new("/Applications/Safari.app");
+        if !bundle.is_symlink() {
+            // Only meaningful on systems where Safari is a symlink.
+            return;
+        }
+        let icon =
+            extract_icon(bundle, "").expect("Safari icon should be extracted through symlink");
+        assert!(icon.w >= TARGET, "icon width {} < {TARGET}", icon.w);
+        assert!(icon.h >= TARGET, "icon height {} < {TARGET}", icon.h);
+        assert_eq!(icon.rgba.len(), (icon.w * icon.h * 4) as usize);
+        // Verify the icon has meaningful non-transparent content.
+        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0));
     }
 
     #[test]
