@@ -92,6 +92,23 @@ pub enum SettingsPressTarget {
     FpsToggle,
     ResetCache,
     ResetSettings,
+    /// Liquid Glass master switch (keyboard equivalent: `V`).
+    LiquidGlassEnabled,
+    /// One of the five numeric Liquid Glass parameters, pressed on the slider
+    /// track. Starts a drag; the value updates until release.
+    LiquidGlassParam(crate::domain::settings::LiquidGlassParamField),
+    /// Per-parameter reset arrow on a slider row.
+    LiquidGlassParamReset(crate::domain::settings::LiquidGlassParamField),
+    /// "Reset Liquid Glass to defaults" action button.
+    LiquidGlassResetAll,
+    /// One of the B/G/D/A/F or C/E/L debug flags (session-only).
+    LiquidGlassDebug(crate::domain::settings::LiquidGlassDebugFlag),
+    /// Window decorations toggle (keyboard equivalent: `M`, session-only).
+    WindowDecorations,
+    /// Settings content scroll up / down hit region (wheel-equivalent hit
+    /// area for click-to-scroll).
+    SettingsScrollUp,
+    SettingsScrollDown,
     Inside,
     Outside,
 }
@@ -293,6 +310,15 @@ pub struct App {
     pub settings: Settings,
     /// Sidebar category currently shown by the settings overlay.
     pub settings_category: SettingsCategory,
+    /// Vertical content scroll offset (in logical content rows) for the
+    /// settings overlay. Only the `Debug` category overflows today, so this
+    /// is reset to 0 whenever the category changes. Stepped one row at a
+    /// time so rows always land on whole slots — pixel-level smooth scroll
+    /// would need a clip primitive we don't have yet.
+    pub settings_scroll_rows: i32,
+    /// When a slider knob is being dragged, the Liquid Glass parameter field
+    /// it controls. `None` outside an active drag.
+    pub settings_slider_drag: Option<crate::domain::settings::LiquidGlassParamField>,
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     pub last_redraw: Option<Instant>,
@@ -403,6 +429,8 @@ impl App {
             settings_panel_progress: 0.0,
             settings: Settings::default(),
             settings_category: SettingsCategory::Apps,
+            settings_scroll_rows: 0,
+            settings_slider_drag: None,
             last_redraw: None,
             last_frame_dt_ms: 0.0,
             visible: true,

@@ -200,6 +200,7 @@ impl App {
             &layout,
             self.scale_factor,
             settings_category_id(self.settings_category),
+            self.settings_scroll_rows,
             crate::ui_model::geometry::Point::new(x, y),
         );
         settings_press_target_from_layout_hit(hit)
@@ -210,6 +211,7 @@ impl App {
             SettingsPressTarget::Close => self.close_settings(),
             SettingsPressTarget::Category(category) => {
                 self.settings_category = category;
+                self.reset_settings_scroll();
                 self.request_redraw();
             }
             SettingsPressTarget::Sort(order) => {
@@ -260,6 +262,9 @@ impl App {
             }
             SettingsPressTarget::ResetSettings => {
                 self.settings = Settings::default();
+                // Mirror the reset into the renderer's Liquid Glass params so
+                // the on-screen effect matches the now-default settings.
+                self.apply_persisted_liquid_glass_to_renderer();
                 // Reset the user layout entirely (order, folders, hidden).
                 self.launcher_state = crate::domain::launcher_state::LauncherState::new();
                 self.sync_launcher_layout_with_registry();
@@ -268,8 +273,148 @@ impl App {
                 self.relayout();
                 self.request_redraw();
             }
+            SettingsPressTarget::LiquidGlassEnabled => {
+                let next = !self.settings.liquid_glass.enabled;
+                self.settings.liquid_glass.enabled = next;
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_enabled(next);
+                }
+                self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassParam(field) => {
+                // Begin a drag. Subsequent pointer moves update the value
+                // via `update_settings_slider_drag`; release commits.
+                self.settings_slider_drag = Some(field);
+                // Also set the value at the press position so a tap without
+                // drag still moves the knob.
+                self.update_settings_slider_drag(self.pointer_phys_x);
+            }
+            SettingsPressTarget::LiquidGlassParamReset(field) => {
+                let (min, max, default) = field.range();
+                let _ = (min, max);
+                field.set(&mut self.settings.liquid_glass, default);
+                if let Some(r) = self.renderer.as_mut() {
+                    apply_param_to_renderer(r, field, default);
+                }
+                self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassResetAll => {
+                self.settings.liquid_glass.reset_to_defaults();
+                if let Some(r) = self.renderer.as_mut() {
+                    r.reset_liquid_glass_params();
+                }
+                self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassDebug(flag) => {
+                if let Some(r) = self.renderer.as_mut() {
+                    r.toggle_liquid_glass_debug_flag(debug_flag_to_renderer(flag));
+                }
+                self.request_redraw();
+            }
+            SettingsPressTarget::WindowDecorations => {
+                if let Some(r) = self.renderer.as_mut() {
+                    let next = !r.decorated();
+                    r.set_decorated(next);
+                }
+                self.request_redraw();
+            }
+            SettingsPressTarget::SettingsScrollUp => {
+                self.scroll_settings_by(-1);
+            }
+            SettingsPressTarget::SettingsScrollDown => {
+                self.scroll_settings_by(1);
+            }
             SettingsPressTarget::Inside | SettingsPressTarget::Outside => {}
         }
+    }
+
+    /// Update the in-flight slider drag from the current pointer x (physical
+    /// px). No-op if no drag is active. Computes the new value from the
+    /// pointer position over the slider track, writes it into both the
+    /// persisted settings snapshot and the renderer, then requests a redraw.
+    pub(crate) fn update_settings_slider_drag(&mut self, pointer_phys_x: f32) {
+        use crate::layout::settings_panel as sp;
+        let Some(field_id) = self.settings_slider_drag else {
+            return;
+        };
+        let layout = self.settings_panel_layout();
+        let scale = self.scale_factor;
+        // Map the domain field id to the layout id for geometry.
+        let layout_id = match field_id {
+            crate::domain::settings::LiquidGlassParamField::Thickness => {
+                sp::LiquidGlassParamId::Thickness
+            }
+            crate::domain::settings::LiquidGlassParamField::RefractiveIndex => {
+                sp::LiquidGlassParamId::RefractiveIndex
+            }
+            crate::domain::settings::LiquidGlassParamField::Saturation => {
+                sp::LiquidGlassParamId::Saturation
+            }
+            crate::domain::settings::LiquidGlassParamField::ChromaticAberration => {
+                sp::LiquidGlassParamId::ChromaticAberration
+            }
+            crate::domain::settings::LiquidGlassParamField::BlurRadius => {
+                sp::LiquidGlassParamId::BlurRadius
+            }
+        };
+        let value = sp::debug_slider_value_from_pointer(&layout, scale, pointer_phys_x, layout_id);
+        field_id.set(&mut self.settings.liquid_glass, value);
+        if let Some(r) = self.renderer.as_mut() {
+            apply_param_to_renderer(r, field_id, value);
+        }
+        self.request_redraw();
+    }
+
+    /// Commit and end the current slider drag, if any.
+    pub(crate) fn end_settings_slider_drag(&mut self) {
+        if self.settings_slider_drag.take().is_some() {
+            self.persist_settings();
+            self.request_redraw();
+        }
+    }
+
+    /// Scroll the settings content by `delta_rows`, clamped to the visible
+    /// range. `max_rows` is the total overflow (how many rows are hidden
+    /// below the fold); 0 means no scrolling.
+    pub(crate) fn scroll_settings_by(&mut self, delta_rows: i32) {
+        let max = self.settings_max_scroll_rows();
+        eprintln!(
+            "settings-scroll: scroll_settings_by(delta={}) called, max={}, current={}",
+            delta_rows, max, self.settings_scroll_rows
+        );
+        if max <= 0 {
+            self.settings_scroll_rows = 0;
+            return;
+        }
+        let next = self.settings_scroll_rows + delta_rows;
+        self.settings_scroll_rows = next.clamp(0, max);
+        eprintln!(
+            "settings-scroll: new scroll_rows={}",
+            self.settings_scroll_rows
+        );
+        self.request_redraw();
+    }
+
+    /// How many content rows can be scrolled below the fold for the current
+    /// category. Returns 0 for categories that fit without scrolling.
+    pub(crate) fn settings_max_scroll_rows(&self) -> i32 {
+        // Debug overflows; the other categories fit. The exact count is
+        // computed in the layout module; expose a stable value here.
+        // (See `layout::settings_panel::debug_category_overflow_rows`.)
+        match self.settings_category {
+            crate::domain::settings::SettingsCategory::Debug => {
+                crate::layout::settings_panel::debug_category_overflow_rows()
+            }
+            _ => 0,
+        }
+    }
+
+    /// Reset the per-category scroll when the category changes.
+    pub(crate) fn reset_settings_scroll(&mut self) {
+        self.settings_scroll_rows = 0;
     }
 
     /// Drain the shared inbox and dispatch each message.
@@ -526,6 +671,10 @@ impl App {
             return;
         }
         self.settings_open = false;
+        // Drop any in-flight slider drag and reset the per-category scroll so
+        // the next open starts at the top.
+        self.settings_slider_drag = None;
+        self.reset_settings_scroll();
         debug_log!("settings: closed");
         self.request_redraw();
     }
@@ -1372,5 +1521,41 @@ impl App {
         self.folders.page = ((-scroller.position / extent).round() as isize)
             .clamp(0, layout.page_count.saturating_sub(1) as isize)
             as usize;
+    }
+}
+
+/// Push a single parameter value into the renderer.
+fn apply_param_to_renderer(
+    r: &mut crate::renderer::Renderer,
+    field: crate::domain::settings::LiquidGlassParamField,
+    value: f32,
+) {
+    use crate::domain::settings::LiquidGlassParamField;
+    match field {
+        LiquidGlassParamField::Thickness => r.set_liquid_glass_thickness(value),
+        LiquidGlassParamField::RefractiveIndex => r.set_liquid_glass_refractive_index(value),
+        LiquidGlassParamField::Saturation => r.set_liquid_glass_saturation(value),
+        LiquidGlassParamField::ChromaticAberration => {
+            r.set_liquid_glass_chromatic_aberration(value)
+        }
+        LiquidGlassParamField::BlurRadius => r.set_liquid_glass_blur_radius(value),
+    }
+}
+
+/// Map the domain debug flag to the renderer's mirror enum.
+fn debug_flag_to_renderer(
+    flag: crate::domain::settings::LiquidGlassDebugFlag,
+) -> crate::liquid_glass::SettingsDebugFlag {
+    use crate::domain::settings::LiquidGlassDebugFlag as D;
+    use crate::liquid_glass::SettingsDebugFlag as R;
+    match flag {
+        D::DisableChromaticAberration => R::DisableChromaticAberration,
+        D::DisableEdgeLighting => R::DisableEdgeLighting,
+        D::DisableBlur => R::DisableBlur,
+        D::ShowBackdropTexture => R::ShowBackdropTexture,
+        D::ShowGeometryTexture => R::ShowGeometryTexture,
+        D::ShowDisplacement => R::ShowDisplacement,
+        D::ShowAlphaMask => R::ShowAlphaMask,
+        D::ShowFinalGlassOnly => R::ShowFinalGlassOnly,
     }
 }

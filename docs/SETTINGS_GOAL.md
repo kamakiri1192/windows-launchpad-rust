@@ -103,3 +103,71 @@ pub struct Settings {
 - `GearStyle` enum / `LAUNCHPAD_GEAR_STYLE` env var は削除済み。
 - コーナーギアヘルパ（`gear_geometry`/`gear_instance` 等）も削除済み。編集モードギアは `edit_gear_*` 系。
 - `KIND_CLOSE`/`KIND_GEAR` は `src/bottom_control.rs` で `pub`。新規 kind を足す場合はここに定義し、shader の `element_extent` と `fs_main` の分岐を更新する。
+
+## Debug カテゴリの拡張（issue #112）
+
+「キーボードショートカットでデバッグできることを、設定画面からも同様に」を
+実現するため、Debug カテゴリをセクション見出し付きで大幅に拡張した。
+
+### 配置（スクロール対応）
+
+```
+[トグル] 開発者ショートカットを有効化      (debug_keys_enabled)  ※永続化
+── ウィンドウ ──
+[トグル] ウィンドウ装飾                    (M)  ※セッションのみ
+[ボタン] アイコンキャッシュを再構築        (R)
+── Liquid Glass ──
+[トグル] Liquid Glass を有効化             (V)  ※永続化
+[スライダー+↺] thickness                   (1/2)  ※永続化
+[スライダー+↺] refractive_index            (3/4)  ※永続化
+[スライダー+↺] saturation                  (5/6)  ※永続化
+[スライダー+↺] chromatic_aberration        (7/8)  ※永続化
+[スライダー+↺] blur_radius                 (9/0)  ※永続化
+[トグル] 色収差を無効化                    (C)  ※セッションのみ
+[トグル] エッジライティングを無効化        (E)  ※セッションのみ
+[トグル] ブラーを無効化                    (L)  ※セッションのみ
+[ボタン] Liquid Glass をデフォルトに戻す   ← 一括リセット（V＋数値5種）
+── デバッグビュー ──
+[トグル] backdrop texture                  (B)  ※セッションのみ
+[トグル] geometry texture                  (G)
+[トグル] displacement                      (D)
+[トグル] alpha mask                        (A)
+[トグル] final glass only                  (F)
+```
+
+### 永続化の設計
+
+- **永続化対象**: `domain::settings::LiquidGlassSettings`（`enabled` ＋ 数値5種）。
+  `#[serde(default)]` で Settings に統合し、古い JSON からの前方互換デコードに対応。
+- **セッションのみ**: ウィンドウ装飾(M)、デバッグビュー(B/G/D/A/F)、無効化フラグ(C/E/L)。
+  これらは保存しないことで、誤ってデバッグ状態を残したまま終了しても影響を残さない。
+- キーボードでパラメータを変更した場合も、`LiquidGlassKey` ハンドラが
+  renderer の params を `settings.liquid_glass` へ同期してから persist する
+  （`src/app/action.rs::handle_keyboard` の `LiquidGlassKey` 分岐）。
+
+### UI 部品の新規追加
+
+- `ControlKind::SliderTrack` / `SliderKnob` / `ResetIcon`（kind 10/11/12）。
+  `shader_control.wgsl` の `element_extent` / `fs_main` に分支を追加。
+- スライダーのジオメトリ計算は `liquid_glass_studio.rs` から**コピー**
+  して `src/layout/settings_panel.rs` に実装（後続PRで本体LG部品を書き換える際、
+  共通化しないため）。`debug_slider_geometry` / `debug_slider_value_from_pointer`
+  / `debug_classify_row_hit` が中心。
+- 個別リセットは各行の ↺ アイコン、一括リセットはセクション末尾のボタン。
+
+### スクロール
+
+- Debug カテゴリは内容がパネル高さを超えるため、**行単位の縦スクロール**を
+  実装した（`settings_scroll_rows: i32`）。ホイール/トラックパッドは
+  `WindowEvent::MouseWheel` を新規ハンドル（`src/app/handler.rs`）。
+- クリップ機能（テキスト/インクの矩形マスク）は RenderModel に無いため、
+  **表示範囲外の行は生成時にフィルタ** して描画しない方式（`debug_row_is_visible`）。
+  ピクセル単位の滑らかなスクロールは今後の課題。
+
+### Renderer API
+
+`LiquidGlassRenderer` に getter/setter を追加（`params()` / `debug_options()` /
+`set_thickness()` 等 / `reset_params_to_defaults()` / `toggle_debug_flag()`）。
+`LiquidGlassParams` / `DebugOptions` の構造体自体には**触れない**
+（後続PRで置き換えるため）。`domain` と `liquid_glass` の循環依存を避けるため、
+renderer 側に `SettingsDebugFlag` のミラー enum を持つ。

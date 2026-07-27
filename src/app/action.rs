@@ -78,6 +78,11 @@ pub enum AppAction {
     },
     PointerRelease(ReleaseAction),
     CursorLeft,
+    /// Vertical mouse-wheel / trackpad scroll, pre-quantized to whole rows
+    /// (positive = scroll down). Consumed by the settings overlay.
+    MouseWheel {
+        delta_rows: i32,
+    },
 }
 
 /// Keyboard intent, classified by [`keyboard_action`] from the shell flags and
@@ -521,6 +526,13 @@ impl App {
             AppAction::CursorLeft => {
                 self.handle_cursor_left();
             }
+            AppAction::MouseWheel { delta_rows } => {
+                // Wheel only drives the settings overlay for now; the grid
+                // scroll stays pointer-drag based.
+                if self.settings_panel_active() {
+                    self.scroll_settings_by(delta_rows);
+                }
+            }
         }
     }
 
@@ -641,6 +653,19 @@ impl App {
             KeyAction::LiquidGlassKey(key_code) => {
                 if let Some(r) = self.renderer.as_mut() {
                     if r.handle_liquid_glass_key(key_code) {
+                        // Keep the persisted snapshot in sync with the
+                        // keyboard-driven param change so the next save
+                        // captures it. The numeric parameters and the master
+                        // switch (V) are persisted; the debug-view / disable
+                        // flags are session-only and stay out of `settings`.
+                        let p = r.liquid_glass_params_snapshot();
+                        self.settings.liquid_glass.enabled = p.enabled;
+                        self.settings.liquid_glass.thickness = p.thickness;
+                        self.settings.liquid_glass.refractive_index = p.refractive_index;
+                        self.settings.liquid_glass.saturation = p.saturation;
+                        self.settings.liquid_glass.chromatic_aberration = p.chromatic_aberration;
+                        self.settings.liquid_glass.blur_radius = p.blur_radius;
+                        self.persist_settings();
                         self.execute_command(AppCommand::RequestRedraw);
                     }
                 }
@@ -766,6 +791,11 @@ impl App {
         let _ = self
             .input_router
             .pointer_moved(crate::input_routing::PhysicalPoint::new(x, y));
+        // Settings overlay slider drag: follow the pointer live.
+        if self.settings_slider_drag.is_some() {
+            self.update_settings_slider_drag(x);
+            return;
+        }
         // Edit-mode drag: follow the pointer and live-reorder.
         if self.editing && self.drag_item.is_some() {
             self.handle_edit_drag_move();
@@ -794,6 +824,9 @@ impl App {
     pub(crate) fn handle_pointer_release(&mut self, release_action: ReleaseAction) {
         let px = self.pointer_phys_x;
         let py = self.pointer_phys_y;
+        // Commit any in-flight settings slider drag first so the value is
+        // persisted even if the release landed outside the slider row.
+        self.end_settings_slider_drag();
         // Always clear the control-press flag on release — it was set by the
         // press classifier and must not persist beyond the matching release,
         // otherwise subsequent grid presses would be misclassified through the

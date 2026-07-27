@@ -31,6 +31,9 @@ struct Uniforms {
 //   6 = rounded rectangle
 //   7 = check mark
 //   8 = chevron
+//  10 = slider track (wide rounded bar) — params: (half_h, alpha, half_w, radius)
+//  11 = slider knob (filled disk) — params: (radius, alpha, _, _)
+//  12 = reset arrow (counterclockwise ↺) — params: (radius, alpha, stroke, _)
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -123,6 +126,18 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         // rounded rectangle: params.z carries half-width.
         return max(params.z, size) * 1.05;
     }
+    if kind > 9.5 && kind < 10.5 {
+        // slider track: params.z carries half-width.
+        return max(params.z, size) * 1.05;
+    }
+    if kind > 10.5 && kind < 11.5 {
+        // slider knob: a filled disk of radius `size`.
+        return size * 1.6;
+    }
+    if kind > 11.5 {
+        // reset arrow: roughly a disk of radius `size`.
+        return size * 1.6;
+    }
     if kind > 6.5 {
         return size * 1.8;
     }
@@ -208,7 +223,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p + b1, 2.0 * b1, w);
         let d2 = sd_segment(p + b2, 2.0 * b2, w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
-    } else if kind < 4.5 || kind > 8.5 {
+    } else if kind < 4.5 || (kind > 8.5 && kind < 9.5) {
         // Edit badge: the glass disk is rendered by Liquid Glass; this pass
         // only paints the iOS-style close glyph.
         let r = in.params.x;
@@ -270,7 +285,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p - a, b - a, w);
         let d2 = sd_segment(p - b, c - b, w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
-    } else {
+    } else if kind < 8.5 {
         // Chevron pointing right.
         let r = in.params.x;
         let w = max(in.params.z, 1.0);
@@ -280,6 +295,49 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d1 = sd_segment(p - a, b - a, w);
         let d2 = sd_segment(p - b, c - b, w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, min(d1, d2));
+    } else if kind < 10.5 {
+        // Slider track: a wide, low rounded bar. params: (half_h, alpha, half_w, radius).
+        let half_h = in.params.x;
+        let half_w = max(in.params.z, 0.0);
+        let radius = max(in.params.w, 0.0);
+        let d = sd_round_box(p, vec2<f32>(half_w, half_h), radius);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, d);
+    } else if kind < 11.5 {
+        // Slider knob: a filled disk of radius `size`.
+        let r = in.params.x;
+        let d = sd_circle(p, r);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, d);
+    } else {
+        // Reset arrow (↺): an open ring (≈270°) plus an arrowhead at the
+        // upper-left opening. Local space is Y-down, so "upper-left" maps to
+        // negative-x / negative-y. params: (radius, alpha, stroke, _).
+        let r = in.params.x;
+        let stroke = max(in.params.z, 1.0);
+        // Ring annulus.
+        let d_ring = abs(sd_circle(p, r)) - stroke * 0.5;
+        let ring = 1.0 - smoothstep(-1.0, 1.0, d_ring);
+        // Cut a small wedge at the opening so the ring reads as ↺ rather
+        // than a full circle: zero out coverage where the angle is in the
+        // opening sector around +x (right side), simulating an open top.
+        // We carve the opening on the upper-right by rotating into that
+        // frame; angle measured from +x axis, CCW.
+        let ang = atan2(-p.y, p.x); // negate y because local is Y-down
+        // Opening centered at 45° (upper-right), ~110° wide.
+        let opening = smoothstep(0.55, 0.95, 1.0 - abs(ang - 0.7854) / 0.95);
+        // Arrowhead: a small triangle/chevron at the opening's lower tip
+        // (around angle ~ -10°), pointing back toward the ring center.
+        // Place a short segment near (r*cos(-10°), -r*sin(-10°)).
+        let tip_ang = -0.17;
+        let tip = vec2<f32>(r * cos(tip_ang), r * sin(tip_ang) * -1.0);
+        let aw = max(stroke * 0.9, 1.2);
+        let al = r * 0.34;
+        // Two short strokes forming a "V" opening downward-left (toward center).
+        let dir1 = normalize(vec2<f32>(-0.6, -0.8));
+        let dir2 = normalize(vec2<f32>(0.6, -0.8));
+        let d_a1 = sd_segment(p - tip, dir1 * al, aw);
+        let d_a2 = sd_segment(p - tip, dir2 * al, aw);
+        let arrow = 1.0 - smoothstep(-1.0, 1.0, min(d_a1, d_a2));
+        coverage = max(ring * (1.0 - opening), arrow);
     }
 
     // Only the edit-badge glyph (kind 4) is masked to the page frame. The

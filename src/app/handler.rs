@@ -204,6 +204,12 @@ impl ApplicationHandler<UserEvent> for App {
         self.scroller = Some(scroller);
         self.text = Some(text);
 
+        // Apply the persisted Liquid Glass parameters so the user's last
+        // tuning survives a restart. Debug-only flags (overlays, disable
+        // toggles, window decorations) are intentionally NOT restored: a
+        // stale debug view must never survive a relaunch.
+        self.apply_persisted_liquid_glass_to_renderer();
+
         // First paint: empty/loading state, NO icon extraction. This is the
         // core Phase-1 win — the window is visible before any Shell/GDI work.
         self.relayout();
@@ -279,12 +285,42 @@ impl ApplicationHandler<UserEvent> for App {
                     pressed: state == ElementState::Pressed,
                 }
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Only the settings overlay consumes wheel events today.
+                let rows = Self::wheel_delta_to_rows(delta, self.scale_factor);
+                if rows == 0 {
+                    return;
+                }
+                AppAction::MouseWheel { delta_rows: rows }
+            }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
             WindowEvent::Focused(focused) => AppAction::Focused(focused),
             _ => return,
         };
         self.handle_action(action);
         self.publish_input_routing_snapshot();
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        // macOS trackpads can deliver scroll as a DeviceEvent rather than a
+        // WindowEvent. Mirror the WindowEvent::MouseWheel handling here so
+        // the settings overlay scrolls regardless of which path the OS took.
+        if let winit::event::DeviceEvent::MouseWheel { delta } = event {
+            if !self.settings_panel_active() {
+                return;
+            }
+            let rows = Self::wheel_delta_to_rows(delta, self.scale_factor);
+            if rows == 0 {
+                return;
+            }
+            self.handle_action(AppAction::MouseWheel { delta_rows: rows });
+            self.publish_input_routing_snapshot();
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -323,6 +359,39 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 impl App {
+    /// Translate a winit mouse-wheel / trackpad scroll delta into whole-row
+    /// units for the settings overlay. Positive = scroll down. Shared by the
+    /// `WindowEvent::MouseWheel` and `DeviceEvent::MouseWheel` paths so the
+    /// overlay scrolls regardless of which path the OS delivers on.
+    fn wheel_delta_to_rows(delta: winit::event::MouseScrollDelta, scale_factor: f32) -> i32 {
+        match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                if y.abs() < 0.25 {
+                    0
+                } else if y > 0.0 {
+                    1
+                } else {
+                    -1
+                }
+            }
+            winit::event::MouseScrollDelta::PixelDelta(px) => {
+                // Physical px → logical, then ~62px per row. Note: winit's
+                // PixelDelta.y is positive for scroll-down on most platforms,
+                // matching the sign convention used here.
+                let scale = scale_factor.max(0.1);
+                let logical = (px.y as f32) / scale;
+                let rows_f = logical / crate::layout::settings_panel::row_step(scale);
+                if rows_f.abs() < 0.5 {
+                    0
+                } else if rows_f > 0.0 {
+                    rows_f.ceil() as i32
+                } else {
+                    rows_f.floor() as i32
+                }
+            }
+        }
+    }
+
     /// Classify a left-button press into a [`PressAction`] using the current
     /// shell flags and the pointer position. This feeds
     /// [`AppAction::PointerPress`].

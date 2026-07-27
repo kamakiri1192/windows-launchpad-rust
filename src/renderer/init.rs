@@ -10,6 +10,7 @@ use wgpu::{
 
 use crate::layout::grid::GridLayout;
 use crate::liquid_glass::capture::FallbackCapture;
+use crate::liquid_glass::renderer::SettingsDebugFlag;
 use crate::liquid_glass::LiquidGlassRenderer;
 use crate::renderer::controls::ControlInstance;
 use crate::renderer::icon_pipeline::IconInstance;
@@ -708,6 +709,131 @@ impl Renderer {
             "window decorations: {}",
             if self.decorated { "on" } else { "off" }
         );
+    }
+
+    /// Current state of the OS window frame (keyboard equivalent: `M`).
+    pub fn decorated(&self) -> bool {
+        self.decorated
+    }
+
+    /// Force the OS window frame to a specific state. Used by the settings
+    /// panel's "window decorations" toggle so it can reflect an explicit
+    /// on/off rather than just flipping.
+    pub fn set_decorated(&mut self, decorated: bool) {
+        if self.decorated == decorated {
+            return;
+        }
+        self.decorated = decorated;
+        self.window.set_decorations(self.decorated);
+        eprintln!(
+            "window decorations: {}",
+            if self.decorated { "on" } else { "off" }
+        );
+    }
+
+    // ----- Liquid Glass settings-panel accessors -----------------------
+    //
+    // Thin wrappers over `LiquidGlassRenderer` so the App can drive the same
+    // state from the settings overlay that the keyboard debug handler does.
+
+    pub fn liquid_glass_enabled(&self) -> bool {
+        self.liquid_glass.params().enabled
+    }
+
+    pub fn liquid_glass_thickness(&self) -> f32 {
+        self.liquid_glass.params().thickness
+    }
+
+    pub fn liquid_glass_refractive_index(&self) -> f32 {
+        self.liquid_glass.params().refractive_index
+    }
+
+    pub fn liquid_glass_saturation(&self) -> f32 {
+        self.liquid_glass.params().saturation
+    }
+
+    pub fn liquid_glass_chromatic_aberration(&self) -> f32 {
+        self.liquid_glass.params().chromatic_aberration
+    }
+
+    pub fn liquid_glass_blur_radius(&self) -> f32 {
+        self.liquid_glass.params().blur_radius
+    }
+
+    /// Snapshot of the renderer's session-only Liquid Glass debug options.
+    pub fn debug_options_view(&self) -> crate::liquid_glass::DebugOptions {
+        self.liquid_glass.debug_options()
+    }
+
+    /// Snapshot of the current Liquid Glass parameters (used to sync the
+    /// keyboard-driven changes back into the persisted settings).
+    pub fn liquid_glass_params_snapshot(&self) -> crate::liquid_glass::LiquidGlassParams {
+        self.liquid_glass.params()
+    }
+
+    pub fn liquid_glass_debug_flag(&self, flag: SettingsDebugFlag) -> bool {
+        let debug = self.liquid_glass.debug_options();
+        match flag {
+            SettingsDebugFlag::ShowBackdropTexture => debug.show_backdrop_texture,
+            SettingsDebugFlag::ShowGeometryTexture => debug.show_geometry_texture,
+            SettingsDebugFlag::ShowDisplacement => debug.show_displacement,
+            SettingsDebugFlag::ShowAlphaMask => debug.show_alpha_mask,
+            SettingsDebugFlag::ShowFinalGlassOnly => debug.show_final_glass_only,
+            SettingsDebugFlag::DisableChromaticAberration => debug.disable_chromatic_aberration,
+            SettingsDebugFlag::DisableEdgeLighting => debug.disable_edge_lighting,
+            SettingsDebugFlag::DisableBlur => debug.disable_blur,
+        }
+    }
+
+    pub fn set_liquid_glass_enabled(&mut self, enabled: bool) {
+        self.liquid_glass.set_enabled(enabled);
+    }
+
+    pub fn set_liquid_glass_thickness(&mut self, value: f32) {
+        self.liquid_glass.set_thickness(value);
+    }
+
+    pub fn set_liquid_glass_refractive_index(&mut self, value: f32) {
+        self.liquid_glass.set_refractive_index(value);
+    }
+
+    pub fn set_liquid_glass_saturation(&mut self, value: f32) {
+        self.liquid_glass.set_saturation(value);
+    }
+
+    pub fn set_liquid_glass_chromatic_aberration(&mut self, value: f32) {
+        self.liquid_glass.set_chromatic_aberration(value);
+    }
+
+    pub fn set_liquid_glass_blur_radius(&mut self, value: f32) {
+        self.liquid_glass.set_blur_radius(value);
+    }
+
+    pub fn reset_liquid_glass_params(&mut self) {
+        self.liquid_glass.reset_params_to_defaults();
+    }
+
+    pub fn apply_persisted_liquid_glass(
+        &mut self,
+        enabled: bool,
+        thickness: f32,
+        refractive_index: f32,
+        saturation: f32,
+        chromatic_aberration: f32,
+        blur_radius: f32,
+    ) {
+        self.liquid_glass.apply_persisted_params(
+            enabled,
+            thickness,
+            refractive_index,
+            saturation,
+            chromatic_aberration,
+            blur_radius,
+        );
+    }
+
+    pub fn toggle_liquid_glass_debug_flag(&mut self, flag: SettingsDebugFlag) {
+        self.liquid_glass.toggle_debug_flag(flag);
     }
 
     pub fn notify_window_moved(&mut self) {

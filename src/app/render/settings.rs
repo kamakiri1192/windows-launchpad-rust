@@ -1,7 +1,10 @@
 //! Settings panel render adapter methods and builders.
 
-use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
+use crate::domain::settings::{
+    LiquidGlassDebugFlag, LiquidGlassParamField, Settings, SettingsCategory, SortOrder,
+};
 use crate::layout;
+use crate::layout::settings_panel::{LiquidGlassDebugId, LiquidGlassParamId};
 use crate::renderer::text_engine as text;
 use crate::ui_model;
 use crate::ui_model::geometry::{Point, Rect, UvRect};
@@ -29,6 +32,33 @@ impl App {
         let hidden_count = self.launcher_state.hidden_apps.len();
         let hidden_count_label = format!("{hidden_count} 件");
         let copy = settings_panel_copy(&hidden_count_label);
+        // Snapshot the renderer-only session state (window decorations + the
+        // eight B/G/D/A/F and C/E/L debug flags) so the layout layer can draw
+        // the toggles without depending on the renderer.
+        let (window_decorated, lg_debug_state) = self
+            .renderer
+            .as_ref()
+            .map(|r| {
+                let debug = r.debug_options_view();
+                (
+                    r.decorated(),
+                    layout::settings_panel::LiquidGlassDebugState {
+                        disable_chromatic_aberration: debug.disable_chromatic_aberration,
+                        disable_edge_lighting: debug.disable_edge_lighting,
+                        disable_blur: debug.disable_blur,
+                        show_backdrop_texture: debug.show_backdrop_texture,
+                        show_geometry_texture: debug.show_geometry_texture,
+                        show_displacement: debug.show_displacement,
+                        show_alpha_mask: debug.show_alpha_mask,
+                        show_final_glass_only: debug.show_final_glass_only,
+                    },
+                )
+            })
+            .unwrap_or((
+                false,
+                layout::settings_panel::LiquidGlassDebugState::default(),
+            ));
+        let lg = self.settings.liquid_glass;
         let model = layout::settings_panel::build_with_copy(
             layout::settings_panel::SettingsPanelInput {
                 viewport: self.viewport_phys(),
@@ -42,6 +72,17 @@ impl App {
                 show_fps: self.settings.show_fps,
                 hidden_count,
                 progress: self.settings_panel_progress,
+                scroll_rows: self.settings_scroll_rows,
+                window_decorated,
+                liquid_glass: layout::settings_panel::LiquidGlassValues {
+                    enabled: lg.enabled,
+                    thickness: lg.thickness,
+                    refractive_index: lg.refractive_index,
+                    saturation: lg.saturation,
+                    chromatic_aberration: lg.chromatic_aberration,
+                    blur_radius: lg.blur_radius,
+                },
+                liquid_glass_debug: lg_debug_state,
             },
             &copy,
         );
@@ -65,6 +106,9 @@ impl App {
             scale,
             self.settings_category,
             &self.settings,
+            self.settings_scroll_rows,
+            window_decorated,
+            lg_debug_state,
             hidden_count,
             &mut instances,
         );
@@ -229,6 +273,30 @@ fn settings_panel_copy<'a>(
         reset_settings_detail: "並び順、非表示、設定値を初期状態に戻します",
         version_label: "バージョン",
         version_value: env!("CARGO_PKG_VERSION"),
+        debug_section_window: "ウィンドウ",
+        debug_section_liquid_glass: "Liquid Glass",
+        debug_section_debug_views: "デバッグビュー",
+        debug_window_decorations_label: "ウィンドウ装飾",
+        debug_window_decorations_detail: "タイトルバーとリサイズ枠を表示します",
+        debug_icon_cache_label: "アイコンキャッシュを再構築",
+        debug_icon_cache_detail: "すべてのアイコンを再抽出します",
+        debug_lg_enabled_label: "Liquid Glass を有効化",
+        debug_lg_enabled_detail: "ガラス効果のマスタースイッチ",
+        debug_lg_thickness_label: "厚み (thickness)",
+        debug_lg_refractive_index_label: "屈折率 (refractive index)",
+        debug_lg_saturation_label: "彩度 (saturation)",
+        debug_lg_chromatic_aberration_label: "色収差 (chromatic aberration)",
+        debug_lg_blur_radius_label: "ぼかし半径 (blur radius)",
+        debug_lg_disable_chromatic_aberration_label: "色収差を無効化",
+        debug_lg_disable_edge_lighting_label: "エッジライティングを無効化",
+        debug_lg_disable_blur_label: "ブラーを無効化",
+        debug_lg_reset_all_label: "Liquid Glass をデフォルトに戻す",
+        debug_lg_reset_all_detail: "コード既定値にリセットします",
+        debug_lg_show_backdrop_texture_label: "背景テクスチャを表示",
+        debug_lg_show_geometry_texture_label: "ジオメトリテクスチャを表示",
+        debug_lg_show_displacement_label: "変位 (displacement) を表示",
+        debug_lg_show_alpha_mask_label: "アルファマスクを表示",
+        debug_lg_show_final_glass_only_label: "最終ガラスのみ表示",
     }
 }
 
@@ -266,12 +334,61 @@ pub(crate) fn settings_press_target_from_layout_hit(
         layout::settings_panel::SettingsPanelHit::ResetSettings => {
             crate::app::state::SettingsPressTarget::ResetSettings
         }
+        layout::settings_panel::SettingsPanelHit::LiquidGlassEnabled => {
+            crate::app::state::SettingsPressTarget::LiquidGlassEnabled
+        }
+        layout::settings_panel::SettingsPanelHit::LiquidGlassParam(id) => {
+            crate::app::state::SettingsPressTarget::LiquidGlassParam(param_field_from_id(id))
+        }
+        layout::settings_panel::SettingsPanelHit::LiquidGlassParamReset(id) => {
+            crate::app::state::SettingsPressTarget::LiquidGlassParamReset(param_field_from_id(id))
+        }
+        layout::settings_panel::SettingsPanelHit::LiquidGlassResetAll => {
+            crate::app::state::SettingsPressTarget::LiquidGlassResetAll
+        }
+        layout::settings_panel::SettingsPanelHit::LiquidGlassDebug(id) => {
+            crate::app::state::SettingsPressTarget::LiquidGlassDebug(debug_flag_from_id(id))
+        }
+        layout::settings_panel::SettingsPanelHit::WindowDecorations => {
+            crate::app::state::SettingsPressTarget::WindowDecorations
+        }
+        layout::settings_panel::SettingsPanelHit::ScrollUp => {
+            crate::app::state::SettingsPressTarget::SettingsScrollUp
+        }
+        layout::settings_panel::SettingsPanelHit::ScrollDown => {
+            crate::app::state::SettingsPressTarget::SettingsScrollDown
+        }
         layout::settings_panel::SettingsPanelHit::Inside => {
             crate::app::state::SettingsPressTarget::Inside
         }
         layout::settings_panel::SettingsPanelHit::Outside => {
             crate::app::state::SettingsPressTarget::Outside
         }
+    }
+}
+
+fn param_field_from_id(id: LiquidGlassParamId) -> LiquidGlassParamField {
+    match id {
+        LiquidGlassParamId::Thickness => LiquidGlassParamField::Thickness,
+        LiquidGlassParamId::RefractiveIndex => LiquidGlassParamField::RefractiveIndex,
+        LiquidGlassParamId::Saturation => LiquidGlassParamField::Saturation,
+        LiquidGlassParamId::ChromaticAberration => LiquidGlassParamField::ChromaticAberration,
+        LiquidGlassParamId::BlurRadius => LiquidGlassParamField::BlurRadius,
+    }
+}
+
+fn debug_flag_from_id(id: LiquidGlassDebugId) -> LiquidGlassDebugFlag {
+    match id {
+        LiquidGlassDebugId::DisableChromaticAberration => {
+            LiquidGlassDebugFlag::DisableChromaticAberration
+        }
+        LiquidGlassDebugId::DisableEdgeLighting => LiquidGlassDebugFlag::DisableEdgeLighting,
+        LiquidGlassDebugId::DisableBlur => LiquidGlassDebugFlag::DisableBlur,
+        LiquidGlassDebugId::ShowBackdropTexture => LiquidGlassDebugFlag::ShowBackdropTexture,
+        LiquidGlassDebugId::ShowGeometryTexture => LiquidGlassDebugFlag::ShowGeometryTexture,
+        LiquidGlassDebugId::ShowDisplacement => LiquidGlassDebugFlag::ShowDisplacement,
+        LiquidGlassDebugId::ShowAlphaMask => LiquidGlassDebugFlag::ShowAlphaMask,
+        LiquidGlassDebugId::ShowFinalGlassOnly => LiquidGlassDebugFlag::ShowFinalGlassOnly,
     }
 }
 
@@ -420,11 +537,15 @@ fn toggle_instances(center: [f32; 2], enabled: bool, scale: f32, instances: &mut
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_settings_panel_instances(
     layout: &crate::layout::settings_panel::SettingsPanelLayout,
     scale: f32,
     category: SettingsCategory,
     settings: &Settings,
+    scroll_rows: i32,
+    window_decorated: bool,
+    lg_debug: crate::layout::settings_panel::LiquidGlassDebugState,
     _hidden_count: usize,
     instances: &mut Vec<InkView>,
 ) {
@@ -537,13 +658,195 @@ fn build_settings_panel_instances(
             );
         }
         SettingsCategory::Debug => {
-            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 1);
-            toggle_instances(
-                [content_right - 28.0 * scale, first_top + row_h * 0.5],
-                settings.debug_keys_enabled,
-                scale,
-                instances,
-            );
+            use crate::layout::settings_panel as sp;
+            let scroll = scroll_rows;
+            let lg = settings.liquid_glass;
+            let lg_values = sp::LiquidGlassValues {
+                enabled: lg.enabled,
+                thickness: lg.thickness,
+                refractive_index: lg.refractive_index,
+                saturation: lg.saturation,
+                chromatic_aberration: lg.chromatic_aberration,
+                blur_radius: lg.blur_radius,
+            };
+
+            // Helper to push a row background centered on row `i`'s slot.
+            let push_row_bg = |instances: &mut Vec<InkView>, i: i32| {
+                if !sp::debug_row_is_visible(layout, scale, scroll, i) {
+                    return;
+                }
+                let y = sp::debug_row_y(layout, scale, scroll, i);
+                instances.push(round_rect_instance(
+                    [layout.cx, y + row_h * 0.5],
+                    (panel_right - content_left) * 0.5,
+                    row_h * 0.5,
+                    row_h * 0.5,
+                    [1.0, 1.0, 1.0, 0.05],
+                ));
+            };
+
+            // Row 0: master debug-keys toggle.
+            push_row_bg(instances, sp::DEBUG_ROW_KEYS);
+            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_KEYS) {
+                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_KEYS);
+                toggle_instances(
+                    [content_right - 28.0 * scale, y + row_h * 0.5],
+                    settings.debug_keys_enabled,
+                    scale,
+                    instances,
+                );
+            }
+            // Row 1: window decorations toggle.
+            push_row_bg(instances, sp::DEBUG_ROW_WINDOW_DECORATIONS);
+            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_WINDOW_DECORATIONS) {
+                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_WINDOW_DECORATIONS);
+                toggle_instances(
+                    [content_right - 28.0 * scale, y + row_h * 0.5],
+                    window_decorated,
+                    scale,
+                    instances,
+                );
+            }
+            // Row 2: icon cache rebuild action (chevron).
+            push_row_bg(instances, sp::DEBUG_ROW_ICON_CACHE);
+            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_ICON_CACHE) {
+                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_ICON_CACHE);
+                instances.push(control_icon(
+                    content_right - 14.0 * scale,
+                    y + row_h * 0.5,
+                    9.0 * scale,
+                    ControlKind::Chevron,
+                    SETTINGS_MUTED,
+                ));
+            }
+            // Row 3: Liquid Glass master toggle.
+            push_row_bg(instances, sp::DEBUG_ROW_LG_ENABLED);
+            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_LG_ENABLED) {
+                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_LG_ENABLED);
+                toggle_instances(
+                    [content_right - 28.0 * scale, y + row_h * 0.5],
+                    lg.enabled,
+                    scale,
+                    instances,
+                );
+            }
+            // Rows 4..9: slider + reset arrow.
+            let (track_left, track_width, knob_r, reset_cx, reset_r) =
+                sp::debug_slider_geometry(layout, scale);
+            let track_hh = sp::debug_slider_track_half_h(scale);
+            for (k, id) in sp::LiquidGlassParamId::ALL.iter().copied().enumerate() {
+                let i = sp::DEBUG_ROW_LG_PARAM_FIRST + k as i32;
+                push_row_bg(instances, i);
+                if !sp::debug_row_is_visible(layout, scale, scroll, i) {
+                    continue;
+                }
+                let y = sp::debug_row_y(layout, scale, scroll, i);
+                let cy = y + row_h * 0.5;
+                let value = lg_values.get(id);
+                let (min, max) = id.range();
+                let t = ((value - min) / (max - min)).clamp(0.0, 1.0);
+                // Track (kind 10): params (half_h, alpha, half_w, radius).
+                instances.push(InkView {
+                    id: UiId::settings_panel(),
+                    center: Point::new(track_left + track_width * 0.5, cy),
+                    extent: track_hh,
+                    opacity: 0.16,
+                    scene_blur: 0.0,
+                    stroke: track_width * 0.5,
+                    corner_radius: track_hh,
+                    color: Color::rgba(1.0, 1.0, 1.0, 0.16),
+                    kind: ControlKind::SliderTrack,
+                    z: 0,
+                });
+                // Knob (kind 11): filled disk positioned at the value t.
+                instances.push(InkView {
+                    id: UiId::settings_panel(),
+                    center: Point::new(track_left + track_width * t, cy),
+                    extent: knob_r,
+                    opacity: 0.92,
+                    scene_blur: 0.0,
+                    stroke: 0.0,
+                    corner_radius: 0.0,
+                    color: Color::rgba(1.0, 1.0, 1.0, 0.92),
+                    kind: ControlKind::SliderKnob,
+                    z: 0,
+                });
+                // Reset arrow (kind 12) on the right.
+                instances.push(InkView {
+                    id: UiId::settings_panel(),
+                    center: Point::new(reset_cx, cy),
+                    extent: reset_r,
+                    opacity: 0.7,
+                    scene_blur: 0.0,
+                    stroke: 1.4 * scale,
+                    corner_radius: 0.0,
+                    color: Color::rgba(1.0, 1.0, 1.0, 0.7),
+                    kind: ControlKind::ResetIcon,
+                    z: 0,
+                });
+            }
+            // Rows 9..12: disable toggles.
+            let disable_ids = [
+                (
+                    sp::DEBUG_ROW_LG_DISABLE_CHROMA,
+                    lg_debug.disable_chromatic_aberration,
+                ),
+                (
+                    sp::DEBUG_ROW_LG_DISABLE_EDGE,
+                    lg_debug.disable_edge_lighting,
+                ),
+                (sp::DEBUG_ROW_LG_DISABLE_BLUR, lg_debug.disable_blur),
+            ];
+            for (i, on) in disable_ids {
+                push_row_bg(instances, i);
+                if sp::debug_row_is_visible(layout, scale, scroll, i) {
+                    let y = sp::debug_row_y(layout, scale, scroll, i);
+                    toggle_instances(
+                        [content_right - 28.0 * scale, y + row_h * 0.5],
+                        on,
+                        scale,
+                        instances,
+                    );
+                }
+            }
+            // Row 12: reset-all action (chevron).
+            push_row_bg(instances, sp::DEBUG_ROW_LG_RESET_ALL);
+            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_LG_RESET_ALL) {
+                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_LG_RESET_ALL);
+                instances.push(control_icon(
+                    content_right - 14.0 * scale,
+                    y + row_h * 0.5,
+                    9.0 * scale,
+                    ControlKind::Chevron,
+                    SETTINGS_MUTED,
+                ));
+            }
+            // Rows 13..18: debug-view toggles.
+            let view_rows = [
+                (sp::DEBUG_ROW_LG_VIEW_FIRST, lg_debug.show_backdrop_texture),
+                (
+                    sp::DEBUG_ROW_LG_VIEW_FIRST + 1,
+                    lg_debug.show_geometry_texture,
+                ),
+                (sp::DEBUG_ROW_LG_VIEW_FIRST + 2, lg_debug.show_displacement),
+                (sp::DEBUG_ROW_LG_VIEW_FIRST + 3, lg_debug.show_alpha_mask),
+                (
+                    sp::DEBUG_ROW_LG_VIEW_FIRST + 4,
+                    lg_debug.show_final_glass_only,
+                ),
+            ];
+            for (i, on) in view_rows {
+                push_row_bg(instances, i);
+                if sp::debug_row_is_visible(layout, scale, scroll, i) {
+                    let y = sp::debug_row_y(layout, scale, scroll, i);
+                    toggle_instances(
+                        [content_right - 28.0 * scale, y + row_h * 0.5],
+                        on,
+                        scale,
+                        instances,
+                    );
+                }
+            }
         }
         SettingsCategory::System => {
             // Row 0: FPS overlay toggle (switch, no chevron).
