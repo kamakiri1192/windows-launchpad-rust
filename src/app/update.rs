@@ -12,7 +12,7 @@ use crate::scroll::Phase;
 use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
 
-use crate::app::render::{settings_category_id, settings_press_target_from_layout_hit};
+use crate::app::render::settings_press_target_from_hit_target;
 use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
 
 impl App {
@@ -195,15 +195,15 @@ impl App {
     }
 
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
-        let layout = self.settings_panel_layout();
-        let hit = crate::layout::settings_panel::hit_test(
-            &layout,
-            self.scale_factor,
-            settings_category_id(self.settings_category),
-            self.settings_scroll_rows,
-            crate::ui_model::geometry::Point::new(x, y),
-        );
-        settings_press_target_from_layout_hit(hit)
+        let point = crate::ui_model::geometry::Point::new(x, y);
+        let region = self
+            .cached_settings_hit_map
+            .as_ref()
+            .and_then(|map| map.hit_test(point));
+        match region {
+            None => SettingsPressTarget::Outside,
+            Some(r) => settings_press_target_from_hit_target(&r.target),
+        }
     }
 
     pub(crate) fn handle_settings_click(&mut self, target: SettingsPressTarget) {
@@ -322,10 +322,12 @@ impl App {
                 self.request_redraw();
             }
             SettingsPressTarget::SettingsScrollUp => {
-                self.scroll_settings_by(-1);
+                let px = -crate::layout::settings_panel::row_step(self.scale_factor);
+                self.scroll_settings_by_px(px);
             }
             SettingsPressTarget::SettingsScrollDown => {
-                self.scroll_settings_by(1);
+                let px = crate::layout::settings_panel::row_step(self.scale_factor);
+                self.scroll_settings_by_px(px);
             }
             SettingsPressTarget::Inside | SettingsPressTarget::Outside => {}
         }
@@ -376,25 +378,19 @@ impl App {
         }
     }
 
-    /// Scroll the settings content by `delta_rows`, clamped to the visible
-    /// range. `max_rows` is the total overflow (how many rows are hidden
-    /// below the fold); 0 means no scrolling.
-    pub(crate) fn scroll_settings_by(&mut self, delta_rows: i32) {
+    /// Scroll the settings content by `delta_px` logical pixels.
+    /// Uses the continuous scroller for pixel-level smooth scrolling. The
+    /// legacy row-based `settings_scroll_rows` counter is intentionally not
+    /// updated here: hit testing derives its row offset from the live pixel
+    /// position (`settings_scroll.position / row_step`) so the two never drift.
+    pub(crate) fn scroll_settings_by_px(&mut self, delta_px: f32) {
         let max = self.settings_max_scroll_rows();
-        eprintln!(
-            "settings-scroll: scroll_settings_by(delta={}) called, max={}, current={}",
-            delta_rows, max, self.settings_scroll_rows
-        );
         if max <= 0 {
             self.settings_scroll_rows = 0;
             return;
         }
-        let next = self.settings_scroll_rows + delta_rows;
-        self.settings_scroll_rows = next.clamp(0, max);
-        eprintln!(
-            "settings-scroll: new scroll_rows={}",
-            self.settings_scroll_rows
-        );
+        let now = std::time::Instant::now();
+        self.settings_scroll.apply_wheel(delta_px, now);
         self.request_redraw();
     }
 
@@ -415,6 +411,7 @@ impl App {
     /// Reset the per-category scroll when the category changes.
     pub(crate) fn reset_settings_scroll(&mut self) {
         self.settings_scroll_rows = 0;
+        self.settings_scroll.set_position(0.0);
     }
 
     /// Drain the shared inbox and dispatch each message.

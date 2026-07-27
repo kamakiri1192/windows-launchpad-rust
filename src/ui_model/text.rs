@@ -1,4 +1,4 @@
-use crate::ui_model::geometry::{Rect, Size};
+use crate::ui_model::geometry::{ClipRegion, Rect, Size};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::Color;
 
@@ -9,6 +9,7 @@ pub struct TextView {
     pub rect: Rect,
     pub style: TextStyle,
     pub z: i16,
+    pub clip: Option<ClipRegion>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

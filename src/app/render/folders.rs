@@ -425,6 +425,7 @@ impl App {
                         color: Color::rgba(1.0, 1.0, 1.0, 1.0),
                         kind: ControlKind::Caret,
                         z: 131,
+                        clip: None,
                     });
                 }
             }
@@ -659,6 +660,7 @@ fn glyph_views(quads: &[GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 130,
+            clip: None,
         })
         .collect()
 }

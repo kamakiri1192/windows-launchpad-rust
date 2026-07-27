@@ -35,7 +35,8 @@ pub(super) struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    _pad: [f32; 3],
+    activation: f32,
+    _pad: [f32; 2],
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
 }
@@ -193,6 +194,10 @@ pub struct LiquidGlassRenderer {
     control_shape_count: u32,
     control_shape_capacity: usize,
     control_shapes: Vec<GlassShape>,
+    control_geometry_texture: wgpu::Texture,
+    control_geometry_view: wgpu::TextureView,
+    last_control_geometry_key: u64,
+    control_geometry_rendered_key: u64,
     settings_panel_shapes: Vec<GlassShape>,
     settings_panel_shape_count: u32,
     settings_panel_shape_capacity: usize,
@@ -443,6 +448,7 @@ impl LiquidGlassRenderer {
             0.0,
             0,
             0.0,
+            0.0,
             backdrop_mapping,
         );
         let uniform_buffer = create_uniform_buffer(device, "liquid glass uniforms", &uniforms);
@@ -498,6 +504,8 @@ impl LiquidGlassRenderer {
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
         let (overlay_geometry_texture, overlay_geometry_view) =
             create_overlay_geometry_texture(device, width, height);
+        let (control_geometry_texture, control_geometry_view) =
+            create_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         // Final blur output is full-res: the final shader samples it without
         // any resolution-mismatch stretch.
@@ -651,7 +659,7 @@ impl LiquidGlassRenderer {
             &control_uniform_buffer,
             &backdrop_view,
             &sampler,
-            &overlay_geometry_view,
+            &control_geometry_view,
             &blur_view,
         );
         let settings_panel_final_bind_group = create_final_bind_group(
@@ -863,6 +871,10 @@ impl LiquidGlassRenderer {
             control_shape_count: 0,
             control_shape_capacity: 2,
             control_shapes: Vec::new(),
+            control_geometry_texture,
+            control_geometry_view,
+            last_control_geometry_key: 0,
+            control_geometry_rendered_key: 0,
             settings_panel_shapes: Vec::new(),
             settings_panel_shape_count: 0,
             settings_panel_shape_capacity: 1,
@@ -926,6 +938,8 @@ impl LiquidGlassRenderer {
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
         let (overlay_geometry_texture, overlay_geometry_view) =
             create_overlay_geometry_texture(device, width, height);
+        let (control_geometry_texture, control_geometry_view) =
+            create_geometry_texture(device, width, height);
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
@@ -940,6 +954,8 @@ impl LiquidGlassRenderer {
         self.geometry_view = geometry_view;
         self.overlay_geometry_texture = overlay_geometry_texture;
         self.overlay_geometry_view = overlay_geometry_view;
+        self.control_geometry_texture = control_geometry_texture;
+        self.control_geometry_view = control_geometry_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
         self.backdrop_mapping = BackdropMapping::full(width, height);
@@ -952,6 +968,8 @@ impl LiquidGlassRenderer {
         self.texture_size = (width, height);
         self.blur_dirty = true;
         self.last_geometry_key = None;
+        self.last_control_geometry_key = 0;
+        self.control_geometry_rendered_key = 0;
         let (down, up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
@@ -1038,7 +1056,7 @@ impl LiquidGlassRenderer {
             &self.control_uniform_buffer,
             backdrop_view,
             &self.sampler,
-            &self.overlay_geometry_view,
+            &self.control_geometry_view,
             &self.blur_view,
         );
         self.settings_panel_final_bind_group = create_final_bind_group(
@@ -1407,6 +1425,7 @@ impl LiquidGlassRenderer {
                 bytemuck::cast_slice(&self.control_shapes),
             );
         }
+        self.last_control_geometry_key = self.last_control_geometry_key.wrapping_add(1);
     }
 
     /// Replace the modal glass lane atomically.
@@ -1834,6 +1853,7 @@ fn should_refresh_blur(dirty: bool, captured: bool) -> bool {
     dirty || captured
 }
 
+#[allow(clippy::too_many_arguments)]
 fn uniforms_from_params(
     params: &LiquidGlassParams,
     debug: DebugOptions,
@@ -1841,6 +1861,7 @@ fn uniforms_from_params(
     scroll_x: f32,
     shape_count: u32,
     time: f32,
+    activation: f32,
     backdrop: BackdropMapping,
 ) -> GlassUniforms {
     let (width, height) = viewport;
@@ -1869,7 +1890,8 @@ fn uniforms_from_params(
         shape_count,
         debug_flags: debug.flags(),
         time,
-        _pad: [0.0; 3],
+        activation,
+        _pad: [0.0; 2],
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }

@@ -10,7 +10,7 @@
 // ---- overlay instance data (mirrors shader_control.wgsl) --------------------
 
 /// One drawable overlay element for the bottom control. Matches the WGSL
-/// `@location(0..3)` instance attributes of `shader_control.wgsl`. Built by
+/// `@location(0..5)` instance attributes of `shader_control.wgsl`. Built by
 /// `build_overlay_instances` from a resolved geometry + layer list.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -23,11 +23,23 @@ pub struct ControlInstance {
     pub color: [f32; 4],
     /// (kind, a, b, c) element-specific payload.
     pub kind: [f32; 4],
+    /// Clip rectangle in physical px: (min_x, min_y, width, height).
+    /// Sentinel: clip_rect.z <= 0.0 means "no clip".
+    pub clip_rect: [f32; 4],
+    /// Clip corner radius in physical px (0 = sharp corners).
+    /// Packed as vec4 with padding: (radius, 0, 0, 0).
+    pub clip_radius: [f32; 4],
 }
 
 impl ControlInstance {
-    pub const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+    pub const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x4,
+        2 => Float32x4,
+        3 => Float32x4,
+        4 => Float32x4,
+        5 => Float32x4
+    ];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ControlInstance>() as wgpu::BufferAddress,

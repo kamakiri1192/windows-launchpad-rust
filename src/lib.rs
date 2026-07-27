@@ -20,4 +20,6 @@ pub mod icons;
 pub mod input_probe_protocol;
 pub mod input_routing;
 pub mod layout;
+pub mod scroll;
+pub mod ui;
 pub mod ui_model;

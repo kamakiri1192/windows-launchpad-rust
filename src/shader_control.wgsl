@@ -39,6 +39,8 @@ struct InstanceIn {
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
     @location(2) color: vec4<f32>,   // rgba tint (non-premultiplied)
     @location(3) kind: vec4<f32>,    // (kind, a, b, c) element-specific
+    @location(4) clip_rect: vec4<f32>,  // (min_x, min_y, width, height); width<=0 → no clip
+    @location(5) clip_radius: vec4<f32>, // (radius, 0, 0, 0)
 };
 
 struct VsOut {
@@ -47,6 +49,9 @@ struct VsOut {
     @location(1) params: vec4<f32>,
     @location(2) color: vec4<f32>,
     @location(3) kind: vec4<f32>,
+    @location(4) pixel_pos: vec2<f32>,  // screen px position for clip test
+    @location(5) clip_rect: vec4<f32>,
+    @location(6) clip_radius: vec4<f32>,
 };
 
 @vertex
@@ -56,6 +61,8 @@ fn vs_main(
     @location(1) params: vec4<f32>,
     @location(2) color: vec4<f32>,
     @location(3) kind: vec4<f32>,
+    @location(4) clip_rect: vec4<f32>,
+    @location(5) clip_radius: vec4<f32>,
 ) -> VsOut {
     // Local extent for the unit quad. We size the quad generously per element
     // so the SDF (ring/dot/X) fits; `size` is the element's radius.
@@ -108,6 +115,10 @@ fn vs_main(
     out.params = params;
     out.color = color;
     out.kind = kind;
+    // Pass screen-space pixel position for per-instance clip test.
+    out.pixel_pos = world;
+    out.clip_rect = clip_rect;
+    out.clip_radius = clip_radius;
     return out;
 }
 
@@ -347,6 +358,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     let a = coverage * alpha;
+
+    // Per-instance clip: discard fragments outside the clip rect.
+    if (in.clip_rect.z > 0.0) {
+        let p = in.pixel_pos;
+        let inside = p.x >= in.clip_rect.x && p.y >= in.clip_rect.y
+                  && p.x < in.clip_rect.x + in.clip_rect.z
+                  && p.y < in.clip_rect.y + in.clip_rect.w;
+        if (!inside) {
+            discard;
+        }
+        // Rounded corners via SDF.
+        let r = in.clip_radius.x;
+        if (r > 0.0) {
+            let half = vec2<f32>(in.clip_rect.z, in.clip_rect.w) * 0.5;
+            let center = vec2<f32>(in.clip_rect.x + half.x, in.clip_rect.y + half.y);
+            let local_clip = p - center;
+            let sd = sd_round_box(local_clip, half, r);
+            if (sd > 0.0) {
+                discard;
+            }
+        }
+    }
+
     if a <= 0.001 {
         discard;
     }

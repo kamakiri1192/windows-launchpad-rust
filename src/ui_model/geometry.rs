@@ -84,6 +84,44 @@ impl Rect {
             height: self.height - insets.top - insets.bottom,
         }
     }
+
+    /// Returns the intersection of `self` and `other` (common rectangular
+    /// area) using the same half-open boundary convention as [`Rect::contains`].
+    /// Returns `None` if the intersection has zero area (width or height ≤ 0).
+    pub fn intersection(self, other: Rect) -> Option<Rect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let max_x = self.max_x().min(other.max_x());
+        let max_y = self.max_y().min(other.max_y());
+        let width = max_x - x;
+        let height = max_y - y;
+        if width > 0.0 && height > 0.0 {
+            Some(Rect {
+                x,
+                y,
+                width,
+                height,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` if `self` and `other` share any area (their
+    /// intersection has positive width and height).
+    pub fn intersects(self, other: Rect) -> bool {
+        self.x.max(other.x) < self.max_x().min(other.max_x())
+            && self.y.max(other.y) < self.max_y().min(other.max_y())
+    }
+
+    /// Returns `true` when `other` lies entirely inside `self`, using the
+    /// same half-open boundary convention as [`Rect::contains`].
+    pub const fn contains_rect(self, other: Rect) -> bool {
+        other.min_x() >= self.min_x()
+            && other.max_x() <= self.max_x()
+            && other.min_y() >= self.min_y()
+            && other.max_y() <= self.max_y()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -164,6 +202,129 @@ mod tests {
             rect.inset(Insets::symmetric(-5.0, -10.0)),
             Rect::new(5.0, 10.0, 110.0, 70.0)
         );
+    }
+
+    #[test]
+    fn intersection_overlapping_rects() {
+        let a = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let b = Rect::new(30.0, 30.0, 60.0, 30.0);
+
+        assert_eq!(a.intersection(b), Some(Rect::new(30.0, 30.0, 60.0, 30.0)));
+        assert_eq!(b.intersection(a), Some(Rect::new(30.0, 30.0, 60.0, 30.0)));
+    }
+
+    #[test]
+    fn intersection_touching_edges_returns_none() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(10.0, 0.0, 10.0, 10.0); // touches a's right edge
+
+        assert_eq!(a.intersection(b), None);
+    }
+
+    #[test]
+    fn intersection_one_rect_fully_contained() {
+        let outer = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let inner = Rect::new(10.0, 20.0, 30.0, 40.0);
+
+        assert_eq!(outer.intersection(inner), Some(inner));
+    }
+
+    #[test]
+    fn intersection_disjoint_returns_none() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 20.0, 10.0, 10.0);
+
+        assert_eq!(a.intersection(b), None);
+    }
+
+    #[test]
+    fn intersection_aligned_on_one_axis() {
+        let a = Rect::new(0.0, 0.0, 20.0, 10.0);
+        let b = Rect::new(5.0, 0.0, 10.0, 10.0); // same height, overlapping x
+
+        assert_eq!(a.intersection(b), Some(Rect::new(5.0, 0.0, 10.0, 10.0)));
+    }
+
+    #[test]
+    fn intersects_returns_true_for_overlapping() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(5.0, 5.0, 10.0, 10.0);
+
+        assert!(a.intersects(b));
+    }
+
+    #[test]
+    fn intersects_returns_false_for_disjoint() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 20.0, 10.0, 10.0);
+
+        assert!(!a.intersects(b));
+    }
+
+    #[test]
+    fn intersects_returns_false_for_touching_edges() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(10.0, 0.0, 10.0, 10.0);
+
+        assert!(!a.intersects(b));
+    }
+
+    #[test]
+    fn contains_rect_fully_inside() {
+        let outer = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let inner = Rect::new(10.0, 20.0, 30.0, 40.0);
+
+        assert!(outer.contains_rect(inner));
+    }
+
+    #[test]
+    fn contains_rect_same_rect() {
+        let a = Rect::new(10.0, 20.0, 30.0, 40.0);
+
+        assert!(a.contains_rect(a));
+    }
+
+    #[test]
+    fn contains_rect_partially_outside() {
+        let outer = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let half_out = Rect::new(80.0, 0.0, 30.0, 100.0); // extends past right edge
+
+        assert!(!outer.contains_rect(half_out));
+    }
+
+    #[test]
+    fn contains_rect_fully_outside() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 20.0, 10.0, 10.0);
+
+        assert!(!a.contains_rect(b));
+    }
+
+    #[test]
+    fn contains_rect_touches_inner_edge() {
+        let outer = Rect::new(0.0, 0.0, 100.0, 100.0);
+        // inner rect at min-x edge (inclusive)
+        let at_min = Rect::new(0.0, 10.0, 20.0, 30.0);
+        assert!(outer.contains_rect(at_min));
+
+        // inner rect at max-x edge (exclusive — still contained because
+        // every point in `at_max` has x < 100.0)
+        let at_max = Rect::new(80.0, 10.0, 20.0, 30.0);
+        assert!(outer.contains_rect(at_max));
+    }
+}
+
+/// Axis-aligned rounded-rectangle clip region, applied per-instance in the
+/// shader (hard discard outside). `radius == 0.0` means sharp corners.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipRegion {
+    pub rect: Rect,
+    pub radius: f32,
+}
+
+impl ClipRegion {
+    pub const fn new(rect: Rect, radius: f32) -> Self {
+        Self { rect, radius }
     }
 }
 

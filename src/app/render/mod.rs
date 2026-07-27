@@ -18,4 +18,4 @@ mod icons;
 mod overlay;
 mod settings;
 
-pub(crate) use settings::{settings_category_id, settings_press_target_from_layout_hit};
+pub(crate) use settings::settings_press_target_from_hit_target;

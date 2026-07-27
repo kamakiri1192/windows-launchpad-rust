@@ -1,17 +1,14 @@
 //! Settings panel render adapter methods and builders.
 
 use crate::domain::settings::{
-    LiquidGlassDebugFlag, LiquidGlassParamField, Settings, SettingsCategory, SortOrder,
+    LiquidGlassDebugFlag, LiquidGlassParamField, SettingsCategory, SortOrder,
 };
 use crate::layout;
-use crate::layout::settings_panel::{LiquidGlassDebugId, LiquidGlassParamId};
 use crate::renderer::text_engine as text;
 use crate::ui_model;
-use crate::ui_model::geometry::{Point, Rect, UvRect};
+use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::ids::UiId;
-use crate::ui_model::render_model::{
-    Color, ControlKind, GlassLayer, GlyphLane, GlyphView, InkLane, InkView,
-};
+use crate::ui_model::render_model::{Color, GlassLayer, GlyphLane, GlyphView, InkLane, InkView};
 
 use super::helpers::advance_unit_toward;
 use crate::app::state::App;
@@ -59,8 +56,25 @@ impl App {
                 layout::settings_panel::LiquidGlassDebugState::default(),
             ));
         let lg = self.settings.liquid_glass;
-        let model = layout::settings_panel::build_with_copy(
-            layout::settings_panel::SettingsPanelInput {
+
+        // Current pointer position in logical pixels (for widget hover/press states)
+        let pointer_logical = if scale > 0.0 {
+            Some(ui_model::geometry::Point::new(
+                self.pointer_phys_x,
+                self.pointer_phys_y,
+            ))
+        } else {
+            None
+        };
+        let pointer_pressed = self.pressed_on_settings.is_some()
+            || self.pending_press.is_some()
+            || self.settings_slider_drag.is_some();
+        // Capture the settings_scroll into a local ref for the builder.
+        // We use a trick: split borrow of settings_scroll while we still need
+        // other fields of self. Build the input first, then pass &mut scroll.
+        self.profiler.begin_settings_build();
+        let model = {
+            let input = layout::settings_panel::SettingsPanelInput {
                 viewport: self.viewport_phys(),
                 scale_factor: scale,
                 category: settings_category_id(self.settings_category),
@@ -83,41 +97,107 @@ impl App {
                     blur_radius: lg.blur_radius,
                 },
                 liquid_glass_debug: lg_debug_state,
-            },
-            &copy,
+                pointer_pos: pointer_logical,
+                pointer_pressed,
+            };
+            layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
+        };
+        self.profiler.end_settings_build();
+
+        // Cache the HitMap for next frame's input processing (1-frame delay).
+        let clone_start = std::time::Instant::now();
+        self.cached_settings_hit_map = Some(model.result.hits.clone());
+        self.profiler.record_hitmap_clone(clone_start.elapsed());
+
+        // Record shape/model counts for profiling.
+        let overlay_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Overlay)
+            .map(|b| b.surfaces.len() as u64)
+            .unwrap_or(0);
+        let modal_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Modal)
+            .map(|b| b.surfaces.len() as u64)
+            .unwrap_or(0);
+        let ink_count = model
+            .result
+            .render
+            .ink
+            .iter()
+            .map(|b| b.views.len() as u64)
+            .sum::<u64>();
+        let glyph_count = model
+            .result
+            .render
+            .glyphs
+            .iter()
+            .map(|b| b.views.len() as u64)
+            .sum::<u64>();
+        let text_count = model.result.render.text.len() as u64;
+        // Count existing overlay glass that's merged in (from bottom control etc.)
+        let existing_overlay = self
+            .render_model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Overlay)
+            .map(|batch| batch.surfaces.len() as u64)
+            .unwrap_or(0);
+        let existing_modal = self
+            .render_model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .map(|batch| batch.surfaces.len() as u64)
+            .unwrap_or(0);
+        // Also get base/control shapes from the render_model.
+        let base_count = self
+            .render_model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Base)
+            .map(|batch| batch.surfaces.len() as u64)
+            .unwrap_or(0);
+        let control_overlay = existing_overlay; // Overlay = control + settings glass
+        let region_count = model.result.hits.len() as u64;
+        self.profiler.record_counts(
+            overlay_glass + existing_overlay,
+            modal_glass + existing_modal,
+            control_overlay,
+            base_count,
+            region_count,
+            ink_count,
+            glyph_count,
+            text_count,
         );
+
         let panel = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
 
-        let btn_r = layout::settings_panel::CLOSE_HALF * scale;
-        let close = control_icon(
-            panel.left + panel.hw * 2.0 - btn_r * 2.0,
-            panel.top + btn_r * 2.0,
-            btn_r,
-            ControlKind::CloseButton,
-            layout::settings_panel::INK,
-        );
+        // Extract ink instances from the builder's output.
+        let mut instances: Vec<InkView> = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|b| b.lane == InkLane::Settings)
+            .map(|b| b.views.clone())
+            .unwrap_or_default();
 
-        let mut instances = Vec::new();
+        // Text views from the builder → glyph quads.
         let mut quads = Vec::new();
-        build_settings_panel_instances(
-            &panel,
-            scale,
-            self.settings_category,
-            &self.settings,
-            self.settings_scroll_rows,
-            window_decorated,
-            lg_debug_state,
-            hidden_count,
-            &mut instances,
-        );
-        instances.push(close);
-
         if let Some(text) = self.text.as_mut() {
             build_settings_panel_text_views(text, &model.result.render.text, scale, &mut quads);
         }
 
+        // Transform for pop animation.
         transform_settings_instances(
             &mut instances,
             [panel.cx, panel.cy],
@@ -126,6 +206,12 @@ impl App {
         );
         transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
 
+        // Glass from the builder's output. The panel background lives on the
+        // Modal layer; the Liquid Glass toggle thumbs live on the Overlay
+        // layer (so they render as independent glass lenses, not a union with
+        // the panel capsule). Overlay is merged with whatever the rest of the
+        // frame already pushed there (e.g. the bottom control capsule) because
+        // `set_glass_batch` replaces per-layer.
         let modal = model
             .result
             .render
@@ -135,6 +221,38 @@ impl App {
             .map(|batch| batch.surfaces.clone())
             .unwrap_or_default();
         self.render_model.set_glass_batch(GlassLayer::Modal, modal);
+
+        let ui_overlay = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Overlay)
+            .map(|batch| batch.surfaces.clone())
+            .unwrap_or_default();
+        if !ui_overlay.is_empty() {
+            let existing_overlay = self
+                .render_model
+                .glass
+                .iter()
+                .find(|batch| batch.layer == GlassLayer::Overlay)
+                .map(|batch| batch.surfaces.clone())
+                .unwrap_or_default();
+            // Cull only the settings-panel glass (toggle thumbs) that has
+            // scrolled fully past the panel AABB. The existing_overlay
+            // (bottom control capsule, gear, etc.) is left untouched —
+            // the list-virtualization idea applies to our own scrollable
+            // content, not to ambient UI that happens to share the Overlay
+            // lane.
+            let panel_rect = model.layout.rect();
+            let ui_overlay: Vec<_> = ui_overlay
+                .into_iter()
+                .filter(|s| s.rect.intersects(panel_rect))
+                .collect();
+            let merged: Vec<_> = existing_overlay.into_iter().chain(ui_overlay).collect();
+            self.render_model
+                .set_glass_batch(GlassLayer::Overlay, merged);
+        }
         self.render_model
             .set_ink_batch(InkLane::Settings, instances);
         self.render_model
@@ -179,33 +297,12 @@ pub(crate) fn settings_category_id(
     }
 }
 
-pub(crate) fn settings_category_from_id(
-    category: layout::settings_panel::SettingsCategoryId,
-) -> SettingsCategory {
-    match category {
-        layout::settings_panel::SettingsCategoryId::Apps => SettingsCategory::Apps,
-        layout::settings_panel::SettingsCategoryId::Search => SettingsCategory::Search,
-        layout::settings_panel::SettingsCategoryId::System => SettingsCategory::System,
-        layout::settings_panel::SettingsCategoryId::About => SettingsCategory::About,
-        layout::settings_panel::SettingsCategoryId::Debug => SettingsCategory::Debug,
-    }
-}
-
 pub(crate) fn sort_order_id(order: SortOrder) -> layout::settings_panel::SortOrderId {
     match order {
         SortOrder::Name => layout::settings_panel::SortOrderId::Name,
         SortOrder::Manual => layout::settings_panel::SortOrderId::Manual,
         SortOrder::Recent => layout::settings_panel::SortOrderId::Recent,
         SortOrder::Frequent => layout::settings_panel::SortOrderId::Frequent,
-    }
-}
-
-pub(crate) fn sort_order_from_id(order: layout::settings_panel::SortOrderId) -> SortOrder {
-    match order {
-        layout::settings_panel::SortOrderId::Name => SortOrder::Name,
-        layout::settings_panel::SortOrderId::Manual => SortOrder::Manual,
-        layout::settings_panel::SortOrderId::Recent => SortOrder::Recent,
-        layout::settings_panel::SortOrderId::Frequent => SortOrder::Frequent,
     }
 }
 
@@ -300,116 +397,113 @@ fn settings_panel_copy<'a>(
     }
 }
 
-pub(crate) fn settings_press_target_from_layout_hit(
-    hit: layout::settings_panel::SettingsPanelHit,
+/// Convert a [`HitTarget`] (from the cached HitMap) to a
+/// [`SettingsPressTarget`] by matching on the `SettingsTarget` key strings.
+/// This replaces `settings_press_target_from_layout_hit` which operated on
+/// the now-removed `SettingsPanelHit` enum.
+pub(crate) fn settings_press_target_from_hit_target(
+    target: &crate::ui_model::hit::HitTarget,
 ) -> crate::app::state::SettingsPressTarget {
-    match hit {
-        layout::settings_panel::SettingsPanelHit::Close => {
-            crate::app::state::SettingsPressTarget::Close
+    use crate::app::state::SettingsPressTarget;
+    use crate::ui_model::hit::{HitTarget, SettingsTarget};
+
+    match target {
+        HitTarget::Settings {
+            target: SettingsTarget::Close,
+        } => SettingsPressTarget::Close,
+        HitTarget::Settings {
+            target: SettingsTarget::Panel,
+        } => SettingsPressTarget::Inside,
+        HitTarget::Settings {
+            target: SettingsTarget::Category { key },
+        } => {
+            let cat = match key.as_str() {
+                "apps" => crate::domain::settings::SettingsCategory::Apps,
+                "search" => crate::domain::settings::SettingsCategory::Search,
+                "system" => crate::domain::settings::SettingsCategory::System,
+                "about" => crate::domain::settings::SettingsCategory::About,
+                "debug" => crate::domain::settings::SettingsCategory::Debug,
+                _ => return SettingsPressTarget::Inside,
+            };
+            SettingsPressTarget::Category(cat)
         }
-        layout::settings_panel::SettingsPanelHit::Category(category) => {
-            crate::app::state::SettingsPressTarget::Category(settings_category_from_id(category))
+        HitTarget::Settings {
+            target: SettingsTarget::SortOption { key },
+        } => {
+            let order = match key.as_str() {
+                "name" => crate::domain::settings::SortOrder::Name,
+                "manual" => crate::domain::settings::SortOrder::Manual,
+                "recent" => crate::domain::settings::SortOrder::Recent,
+                "frequent" => crate::domain::settings::SortOrder::Frequent,
+                _ => return SettingsPressTarget::Inside,
+            };
+            SettingsPressTarget::Sort(order)
         }
-        layout::settings_panel::SettingsPanelHit::Sort(order) => {
-            crate::app::state::SettingsPressTarget::Sort(sort_order_from_id(order))
-        }
-        layout::settings_panel::SettingsPanelHit::FrequentToggle => {
-            crate::app::state::SettingsPressTarget::FrequentToggle
-        }
-        layout::settings_panel::SettingsPanelHit::SteamToggle => {
-            crate::app::state::SettingsPressTarget::SteamToggle
-        }
-        layout::settings_panel::SettingsPanelHit::SearchHiddenToggle => {
-            crate::app::state::SettingsPressTarget::SearchHiddenToggle
-        }
-        layout::settings_panel::SettingsPanelHit::DebugToggle => {
-            crate::app::state::SettingsPressTarget::DebugToggle
-        }
-        layout::settings_panel::SettingsPanelHit::FpsToggle => {
-            crate::app::state::SettingsPressTarget::FpsToggle
-        }
-        layout::settings_panel::SettingsPanelHit::ResetCache => {
-            crate::app::state::SettingsPressTarget::ResetCache
-        }
-        layout::settings_panel::SettingsPanelHit::ResetSettings => {
-            crate::app::state::SettingsPressTarget::ResetSettings
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassEnabled => {
-            crate::app::state::SettingsPressTarget::LiquidGlassEnabled
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassParam(id) => {
-            crate::app::state::SettingsPressTarget::LiquidGlassParam(param_field_from_id(id))
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassParamReset(id) => {
-            crate::app::state::SettingsPressTarget::LiquidGlassParamReset(param_field_from_id(id))
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassResetAll => {
-            crate::app::state::SettingsPressTarget::LiquidGlassResetAll
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassDebug(id) => {
-            crate::app::state::SettingsPressTarget::LiquidGlassDebug(debug_flag_from_id(id))
-        }
-        layout::settings_panel::SettingsPanelHit::WindowDecorations => {
-            crate::app::state::SettingsPressTarget::WindowDecorations
-        }
-        layout::settings_panel::SettingsPanelHit::ScrollUp => {
-            crate::app::state::SettingsPressTarget::SettingsScrollUp
-        }
-        layout::settings_panel::SettingsPanelHit::ScrollDown => {
-            crate::app::state::SettingsPressTarget::SettingsScrollDown
-        }
-        layout::settings_panel::SettingsPanelHit::Inside => {
-            crate::app::state::SettingsPressTarget::Inside
-        }
-        layout::settings_panel::SettingsPanelHit::Outside => {
-            crate::app::state::SettingsPressTarget::Outside
-        }
+        HitTarget::Settings {
+            target: SettingsTarget::Toggle { key },
+        } => match key.as_str() {
+            "frequent-apps" => SettingsPressTarget::FrequentToggle,
+            "steam-apps" => SettingsPressTarget::SteamToggle,
+            "search-hidden" => SettingsPressTarget::SearchHiddenToggle,
+            "debug" => SettingsPressTarget::DebugToggle,
+            "show-fps" => SettingsPressTarget::FpsToggle,
+            "lg-enabled" => SettingsPressTarget::LiquidGlassEnabled,
+            "window-decorations" => SettingsPressTarget::WindowDecorations,
+            key if key.starts_with("lg-param-") => {
+                let field = param_field_from_key(&key["lg-param-".len()..]);
+                SettingsPressTarget::LiquidGlassParam(field)
+            }
+            key if key.starts_with("lg-debug-") => {
+                let flag = debug_flag_from_key(&key["lg-debug-".len()..]);
+                SettingsPressTarget::LiquidGlassDebug(flag)
+            }
+            _ => SettingsPressTarget::Inside,
+        },
+        HitTarget::Settings {
+            target: SettingsTarget::Action { key },
+        } => match key.as_str() {
+            "reset-cache" => SettingsPressTarget::ResetCache,
+            "reset-settings" => SettingsPressTarget::ResetSettings,
+            "lg-reset-all" => SettingsPressTarget::LiquidGlassResetAll,
+            key if key.starts_with("lg-param-reset-") => {
+                let field = param_field_from_key(&key["lg-param-reset-".len()..]);
+                SettingsPressTarget::LiquidGlassParamReset(field)
+            }
+            _ => SettingsPressTarget::Inside,
+        },
+        HitTarget::Backdrop { .. } => SettingsPressTarget::Outside,
+        _ => SettingsPressTarget::Inside,
     }
 }
 
-fn param_field_from_id(id: LiquidGlassParamId) -> LiquidGlassParamField {
-    match id {
-        LiquidGlassParamId::Thickness => LiquidGlassParamField::Thickness,
-        LiquidGlassParamId::RefractiveIndex => LiquidGlassParamField::RefractiveIndex,
-        LiquidGlassParamId::Saturation => LiquidGlassParamField::Saturation,
-        LiquidGlassParamId::ChromaticAberration => LiquidGlassParamField::ChromaticAberration,
-        LiquidGlassParamId::BlurRadius => LiquidGlassParamField::BlurRadius,
+fn param_field_from_key(key: &str) -> LiquidGlassParamField {
+    match key {
+        "thickness" => LiquidGlassParamField::Thickness,
+        "refractive-index" => LiquidGlassParamField::RefractiveIndex,
+        "saturation" => LiquidGlassParamField::Saturation,
+        "chromatic-aberration" => LiquidGlassParamField::ChromaticAberration,
+        "blur-radius" => LiquidGlassParamField::BlurRadius,
+        _ => LiquidGlassParamField::Thickness,
     }
 }
 
-fn debug_flag_from_id(id: LiquidGlassDebugId) -> LiquidGlassDebugFlag {
-    match id {
-        LiquidGlassDebugId::DisableChromaticAberration => {
-            LiquidGlassDebugFlag::DisableChromaticAberration
-        }
-        LiquidGlassDebugId::DisableEdgeLighting => LiquidGlassDebugFlag::DisableEdgeLighting,
-        LiquidGlassDebugId::DisableBlur => LiquidGlassDebugFlag::DisableBlur,
-        LiquidGlassDebugId::ShowBackdropTexture => LiquidGlassDebugFlag::ShowBackdropTexture,
-        LiquidGlassDebugId::ShowGeometryTexture => LiquidGlassDebugFlag::ShowGeometryTexture,
-        LiquidGlassDebugId::ShowDisplacement => LiquidGlassDebugFlag::ShowDisplacement,
-        LiquidGlassDebugId::ShowAlphaMask => LiquidGlassDebugFlag::ShowAlphaMask,
-        LiquidGlassDebugId::ShowFinalGlassOnly => LiquidGlassDebugFlag::ShowFinalGlassOnly,
+fn debug_flag_from_key(key: &str) -> LiquidGlassDebugFlag {
+    match key {
+        "disable-chromatic-aberration" => LiquidGlassDebugFlag::DisableChromaticAberration,
+        "disable-edge-lighting" => LiquidGlassDebugFlag::DisableEdgeLighting,
+        "disable-blur" => LiquidGlassDebugFlag::DisableBlur,
+        "show-backdrop-texture" => LiquidGlassDebugFlag::ShowBackdropTexture,
+        "show-geometry-texture" => LiquidGlassDebugFlag::ShowGeometryTexture,
+        "show-displacement" => LiquidGlassDebugFlag::ShowDisplacement,
+        "show-alpha-mask" => LiquidGlassDebugFlag::ShowAlphaMask,
+        "show-final-glass-only" => LiquidGlassDebugFlag::ShowFinalGlassOnly,
+        _ => LiquidGlassDebugFlag::DisableChromaticAberration,
     }
 }
 
 const SETTINGS_TITLE: &str = "設定";
 /// Title font for the settings panel.
 const SETTINGS_TITLE_FONT: &str = text::UI_FONT_FAMILY;
-const SETTINGS_SIDEBAR_W: f32 = 210.0;
-const SETTINGS_SIDEBAR_TOP: f32 = 78.0;
-const SETTINGS_SIDEBAR_ROW_H: f32 = 38.0;
-const SETTINGS_SIDEBAR_STEP: f32 = 44.0;
-const SETTINGS_CONTENT_PAD: f32 = 34.0;
-const SETTINGS_CONTENT_TOP: f32 = 92.0;
-const SETTINGS_ROW_H: f32 = 46.0;
-const SETTINGS_ROW_STEP: f32 = 62.0;
-const SETTINGS_SEGMENT_H: f32 = 32.0;
-const SETTINGS_SEGMENT_GAP: f32 = 8.0;
-const SETTINGS_INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
-const SETTINGS_MUTED: [f32; 4] = [1.0, 1.0, 1.0, 0.58];
-const SETTINGS_DIM: [f32; 4] = [1.0, 1.0, 1.0, 0.34];
-const SETTINGS_ACCENT: [f32; 4] = [0.35, 0.68, 1.0, 0.42];
-const SETTINGS_GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
 fn transform_settings_instances(
     instances: &mut [InkView],
@@ -443,34 +537,6 @@ fn transform_settings_quads(
     }
 }
 
-fn control_icon(x: f32, y: f32, radius: f32, kind: ControlKind, color: [f32; 4]) -> InkView {
-    ink_view([x, y], radius, color[3], 1.6, 0.0, color, kind)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn ink_view(
-    center: [f32; 2],
-    extent: f32,
-    opacity: f32,
-    stroke: f32,
-    corner_radius: f32,
-    color: [f32; 4],
-    kind: ControlKind,
-) -> InkView {
-    InkView {
-        id: UiId::settings_panel(),
-        center: Point::new(center[0], center[1]),
-        extent,
-        opacity,
-        scene_blur: 0.0,
-        stroke,
-        corner_radius,
-        color: Color::rgba(color[0], color[1], color[2], color[3]),
-        kind,
-        z: 0,
-    }
-}
-
 fn glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
     quads
         .iter()
@@ -485,431 +551,9 @@ fn glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 0,
+            clip: None,
         })
         .collect()
-}
-
-fn round_rect_instance(
-    center: [f32; 2],
-    half_width: f32,
-    half_height: f32,
-    radius: f32,
-    color: [f32; 4],
-) -> InkView {
-    ink_view(
-        center,
-        half_height,
-        color[3],
-        half_width,
-        radius,
-        color,
-        ControlKind::RowBackground,
-    )
-}
-
-fn divider_instance(center: [f32; 2], half_width: f32, half_height: f32) -> InkView {
-    round_rect_instance(center, half_width, half_height, half_height, SETTINGS_DIM)
-}
-
-fn toggle_instances(center: [f32; 2], enabled: bool, scale: f32, instances: &mut Vec<InkView>) {
-    let track_hw = 22.0 * scale;
-    let track_hh = 11.0 * scale;
-    let track_color = if enabled {
-        SETTINGS_GREEN
-    } else {
-        [1.0, 1.0, 1.0, 0.14]
-    };
-    instances.push(round_rect_instance(
-        center,
-        track_hw,
-        track_hh,
-        track_hh,
-        track_color,
-    ));
-    if enabled {
-        instances.push(control_icon(
-            center[0] + 10.0 * scale,
-            center[1],
-            6.0 * scale,
-            ControlKind::Dot,
-            [1.0, 1.0, 1.0, 0.78],
-        ));
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_settings_panel_instances(
-    layout: &crate::layout::settings_panel::SettingsPanelLayout,
-    scale: f32,
-    category: SettingsCategory,
-    settings: &Settings,
-    scroll_rows: i32,
-    window_decorated: bool,
-    lg_debug: crate::layout::settings_panel::LiquidGlassDebugState,
-    _hidden_count: usize,
-    instances: &mut Vec<InkView>,
-) {
-    let panel_right = layout.left + layout.hw * 2.0;
-    let panel_bottom = layout.top + layout.hh * 2.0;
-    instances.push(divider_instance(
-        [layout.right_left, layout.cy],
-        0.55 * scale,
-        layout.hh - 28.0 * scale,
-    ));
-
-    for (i, item) in SettingsCategory::ALL.iter().copied().enumerate() {
-        if item == category {
-            let row_top = layout.top
-                + SETTINGS_SIDEBAR_TOP * scale
-                + i as f32 * SETTINGS_SIDEBAR_STEP * scale;
-            instances.push(round_rect_instance(
-                [
-                    layout.left + layout.sidebar_w * 0.5,
-                    row_top + SETTINGS_SIDEBAR_ROW_H * scale * 0.5,
-                ],
-                layout.sidebar_w * 0.5 - 14.0 * scale,
-                SETTINGS_SIDEBAR_ROW_H * scale * 0.5,
-                10.0 * scale,
-                SETTINGS_ACCENT,
-            ));
-        }
-    }
-
-    let content_left = layout.right_left + SETTINGS_CONTENT_PAD * scale;
-    let content_right = panel_right - SETTINGS_CONTENT_PAD * scale;
-    let row_w = content_right - content_left;
-    let row_h = SETTINGS_ROW_H * scale;
-    let first_top = layout.top + SETTINGS_CONTENT_TOP * scale;
-
-    match category {
-        SettingsCategory::Apps => {
-            let segment_top = first_top + 44.0 * scale;
-            let gap = SETTINGS_SEGMENT_GAP * scale;
-            let each_w = (row_w - gap * 3.0) / 4.0;
-            for (i, order) in SortOrder::ALL.iter().copied().enumerate() {
-                let left = content_left + i as f32 * (each_w + gap);
-                let selected = settings.sort_order == order;
-                instances.push(round_rect_instance(
-                    [
-                        left + each_w * 0.5,
-                        segment_top + SETTINGS_SEGMENT_H * scale * 0.5,
-                    ],
-                    each_w * 0.5,
-                    SETTINGS_SEGMENT_H * scale * 0.5,
-                    10.0 * scale,
-                    if selected {
-                        SETTINGS_ACCENT
-                    } else {
-                        [1.0, 1.0, 1.0, 0.14]
-                    },
-                ));
-                if selected {
-                    instances.push(control_icon(
-                        left + 15.0 * scale,
-                        segment_top + SETTINGS_SEGMENT_H * scale * 0.5,
-                        8.0 * scale,
-                        ControlKind::Checkmark,
-                        SETTINGS_INK,
-                    ));
-                }
-            }
-            settings_row_backgrounds(
-                content_left,
-                first_top + SETTINGS_ROW_STEP * scale,
-                row_w,
-                row_h,
-                scale,
-                instances,
-                3,
-            );
-            toggle_instances(
-                [
-                    content_right - 28.0 * scale,
-                    first_top + SETTINGS_ROW_STEP * scale + row_h * 0.5,
-                ],
-                settings.frequent_apps_enabled,
-                scale,
-                instances,
-            );
-            toggle_instances(
-                [
-                    content_right - 28.0 * scale,
-                    first_top + SETTINGS_ROW_STEP * 2.0 * scale + row_h * 0.5,
-                ],
-                settings.show_steam_apps,
-                scale,
-                instances,
-            );
-            instances.push(control_icon(
-                content_right - 14.0 * scale,
-                first_top + SETTINGS_ROW_STEP * 3.0 * scale + row_h * 0.5,
-                9.0 * scale,
-                ControlKind::Chevron,
-                SETTINGS_MUTED,
-            ));
-        }
-        SettingsCategory::Search => {
-            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 1);
-            toggle_instances(
-                [content_right - 28.0 * scale, first_top + row_h * 0.5],
-                settings.search_includes_hidden,
-                scale,
-                instances,
-            );
-        }
-        SettingsCategory::Debug => {
-            use crate::layout::settings_panel as sp;
-            let scroll = scroll_rows;
-            let lg = settings.liquid_glass;
-            let lg_values = sp::LiquidGlassValues {
-                enabled: lg.enabled,
-                thickness: lg.thickness,
-                refractive_index: lg.refractive_index,
-                saturation: lg.saturation,
-                chromatic_aberration: lg.chromatic_aberration,
-                blur_radius: lg.blur_radius,
-            };
-
-            // Helper to push a row background centered on row `i`'s slot.
-            let push_row_bg = |instances: &mut Vec<InkView>, i: i32| {
-                if !sp::debug_row_is_visible(layout, scale, scroll, i) {
-                    return;
-                }
-                let y = sp::debug_row_y(layout, scale, scroll, i);
-                instances.push(round_rect_instance(
-                    [layout.cx, y + row_h * 0.5],
-                    (panel_right - content_left) * 0.5,
-                    row_h * 0.5,
-                    row_h * 0.5,
-                    [1.0, 1.0, 1.0, 0.05],
-                ));
-            };
-
-            // Row 0: master debug-keys toggle.
-            push_row_bg(instances, sp::DEBUG_ROW_KEYS);
-            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_KEYS) {
-                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_KEYS);
-                toggle_instances(
-                    [content_right - 28.0 * scale, y + row_h * 0.5],
-                    settings.debug_keys_enabled,
-                    scale,
-                    instances,
-                );
-            }
-            // Row 1: window decorations toggle.
-            push_row_bg(instances, sp::DEBUG_ROW_WINDOW_DECORATIONS);
-            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_WINDOW_DECORATIONS) {
-                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_WINDOW_DECORATIONS);
-                toggle_instances(
-                    [content_right - 28.0 * scale, y + row_h * 0.5],
-                    window_decorated,
-                    scale,
-                    instances,
-                );
-            }
-            // Row 2: icon cache rebuild action (chevron).
-            push_row_bg(instances, sp::DEBUG_ROW_ICON_CACHE);
-            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_ICON_CACHE) {
-                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_ICON_CACHE);
-                instances.push(control_icon(
-                    content_right - 14.0 * scale,
-                    y + row_h * 0.5,
-                    9.0 * scale,
-                    ControlKind::Chevron,
-                    SETTINGS_MUTED,
-                ));
-            }
-            // Row 3: Liquid Glass master toggle.
-            push_row_bg(instances, sp::DEBUG_ROW_LG_ENABLED);
-            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_LG_ENABLED) {
-                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_LG_ENABLED);
-                toggle_instances(
-                    [content_right - 28.0 * scale, y + row_h * 0.5],
-                    lg.enabled,
-                    scale,
-                    instances,
-                );
-            }
-            // Rows 4..9: slider + reset arrow.
-            let (track_left, track_width, knob_r, reset_cx, reset_r) =
-                sp::debug_slider_geometry(layout, scale);
-            let track_hh = sp::debug_slider_track_half_h(scale);
-            for (k, id) in sp::LiquidGlassParamId::ALL.iter().copied().enumerate() {
-                let i = sp::DEBUG_ROW_LG_PARAM_FIRST + k as i32;
-                push_row_bg(instances, i);
-                if !sp::debug_row_is_visible(layout, scale, scroll, i) {
-                    continue;
-                }
-                let y = sp::debug_row_y(layout, scale, scroll, i);
-                let cy = y + row_h * 0.5;
-                let value = lg_values.get(id);
-                let (min, max) = id.range();
-                let t = ((value - min) / (max - min)).clamp(0.0, 1.0);
-                // Track (kind 10): params (half_h, alpha, half_w, radius).
-                instances.push(InkView {
-                    id: UiId::settings_panel(),
-                    center: Point::new(track_left + track_width * 0.5, cy),
-                    extent: track_hh,
-                    opacity: 0.16,
-                    scene_blur: 0.0,
-                    stroke: track_width * 0.5,
-                    corner_radius: track_hh,
-                    color: Color::rgba(1.0, 1.0, 1.0, 0.16),
-                    kind: ControlKind::SliderTrack,
-                    z: 0,
-                });
-                // Knob (kind 11): filled disk positioned at the value t.
-                instances.push(InkView {
-                    id: UiId::settings_panel(),
-                    center: Point::new(track_left + track_width * t, cy),
-                    extent: knob_r,
-                    opacity: 0.92,
-                    scene_blur: 0.0,
-                    stroke: 0.0,
-                    corner_radius: 0.0,
-                    color: Color::rgba(1.0, 1.0, 1.0, 0.92),
-                    kind: ControlKind::SliderKnob,
-                    z: 0,
-                });
-                // Reset arrow (kind 12) on the right.
-                instances.push(InkView {
-                    id: UiId::settings_panel(),
-                    center: Point::new(reset_cx, cy),
-                    extent: reset_r,
-                    opacity: 0.7,
-                    scene_blur: 0.0,
-                    stroke: 1.4 * scale,
-                    corner_radius: 0.0,
-                    color: Color::rgba(1.0, 1.0, 1.0, 0.7),
-                    kind: ControlKind::ResetIcon,
-                    z: 0,
-                });
-            }
-            // Rows 9..12: disable toggles.
-            let disable_ids = [
-                (
-                    sp::DEBUG_ROW_LG_DISABLE_CHROMA,
-                    lg_debug.disable_chromatic_aberration,
-                ),
-                (
-                    sp::DEBUG_ROW_LG_DISABLE_EDGE,
-                    lg_debug.disable_edge_lighting,
-                ),
-                (sp::DEBUG_ROW_LG_DISABLE_BLUR, lg_debug.disable_blur),
-            ];
-            for (i, on) in disable_ids {
-                push_row_bg(instances, i);
-                if sp::debug_row_is_visible(layout, scale, scroll, i) {
-                    let y = sp::debug_row_y(layout, scale, scroll, i);
-                    toggle_instances(
-                        [content_right - 28.0 * scale, y + row_h * 0.5],
-                        on,
-                        scale,
-                        instances,
-                    );
-                }
-            }
-            // Row 12: reset-all action (chevron).
-            push_row_bg(instances, sp::DEBUG_ROW_LG_RESET_ALL);
-            if sp::debug_row_is_visible(layout, scale, scroll, sp::DEBUG_ROW_LG_RESET_ALL) {
-                let y = sp::debug_row_y(layout, scale, scroll, sp::DEBUG_ROW_LG_RESET_ALL);
-                instances.push(control_icon(
-                    content_right - 14.0 * scale,
-                    y + row_h * 0.5,
-                    9.0 * scale,
-                    ControlKind::Chevron,
-                    SETTINGS_MUTED,
-                ));
-            }
-            // Rows 13..18: debug-view toggles.
-            let view_rows = [
-                (sp::DEBUG_ROW_LG_VIEW_FIRST, lg_debug.show_backdrop_texture),
-                (
-                    sp::DEBUG_ROW_LG_VIEW_FIRST + 1,
-                    lg_debug.show_geometry_texture,
-                ),
-                (sp::DEBUG_ROW_LG_VIEW_FIRST + 2, lg_debug.show_displacement),
-                (sp::DEBUG_ROW_LG_VIEW_FIRST + 3, lg_debug.show_alpha_mask),
-                (
-                    sp::DEBUG_ROW_LG_VIEW_FIRST + 4,
-                    lg_debug.show_final_glass_only,
-                ),
-            ];
-            for (i, on) in view_rows {
-                push_row_bg(instances, i);
-                if sp::debug_row_is_visible(layout, scale, scroll, i) {
-                    let y = sp::debug_row_y(layout, scale, scroll, i);
-                    toggle_instances(
-                        [content_right - 28.0 * scale, y + row_h * 0.5],
-                        on,
-                        scale,
-                        instances,
-                    );
-                }
-            }
-        }
-        SettingsCategory::System => {
-            // Row 0: FPS overlay toggle (switch, no chevron).
-            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 1);
-            toggle_instances(
-                [content_right - 28.0 * scale, first_top + row_h * 0.5],
-                settings.show_fps,
-                scale,
-                instances,
-            );
-            // Rows 1-2: Reset cache / reset settings (chevron action rows).
-            settings_row_backgrounds(
-                content_left,
-                first_top + SETTINGS_ROW_STEP * scale,
-                row_w,
-                row_h,
-                scale,
-                instances,
-                2,
-            );
-            for i in 0..2 {
-                instances.push(control_icon(
-                    content_right - 14.0 * scale,
-                    first_top + (i + 1) as f32 * SETTINGS_ROW_STEP * scale + row_h * 0.5,
-                    9.0 * scale,
-                    ControlKind::Chevron,
-                    SETTINGS_MUTED,
-                ));
-            }
-        }
-        SettingsCategory::About => {
-            settings_row_backgrounds(content_left, first_top, row_w, row_h, scale, instances, 1);
-        }
-    }
-
-    instances.push(divider_instance(
-        [layout.cx, panel_bottom - 56.0 * scale],
-        layout.hw - 26.0 * scale,
-        0.45 * scale,
-    ));
-}
-
-fn settings_row_backgrounds(
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
-    scale: f32,
-    instances: &mut Vec<InkView>,
-    count: usize,
-) {
-    for i in 0..count {
-        instances.push(round_rect_instance(
-            [
-                left + width * 0.5,
-                top + i as f32 * SETTINGS_ROW_STEP * scale + height * 0.5,
-            ],
-            width * 0.5,
-            height * 0.5,
-            12.0 * scale,
-            [1.0, 1.0, 1.0, 0.12],
-        ));
-    }
 }
 
 fn build_settings_panel_text_views(
@@ -1032,4 +676,112 @@ fn push_text_right(
         center: (right - width * 0.5, center_y),
         scale_factor: scale,
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::SettingsPressTarget;
+    use crate::domain::settings::{LiquidGlassDebugFlag, LiquidGlassParamField};
+    use crate::ui_model::hit::{HitTarget, SettingsTarget};
+
+    #[test]
+    fn press_target_from_hit_target_toggle_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("frequent-apps")),
+            SettingsPressTarget::FrequentToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("steam-apps")),
+            SettingsPressTarget::SteamToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("search-hidden")),
+            SettingsPressTarget::SearchHiddenToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("debug")),
+            SettingsPressTarget::DebugToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("show-fps")),
+            SettingsPressTarget::FpsToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-enabled")),
+            SettingsPressTarget::LiquidGlassEnabled
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "window-decorations"
+            )),
+            SettingsPressTarget::WindowDecorations
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_action_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action("reset-cache")),
+            SettingsPressTarget::ResetCache
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action("reset-settings")),
+            SettingsPressTarget::ResetSettings
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action("lg-reset-all")),
+            SettingsPressTarget::LiquidGlassResetAll
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_lg_param_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-param-thickness"
+            )),
+            SettingsPressTarget::LiquidGlassParam(LiquidGlassParamField::Thickness)
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action(
+                "lg-param-reset-thickness"
+            )),
+            SettingsPressTarget::LiquidGlassParamReset(LiquidGlassParamField::Thickness)
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_lg_debug_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-debug-disable-chromatic-aberration"
+            )),
+            SettingsPressTarget::LiquidGlassDebug(LiquidGlassDebugFlag::DisableChromaticAberration)
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_close_and_panel() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::Settings {
+                target: SettingsTarget::Close
+            }),
+            SettingsPressTarget::Close
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::Settings {
+                target: SettingsTarget::Panel
+            }),
+            SettingsPressTarget::Inside
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_backdrop_is_outside() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::modal_dismiss_backdrop()),
+            SettingsPressTarget::Outside
+        );
+    }
 }

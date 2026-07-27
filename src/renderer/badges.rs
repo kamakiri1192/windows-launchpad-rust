@@ -58,6 +58,8 @@ impl Renderer {
                     source.tile_center[1],
                     source.phase,
                 ],
+                clip_rect: [0.0; 4],
+                clip_radius: [0.0; 4],
             });
         }
 
@@ -124,6 +126,8 @@ impl Renderer {
                     source.tile_center[1],
                     source.phase,
                 ],
+                clip_rect: [0.0; 4],
+                clip_radius: [0.0; 4],
             });
         }
 

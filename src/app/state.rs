@@ -27,7 +27,7 @@ use crate::domain::settings::{Settings, SettingsCategory, SortOrder};
 use crate::icon_cache::IconCache;
 use crate::renderer::icon_atlas::IconAtlas;
 use crate::renderer::Renderer;
-use crate::scroll::Scroller;
+use crate::scroll::{ContinuousConfig, ContinuousScroller, Scroller};
 use crate::startup_timer::StartupTimer;
 use crate::workers::icon_worker::WorkerHandle;
 use crate::workers::refresh_watcher::RefreshMessage;
@@ -312,13 +312,21 @@ pub struct App {
     pub settings_category: SettingsCategory,
     /// Vertical content scroll offset (in logical content rows) for the
     /// settings overlay. Only the `Debug` category overflows today, so this
-    /// is reset to 0 whenever the category changes. Stepped one row at a
-    /// time so rows always land on whole slots — pixel-level smooth scroll
-    /// would need a clip primitive we don't have yet.
+    /// is reset to 0 whenever the category changes.
+    ///
+    /// **Deprecated:** Phase 3 introduces `settings_scroll` (ContinuousScroller)
+    /// for pixel-level smooth scroll. This field is kept for compatibility with
+    /// the existing row-based layout code and will be removed in Phase 6.
     pub settings_scroll_rows: i32,
+    /// Phase 3 pixel-level continuous scroller for the settings panel.
+    /// Provides pixel-precise, iOS-style scroll with rubber-band and inertia.
+    pub settings_scroll: ContinuousScroller,
     /// When a slider knob is being dragged, the Liquid Glass parameter field
     /// it controls. `None` outside an active drag.
     pub settings_slider_drag: Option<crate::domain::settings::LiquidGlassParamField>,
+    /// Cached HitMap from the previous frame's `build_with_ui` call, used for
+    /// hit testing in the current frame's input processing (1-frame delay).
+    pub cached_settings_hit_map: Option<crate::layout::hit_map::HitMap>,
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     pub last_redraw: Option<Instant>,
@@ -357,6 +365,9 @@ pub struct App {
     /// AppKit local event monitor and retained native click packets.
     #[cfg(target_os = "macos")]
     pub _macos_input: Option<crate::platform::macos::input_passthrough::MacInputPassthrough>,
+
+    // ---- profiling ---------------------------------------------------------
+    pub profiler: crate::profiling::FrameProfiler,
 }
 
 use crate::domain::app_registry::AppLaunchInfo;
@@ -430,7 +441,9 @@ impl App {
             settings: Settings::default(),
             settings_category: SettingsCategory::Apps,
             settings_scroll_rows: 0,
+            settings_scroll: ContinuousScroller::new(ContinuousConfig::default()),
             settings_slider_drag: None,
+            cached_settings_hit_map: None,
             last_redraw: None,
             last_frame_dt_ms: 0.0,
             visible: true,
@@ -444,6 +457,7 @@ impl App {
             _macos: None,
             #[cfg(target_os = "macos")]
             _macos_input: None,
+            profiler: crate::profiling::FrameProfiler::new(),
         }
     }
 }

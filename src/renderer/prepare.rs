@@ -27,12 +27,19 @@ use super::Renderer;
 fn shape_for(surface: &GlassSurface) -> GlassShape {
     let center = [surface.rect.center().x, surface.rect.center().y];
     let size = [surface.rect.width, surface.rect.height];
-    match surface.behavior {
+    let mut shape = match surface.behavior {
         GlassBehavior::Scrolling => GlassShape::rounded_rect(center, size, surface.radius),
         GlassBehavior::FixedFrame => GlassShape::fixed_rounded_rect(center, size, surface.radius),
         GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
         GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
-    }
+    };
+    shape = shape.with_activation(surface.activation);
+    // Pack the optional clip region into the per-shape clip fields.
+    // Sentinels: clip_rect = [0,0,0,0] (width <= 0) and clip_radius = 0.0
+    // mean "no clip" — the WGSL side checks clip_rect.z > 0.0.
+    let (clip_rect, clip_radius_packed) = clip_to_packed(&surface.clip);
+    shape = shape.with_clip(clip_rect, clip_radius_packed[0]);
+    shape
 }
 
 fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape {
@@ -42,7 +49,7 @@ fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape 
         tile.id == surface.id
             && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0
     });
-    if let Some(tile) = animated_parent {
+    let mut shape = if let Some(tile) = animated_parent {
         if surface.behavior == GlassBehavior::Control {
             GlassShape::animated_control_rounded_rect(
                 center,
@@ -59,8 +66,27 @@ fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape 
             )
         }
     } else {
-        shape_for(surface)
-    }
+        shape_for_geometry_only(surface)
+    };
+    // Propagate the optional clip region so grid/drag overlays respect the
+    // clip stack (e.g. Toggle thumb inside a scrollable settings panel).
+    let (clip_rect, clip_radius_packed) = clip_to_packed(&surface.clip);
+    shape = shape.with_clip(clip_rect, clip_radius_packed[0]);
+    shape
+}
+
+/// Like `shape_for` but without clip packing (used as a base by callers that
+/// apply clip themselves).
+fn shape_for_geometry_only(surface: &GlassSurface) -> GlassShape {
+    let center = [surface.rect.center().x, surface.rect.center().y];
+    let size = [surface.rect.width, surface.rect.height];
+    let shape = match surface.behavior {
+        GlassBehavior::Scrolling => GlassShape::rounded_rect(center, size, surface.radius),
+        GlassBehavior::FixedFrame => GlassShape::fixed_rounded_rect(center, size, surface.radius),
+        GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
+        GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
+    };
+    shape.with_activation(surface.activation)
 }
 
 /// The current Liquid Glass modal pass accepts one surface. Select the
@@ -98,15 +124,31 @@ fn control_kind(kind: &ControlKind) -> f32 {
 
 fn ink_instance(view: &InkView) -> Option<ControlInstance> {
     let kind = control_kind(&view.kind);
+    let clip = clip_to_packed(&view.clip);
     (kind >= 0.0).then_some(ControlInstance {
         center: [view.center.x, view.center.y],
         params: [view.extent, view.opacity, view.stroke, view.corner_radius],
         color: [view.color.r, view.color.g, view.color.b, view.color.a],
         kind: [kind, 0.0, 0.0, 0.0],
+        clip_rect: clip.0,
+        clip_radius: clip.1,
     })
 }
 
+/// Pack an optional ClipRegion into shader-facing (clip_rect, clip_radius) pairs.
+/// Returns sentinel (width <= 0) for None.
+fn clip_to_packed(clip: &Option<crate::ui_model::geometry::ClipRegion>) -> ([f32; 4], [f32; 4]) {
+    match clip {
+        Some(c) => (
+            [c.rect.x, c.rect.y, c.rect.width, c.rect.height],
+            [c.radius, 0.0, 0.0, 0.0],
+        ),
+        None => ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
+    }
+}
+
 fn glyph_quad(view: &GlyphView) -> GlyphQuad {
+    let clip = clip_to_packed(&view.clip);
     GlyphQuad {
         x: view.rect.x,
         y: view.rect.y,
@@ -117,6 +159,8 @@ fn glyph_quad(view: &GlyphView) -> GlyphQuad {
         u1: view.uv.u1,
         v1: view.uv.v1,
         color: [view.color.r, view.color.g, view.color.b, view.color.a],
+        clip_rect: clip.0,
+        clip_radius: clip.1,
     }
 }
 
@@ -494,6 +538,9 @@ mod tests {
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z,
+            clip: None,
+            activation: 0.0,
+            tint: None,
         }
     }
 
@@ -573,6 +620,7 @@ mod tests {
             color: Color::rgba(1.0, 0.9, 0.8, 0.7),
             kind: ControlKind::CloseButton,
             z: 3,
+            clip: None,
         };
         let packed = ink_instance(&view).unwrap();
         assert_eq!(packed.center, [12.25, 34.5]);
@@ -594,6 +642,7 @@ mod tests {
             },
             color: Color::rgba(0.5, 0.6, 0.7, 0.8),
             z: 2,
+            clip: None,
         };
         let packed = glyph_quad(&view);
         assert_eq!(

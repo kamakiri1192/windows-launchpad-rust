@@ -1,13 +1,17 @@
-use crate::layout::hit_map::{HitMap, HitRegion};
+use crate::layout::hit_map::HitRegion;
 use crate::layout::LayoutResult;
+use crate::scroll::ContinuousScroller;
+use crate::ui::context::Ui;
+use crate::ui::theme::Theme;
+use crate::ui::widgets::color_from_array;
+use crate::ui::widgets::{Button, ButtonStyle, Heading, IconButton, Label, Slider, Toggle};
 use crate::ui_model::geometry::{Point, Rect};
 use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    Color, ControlKind, ControlView, GlassBatch, GlassBehavior, GlassLayer, GlassMaterial,
-    GlassSurface, RenderModel,
+    ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, InkView,
 };
-use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
+use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextWeight};
 
 #[cfg(target_os = "macos")]
 pub const TITLE_FONT: &str = ".SF NS";
@@ -309,6 +313,7 @@ pub struct SettingsPanelInput {
     pub hidden_count: usize,
     pub progress: f32,
     /// Vertical scroll offset (in rows) for the Debug category.
+    /// Deprecated: Phase 4 migrates to pixel-based ContinuousScroller.
     pub scroll_rows: i32,
     /// Window decoration state (M-equivalent). Session-only.
     pub window_decorated: bool,
@@ -318,6 +323,10 @@ pub struct SettingsPanelInput {
     /// order given by `LiquidGlassDebugId` (disable flags first, then view
     /// overlays). `true` = the flag is currently on.
     pub liquid_glass_debug: LiquidGlassDebugState,
+    /// Current pointer position in logical pixels (for widget hover/press).
+    pub pointer_pos: Option<Point>,
+    /// Whether the primary pointer button is currently pressed.
+    pub pointer_pressed: bool,
 }
 
 /// Persisted Liquid Glass values forwarded from
@@ -486,201 +495,18 @@ pub fn hit_close(layout: &SettingsPanelLayout, scale_factor: f32, point: Point) 
     dx * dx + dy * dy <= hit_radius * hit_radius
 }
 
-pub fn hit_test(
-    layout: &SettingsPanelLayout,
-    scale_factor: f32,
-    category: SettingsCategoryId,
-    scroll_rows: i32,
-    point: Point,
-) -> SettingsPanelHit {
-    let scale = sanitize_scale(scale_factor);
-    let input_debug_scroll = scroll_rows;
-    if !contains(layout, point) {
-        return SettingsPanelHit::Outside;
-    }
-    if hit_close(layout, scale, point) {
-        return SettingsPanelHit::Close;
-    }
-
-    for (index, category) in SettingsCategoryId::ALL.iter().copied().enumerate() {
-        let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
-        if point.x >= layout.left + 12.0 * scale
-            && point.x <= layout.right_left - 12.0 * scale
-            && point.y >= row_top
-            && point.y <= row_top + SIDEBAR_ROW_H * scale
-        {
-            return SettingsPanelHit::Category(category);
-        }
-    }
-
-    if point.x < layout.right_left {
-        return SettingsPanelHit::Inside;
-    }
-
-    let content_left = layout.content_left(scale);
-    let (row_w, row_h) = layout.row_size(scale);
-    let first_top = layout.first_row_top(scale);
-
-    match category {
-        SettingsCategoryId::Apps => {
-            let segment_top = first_top + 44.0 * scale;
-            let segment_h = SEGMENT_H * scale;
-            if point.y >= segment_top && point.y <= segment_top + segment_h {
-                let gap = SEGMENT_GAP * scale;
-                let each_w = (row_w - gap * 3.0) / 4.0;
-                for (index, order) in SortOrderId::ALL.iter().copied().enumerate() {
-                    let left = content_left + index as f32 * (each_w + gap);
-                    if point.x >= left && point.x <= left + each_w {
-                        return SettingsPanelHit::Sort(order);
-                    }
-                }
-            }
-            let frequent_top = first_top + ROW_STEP * scale;
-            if point_in_row(point, content_left, frequent_top, row_w, row_h) {
-                return SettingsPanelHit::FrequentToggle;
-            }
-            let hidden_top = first_top + ROW_STEP * 2.0 * scale;
-            if point_in_row(point, content_left, hidden_top, row_w, row_h) {
-                return SettingsPanelHit::SteamToggle;
-            }
-            let hidden_top = first_top + ROW_STEP * 3.0 * scale;
-            if point_in_row(point, content_left, hidden_top, row_w, row_h) {
-                return SettingsPanelHit::Inside;
-            }
-        }
-        SettingsCategoryId::Search => {
-            if point_in_row(point, content_left, first_top, row_w, row_h) {
-                return SettingsPanelHit::SearchHiddenToggle;
-            }
-        }
-        SettingsCategoryId::Debug => {
-            let scroll = input_debug_scroll;
-            // Walk every Debug row; the first visible row whose on-screen Y
-            // contains the point wins. Section headers are not interactive.
-            // Slider rows additionally expose a reset-arrow hit area on the
-            // right and a track hit area covering the rest of the row.
-            for i in 0..DEBUG_CATEGORY_ROW_COUNT {
-                if !debug_row_is_visible(layout, scale, scroll, i) {
-                    continue;
-                }
-                let row_y = debug_row_y(layout, scale, scroll, i);
-                if !point_in_row(point, content_left, row_y, row_w, row_h) {
-                    continue;
-                }
-                return debug_classify_row_hit(layout, scale, i, point);
-            }
-            // Scroll affordances: a narrow hit strip along the panel's bottom
-            // edge scrolls down, and along the top edge (just below the title)
-            // scrolls up. Only active when scrolling is possible.
-            let max_scroll = debug_category_overflow_rows();
-            if max_scroll > 0 {
-                let top_strip = first_top - 6.0 * scale;
-                let bottom_strip = layout.panel_bottom() - 12.0 * scale;
-                if point.x >= content_left
-                    && point.x <= layout.content_right(scale)
-                    && point.y >= top_strip
-                    && point.y < first_top
-                {
-                    return SettingsPanelHit::ScrollUp;
-                }
-                if point.x >= content_left
-                    && point.x <= layout.content_right(scale)
-                    && point.y >= bottom_strip
-                    && point.y <= layout.panel_bottom()
-                {
-                    return SettingsPanelHit::ScrollDown;
-                }
-            }
-        }
-        SettingsCategoryId::System => {
-            // Row 0: FPS overlay toggle.
-            if point_in_row(point, content_left, first_top, row_w, row_h) {
-                return SettingsPanelHit::FpsToggle;
-            }
-            // Row 1: Reset cache action.
-            let reset_cache_top = first_top + ROW_STEP * scale;
-            if point_in_row(point, content_left, reset_cache_top, row_w, row_h) {
-                return SettingsPanelHit::ResetCache;
-            }
-            // Row 2: Reset settings action.
-            let reset_settings_top = first_top + ROW_STEP * scale * 2.0;
-            if point_in_row(point, content_left, reset_settings_top, row_w, row_h) {
-                return SettingsPanelHit::ResetSettings;
-            }
-        }
-        SettingsCategoryId::About => {}
-    }
-
-    SettingsPanelHit::Inside
-}
-
-pub fn build(input: SettingsPanelInput) -> SettingsPanelModel {
-    let hidden_count_label = format!("{} hidden", input.hidden_count);
-    let copy = SettingsPanelCopy {
-        title: "Settings",
-        categories: [
-            (SettingsCategoryId::Apps, "Apps"),
-            (SettingsCategoryId::Search, "Search"),
-            (SettingsCategoryId::System, "System"),
-            (SettingsCategoryId::About, "About"),
-            (SettingsCategoryId::Debug, "Debug"),
-        ],
-        sort_orders: [
-            (SortOrderId::Name, "Name"),
-            (SortOrderId::Manual, "Manual"),
-            (SortOrderId::Recent, "Recent"),
-            (SortOrderId::Frequent, "Frequent"),
-        ],
-        sort_label: "Sort",
-        frequent_apps_label: "Frequent apps",
-        frequent_apps_detail: "Show frequently used apps on the home screen.",
-        steam_apps_label: "Steam apps",
-        steam_apps_detail: "Show installed Steam games and applications.",
-        hidden_apps_label: "Hidden apps",
-        hidden_count_label: &hidden_count_label,
-        search_hidden_label: "Include hidden apps in search",
-        search_hidden_detail: "Show hidden apps only while searching.",
-        debug_label: "Developer shortcuts",
-        debug_detail: "Enable single-key debug shortcuts.",
-        show_fps_label: "Show FPS",
-        show_fps_detail: "Display the frame rate in the top-right corner.",
-        reset_cache_label: "Reset cache",
-        reset_cache_detail: "Extract icons again.",
-        reset_settings_label: "Reset settings",
-        reset_settings_detail: "Restore order, hidden apps, and settings.",
-        version_label: "Version",
-        version_value: env!("CARGO_PKG_VERSION"),
-        debug_section_window: "Window",
-        debug_section_liquid_glass: "Liquid Glass",
-        debug_section_debug_views: "Debug views",
-        debug_window_decorations_label: "Window decorations",
-        debug_window_decorations_detail: "Show the OS title bar and resize edges.",
-        debug_icon_cache_label: "Rebuild icon cache",
-        debug_icon_cache_detail: "Re-extract every icon live.",
-        debug_lg_enabled_label: "Enable Liquid Glass",
-        debug_lg_enabled_detail: "Master switch for the glass effect.",
-        debug_lg_thickness_label: "Thickness",
-        debug_lg_refractive_index_label: "Refractive index",
-        debug_lg_saturation_label: "Saturation",
-        debug_lg_chromatic_aberration_label: "Chromatic aberration",
-        debug_lg_blur_radius_label: "Blur radius",
-        debug_lg_disable_chromatic_aberration_label: "Disable chromatic aberration",
-        debug_lg_disable_edge_lighting_label: "Disable edge lighting",
-        debug_lg_disable_blur_label: "Disable blur",
-        debug_lg_reset_all_label: "Reset Liquid Glass to defaults",
-        debug_lg_reset_all_detail: "Restore the coded baseline parameters.",
-        debug_lg_show_backdrop_texture_label: "Show backdrop texture",
-        debug_lg_show_geometry_texture_label: "Show geometry texture",
-        debug_lg_show_displacement_label: "Show displacement",
-        debug_lg_show_alpha_mask_label: "Show alpha mask",
-        debug_lg_show_final_glass_only_label: "Show final glass only",
-    };
-    build_with_copy(input, &copy)
-}
-
-pub fn build_with_copy(
+/// Build the settings panel using the new Liquid Glass UI foundation
+/// (Phase 4). This replaces the manual coordinate-calculation approach of
+/// `build_with_copy` with an immediate-mode `Ui` context and widgets.
+///
+/// `scroll` is the Debug-category's continuous scroller (owned by `App`).
+/// The output `SettingsPanelModel` is compatible with the existing app-side
+/// rendering adapter, which transforms the ink/text views by `visual_scale`
+/// and `visual_alpha` for the pop animation.
+pub fn build_with_ui(
     input: SettingsPanelInput,
     copy: &SettingsPanelCopy<'_>,
+    scroll: &mut ContinuousScroller,
 ) -> SettingsPanelModel {
     let scale = sanitize_scale(input.scale_factor);
     let layout = panel_layout(input.viewport, scale);
@@ -688,28 +514,43 @@ pub fn build_with_copy(
     let pop = pop_progress(raw_progress);
     let visual_scale = 0.935 + 0.065 * pop;
     let visual_alpha = alpha(raw_progress);
-    let mut render = RenderModel::new();
-    let mut hits = HitMap::new();
 
-    render.glass.push(GlassBatch {
-        layer: GlassLayer::Modal,
-        surfaces: vec![GlassSurface {
+    let theme = Theme {
+        scale_factor: scale,
+        ..Default::default()
+    };
+    let mut ui = Ui::new(theme, input.viewport.0 as f32, input.viewport.1 as f32);
+    ui.set_pointer(input.pointer_pos);
+    ui.set_pointer_pressed(input.pointer_pressed);
+
+    // ------------------------------------------------------------------
+    // Panel glass background (scaled for pop animation)
+    // ------------------------------------------------------------------
+    ui.push_glass(
+        GlassLayer::Modal,
+        GlassSurface {
             id: UiId::settings_panel(),
             rect: scaled_rect_around_center(&layout, visual_scale),
             radius: layout.radius * visual_scale,
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z: Z_PANEL,
-        }],
-    });
+            clip: None,
+            activation: 0.0,
+            tint: None,
+        },
+    );
 
-    hits.push(HitRegion::rect_inclusive(
+    // ------------------------------------------------------------------
+    // Backdrop + panel hit regions
+    // ------------------------------------------------------------------
+    ui.push_hit(HitRegion::rect_inclusive(
         UiId::backdrop("settings-modal"),
         Rect::new(0.0, 0.0, input.viewport.0 as f32, input.viewport.1 as f32),
         HitTarget::modal_dismiss_backdrop(),
         Z_BACKDROP,
     ));
-    hits.push(HitRegion::rect_inclusive(
+    ui.push_hit(HitRegion::rect_inclusive(
         UiId::settings_panel(),
         layout.rect(),
         HitTarget::Settings {
@@ -718,15 +559,524 @@ pub fn build_with_copy(
         Z_PANEL,
     ));
 
-    push_static_controls(&mut render, &layout, scale, input);
-    push_text_views(&mut render, &layout, scale, input, copy);
-    push_hit_regions(&mut hits, &layout, scale, input.category, input.scroll_rows);
+    // ------------------------------------------------------------------
+    // Title
+    // ------------------------------------------------------------------
+    ui.begin_absolute_placement();
+    ui.set_cursor(layout.left + 24.0 * scale, layout.top + 18.0 * scale);
+    ui.set_available_width(layout.hw * 2.0 - 48.0 * scale);
+    ui.label(
+        &Label::new(copy.title)
+            .id(UiId::settings_row("text-title"))
+            .style(TextStyle::new(
+                TextRole::SettingsTitle,
+                TITLE_SIZE,
+                color_from_array(INK),
+                TextWeight::Regular,
+                TextAlign::Start,
+            ))
+            .color(INK),
+    );
+
+    // ------------------------------------------------------------------
+    // Close button
+    // ------------------------------------------------------------------
+    let (close_cx, close_cy) = layout.close_center(scale);
+    let close_hit_r = CLOSE_HIT_HALF * scale;
+    ui.begin_absolute_placement();
+    ui.set_cursor(close_cx - close_hit_r, close_cy - close_hit_r);
+    ui.icon_button(
+        &IconButton::new(ControlKind::CloseButton)
+            .id(UiId::settings_close())
+            .visual_radius(CLOSE_HALF)
+            .hit_radius(CLOSE_HIT_HALF)
+            .tint(INK)
+            .hit_target(SettingsPanelHit::Close.target()),
+    );
+
+    // ------------------------------------------------------------------
+    // Sidebar vertical divider (InkView directly — Divider widget is
+    // horizontal only)
+    // ------------------------------------------------------------------
+    let sidebar_div = InkView {
+        id: UiId::settings_row("sidebar-divider"),
+        center: Point::new(layout.right_left, layout.cy),
+        extent: 0.55 * scale,
+        opacity: DIM[3],
+        scene_blur: 0.0,
+        stroke: layout.hh - 28.0 * scale,
+        corner_radius: 0.55 * scale,
+        color: color_from_array(DIM),
+        kind: ControlKind::Divider,
+        z: Z_CONTROL,
+        clip: None,
+    };
+    ui.push_ink(sidebar_div);
+
+    // ------------------------------------------------------------------
+    // Sidebar category buttons
+    // ------------------------------------------------------------------
+    for (index, (cat_id, label)) in copy.categories.iter().copied().enumerate() {
+        let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
+        let sidebar_w = layout.sidebar_w - 24.0 * scale;
+        let selected = cat_id == input.category;
+
+        ui.begin_absolute_placement();
+        ui.set_cursor(layout.left + 12.0 * scale, row_top);
+        ui.set_available_width(sidebar_w);
+        ui.button(
+            &Button::new(label)
+                .id(UiId::settings_row(format!("category-{}", cat_id.key())))
+                .style(if selected {
+                    ButtonStyle::Prominent
+                } else {
+                    ButtonStyle::Plain
+                })
+                .chevron_opt(false)
+                .hit_target(SettingsPanelHit::Category(cat_id).target()),
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Content area
+    // ------------------------------------------------------------------
+    let content_left = layout.content_left(scale);
+    let content_right = layout.content_right(scale);
+    let content_w = content_right - content_left;
+    let first_top = layout.first_row_top(scale);
+    let row_h = ROW_H * scale;
+
+    // Category heading
+    let cat_label = copy
+        .categories
+        .iter()
+        .find_map(|(cat, lbl)| (*cat == input.category).then_some(*lbl))
+        .unwrap_or(input.category.key());
+    ui.begin_absolute_placement();
+    ui.set_cursor(content_left, layout.top + 32.0 * scale);
+    ui.set_available_width(content_w);
+    ui.heading(&Heading::new(cat_label).id(UiId::settings_row("category-heading")));
+
+    match input.category {
+        // ==============================================================
+        // Apps
+        // ==============================================================
+        SettingsCategoryId::Apps => {
+            let segment_top = first_top + 44.0 * scale;
+            let gap = SEGMENT_GAP * scale;
+            let each_w = (content_w - gap * 3.0) / 4.0;
+
+            // Sort label
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, first_top - 8.0 * scale);
+            ui.set_available_width(content_w);
+            ui.label(
+                &Label::new(copy.sort_label)
+                    .id(UiId::settings_row("text-sort-label"))
+                    .color(INK),
+            );
+
+            // Sort segment buttons
+            for (seg_idx, (order, label)) in copy.sort_orders.iter().copied().enumerate() {
+                let left = content_left + seg_idx as f32 * (each_w + gap);
+                ui.begin_absolute_placement();
+                ui.set_cursor(left, segment_top);
+                ui.set_available_width(each_w);
+                ui.button(
+                    &Button::new(label)
+                        .id(UiId::settings_row(format!("sort-{}", order.key())))
+                        .style(if input.sort_order == order {
+                            ButtonStyle::Prominent
+                        } else {
+                            ButtonStyle::Plain
+                        })
+                        .chevron_opt(false)
+                        .hit_target(SettingsPanelHit::Sort(order).target()),
+                );
+            }
+
+            // Frequent apps toggle
+            let y = first_top + ROW_STEP * scale;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.toggle(
+                &Toggle::new(input.frequent_apps_enabled)
+                    .id(UiId::settings_row("toggle-frequent-apps"))
+                    .label(copy.frequent_apps_label)
+                    .detail(copy.frequent_apps_detail)
+                    .hit_target(SettingsPanelHit::FrequentToggle.target()),
+            );
+
+            // Steam apps toggle
+            let y = first_top + ROW_STEP * 2.0 * scale;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.toggle(
+                &Toggle::new(input.show_steam_apps)
+                    .id(UiId::settings_row("toggle-steam-apps"))
+                    .label(copy.steam_apps_label)
+                    .detail(copy.steam_apps_detail)
+                    .hit_target(SettingsPanelHit::SteamToggle.target()),
+            );
+
+            // Hidden apps row (chevron, no toggle)
+            let y = first_top + ROW_STEP * 3.0 * scale;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.button(
+                &Button::new(copy.hidden_apps_label)
+                    .id(UiId::settings_row("hidden-apps"))
+                    .chevron_opt(true),
+            );
+            // Hidden count text (right-aligned, overlaid on the row)
+            ui.begin_absolute_placement();
+            ui.set_cursor(
+                content_right - 32.0 * scale,
+                y + row_h * 0.5 - LABEL_LINE * scale * 0.5,
+            );
+            ui.label(
+                &Label::new(copy.hidden_count_label)
+                    .id(UiId::settings_row("text-hidden-apps-count"))
+                    .color(MUTED)
+                    .align(TextAlign::End),
+            );
+        }
+
+        // ==============================================================
+        // Search
+        // ==============================================================
+        SettingsCategoryId::Search => {
+            let y = first_top;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.toggle(
+                &Toggle::new(input.search_includes_hidden)
+                    .id(UiId::settings_row("toggle-search-hidden"))
+                    .label(copy.search_hidden_label)
+                    .detail(copy.search_hidden_detail)
+                    .hit_target(SettingsPanelHit::SearchHiddenToggle.target()),
+            );
+        }
+
+        // ==============================================================
+        // System
+        // ==============================================================
+        SettingsCategoryId::System => {
+            // FPS toggle
+            let y = first_top;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.toggle(
+                &Toggle::new(input.show_fps)
+                    .id(UiId::settings_row("toggle-show-fps"))
+                    .label(copy.show_fps_label)
+                    .detail(copy.show_fps_detail)
+                    .hit_target(SettingsPanelHit::FpsToggle.target()),
+            );
+
+            // Reset cache button
+            let y = first_top + ROW_STEP * scale;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.button(
+                &Button::new(copy.reset_cache_label)
+                    .id(UiId::settings_row("reset-cache"))
+                    .detail(copy.reset_cache_detail)
+                    .chevron_opt(true)
+                    .hit_target(SettingsPanelHit::ResetCache.target()),
+            );
+
+            // Reset settings button
+            let y = first_top + ROW_STEP * 2.0 * scale;
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.button(
+                &Button::new(copy.reset_settings_label)
+                    .id(UiId::settings_row("reset-settings"))
+                    .detail(copy.reset_settings_detail)
+                    .chevron_opt(true)
+                    .hit_target(SettingsPanelHit::ResetSettings.target()),
+            );
+        }
+
+        // ==============================================================
+        // About
+        // ==============================================================
+        SettingsCategoryId::About => {
+            let y = first_top;
+            // Version row background
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, y);
+            ui.set_available_width(content_w);
+            ui.button(
+                &Button::new(copy.version_label)
+                    .id(UiId::settings_row("version"))
+                    .chevron_opt(false),
+            );
+            // Version value (right-aligned)
+            ui.begin_absolute_placement();
+            ui.set_cursor(
+                content_right - 16.0 * scale,
+                y + row_h * 0.5 - LABEL_LINE * scale * 0.5,
+            );
+            ui.label(
+                &Label::new(copy.version_value)
+                    .id(UiId::settings_row("text-version-value"))
+                    .color(MUTED)
+                    .align(TextAlign::End),
+            );
+        }
+
+        // ==============================================================
+        // Debug (scrollable)
+        // ==============================================================
+        SettingsCategoryId::Debug => {
+            let scroll_id = UiId::named("settings.debug.scroll");
+            let debug_viewport_h = layout.panel_bottom() - first_top;
+
+            ui.begin_absolute_placement();
+            ui.set_cursor(content_left, first_top);
+            ui.set_available_width(content_w);
+            ui.set_available_height(Some(debug_viewport_h));
+
+            ui.scroll_view(scroll_id, scroll, |ui| {
+                let cw = ui.available_width;
+
+                // Row 0: Debug keys toggle
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.debug_keys_enabled)
+                        .id(UiId::settings_row("toggle-debug"))
+                        .label(copy.debug_label)
+                        .detail(copy.debug_detail)
+                        .hit_target(SettingsPanelHit::DebugToggle.target()),
+                );
+
+                // Section header: Window
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.spacer(8.0 * scale);
+                ui.heading(
+                    &Heading::new(copy.debug_section_window)
+                        .id(UiId::settings_row("debug-section-0")),
+                );
+                ui.spacer(2.0 * scale);
+
+                // Row 1: Window decorations toggle
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.window_decorated)
+                        .id(UiId::settings_row("toggle-window-decorations"))
+                        .label(copy.debug_window_decorations_label)
+                        .detail(copy.debug_window_decorations_detail)
+                        .hit_target(SettingsPanelHit::WindowDecorations.target()),
+                );
+
+                // Row 2: Icon cache rebuild button
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.button(
+                    &Button::new(copy.debug_icon_cache_label)
+                        .id(UiId::settings_row("debug-icon-cache"))
+                        .detail(copy.debug_icon_cache_detail)
+                        .chevron_opt(true)
+                        .hit_target(SettingsPanelHit::ResetCache.target()),
+                );
+
+                // Section header: Liquid Glass
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.spacer(8.0 * scale);
+                ui.heading(
+                    &Heading::new(copy.debug_section_liquid_glass)
+                        .id(UiId::settings_row("debug-section-1")),
+                );
+                ui.spacer(2.0 * scale);
+
+                // Row 3: Liquid Glass master toggle
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.liquid_glass.enabled)
+                        .id(UiId::settings_row("toggle-lg-enabled"))
+                        .label(copy.debug_lg_enabled_label)
+                        .detail(copy.debug_lg_enabled_detail)
+                        .hit_target(SettingsPanelHit::LiquidGlassEnabled.target()),
+                );
+
+                // Rows 4-8: Liquid Glass parameter sliders
+                let param_labels: [(LiquidGlassParamId, &str); 5] = [
+                    (LiquidGlassParamId::Thickness, copy.debug_lg_thickness_label),
+                    (
+                        LiquidGlassParamId::RefractiveIndex,
+                        copy.debug_lg_refractive_index_label,
+                    ),
+                    (
+                        LiquidGlassParamId::Saturation,
+                        copy.debug_lg_saturation_label,
+                    ),
+                    (
+                        LiquidGlassParamId::ChromaticAberration,
+                        copy.debug_lg_chromatic_aberration_label,
+                    ),
+                    (
+                        LiquidGlassParamId::BlurRadius,
+                        copy.debug_lg_blur_radius_label,
+                    ),
+                ];
+                for (param_id, label) in param_labels {
+                    let value = input.liquid_glass.get(param_id);
+                    let (min, max) = param_id.range();
+                    ui.begin_absolute_placement();
+                    ui.set_available_width(cw);
+                    ui.slider(
+                        &Slider::new(value, (min, max))
+                            .id(UiId::settings_row(format!("slider-{}", param_id.key())))
+                            .label(label)
+                            .reset_opt(true)
+                            .hit_target(SettingsPanelHit::LiquidGlassParam(param_id).target())
+                            .hit_target_reset(
+                                SettingsPanelHit::LiquidGlassParamReset(param_id).target(),
+                            ),
+                    );
+                }
+
+                // Rows 9-11: Disable-flag toggles
+                let disable_items = [
+                    (
+                        LiquidGlassDebugId::DisableChromaticAberration,
+                        copy.debug_lg_disable_chromatic_aberration_label,
+                        input.liquid_glass_debug.disable_chromatic_aberration,
+                    ),
+                    (
+                        LiquidGlassDebugId::DisableEdgeLighting,
+                        copy.debug_lg_disable_edge_lighting_label,
+                        input.liquid_glass_debug.disable_edge_lighting,
+                    ),
+                    (
+                        LiquidGlassDebugId::DisableBlur,
+                        copy.debug_lg_disable_blur_label,
+                        input.liquid_glass_debug.disable_blur,
+                    ),
+                ];
+                for (flag_id, label, state) in disable_items {
+                    ui.begin_absolute_placement();
+                    ui.set_available_width(cw);
+                    ui.toggle(
+                        &Toggle::new(state)
+                            .id(UiId::settings_row(format!(
+                                "toggle-lg-disable-{}",
+                                flag_id.key()
+                            )))
+                            .label(label)
+                            .hit_target(SettingsPanelHit::LiquidGlassDebug(flag_id).target()),
+                    );
+                }
+
+                // Row 12: Reset-all button
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.button(
+                    &Button::new(copy.debug_lg_reset_all_label)
+                        .id(UiId::settings_row("reset-lg-all"))
+                        .detail(copy.debug_lg_reset_all_detail)
+                        .chevron_opt(true)
+                        .hit_target(SettingsPanelHit::LiquidGlassResetAll.target()),
+                );
+
+                // Section header: Debug views
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.spacer(8.0 * scale);
+                ui.heading(
+                    &Heading::new(copy.debug_section_debug_views)
+                        .id(UiId::settings_row("debug-section-2")),
+                );
+                ui.spacer(2.0 * scale);
+
+                // Rows 13-17: Debug-view toggles
+                let view_items = [
+                    (
+                        LiquidGlassDebugId::ShowBackdropTexture,
+                        copy.debug_lg_show_backdrop_texture_label,
+                        input.liquid_glass_debug.show_backdrop_texture,
+                    ),
+                    (
+                        LiquidGlassDebugId::ShowGeometryTexture,
+                        copy.debug_lg_show_geometry_texture_label,
+                        input.liquid_glass_debug.show_geometry_texture,
+                    ),
+                    (
+                        LiquidGlassDebugId::ShowDisplacement,
+                        copy.debug_lg_show_displacement_label,
+                        input.liquid_glass_debug.show_displacement,
+                    ),
+                    (
+                        LiquidGlassDebugId::ShowAlphaMask,
+                        copy.debug_lg_show_alpha_mask_label,
+                        input.liquid_glass_debug.show_alpha_mask,
+                    ),
+                    (
+                        LiquidGlassDebugId::ShowFinalGlassOnly,
+                        copy.debug_lg_show_final_glass_only_label,
+                        input.liquid_glass_debug.show_final_glass_only,
+                    ),
+                ];
+                for (flag_id, label, state) in view_items {
+                    ui.begin_absolute_placement();
+                    ui.set_available_width(cw);
+                    ui.toggle(
+                        &Toggle::new(state)
+                            .id(UiId::settings_row(format!(
+                                "toggle-lg-view-{}",
+                                flag_id.key()
+                            )))
+                            .label(label)
+                            .hit_target(SettingsPanelHit::LiquidGlassDebug(flag_id).target()),
+                    );
+                }
+            });
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Bottom divider
+    // ------------------------------------------------------------------
+    let panel_bottom = layout.panel_bottom();
+    let bottom_div = InkView {
+        id: UiId::settings_row("bottom-divider"),
+        center: Point::new(layout.cx, panel_bottom - 56.0 * scale),
+        extent: 0.45 * scale,
+        opacity: DIM[3],
+        scene_blur: 0.0,
+        stroke: layout.hw - 26.0 * scale,
+        corner_radius: 0.45 * scale,
+        color: color_from_array(DIM),
+        kind: ControlKind::Divider,
+        z: Z_CONTROL,
+        clip: None,
+    };
+    ui.push_ink(bottom_div);
+
+    // ------------------------------------------------------------------
+    // Assemble the model
+    // ------------------------------------------------------------------
+    let result = ui.into_layout_result();
 
     SettingsPanelModel {
         layout,
         visual_scale,
         visual_alpha,
-        result: LayoutResult::new(render, hits),
+        result,
     }
 }
 
@@ -821,129 +1171,23 @@ pub fn debug_category_overflow_rows() -> i32 {
     (total - visible).ceil() as i32 - 1
 }
 
-/// Y position (in logical content space, *before* the scroll offset is
-/// applied) of the top of row `i` within the Debug category.
-pub fn debug_row_y_unscrolled(layout: &SettingsPanelLayout, scale: f32, i: i32) -> f32 {
-    layout.first_row_top(scale) + i as f32 * row_step(scale)
-}
-
-/// On-screen Y of row `i` after applying the scroll offset. Negative values
-/// mean the row is scrolled above the visible region (and must be skipped
-/// during rendering so it does not leak into the title bar).
-pub fn debug_row_y(layout: &SettingsPanelLayout, scale: f32, scroll_rows: i32, i: i32) -> f32 {
-    debug_row_y_unscrolled(layout, scale, i) - scroll_rows as f32 * row_step(scale)
-}
-
-/// Y position of the section header that sits between row `after` and
-/// `after + 1` (e.g. `after = 0` for the first header). Rendered at a
-/// half-row offset above row `after + 1`.
-pub fn debug_section_header_y(
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    scroll_rows: i32,
-    after: i32,
-) -> f32 {
-    let step = row_step(scale);
-    let unscrolled = layout.first_row_top(scale) + (after as f32 + 1.0) * step - step * 0.5;
-    unscrolled - scroll_rows as f32 * step
-}
-
-/// True when a row's on-screen Y is within the visible content region (i.e.
-/// not scrolled out of view). Used to suppress rendering / hit-testing of
-/// clipped rows in lieu of a real clip primitive.
-pub fn debug_row_is_visible(
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    scroll_rows: i32,
-    i: i32,
-) -> bool {
-    let y = debug_row_y(layout, scale, scroll_rows, i);
-    let top = layout.first_row_top(scale) - 2.0;
-    let bottom = layout.panel_bottom() - ROW_H * scale;
-    y >= top && y <= bottom
-}
-
-// ----- Debug-category row index map -----------------------------------
-
-/// Row index of the master debug-keys toggle (`debug_keys_enabled`).
-pub const DEBUG_ROW_KEYS: i32 = 0;
-/// Row index of the window-decorations toggle (M).
-pub const DEBUG_ROW_WINDOW_DECORATIONS: i32 = 1;
-/// Row index of the icon-cache rebuild action (R).
-pub const DEBUG_ROW_ICON_CACHE: i32 = 2;
-/// Row index of the Liquid Glass master toggle (V).
-pub const DEBUG_ROW_LG_ENABLED: i32 = 3;
-/// First slider row index (thickness). The five parameters occupy rows
-/// `DEBUG_ROW_LG_PARAM_FIRST .. DEBUG_ROW_LG_PARAM_FIRST + 5`.
-pub const DEBUG_ROW_LG_PARAM_FIRST: i32 = 4;
-/// Row index of the "disable chromatic aberration" toggle (C).
-pub const DEBUG_ROW_LG_DISABLE_CHROMA: i32 = 9;
-/// Row index of the "disable edge lighting" toggle (E).
-pub const DEBUG_ROW_LG_DISABLE_EDGE: i32 = 10;
-/// Row index of the "disable blur" toggle (L).
-pub const DEBUG_ROW_LG_DISABLE_BLUR: i32 = 11;
-/// Row index of the "reset Liquid Glass to defaults" button.
-pub const DEBUG_ROW_LG_RESET_ALL: i32 = 12;
-/// First debug-view row index (show backdrop texture). The five view toggles
-/// occupy rows `DEBUG_ROW_LG_VIEW_FIRST .. DEBUG_ROW_LG_VIEW_FIRST + 5`.
-pub const DEBUG_ROW_LG_VIEW_FIRST: i32 = 13;
-
-/// Row index for a slider parameter.
-pub fn debug_param_row(id: LiquidGlassParamId) -> i32 {
-    DEBUG_ROW_LG_PARAM_FIRST
-        + match id {
-            LiquidGlassParamId::Thickness => 0,
-            LiquidGlassParamId::RefractiveIndex => 1,
-            LiquidGlassParamId::Saturation => 2,
-            LiquidGlassParamId::ChromaticAberration => 3,
-            LiquidGlassParamId::BlurRadius => 4,
-        }
-}
-
-/// Row index for a debug-view toggle (B/G/D/A/F).
-pub fn debug_view_row(id: LiquidGlassDebugId) -> i32 {
-    match id {
-        LiquidGlassDebugId::ShowBackdropTexture => DEBUG_ROW_LG_VIEW_FIRST,
-        LiquidGlassDebugId::ShowGeometryTexture => DEBUG_ROW_LG_VIEW_FIRST + 1,
-        LiquidGlassDebugId::ShowDisplacement => DEBUG_ROW_LG_VIEW_FIRST + 2,
-        LiquidGlassDebugId::ShowAlphaMask => DEBUG_ROW_LG_VIEW_FIRST + 3,
-        LiquidGlassDebugId::ShowFinalGlassOnly => DEBUG_ROW_LG_VIEW_FIRST + 4,
-        _ => DEBUG_ROW_LG_VIEW_FIRST,
-    }
-}
-
 /// Slider X geometry for a row: `(track_left, track_width, knob_radius,
 /// reset_center_x, reset_radius)`. All in logical px relative to the panel
-/// content area. The slider lives in the right half of a row, with the reset
-/// arrow just to the right of the track.
+/// content area. Delegates to the widget-side [`Slider::geometry`] so hit
+/// testing and rendering share identical coordinate math.
 pub fn debug_slider_geometry(
     layout: &SettingsPanelLayout,
     scale: f32,
 ) -> (f32, f32, f32, f32, f32) {
     let content_right = layout.content_right(scale);
-    let reset_radius = 9.0 * scale;
-    let gap = 10.0 * scale;
-    let track_right = content_right - reset_radius * 2.0 - gap;
-    let track_width = 120.0 * scale;
-    let track_left = track_right - track_width;
-    let knob_radius = 7.5 * scale;
-    (
-        track_left,
-        track_width,
-        knob_radius,
-        content_right - reset_radius,
-        reset_radius,
-    )
-}
-
-/// Slider half-height (the track's vertical radius), in logical px.
-pub fn debug_slider_track_half_h(scale: f32) -> f32 {
-    2.5 * scale
+    let (track_left, track_width, knob_radius, reset_cx, reset_r, _track_hh) =
+        Slider::geometry(content_right, scale);
+    (track_left, track_width, knob_radius, reset_cx, reset_r)
 }
 
 /// Convert a pointer X (logical, content-space) to a slider value for the
-/// given parameter id and current Liquid Glass values. Returns the clamped
-/// value.
+/// given parameter id. Delegates to the widget-side [`Slider::value_from_pointer`]
+/// so drag and hit testing share identical coordinate math.
 pub fn debug_slider_value_from_pointer(
     layout: &SettingsPanelLayout,
     scale: f32,
@@ -951,921 +1195,7 @@ pub fn debug_slider_value_from_pointer(
     id: LiquidGlassParamId,
 ) -> f32 {
     let (track_left, track_width, _, _, _) = debug_slider_geometry(layout, scale);
-    let (min, max) = id.range();
-    let t = ((pointer_x - track_left) / track_width).clamp(0.0, 1.0);
-    min + (max - min) * t
-}
-
-/// Emit a section header text at the half-row offset above row `after + 1`.
-/// No-op when the header is scrolled out of view.
-fn debug_section_text(
-    render: &mut RenderModel,
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    scroll: i32,
-    label: &str,
-    after: i32,
-) {
-    let y = debug_section_header_y(layout, scale, scroll, after);
-    let top = layout.first_row_top(scale) - 2.0;
-    let bottom = layout.panel_bottom() - ROW_H * scale;
-    if y < top || y > bottom {
-        return;
-    }
-    let id_str = format!("debug-section-{}", after);
-    let id = UiId::settings_row(&id_str);
-    render.text.push(TextView {
-        id,
-        text: label.to_string(),
-        rect: Rect::new(
-            layout.content_left(scale),
-            y,
-            layout.content_right(scale) - layout.content_left(scale),
-            HEADER_LINE * scale,
-        ),
-        style: TextStyle {
-            role: TextRole::SettingsHeader,
-            size: HEADER_SIZE,
-            color: Color::rgba(MUTED[0], MUTED[1], MUTED[2], MUTED[3]),
-            weight: TextWeight::Medium,
-            align: TextAlign::Start,
-        },
-        z: Z_CONTROL + 1,
-    });
-}
-
-/// Classify a hit that landed inside Debug row `i`. Slider rows split into
-/// the reset-arrow hit area (right) and the slider track hit area (the rest
-/// of the row); all other rows map 1:1 to a hit variant.
-pub fn debug_classify_row_hit(
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    i: i32,
-    point: Point,
-) -> SettingsPanelHit {
-    // Slider rows: DEBUG_ROW_LG_PARAM_FIRST .. +5
-    if (DEBUG_ROW_LG_PARAM_FIRST..DEBUG_ROW_LG_PARAM_FIRST + 5).contains(&i) {
-        let id = LiquidGlassParamId::ALL[(i - DEBUG_ROW_LG_PARAM_FIRST) as usize];
-        let (_, _, _, reset_cx, reset_r) = debug_slider_geometry(layout, scale);
-        let dx = point.x - reset_cx;
-        let row_center_y = debug_row_y(layout, scale, /*scroll=*/ 0, i) + ROW_H * scale * 0.5;
-        let dy = point.y - row_center_y;
-        if dx * dx + dy * dy <= (reset_r * 1.6) * (reset_r * 1.6) {
-            return SettingsPanelHit::LiquidGlassParamReset(id);
-        }
-        return SettingsPanelHit::LiquidGlassParam(id);
-    }
-    match i {
-        DEBUG_ROW_KEYS => SettingsPanelHit::DebugToggle,
-        DEBUG_ROW_WINDOW_DECORATIONS => SettingsPanelHit::WindowDecorations,
-        DEBUG_ROW_ICON_CACHE => SettingsPanelHit::ResetCache,
-        DEBUG_ROW_LG_ENABLED => SettingsPanelHit::LiquidGlassEnabled,
-        DEBUG_ROW_LG_DISABLE_CHROMA => {
-            SettingsPanelHit::LiquidGlassDebug(LiquidGlassDebugId::DisableChromaticAberration)
-        }
-        DEBUG_ROW_LG_DISABLE_EDGE => {
-            SettingsPanelHit::LiquidGlassDebug(LiquidGlassDebugId::DisableEdgeLighting)
-        }
-        DEBUG_ROW_LG_DISABLE_BLUR => {
-            SettingsPanelHit::LiquidGlassDebug(LiquidGlassDebugId::DisableBlur)
-        }
-        DEBUG_ROW_LG_RESET_ALL => SettingsPanelHit::LiquidGlassResetAll,
-        other => {
-            // Debug-view rows.
-            let view_first = DEBUG_ROW_LG_VIEW_FIRST;
-            if other >= view_first && other < view_first + 5 {
-                let id = [
-                    LiquidGlassDebugId::ShowBackdropTexture,
-                    LiquidGlassDebugId::ShowGeometryTexture,
-                    LiquidGlassDebugId::ShowDisplacement,
-                    LiquidGlassDebugId::ShowAlphaMask,
-                    LiquidGlassDebugId::ShowFinalGlassOnly,
-                ][(other - view_first) as usize];
-                SettingsPanelHit::LiquidGlassDebug(id)
-            } else {
-                SettingsPanelHit::Inside
-            }
-        }
-    }
-}
-
-fn push_static_controls(
-    render: &mut RenderModel,
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    input: SettingsPanelInput,
-) {
-    render.controls.push(ControlView {
-        id: UiId::settings_row("sidebar-divider"),
-        rect: centered_rect(
-            layout.right_left,
-            layout.cy,
-            1.1 * scale,
-            layout.hh * 2.0 - 56.0 * scale,
-        ),
-        kind: ControlKind::Divider,
-        opacity: DIM[3],
-        z: Z_CONTROL,
-    });
-
-    for (index, category) in SettingsCategoryId::ALL.iter().copied().enumerate() {
-        if category == input.category {
-            let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
-            render.controls.push(ControlView {
-                id: UiId::settings_row(format!("category-{}", category.key())),
-                rect: centered_rect(
-                    layout.left + layout.sidebar_w * 0.5,
-                    row_top + SIDEBAR_ROW_H * scale * 0.5,
-                    layout.sidebar_w - 28.0 * scale,
-                    SIDEBAR_ROW_H * scale,
-                ),
-                kind: ControlKind::RowBackground,
-                opacity: ACCENT[3],
-                z: Z_CONTROL,
-            });
-        }
-    }
-
-    let (close_x, close_y) = layout.close_center(scale);
-    let close_size = CLOSE_HALF * scale * 2.0;
-    render.controls.push(ControlView {
-        id: UiId::settings_close(),
-        rect: centered_rect(close_x, close_y, close_size, close_size),
-        kind: ControlKind::CloseButton,
-        opacity: INK[3],
-        z: Z_CONTROL,
-    });
-}
-
-fn push_text_views(
-    render: &mut RenderModel,
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    input: SettingsPanelInput,
-    copy: &SettingsPanelCopy<'_>,
-) {
-    let content_left = layout.content_left(scale);
-    let content_right = layout.content_right(scale);
-    let first_top = layout.first_row_top(scale);
-    let row_h = ROW_H * scale;
-
-    push_text(
-        render,
-        "title",
-        copy.title,
-        layout.left + 24.0 * scale,
-        layout.top + 36.0 * scale,
-        TITLE_SIZE,
-        TITLE_LINE * scale,
-        INK,
-        TextRole::SettingsTitle,
-        TextAlign::Start,
-    );
-
-    for (index, (category, label)) in copy.categories.iter().copied().enumerate() {
-        let y = layout.top
-            + SIDEBAR_TOP * scale
-            + index as f32 * SIDEBAR_STEP * scale
-            + SIDEBAR_ROW_H * scale * 0.5;
-        push_text(
-            render,
-            format!("category-{}", category.key()),
-            label,
-            layout.left + 28.0 * scale,
-            y,
-            LABEL_SIZE,
-            LABEL_LINE * scale,
-            if category == input.category {
-                INK
-            } else {
-                MUTED
-            },
-            TextRole::SettingsSidebar,
-            TextAlign::Start,
-        );
-    }
-
-    let category_label = copy
-        .categories
-        .iter()
-        .find_map(|(category, label)| (*category == input.category).then_some(*label))
-        .unwrap_or(input.category.key());
-    push_text(
-        render,
-        "category-heading",
-        category_label,
-        content_left,
-        layout.top + 46.0 * scale,
-        HEADER_SIZE,
-        HEADER_LINE * scale,
-        INK,
-        TextRole::SettingsHeader,
-        TextAlign::Start,
-    );
-
-    match input.category {
-        SettingsCategoryId::Apps => {
-            push_text(
-                render,
-                "sort-label",
-                copy.sort_label,
-                content_left,
-                first_top + 12.0 * scale,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-
-            let gap = SEGMENT_GAP * scale;
-            let row_w = content_right - content_left;
-            let each_w = (row_w - gap * 3.0) / 4.0;
-            let segment_top = first_top + 44.0 * scale;
-            for (index, (order, label)) in copy.sort_orders.iter().copied().enumerate() {
-                let left = content_left + index as f32 * (each_w + gap);
-                let x = if input.sort_order == order {
-                    left + 30.0 * scale
-                } else {
-                    left + 14.0 * scale
-                };
-                push_text(
-                    render,
-                    format!("sort-{}", order.key()),
-                    label,
-                    x,
-                    segment_top + SEGMENT_H * scale * 0.5,
-                    DETAIL_SIZE,
-                    DETAIL_LINE * scale,
-                    INK,
-                    TextRole::SettingsDetail,
-                    TextAlign::Start,
-                );
-            }
-
-            let frequent_y = first_top + ROW_STEP * scale + row_h * 0.5;
-            push_text(
-                render,
-                "frequent-apps-label",
-                copy.frequent_apps_label,
-                content_left + 16.0 * scale,
-                frequent_y,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "frequent-apps-detail",
-                copy.frequent_apps_detail,
-                content_left + 16.0 * scale,
-                frequent_y + 16.0 * scale,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::Start,
-            );
-
-            let steam_y = first_top + ROW_STEP * 2.0 * scale + row_h * 0.5;
-            push_text(
-                render,
-                "steam-apps-label",
-                copy.steam_apps_label,
-                content_left + 16.0 * scale,
-                steam_y,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "steam-apps-detail",
-                copy.steam_apps_detail,
-                content_left + 16.0 * scale,
-                steam_y + 16.0 * scale,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::Start,
-            );
-
-            let hidden_y = first_top + ROW_STEP * 3.0 * scale + row_h * 0.5;
-            push_text(
-                render,
-                "hidden-apps-label",
-                copy.hidden_apps_label,
-                content_left + 16.0 * scale,
-                hidden_y,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "hidden-apps-count",
-                copy.hidden_count_label,
-                content_right - 32.0 * scale,
-                hidden_y,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::End,
-            );
-        }
-        SettingsCategoryId::Search => {
-            let y = first_top + row_h * 0.5;
-            push_text(
-                render,
-                "search-hidden-label",
-                copy.search_hidden_label,
-                content_left + 16.0 * scale,
-                y,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "search-hidden-detail",
-                copy.search_hidden_detail,
-                content_left + 16.0 * scale,
-                y + 16.0 * scale,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::Start,
-            );
-        }
-        SettingsCategoryId::Debug => {
-            let scroll = input.scroll_rows;
-            // Helper closures for this category. Each row is only emitted if
-            // it is visible after scrolling, since we have no clip primitive.
-            let label_for = |i: i32| -> f32 { debug_row_y(layout, scale, scroll, i) + row_h * 0.5 };
-            // Row 0: master debug-keys toggle.
-            if debug_row_is_visible(layout, scale, scroll, DEBUG_ROW_KEYS) {
-                let y = label_for(DEBUG_ROW_KEYS);
-                push_text(
-                    render,
-                    "debug-label",
-                    copy.debug_label,
-                    content_left + 16.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    INK,
-                    TextRole::SettingsRow,
-                    TextAlign::Start,
-                );
-                push_text(
-                    render,
-                    "debug-detail",
-                    copy.debug_detail,
-                    content_left + 16.0 * scale,
-                    y + 16.0 * scale,
-                    DETAIL_SIZE,
-                    DETAIL_LINE * scale,
-                    MUTED,
-                    TextRole::SettingsDetail,
-                    TextAlign::Start,
-                );
-            }
-            // Section: Window
-            debug_section_text(render, layout, scale, scroll, copy.debug_section_window, 0);
-            if debug_row_is_visible(layout, scale, scroll, DEBUG_ROW_WINDOW_DECORATIONS) {
-                let y = label_for(DEBUG_ROW_WINDOW_DECORATIONS);
-                push_text(
-                    render,
-                    "debug-window-decorations-label",
-                    copy.debug_window_decorations_label,
-                    content_left + 16.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    INK,
-                    TextRole::SettingsRow,
-                    TextAlign::Start,
-                );
-                push_text(
-                    render,
-                    "debug-window-decorations-detail",
-                    copy.debug_window_decorations_detail,
-                    content_left + 16.0 * scale,
-                    y + 16.0 * scale,
-                    DETAIL_SIZE,
-                    DETAIL_LINE * scale,
-                    MUTED,
-                    TextRole::SettingsDetail,
-                    TextAlign::Start,
-                );
-            }
-            if debug_row_is_visible(layout, scale, scroll, DEBUG_ROW_ICON_CACHE) {
-                let y = label_for(DEBUG_ROW_ICON_CACHE);
-                push_text(
-                    render,
-                    "debug-icon-cache-label",
-                    copy.debug_icon_cache_label,
-                    content_left + 16.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    INK,
-                    TextRole::SettingsRow,
-                    TextAlign::Start,
-                );
-                push_text(
-                    render,
-                    "debug-icon-cache-detail",
-                    copy.debug_icon_cache_detail,
-                    content_left + 16.0 * scale,
-                    y + 16.0 * scale,
-                    DETAIL_SIZE,
-                    DETAIL_LINE * scale,
-                    MUTED,
-                    TextRole::SettingsDetail,
-                    TextAlign::Start,
-                );
-            }
-            // Section: Liquid Glass
-            debug_section_text(
-                render,
-                layout,
-                scale,
-                scroll,
-                copy.debug_section_liquid_glass,
-                2,
-            );
-            if debug_row_is_visible(layout, scale, scroll, DEBUG_ROW_LG_ENABLED) {
-                let y = label_for(DEBUG_ROW_LG_ENABLED);
-                push_text(
-                    render,
-                    "debug-lg-enabled-label",
-                    copy.debug_lg_enabled_label,
-                    content_left + 16.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    INK,
-                    TextRole::SettingsRow,
-                    TextAlign::Start,
-                );
-                push_text(
-                    render,
-                    "debug-lg-enabled-detail",
-                    copy.debug_lg_enabled_detail,
-                    content_left + 16.0 * scale,
-                    y + 16.0 * scale,
-                    DETAIL_SIZE,
-                    DETAIL_LINE * scale,
-                    MUTED,
-                    TextRole::SettingsDetail,
-                    TextAlign::Start,
-                );
-            }
-            // Slider rows: label on the left, current value on the right of the label.
-            let slider_labels = [
-                copy.debug_lg_thickness_label,
-                copy.debug_lg_refractive_index_label,
-                copy.debug_lg_saturation_label,
-                copy.debug_lg_chromatic_aberration_label,
-                copy.debug_lg_blur_radius_label,
-            ];
-            for (k, id) in LiquidGlassParamId::ALL.iter().copied().enumerate() {
-                let i = DEBUG_ROW_LG_PARAM_FIRST + k as i32;
-                if !debug_row_is_visible(layout, scale, scroll, i) {
-                    continue;
-                }
-                let y = label_for(i);
-                push_text(
-                    render,
-                    format!("debug-lg-param-{}-label", id.key()),
-                    slider_labels[k],
-                    content_left + 16.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    INK,
-                    TextRole::SettingsRow,
-                    TextAlign::Start,
-                );
-                let value = input.liquid_glass.get(id);
-                let value_text = format!("{:.3}", value);
-                let (track_left, track_width, _, _, _) = debug_slider_geometry(layout, scale);
-                push_text(
-                    render,
-                    format!("debug-lg-param-{}-value", id.key()),
-                    &value_text,
-                    track_left - 8.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    MUTED,
-                    TextRole::SettingsRow,
-                    TextAlign::End,
-                );
-                let _ = track_width;
-            }
-            // Disable-flag toggles (C/E/L).
-            let disable_rows = [
-                (
-                    DEBUG_ROW_LG_DISABLE_CHROMA,
-                    copy.debug_lg_disable_chromatic_aberration_label,
-                ),
-                (
-                    DEBUG_ROW_LG_DISABLE_EDGE,
-                    copy.debug_lg_disable_edge_lighting_label,
-                ),
-                (DEBUG_ROW_LG_DISABLE_BLUR, copy.debug_lg_disable_blur_label),
-            ];
-            for (i, label) in disable_rows {
-                if debug_row_is_visible(layout, scale, scroll, i) {
-                    let y = label_for(i);
-                    push_text(
-                        render,
-                        format!("debug-lg-disable-{}", i),
-                        label,
-                        content_left + 16.0 * scale,
-                        y,
-                        LABEL_SIZE,
-                        LABEL_LINE * scale,
-                        INK,
-                        TextRole::SettingsRow,
-                        TextAlign::Start,
-                    );
-                }
-            }
-            // Reset-all button.
-            if debug_row_is_visible(layout, scale, scroll, DEBUG_ROW_LG_RESET_ALL) {
-                let y = label_for(DEBUG_ROW_LG_RESET_ALL);
-                push_text(
-                    render,
-                    "debug-lg-reset-all-label",
-                    copy.debug_lg_reset_all_label,
-                    content_left + 16.0 * scale,
-                    y,
-                    LABEL_SIZE,
-                    LABEL_LINE * scale,
-                    INK,
-                    TextRole::SettingsRow,
-                    TextAlign::Start,
-                );
-                push_text(
-                    render,
-                    "debug-lg-reset-all-detail",
-                    copy.debug_lg_reset_all_detail,
-                    content_left + 16.0 * scale,
-                    y + 16.0 * scale,
-                    DETAIL_SIZE,
-                    DETAIL_LINE * scale,
-                    MUTED,
-                    TextRole::SettingsDetail,
-                    TextAlign::Start,
-                );
-            }
-            // Section: Debug views
-            debug_section_text(
-                render,
-                layout,
-                scale,
-                scroll,
-                copy.debug_section_debug_views,
-                12,
-            );
-            let view_rows = [
-                (
-                    DEBUG_ROW_LG_VIEW_FIRST,
-                    copy.debug_lg_show_backdrop_texture_label,
-                ),
-                (
-                    DEBUG_ROW_LG_VIEW_FIRST + 1,
-                    copy.debug_lg_show_geometry_texture_label,
-                ),
-                (
-                    DEBUG_ROW_LG_VIEW_FIRST + 2,
-                    copy.debug_lg_show_displacement_label,
-                ),
-                (
-                    DEBUG_ROW_LG_VIEW_FIRST + 3,
-                    copy.debug_lg_show_alpha_mask_label,
-                ),
-                (
-                    DEBUG_ROW_LG_VIEW_FIRST + 4,
-                    copy.debug_lg_show_final_glass_only_label,
-                ),
-            ];
-            for (i, label) in view_rows {
-                if debug_row_is_visible(layout, scale, scroll, i) {
-                    let y = label_for(i);
-                    push_text(
-                        render,
-                        format!("debug-lg-view-{}", i),
-                        label,
-                        content_left + 16.0 * scale,
-                        y,
-                        LABEL_SIZE,
-                        LABEL_LINE * scale,
-                        INK,
-                        TextRole::SettingsRow,
-                        TextAlign::Start,
-                    );
-                }
-            }
-        }
-        SettingsCategoryId::System => {
-            // Row 0: FPS overlay toggle.
-            let y0 = first_top + row_h * 0.5;
-            push_text(
-                render,
-                "show-fps-label",
-                copy.show_fps_label,
-                content_left + 16.0 * scale,
-                y0,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "show-fps-detail",
-                copy.show_fps_detail,
-                content_left + 16.0 * scale,
-                y0 + 16.0 * scale,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::Start,
-            );
-
-            // Row 1: Reset cache action.
-            let y1 = first_top + ROW_STEP * scale + row_h * 0.5;
-            push_text(
-                render,
-                "reset-cache-label",
-                copy.reset_cache_label,
-                content_left + 16.0 * scale,
-                y1,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "reset-cache-detail",
-                copy.reset_cache_detail,
-                content_left + 16.0 * scale,
-                y1 + 16.0 * scale,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::Start,
-            );
-
-            // Row 2: Reset settings action.
-            let y2 = first_top + ROW_STEP * scale * 2.0 + row_h * 0.5;
-            push_text(
-                render,
-                "reset-settings-label",
-                copy.reset_settings_label,
-                content_left + 16.0 * scale,
-                y2,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "reset-settings-detail",
-                copy.reset_settings_detail,
-                content_left + 16.0 * scale,
-                y2 + 16.0 * scale,
-                DETAIL_SIZE,
-                DETAIL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::Start,
-            );
-        }
-        SettingsCategoryId::About => {
-            let y = first_top + row_h * 0.5;
-            push_text(
-                render,
-                "version-label",
-                copy.version_label,
-                content_left + 16.0 * scale,
-                y,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                INK,
-                TextRole::SettingsRow,
-                TextAlign::Start,
-            );
-            push_text(
-                render,
-                "version-value",
-                copy.version_value,
-                content_right - 16.0 * scale,
-                y,
-                LABEL_SIZE,
-                LABEL_LINE * scale,
-                MUTED,
-                TextRole::SettingsDetail,
-                TextAlign::End,
-            );
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_text(
-    render: &mut RenderModel,
-    id: impl AsRef<str>,
-    value: &str,
-    anchor_x: f32,
-    center_y: f32,
-    font_size: f32,
-    line_height: f32,
-    color: [f32; 4],
-    role: TextRole,
-    align: TextAlign,
-) {
-    render.text.push(TextView {
-        id: UiId::settings_row(format!("text-{}", id.as_ref())),
-        text: value.to_owned(),
-        rect: Rect::new(anchor_x, center_y - line_height * 0.5, 0.0, line_height),
-        style: TextStyle::new(
-            role,
-            font_size,
-            Color::rgba(color[0], color[1], color[2], color[3]),
-            TextWeight::Regular,
-            align,
-        ),
-        z: Z_CONTROL + 1,
-    });
-}
-
-fn push_hit_regions(
-    hits: &mut HitMap,
-    layout: &SettingsPanelLayout,
-    scale: f32,
-    category: SettingsCategoryId,
-    scroll_rows: i32,
-) {
-    let (close_x, close_y) = layout.close_center(scale);
-    hits.push(HitRegion::circle(
-        UiId::settings_close(),
-        Point::new(close_x, close_y),
-        CLOSE_HIT_HALF * scale,
-        SettingsPanelHit::Close.target(),
-        Z_CONTROL + 3,
-    ));
-
-    for (index, category) in SettingsCategoryId::ALL.iter().copied().enumerate() {
-        let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
-        hits.push(HitRegion::rect_inclusive(
-            UiId::settings_row(format!("category-{}", category.key())),
-            Rect::new(
-                layout.left + 12.0 * scale,
-                row_top,
-                layout.sidebar_w - 24.0 * scale,
-                SIDEBAR_ROW_H * scale,
-            ),
-            SettingsPanelHit::Category(category).target(),
-            Z_CONTROL + 1,
-        ));
-    }
-
-    let content_left = layout.content_left(scale);
-    let (row_w, row_h) = layout.row_size(scale);
-    let first_top = layout.first_row_top(scale);
-
-    match category {
-        SettingsCategoryId::Apps => {
-            let segment_top = first_top + 44.0 * scale;
-            let gap = SEGMENT_GAP * scale;
-            let each_w = (row_w - gap * 3.0) / 4.0;
-            for (index, order) in SortOrderId::ALL.iter().copied().enumerate() {
-                let left = content_left + index as f32 * (each_w + gap);
-                hits.push(HitRegion::rect_inclusive(
-                    UiId::settings_row(format!("sort-{}", order.key())),
-                    Rect::new(left, segment_top, each_w, SEGMENT_H * scale),
-                    SettingsPanelHit::Sort(order).target(),
-                    Z_CONTROL + 2,
-                ));
-            }
-            hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("toggle-frequent-apps"),
-                Rect::new(content_left, first_top + ROW_STEP * scale, row_w, row_h),
-                SettingsPanelHit::FrequentToggle.target(),
-                Z_CONTROL + 1,
-            ));
-            hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("toggle-steam-apps"),
-                Rect::new(
-                    content_left,
-                    first_top + ROW_STEP * 2.0 * scale,
-                    row_w,
-                    row_h,
-                ),
-                SettingsPanelHit::SteamToggle.target(),
-                Z_CONTROL + 1,
-            ));
-        }
-        SettingsCategoryId::Search => {
-            hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("toggle-search-hidden"),
-                Rect::new(content_left, first_top, row_w, row_h),
-                SettingsPanelHit::SearchHiddenToggle.target(),
-                Z_CONTROL + 1,
-            ));
-        }
-        SettingsCategoryId::Debug => {
-            // Register one rect per visible Debug row. Slider rows get a
-            // single covering rect (the track); their inner reset-arrow
-            // sub-region is resolved at hit-time via `hit_test`.
-            for i in 0..DEBUG_CATEGORY_ROW_COUNT {
-                if !debug_row_is_visible(layout, scale, scroll_rows, i) {
-                    continue;
-                }
-                let row_y = debug_row_y(layout, scale, scroll_rows, i);
-                let target = debug_classify_row_hit(
-                    layout,
-                    scale,
-                    i,
-                    Point::new(content_left + 1.0, row_y + row_h * 0.5),
-                )
-                .target();
-                hits.push(HitRegion::rect_inclusive(
-                    UiId::settings_row(format!("debug-row-{}", i)),
-                    Rect::new(content_left, row_y, row_w, row_h),
-                    target,
-                    Z_CONTROL + 1,
-                ));
-            }
-            // Scroll affordances.
-            let max_scroll = debug_category_overflow_rows();
-            if max_scroll > 0 {
-                let top_strip_y = first_top - 6.0 * scale;
-                let bottom_strip_y = layout.panel_bottom() - 12.0 * scale;
-                hits.push(HitRegion::rect_inclusive(
-                    UiId::settings_row("debug-scroll-up"),
-                    Rect::new(content_left, top_strip_y, row_w, 6.0 * scale),
-                    SettingsPanelHit::ScrollUp.target(),
-                    Z_CONTROL + 1,
-                ));
-                hits.push(HitRegion::rect_inclusive(
-                    UiId::settings_row("debug-scroll-down"),
-                    Rect::new(content_left, bottom_strip_y, row_w, 12.0 * scale),
-                    SettingsPanelHit::ScrollDown.target(),
-                    Z_CONTROL + 1,
-                ));
-            }
-        }
-        SettingsCategoryId::System => {
-            hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("toggle-show-fps"),
-                Rect::new(content_left, first_top, row_w, row_h),
-                SettingsPanelHit::FpsToggle.target(),
-                Z_CONTROL + 1,
-            ));
-            hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("reset-cache"),
-                Rect::new(content_left, first_top + ROW_STEP * scale, row_w, row_h),
-                SettingsPanelHit::ResetCache.target(),
-                Z_CONTROL + 1,
-            ));
-            hits.push(HitRegion::rect_inclusive(
-                UiId::settings_row("reset-settings"),
-                Rect::new(
-                    content_left,
-                    first_top + ROW_STEP * scale * 2.0,
-                    row_w,
-                    row_h,
-                ),
-                SettingsPanelHit::ResetSettings.target(),
-                Z_CONTROL + 1,
-            ));
-        }
-        SettingsCategoryId::About => {}
-    }
+    Slider::value_from_pointer(pointer_x, track_left, track_width, id.range())
 }
 
 fn scaled_rect_around_center(layout: &SettingsPanelLayout, scale: f32) -> Rect {
@@ -1879,14 +1209,6 @@ fn scaled_rect_around_center(layout: &SettingsPanelLayout, scale: f32) -> Rect {
     )
 }
 
-fn centered_rect(cx: f32, cy: f32, width: f32, height: f32) -> Rect {
-    Rect::new(cx - width * 0.5, cy - height * 0.5, width, height)
-}
-
-fn point_in_row(point: Point, left: f32, top: f32, width: f32, height: f32) -> bool {
-    point.x >= left && point.x <= left + width && point.y >= top && point.y <= top + height
-}
-
 fn sanitize_scale(scale_factor: f32) -> f32 {
     if scale_factor.is_finite() && scale_factor > 0.0 {
         scale_factor
@@ -1898,8 +1220,9 @@ fn sanitize_scale(scale_factor: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_model::hit::{BackdropKind, HitTarget, SettingsTarget};
-    use crate::ui_model::text::{TextAlign, TextRole};
+    use crate::layout::hit_map::HitMap;
+    use crate::scroll::{ContinuousConfig, ContinuousScroller};
+    use crate::ui_model::hit::{HitTarget, SettingsTarget};
 
     fn layout() -> SettingsPanelLayout {
         panel_layout((1280, 800), 1.0)
@@ -1984,26 +1307,35 @@ mod tests {
             window_decorated: false,
             liquid_glass: LiquidGlassValues::default(),
             liquid_glass_debug: LiquidGlassDebugState::default(),
+            pointer_pos: None,
+            pointer_pressed: false,
         }
     }
 
-    fn assert_hit_map_matches_hit_test(model: &SettingsPanelModel, point: Point) {
-        let expected = hit_test(&model.layout, 1.0, SettingsCategoryId::Apps, 0, point).target();
-        let actual = model
-            .result
-            .hits
-            .hit_test(point)
-            .expect("modeled hit")
-            .target
-            .clone();
-
-        assert_eq!(actual, expected);
+    /// Build the settings panel and return the HitMap.
+    fn hit_map_for_category(category: SettingsCategoryId) -> HitMap {
+        let inp = input(category);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        model.result.hits
     }
+
+    /// Hit-test and extract SettingsTarget.
+    fn hit_settings_target(hm: &HitMap, point: Point) -> Option<SettingsTarget> {
+        hm.hit_test(point).and_then(|r| match &r.target {
+            HitTarget::Settings { target } => Some(target.clone()),
+            _ => None,
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // Layout
+    // ------------------------------------------------------------------
 
     #[test]
     fn panel_layout_matches_current_centered_geometry() {
         let layout = layout();
-
         assert_eq!(layout.cx, 640.0);
         assert_eq!(layout.cy, 400.0);
         assert_eq!(layout.hw, 380.0);
@@ -2014,65 +1346,272 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_distinguishes_modal_outside_from_panel_inside() {
-        let layout = layout();
-
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Apps,
-                0,
-                Point::new(100.0, 100.0)
-            ),
-            SettingsPanelHit::Outside
-        );
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Apps,
-                0,
-                Point::new(
-                    layout.content_left(1.0) + 10.0,
-                    layout.first_row_top(1.0) + ROW_STEP * 3.0 + ROW_H * 0.5
-                )
-            ),
-            SettingsPanelHit::Inside
-        );
-    }
-
-    #[test]
     fn panel_contains_matches_current_inclusive_bounds() {
         let layout = layout();
-
         assert!(contains(
             &layout,
             Point::new(layout.panel_right(), layout.panel_bottom())
         ));
     }
 
+    // ------------------------------------------------------------------
+    // HitMap-based hit tests (unified rendering + hit target)
+    // ------------------------------------------------------------------
+
     #[test]
-    fn hit_test_finds_close_button() {
+    fn hit_map_backdrop_outside_panel() {
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let hit = hm.hit_test(Point::new(100.0, 100.0)).unwrap();
+        assert!(matches!(hit.target, HitTarget::Backdrop { .. }));
+    }
+
+    #[test]
+    fn hit_map_panel_inside() {
+        // The panel area has a HitRegion at z=90 covering the panel rect.
+        // Widgets at higher z overlay it, but the panel region is still present.
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let has_panel = hm.regions().iter().any(|r| {
+            matches!(
+                &r.target,
+                HitTarget::Settings {
+                    target: SettingsTarget::Panel
+                }
+            )
+        });
+        assert!(has_panel, "Panel hit region should exist");
+    }
+
+    #[test]
+    fn hit_map_close_button() {
         let layout = layout();
         let (x, y) = layout.close_center(1.0);
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(target, SettingsTarget::Close);
+    }
 
+    #[test]
+    fn hit_map_category_sidebar() {
+        let layout = layout();
+        let y = layout.top + SIDEBAR_TOP + SIDEBAR_ROW_H * 0.5;
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let target = hit_settings_target(&hm, Point::new(layout.left + 30.0, y)).unwrap();
+        assert_eq!(target, SettingsTarget::Category { key: "apps".into() });
+    }
+
+    #[test]
+    fn hit_map_sort_segment() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let content_left = layout.content_left(1.0);
+        let segment_y = layout.first_row_top(1.0) + 44.0 + SEGMENT_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(content_left + 10.0, segment_y)).unwrap();
+        assert_eq!(target, SettingsTarget::SortOption { key: "name".into() });
+    }
+
+    #[test]
+    fn hit_map_frequent_toggle() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
         assert_eq!(
-            hit_test(&layout, 1.0, SettingsCategoryId::Apps, 0, Point::new(x, y)),
-            SettingsPanelHit::Close
+            target,
+            SettingsTarget::Toggle {
+                key: "frequent-apps".into()
+            }
         );
     }
+
+    #[test]
+    fn hit_map_steam_toggle() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(
+            target,
+            SettingsTarget::Toggle {
+                key: "steam-apps".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hit_map_search_hidden_toggle() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Search);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(
+            target,
+            SettingsTarget::Toggle {
+                key: "search-hidden".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hit_map_system_fps_toggle() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::System);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(
+            target,
+            SettingsTarget::Toggle {
+                key: "show-fps".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hit_map_system_reset_cache() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::System);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(
+            target,
+            SettingsTarget::Action {
+                key: "reset-cache".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hit_map_system_reset_settings() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::System);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(
+            target,
+            SettingsTarget::Action {
+                key: "reset-settings".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hit_map_debug_toggle() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let x = layout.content_left(1.0) + 10.0;
+        let y = layout.first_row_top(1.0) + ROW_H * 0.5;
+        let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
+        assert_eq!(
+            target,
+            SettingsTarget::Toggle {
+                key: "debug".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hit_map_debug_lg_enabled_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("lg-enabled"));
+        assert!(found, "LG enabled toggle should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_lg_param_slider_track_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("lg-param-thickness"));
+        assert!(found, "LG thickness slider track should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_lg_param_slider_reset_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_action("lg-param-reset-thickness"));
+        assert!(found, "LG thickness slider reset should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_lg_disable_flag_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm.regions().iter().any(|r| {
+            r.target == HitTarget::settings_toggle("lg-debug-disable-chromatic-aberration")
+        });
+        assert!(found, "LG disable flag toggle should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_lg_view_flag_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("lg-debug-show-backdrop-texture"));
+        assert!(found, "LG view flag toggle should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_lg_reset_all_button_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_action("lg-reset-all"));
+        assert!(found, "LG reset all button should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_window_decorations_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("window-decorations"));
+        assert!(found, "Window decorations toggle should exist");
+    }
+
+    #[test]
+    fn hit_map_category_switch_changes_hit_regions() {
+        let hm_apps = hit_map_for_category(SettingsCategoryId::Apps);
+        let hm_system = hit_map_for_category(SettingsCategoryId::System);
+        let apps_has_frequent = hm_apps
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("frequent-apps"));
+        assert!(apps_has_frequent);
+        let system_has_fps = hm_system
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("show-fps"));
+        assert!(system_has_fps);
+        let system_has_frequent = hm_system
+            .regions()
+            .iter()
+            .any(|r| r.target == HitTarget::settings_toggle("frequent-apps"));
+        assert!(!system_has_frequent);
+    }
+
+    // ------------------------------------------------------------------
+    // Close button
+    // ------------------------------------------------------------------
 
     #[test]
     fn hit_close_enlarges_target_beyond_visible_glyph() {
         let layout = layout();
         let (cx, cy) = layout.close_center(1.0);
-
-        // CLOSE_HIT_HALF > CLOSE_HALF by design (invisible slop around the
-        // smaller visible glyph). The visible × glyph spans ±CLOSE_HALF.
-        // Verify every cardinal point on the glyph boundary is still a hit,
-        // then that the slop ring just outside the glyph but inside the hit
-        // radius registers as Close.
         let dirs = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
         for (dx, dy) in dirs {
             let on_glyph = Point::new(cx + dx * CLOSE_HALF, cy + dy * CLOSE_HALF);
@@ -2080,7 +1619,6 @@ mod tests {
                 hit_close(&layout, 1.0, on_glyph),
                 "glyph boundary should hit: ({dx}, {dy})"
             );
-
             let in_slop = Point::new(
                 cx + dx * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
                 cy + dy * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
@@ -2089,7 +1627,6 @@ mod tests {
                 hit_close(&layout, 1.0, in_slop),
                 "slop ring should hit: ({dx}, {dy})"
             );
-
             let beyond = Point::new(
                 cx + dx * (CLOSE_HIT_HALF + 0.5),
                 cy + dy * (CLOSE_HIT_HALF + 0.5),
@@ -2105,271 +1642,12 @@ mod tests {
     fn hit_close_scales_hit_radius_with_dpi() {
         let layout = layout();
         let (cx, cy) = layout.close_center(1.5);
-
-        // At 150% DPI the hit radius grows to CLOSE_HIT_HALF * 1.5 = 24 px.
-        // A point 20 px from the center is inside the 24 px hit radius but
-        // would be outside a non-scaled glyph (radius 10 * 1.5 = 15 px).
-        let point = Point::new(cx + 20.0, cy);
-        assert!(hit_close(&layout, 1.5, point));
+        assert!(hit_close(&layout, 1.5, Point::new(cx + 20.0, cy)));
     }
 
-    #[test]
-    fn hit_test_finds_category_rows() {
-        let layout = layout();
-        let y = layout.top + SIDEBAR_TOP + SIDEBAR_ROW_H * 0.5;
-
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Search,
-                0,
-                Point::new(layout.left + 30.0, y)
-            ),
-            SettingsPanelHit::Category(SettingsCategoryId::Apps)
-        );
-    }
-
-    #[test]
-    fn hit_test_finds_apps_category_actions() {
-        let layout = layout();
-        let content_left = layout.content_left(1.0);
-        let segment_y = layout.first_row_top(1.0) + 44.0 + SEGMENT_H * 0.5;
-        let frequent_y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
-        let steam_y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
-
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Apps,
-                0,
-                Point::new(content_left + 10.0, segment_y)
-            ),
-            SettingsPanelHit::Sort(SortOrderId::Name)
-        );
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Apps,
-                0,
-                Point::new(content_left + 10.0, frequent_y)
-            ),
-            SettingsPanelHit::FrequentToggle
-        );
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Apps,
-                0,
-                Point::new(content_left + 10.0, steam_y)
-            ),
-            SettingsPanelHit::SteamToggle
-        );
-    }
-
-    #[test]
-    fn hit_test_finds_search_and_system_actions() {
-        let layout = layout();
-        let x = layout.content_left(1.0) + 10.0;
-        let y0 = layout.first_row_top(1.0) + ROW_H * 0.5;
-        let y1 = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
-        let y2 = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
-
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Search,
-                0,
-                Point::new(x, y0)
-            ),
-            SettingsPanelHit::SearchHiddenToggle
-        );
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::System,
-                0,
-                Point::new(x, y0)
-            ),
-            SettingsPanelHit::FpsToggle
-        );
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::System,
-                0,
-                Point::new(x, y1)
-            ),
-            SettingsPanelHit::ResetCache
-        );
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::System,
-                0,
-                Point::new(x, y2)
-            ),
-            SettingsPanelHit::ResetSettings
-        );
-    }
-
-    #[test]
-    fn model_hit_map_prefers_panel_controls_over_backdrop() {
-        let model = build(input(SettingsCategoryId::Apps));
-        let (close_x, close_y) = model.layout.close_center(1.0);
-
-        let close_hit = model
-            .result
-            .hits
-            .hit_test(Point::new(close_x, close_y))
-            .expect("close hit");
-        assert_eq!(
-            close_hit.target,
-            HitTarget::Settings {
-                target: SettingsTarget::Close
-            }
-        );
-
-        let outside_hit = model
-            .result
-            .hits
-            .hit_test(Point::new(10.0, 10.0))
-            .expect("outside hit");
-        assert_eq!(
-            outside_hit.target,
-            HitTarget::Backdrop {
-                kind: BackdropKind::ModalDismiss
-            }
-        );
-    }
-
-    #[test]
-    fn model_hit_map_uses_circular_close_region() {
-        let model = build(input(SettingsCategoryId::Apps));
-        let (close_x, close_y) = model.layout.close_center(1.0);
-
-        // Point sits just outside the visible glyph (radius = CLOSE_HALF = 10)
-        // but inside the enlarged hit circle (radius = CLOSE_HIT_HALF = 16),
-        // so the close target should win thanks to the hit slop.
-        let dist = (CLOSE_HALF + 3.0).min(CLOSE_HIT_HALF - 1.0);
-        let point = Point::new(close_x + dist, close_y);
-
-        assert_eq!(
-            hit_test(&model.layout, 1.0, SettingsCategoryId::Apps, 0, point),
-            SettingsPanelHit::Close
-        );
-        assert_eq!(
-            model.result.hits.hit_test(point).expect("close hit").target,
-            SettingsPanelHit::Close.target()
-        );
-
-        // A point beyond the hit radius falls through to the panel interior.
-        let outside_point = Point::new(close_x + CLOSE_HIT_HALF + 1.0, close_y);
-        assert_eq!(
-            hit_test(
-                &model.layout,
-                1.0,
-                SettingsCategoryId::Apps,
-                0,
-                outside_point
-            ),
-            SettingsPanelHit::Inside
-        );
-    }
-
-    #[test]
-    fn model_hit_map_matches_current_inclusive_edges() {
-        let model = build(input(SettingsCategoryId::Apps));
-        assert_hit_map_matches_hit_test(
-            &model,
-            Point::new(model.layout.panel_right(), model.layout.panel_bottom()),
-        );
-
-        let row_bottom = model.layout.top + SIDEBAR_TOP + SIDEBAR_ROW_H;
-        assert_hit_map_matches_hit_test(
-            &model,
-            Point::new(model.layout.right_left - 12.0, row_bottom),
-        );
-
-        let content_left = model.layout.content_left(1.0);
-        let row_w = model.layout.content_right(1.0) - content_left;
-        let each_w = (row_w - SEGMENT_GAP * 3.0) / 4.0;
-        let segment_top = model.layout.first_row_top(1.0) + 44.0;
-        assert_hit_map_matches_hit_test(
-            &model,
-            Point::new(content_left + each_w, segment_top + SEGMENT_H),
-        );
-    }
-
-    #[test]
-    fn model_emits_settings_text_views_from_layout_positions() {
-        let copy = copy("3 hidden");
-        let model = build_with_copy(
-            SettingsPanelInput {
-                viewport: (1280, 800),
-                scale_factor: 1.0,
-                category: SettingsCategoryId::Apps,
-                sort_order: SortOrderId::Manual,
-                frequent_apps_enabled: false,
-                show_steam_apps: true,
-                search_includes_hidden: false,
-                debug_keys_enabled: false,
-                show_fps: false,
-                hidden_count: 3,
-                progress: 1.0,
-                scroll_rows: 0,
-                window_decorated: false,
-                liquid_glass: LiquidGlassValues::default(),
-                liquid_glass_debug: LiquidGlassDebugState::default(),
-            },
-            &copy,
-        );
-
-        let title = model
-            .result
-            .render
-            .text
-            .iter()
-            .find(|view| view.id.as_str() == "settings-row:text-title")
-            .expect("title text");
-        assert_eq!(title.text, "Settings");
-        assert_eq!(title.style.role, TextRole::SettingsTitle);
-        assert_eq!(title.style.align, TextAlign::Start);
-        assert_eq!(title.rect.x, model.layout.left + 24.0);
-
-        let manual = model
-            .result
-            .render
-            .text
-            .iter()
-            .find(|view| view.id.as_str() == "settings-row:text-sort-manual")
-            .expect("manual sort text");
-        assert_eq!(manual.text, "Manual");
-        let row_w = model.layout.content_right(1.0) - model.layout.content_left(1.0);
-        let each_w = (row_w - SEGMENT_GAP * 3.0) / 4.0;
-        assert_eq!(
-            manual.rect.x,
-            model.layout.content_left(1.0) + each_w + SEGMENT_GAP + 30.0
-        );
-
-        let hidden_count = model
-            .result
-            .render
-            .text
-            .iter()
-            .find(|view| view.id.as_str() == "settings-row:text-hidden-apps-count")
-            .expect("hidden count text");
-        assert_eq!(hidden_count.text, "3 hidden");
-        assert_eq!(hidden_count.style.align, TextAlign::End);
-        assert_eq!(hidden_count.rect.x, model.layout.content_right(1.0) - 32.0);
-    }
+    // ------------------------------------------------------------------
+    // Animation / geometry / slider helpers
+    // ------------------------------------------------------------------
 
     #[test]
     fn animation_helpers_match_endpoints() {
@@ -2379,132 +1657,11 @@ mod tests {
         assert_eq!(pop_progress(1.0), 1.0);
     }
 
-    // ----- Debug-category layout / hit-test (issue #112) -----
-
     #[test]
     fn debug_overflow_rows_is_positive() {
-        // The Debug category has more rows than fit, so scrolling must be
-        // possible. Sanity-check the magnitude is in a reasonable range.
         let n = debug_category_overflow_rows();
         assert!(n > 0, "Debug category should overflow, got {n}");
         assert!(n < DEBUG_CATEGORY_ROW_COUNT, "overflow exceeds row count");
-    }
-
-    #[test]
-    fn debug_row_y_advances_with_scroll() {
-        let layout = layout();
-        let scale = 1.0;
-        let y_top = debug_row_y(&layout, scale, 0, 0);
-        let y_scrolled = debug_row_y(&layout, scale, 3, 0);
-        // Scrolling by 3 rows moves the row up by 3 * row_step.
-        assert_eq!(y_top - y_scrolled, 3.0 * ROW_STEP);
-    }
-
-    #[test]
-    fn debug_row_visibility_respects_scroll() {
-        let layout = layout();
-        let scale = 1.0;
-        // Row 0 is visible at scroll 0, hidden when scrolled well past it.
-        assert!(debug_row_is_visible(&layout, scale, 0, 0));
-        assert!(!debug_row_is_visible(&layout, scale, 10, 0));
-    }
-
-    #[test]
-    fn hit_test_debug_master_toggle_at_row_zero() {
-        let layout = layout();
-        let x = layout.content_left(1.0) + 10.0;
-        let y = layout.first_row_top(1.0) + ROW_H * 0.5;
-        assert_eq!(
-            hit_test(&layout, 1.0, SettingsCategoryId::Debug, 0, Point::new(x, y)),
-            SettingsPanelHit::DebugToggle
-        );
-    }
-
-    #[test]
-    fn hit_test_debug_lg_enabled_toggle() {
-        let layout = layout();
-        let x = layout.content_left(1.0) + 10.0;
-        let y = debug_row_y(&layout, 1.0, 0, DEBUG_ROW_LG_ENABLED) + ROW_H * 0.5;
-        assert_eq!(
-            hit_test(&layout, 1.0, SettingsCategoryId::Debug, 0, Point::new(x, y)),
-            SettingsPanelHit::LiquidGlassEnabled
-        );
-    }
-
-    #[test]
-    fn hit_test_debug_slider_row_resolves_to_param() {
-        let layout = layout();
-        // Click the left part of the thickness slider row → track hit.
-        let row_y = debug_row_y(&layout, 1.0, 0, DEBUG_ROW_LG_PARAM_FIRST) + ROW_H * 0.5;
-        let (track_left, _, _, _, _) = debug_slider_geometry(&layout, 1.0);
-        let x = track_left + 5.0;
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Debug,
-                0,
-                Point::new(x, row_y)
-            ),
-            SettingsPanelHit::LiquidGlassParam(LiquidGlassParamId::Thickness)
-        );
-    }
-
-    #[test]
-    fn hit_test_debug_slider_reset_arrow() {
-        let layout = layout();
-        let row_y = debug_row_y(&layout, 1.0, 0, DEBUG_ROW_LG_PARAM_FIRST) + ROW_H * 0.5;
-        let (_, _, _, reset_cx, _) = debug_slider_geometry(&layout, 1.0);
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Debug,
-                0,
-                Point::new(reset_cx, row_y)
-            ),
-            SettingsPanelHit::LiquidGlassParamReset(LiquidGlassParamId::Thickness)
-        );
-    }
-
-    #[test]
-    fn hit_test_debug_reset_all_button() {
-        let layout = layout();
-        // Row 12 only becomes visible once scrolled; at scroll 0 it is below
-        // the fold and would be clipped.
-        let scroll = 6;
-        let x = layout.content_left(1.0) + 10.0;
-        let y = debug_row_y(&layout, 1.0, scroll, DEBUG_ROW_LG_RESET_ALL) + ROW_H * 0.5;
-        assert_eq!(
-            hit_test(
-                &layout,
-                1.0,
-                SettingsCategoryId::Debug,
-                scroll,
-                Point::new(x, y)
-            ),
-            SettingsPanelHit::LiquidGlassResetAll
-        );
-    }
-
-    #[test]
-    fn hit_test_debug_disabled_rows_when_scrolled() {
-        let layout = layout();
-        // Row 0 scrolled out of view: a click at its old Y must not resolve
-        // to DebugToggle (it falls through to Inside / Outside / next row).
-        let x = layout.content_left(1.0) + 10.0;
-        // Scroll so row 0 is above the viewport.
-        let big_scroll = DEBUG_CATEGORY_ROW_COUNT;
-        let y_row0 = debug_row_y(&layout, 1.0, big_scroll, 0) + ROW_H * 0.5;
-        let hit = hit_test(
-            &layout,
-            1.0,
-            SettingsCategoryId::Debug,
-            big_scroll,
-            Point::new(x, y_row0),
-        );
-        // Row 0's old position is now off-panel (negative Y) → Outside.
-        assert_eq!(hit, SettingsPanelHit::Outside);
     }
 
     #[test]
@@ -2512,7 +1669,6 @@ mod tests {
         let layout = layout();
         let (track_left, track_width, _, _, _) = debug_slider_geometry(&layout, 1.0);
         let (min, max) = LiquidGlassParamId::Thickness.range();
-        // Pointer far left of the track → min value.
         let v_left = debug_slider_value_from_pointer(
             &layout,
             1.0,
@@ -2520,7 +1676,6 @@ mod tests {
             LiquidGlassParamId::Thickness,
         );
         assert_eq!(v_left, min);
-        // Pointer far right of the track → max value.
         let v_right = debug_slider_value_from_pointer(
             &layout,
             1.0,
@@ -2528,7 +1683,6 @@ mod tests {
             LiquidGlassParamId::Thickness,
         );
         assert_eq!(v_right, max);
-        // Pointer at the midpoint → midpoint value (within float tolerance).
         let v_mid = debug_slider_value_from_pointer(
             &layout,
             1.0,
@@ -2539,24 +1693,259 @@ mod tests {
     }
 
     #[test]
-    fn debug_param_and_view_row_indices_are_stable() {
-        // Ensure the row-index helpers agree with the constants used in the
-        // layout code (a regression guard against accidental renumbering).
-        assert_eq!(
-            debug_param_row(LiquidGlassParamId::Thickness),
-            DEBUG_ROW_LG_PARAM_FIRST
+    fn build_with_ui_produces_glass_surface() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let glass_surfaces: Vec<_> = model
+            .result
+            .render
+            .glass
+            .iter()
+            .flat_map(|b| &b.surfaces)
+            .collect();
+        assert!(
+            !glass_surfaces.is_empty(),
+            "build_with_ui should produce glass surfaces"
         );
-        assert_eq!(
-            debug_param_row(LiquidGlassParamId::BlurRadius),
-            DEBUG_ROW_LG_PARAM_FIRST + 4
+    }
+
+    #[test]
+    fn build_with_ui_debug_has_five_sliders() {
+        let inp = input(SettingsCategoryId::Debug);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let all_ink: Vec<_> = model
+            .result
+            .render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .collect();
+        let knobs: Vec<_> = all_ink
+            .iter()
+            .filter(|v| v.kind == ControlKind::SliderKnob)
+            .collect();
+        assert_eq!(knobs.len(), 5, "5 slider knobs");
+    }
+
+    // ------------------------------------------------------------------
+    // Profiling benchmarks: measure build_with_ui CPU cost and model counts.
+    // These are informational tests that print timings; they do not assert
+    // specific values (timings vary by machine).
+    // ------------------------------------------------------------------
+
+    /// Measure `build_with_ui` for the Debug category, which has the most
+    /// toggles (~11). Prints timing and shape/view counts for analysis.
+    #[test]
+    fn profile_build_with_ui_debug_category() {
+        use std::time::Instant;
+
+        let inp = input(SettingsCategoryId::Debug);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        // Warm-up: run once to avoid first-run allocation noise.
+        let _warm = build_with_ui(inp, &c, &mut scroll);
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        // Timed runs.
+        const RUNS: usize = 100;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _model = build_with_ui(inp, &c, &mut scroll);
+            // Reset scroll for next iteration (build_with_ui mutates it).
+            scroll = ContinuousScroller::new(ContinuousConfig::default());
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        // Run one more time to extract counts.
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+
+        let modal_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Modal)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+        let overlay_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Overlay)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+        let ink_count: usize = model.result.render.ink.iter().map(|b| b.views.len()).sum();
+        let glyph_count: usize = model
+            .result
+            .render
+            .glyphs
+            .iter()
+            .map(|b| b.views.len())
+            .sum();
+        let text_count = model.result.render.text.len();
+        let region_count = model.result.hits.len();
+
+        eprintln!();
+        eprintln!("=== PROFILE: build_with_ui (Debug category) ===");
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
         );
-        assert_eq!(
-            debug_view_row(LiquidGlassDebugId::ShowBackdropTexture),
-            DEBUG_ROW_LG_VIEW_FIRST
+        eprintln!(
+            "  Avg per call:       {:.3} us ({:.3} ms)",
+            avg_us,
+            avg_us / 1000.0
         );
-        assert_eq!(
-            debug_view_row(LiquidGlassDebugId::ShowFinalGlassOnly),
-            DEBUG_ROW_LG_VIEW_FIRST + 4
+        eprintln!("  Modal glass shapes: {}", modal_glass);
+        eprintln!("  Overlay glass:      {} (toggle thumbs)", overlay_glass);
+        eprintln!("  Ink views:          {}", ink_count);
+        eprintln!("  Glyph views:        {}", glyph_count);
+        eprintln!("  Text views:         {}", text_count);
+        eprintln!("  Hit regions:        {}", region_count);
+        eprintln!();
+
+        // The Debug category should produce ~11 toggle thumbs (glass overlay
+        // shapes) plus helper shapes. Overlay >= 11 is an indicator.
+        assert!(
+            overlay_glass >= 11,
+            "expected at least 11 toggle glass thumbs"
         );
+    }
+
+    /// Measure `build_with_ui` for the Apps category (fewest toggles: 1-2),
+    /// to compare against the Debug category. The ratio reveals the overhead
+    /// of ~11 toggles vs ~1 toggle.
+    #[test]
+    fn profile_build_with_ui_apps_category() {
+        use std::time::Instant;
+
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        // Warm-up.
+        let _warm = build_with_ui(inp, &c, &mut scroll);
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        const RUNS: usize = 100;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _model = build_with_ui(inp, &c, &mut scroll);
+            scroll = ContinuousScroller::new(ContinuousConfig::default());
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        // Extract counts.
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+
+        let modal_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Modal)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+        let overlay_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Overlay)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+
+        eprintln!();
+        eprintln!("=== PROFILE: build_with_ui (Apps category) ===");
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  Avg per call:       {:.3} us ({:.3} ms)",
+            avg_us,
+            avg_us / 1000.0
+        );
+        eprintln!("  Modal glass shapes: {}", modal_glass);
+        eprintln!("  Overlay glass:      {}", overlay_glass);
+        eprintln!();
+    }
+
+    /// Measure `HitMap::clone()` cost for the Debug category's hit map.
+    #[test]
+    fn profile_hitmap_clone_debug() {
+        use std::time::Instant;
+
+        let inp = input(SettingsCategoryId::Debug);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let hits = &model.result.hits;
+
+        eprintln!("  HitMap regions: {}", hits.len());
+
+        const RUNS: usize = 1000;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _clone = hits.clone();
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        eprintln!();
+        eprintln!(
+            "=== PROFILE: HitMap::clone() (Debug, {} regions) ===",
+            hits.len()
+        );
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  Avg per clone:      {:.3} us ({:.6} ms)",
+            avg_us,
+            avg_us / 1000.0
+        );
+        eprintln!();
+    }
+
+    /// Measure Ui::new() overhead (HashMap allocation etc.).
+    #[test]
+    fn profile_ui_construction() {
+        use crate::ui::context::Ui;
+        use crate::ui::theme::Theme;
+        use std::time::Instant;
+
+        let theme = Theme::default();
+        const RUNS: usize = 1000;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _ui = Ui::new(theme, 1280.0, 800.0);
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        eprintln!();
+        eprintln!("=== PROFILE: Ui::new() ===");
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!("  Avg per call:       {:.3} us", avg_us);
+        eprintln!();
     }
 }
