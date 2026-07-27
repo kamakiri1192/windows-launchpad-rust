@@ -196,11 +196,21 @@ impl App {
 
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
         let layout = self.settings_panel_layout();
+        // Derive the row-based scroll offset used by the legacy hit_test from
+        // the pixel-precise continuous scroller position, so hit testing stays
+        // in sync with the rendered (pixel) layout instead of drifting from
+        // accumulated integer-row rounding.
+        let row_step = crate::layout::settings_panel::row_step(self.scale_factor);
+        let scroll_rows = if row_step > 0.0 {
+            (self.settings_scroll.position / row_step).round() as i32
+        } else {
+            0
+        };
         let hit = crate::layout::settings_panel::hit_test(
             &layout,
             self.scale_factor,
             settings_category_id(self.settings_category),
-            self.settings_scroll_rows,
+            scroll_rows,
             crate::ui_model::geometry::Point::new(x, y),
         );
         settings_press_target_from_layout_hit(hit)
@@ -379,36 +389,18 @@ impl App {
     }
 
     /// Scroll the settings content by `delta_px` logical pixels.
-    /// Uses the continuous scroller for pixel-level smooth scrolling.
+    /// Uses the continuous scroller for pixel-level smooth scrolling. The
+    /// legacy row-based `settings_scroll_rows` counter is intentionally not
+    /// updated here: hit testing derives its row offset from the live pixel
+    /// position (`settings_scroll.position / row_step`) so the two never drift.
     pub(crate) fn scroll_settings_by_px(&mut self, delta_px: f32) {
         let max = self.settings_max_scroll_rows();
-        eprintln!(
-            "settings-scroll: scroll_settings_by_px(delta={:.1}px) called, max={}, scroll_rows={}",
-            delta_px, max, self.settings_scroll_rows
-        );
         if max <= 0 {
             self.settings_scroll_rows = 0;
             return;
         }
-        // Also apply via the continuous scroller (new Phase 3 pixel path).
         let now = std::time::Instant::now();
         self.settings_scroll.apply_wheel(delta_px, now);
-        // Update the legacy row-based counter for compatibility with existing
-        // row-oriented layout code. Phase 6 will remove this line.
-        let logical = delta_px / crate::layout::settings_panel::row_step(self.scale_factor);
-        let delta_rows = if logical > 0.0 {
-            logical.ceil() as i32
-        } else if logical < 0.0 {
-            logical.floor() as i32
-        } else {
-            0
-        };
-        let next = self.settings_scroll_rows + delta_rows;
-        self.settings_scroll_rows = next.clamp(0, max);
-        eprintln!(
-            "settings-scroll: new scroll_rows={}",
-            self.settings_scroll_rows
-        );
         self.request_redraw();
     }
 

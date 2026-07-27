@@ -243,6 +243,7 @@ impl ToggleVisualState {
         // Phase transition: Settling → Idle when all springs have settled.
         if self.phase == ToggleInteractionPhase::Settling
             && self.thumb_progress.settled(motion_cfg)
+            && self.press_amount.settled(motion_cfg)
             && self.glass_activation.settled(motion_cfg)
             && self.tint_progress.settled(motion_cfg)
         {
@@ -338,6 +339,25 @@ impl Ui {
             vs.glass_activation.glide_to(0.0);
             vs.press_amount.glide_to(0.0);
         } else {
+            // A click confirmed by the app this frame (set_active_click) is
+            // the authoritative toggle trigger. Apply it immediately and enter
+            // Settling so the thumb springs to the new terminal. This works
+            // even in a single frame (no press/release pair required), which
+            // matches the immediate-mode Response contract.
+            if clicked {
+                let new_target = if vs.thumb_progress.target >= 0.5 {
+                    0.0
+                } else {
+                    1.0
+                };
+                vs.value_at_press_start = vs.thumb_progress.target >= 0.5;
+                vs.thumb_progress.glide_to(new_target);
+                vs.tint_progress.glide_to(new_target);
+                vs.glass_activation.glide_to(0.0);
+                vs.press_amount.glide_to(0.0);
+                vs.phase = ToggleInteractionPhase::Settling;
+                vs.pending_drag = false;
+            }
             match vs.phase {
                 ToggleInteractionPhase::Idle => {
                     vs.glass_activation.glide_to(0.0);
@@ -428,17 +448,9 @@ impl Ui {
                             vs.glass_activation.snap_to(1.0);
                         }
                     } else {
-                        // Released → determine final value.
+                        // Released → determine final value from midpoint crossing.
                         let current_progress = vs.thumb_progress.value;
-                        let crossed_midpoint = current_progress >= 0.5;
-                        let new_value = if vs.value_at_press_start {
-                            // Was ON; stays ON if still past midpoint.
-                            crossed_midpoint
-                        } else {
-                            // Was OFF; becomes ON if past midpoint.
-                            crossed_midpoint
-                        };
-                        let new_target = if new_value { 1.0 } else { 0.0 };
+                        let new_target = if current_progress >= 0.5 { 1.0 } else { 0.0 };
 
                         vs.thumb_progress.glide_to(new_target);
                         vs.tint_progress.glide_to(new_target);
@@ -717,17 +729,15 @@ impl Ui {
         // ------------------------------------------------------------------
         // Compute response value
         // ------------------------------------------------------------------
-        // The "stored" value for the response depends on whether a toggle was
-        // confirmed this frame (via click or settle completing).
-        let new_value = if clicked && t.enabled {
-            vs.thumb_progress.target < 0.5
-            // If clicked, flip the previous target state.
-        } else {
-            vs.thumb_progress.target >= 0.5
-        };
+        // The state machine already advanced `thumb_progress.target` to the
+        // post-interaction value (flipped on click, set on drag release), so
+        // the response value is simply whether the thumb is on the ON side.
+        let new_value = vs.thumb_progress.target >= 0.5;
 
-        // Determine changed: value changed this frame due to click.
-        let value_changed = clicked && t.enabled;
+        // Determine changed: value changed this frame due to click or drag.
+        let value_changed = (clicked && t.enabled)
+            || (vs.phase == ToggleInteractionPhase::Settling
+                && new_value != vs.value_at_press_start);
 
         // ------------------------------------------------------------------
         // Update stored state

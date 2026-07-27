@@ -38,10 +38,11 @@ fn vs_main(
     @location(0) xywh: vec4<f32>,  // (x, y, w, h) top-left + size, content px
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
-    // NOTE: grid text has no clip region. The control-text and modal-text
-    // shaders (shader_control_text.wgsl) carry clip_rect/clip_radius at
-    // locations 3/4, but this grid-text shader intentionally does not, so
-    // it keeps its 3-attribute / 48-byte vertex layout.
+    // NOTE: grid text has no clip region. The vertex buffer is the shared
+    // 5-attribute / 80-byte GlyphQuad layout (which also carries clip_rect at
+    // location 3 and clip_radius at location 4 for the control/modal text
+    // shaders), but this grid-text entry point only consumes the first three
+    // locations. Locations 3/4 are uploaded but ignored here.
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),

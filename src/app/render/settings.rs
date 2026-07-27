@@ -131,7 +131,12 @@ impl App {
         );
         transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
 
-        // Glass from the builder's output.
+        // Glass from the builder's output. The panel background lives on the
+        // Modal layer; the Liquid Glass toggle thumbs live on the Overlay
+        // layer (so they render as independent glass lenses, not a union with
+        // the panel capsule). Overlay is merged with whatever the rest of the
+        // frame already pushed there (e.g. the bottom control capsule) because
+        // `set_glass_batch` replaces per-layer.
         let modal = model
             .result
             .render
@@ -141,6 +146,27 @@ impl App {
             .map(|batch| batch.surfaces.clone())
             .unwrap_or_default();
         self.render_model.set_glass_batch(GlassLayer::Modal, modal);
+
+        let ui_overlay = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Overlay)
+            .map(|batch| batch.surfaces.clone())
+            .unwrap_or_default();
+        if !ui_overlay.is_empty() {
+            let existing_overlay = self
+                .render_model
+                .glass
+                .iter()
+                .find(|batch| batch.layer == GlassLayer::Overlay)
+                .map(|batch| batch.surfaces.clone())
+                .unwrap_or_default();
+            let merged: Vec<_> = existing_overlay.into_iter().chain(ui_overlay).collect();
+            self.render_model
+                .set_glass_batch(GlassLayer::Overlay, merged);
+        }
         self.render_model
             .set_ink_batch(InkLane::Settings, instances);
         self.render_model

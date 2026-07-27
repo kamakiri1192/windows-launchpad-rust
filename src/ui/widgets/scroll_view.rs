@@ -147,10 +147,10 @@ impl Ui {
             };
 
             // Get or init scrollbar state.
-            if self.element_state(&id).scrollbar.is_none() {
-                self.element_state_mut(&id).scrollbar = Some(ScrollbarState::default());
-            }
-            let state = self.element_state(&id).scrollbar.unwrap();
+            let state = self
+                .element_state_mut(&id)
+                .scrollbar
+                .get_or_insert_with(ScrollbarState::default);
 
             // Scrollbar width: idle vs active (hover/drag).
             let width = if state.hovered || state.dragging {
