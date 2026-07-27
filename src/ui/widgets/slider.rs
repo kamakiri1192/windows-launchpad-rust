@@ -302,7 +302,11 @@ impl Ui {
         }
 
         // --- Slider geometry ---
-        let content_right = rect.max_x() - 16.0 * scale;
+        // `rect.max_x()` is the content-area right edge (set by the layout to
+        // `content_right` = panel_right - CONTENT_PAD). Pass it straight into
+        // Slider::geometry so the rendered track/reset/knob match the
+        // hit_test geometry exactly (no extra inset).
+        let content_right = rect.max_x();
         let (track_left, track_width, knob_r, reset_cx, reset_r, track_hh) =
             Slider::geometry(content_right, scale);
 
