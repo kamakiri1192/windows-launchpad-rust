@@ -987,7 +987,12 @@ impl App {
             || folder_long_press_pending
             || self.qa_capture_due(now)
             || self.profile_scroll.is_some()
-            || self.settings.show_fps
+            // Only keep redrawing for the FPS counter while the window is
+            // visible. `about_to_wait` ticks keep firing even after hide(),
+            // so without `self.visible` the hidden window would be rendered
+            // every tick (sluggish machine + GPU driver crash). `show_fps`
+            // stays persisted; the counter returns on the next summon.
+            || (self.settings.show_fps && self.visible)
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening
