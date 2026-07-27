@@ -11,6 +11,7 @@ pub mod layout;
 pub mod registry;
 pub mod response;
 pub mod theme;
+pub mod widgets;
 
 // Re-export the most commonly used types.
 pub use context::{LayoutDirection, Ui};
@@ -18,3 +19,9 @@ pub use interaction::{ElementState, InteractionPhase};
 pub use registry::Registry;
 pub use response::Response;
 pub use theme::{ControlSize, ScrollbarStyle, Theme, ToggleMotionStyle};
+
+// Re-export widget types.
+pub use widgets::{
+    Button, ButtonStyle, Divider, Heading, IconButton, Label, Slider, SliderResponse, Toggle,
+    ToggleResponse, ToggleStyle,
+};

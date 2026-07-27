@@ -88,6 +88,11 @@ pub struct Ui {
     pointer_pressed: bool,
     #[allow(dead_code)]
     last_click_consumed: bool,
+    /// If `Some(id)`, the widget with this id reports `clicked = true` this
+    /// frame. Set by the app after performing external hit-test on pointer
+    /// release. Phase 4 (settings panel migration) will wire this into the
+    /// existing SettingsPressTarget routing.
+    active_click_id: Option<UiId>,
 
     // ---- anonymous id counter -------------------------------------------
     anon_counter: u64,
@@ -123,6 +128,7 @@ impl Ui {
             pointer_pos: None,
             pointer_pressed: false,
             last_click_consumed: false,
+            active_click_id: None,
             anon_counter: 0,
         }
     }
@@ -159,6 +165,18 @@ impl Ui {
     /// Currently focused element id.
     pub fn focused_id(&self) -> Option<&UiId> {
         self.focused_id.as_ref()
+    }
+
+    /// Set which widget id, if any, should be treated as "clicked" this frame.
+    /// The app performs external hit-testing on pointer release and passes the
+    /// winning id here. Widgets whose id matches will report `clicked = true`.
+    pub fn set_active_click(&mut self, id: Option<UiId>) {
+        self.active_click_id = id;
+    }
+
+    /// Returns `true` when `id` matches the active-click id for this frame.
+    pub fn is_active_click(&self, id: &UiId) -> bool {
+        self.active_click_id.as_ref() == Some(id)
     }
 
     // ------------------------------------------------------------------
