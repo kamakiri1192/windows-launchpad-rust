@@ -2,6 +2,22 @@ use crate::layout::grid::GridLayout;
 use crate::ui_model::grid::GridItem;
 use crate::ui_model::render_model::TileView;
 
+/// One glass rounded-rect shape in the storage buffer, laid out for direct
+/// WGSL consumption. Every field offset is documented to keep Rust `#[repr(C)]`
+/// in sync with the corresponding WGSL `struct GlassShape`.
+///
+/// Offsets (bytes):
+///   0  center       [f32; 2]  (8)
+///   8  size         [f32; 2]  (8)
+///  16  radius       f32       (4)
+///  20  shape_type   u32       (4)
+///  24  activation   f32       (4)
+///  28  _pad1        u32       (4)  → align next vec4 to 32
+///  32  clip_rect    [f32; 4]  (16) → min_x, min_y, width, height; w≤0 = no clip
+///  48  clip_radius  f32       (4)
+///  52  _pad2        [u32; 3]  (12) → align motion to 64
+///  64  motion       [f32; 4]  (16)
+/// Total: 80 bytes
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlassShape {
@@ -15,9 +31,16 @@ pub struct GlassShape {
     pub shape_type: u32,
     /// Per-shape glass activation (0.0 = idle, 1.0 = fully active).
     pub activation: f32,
-    /// Explicit padding so `motion` starts at the WGSL-required 16-byte
-    /// boundary (offset 32).
-    pub _pad: u32,
+    /// 4-byte pad so `clip_rect` starts at offset 32 (WGSL vec4<f32> needs
+    /// 16-byte alignment in storage buffers).
+    pub _pad1: u32,
+    /// Per-shape clip rectangle in content px: (min_x, min_y, width, height).
+    /// Sentinel: width <= 0.0 means no clipping (shape renders everywhere).
+    pub clip_rect: [f32; 4],
+    /// Corner radius for the clip rectangle (0 = sharp corners).
+    pub clip_radius: f32,
+    /// 12-byte pad so `motion` starts at offset 64 (WGSL vec4<f32> 16-aligned).
+    pub _pad2: [u32; 3],
     /// Optional GPU animation payload: `(pivot_x, pivot_y, phase, flags)`.
     pub motion: [f32; 4],
 }
@@ -109,7 +132,10 @@ impl GlassShape {
             radius,
             shape_type,
             activation: 0.0,
-            _pad: 0,
+            _pad1: 0,
+            clip_rect: [0.0; 4],
+            clip_radius: 0.0,
+            _pad2: [0; 3],
             motion: [0.0; 4],
         }
     }
@@ -117,6 +143,13 @@ impl GlassShape {
     /// Set the per-shape glass activation level.
     pub fn with_activation(mut self, activation: f32) -> Self {
         self.activation = activation;
+        self
+    }
+
+    /// Set the per-shape clip region. Pass sentinel `([0.0;4], 0.0)` for no clip.
+    pub fn with_clip(mut self, clip_rect: [f32; 4], clip_radius: f32) -> Self {
+        self.clip_rect = clip_rect;
+        self.clip_radius = clip_radius;
         self
     }
 
@@ -222,7 +255,7 @@ mod tests {
 
     #[test]
     fn glass_shape_layout_matches_wgsl_storage_struct() {
-        assert_eq!(std::mem::size_of::<GlassShape>(), 48);
+        assert_eq!(std::mem::size_of::<GlassShape>(), 80);
         assert_eq!(std::mem::align_of::<GlassShape>(), 4);
     }
 

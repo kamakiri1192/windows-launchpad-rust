@@ -23,11 +23,27 @@ struct GlassUniforms {
 };
 
 struct GlassShape {
+    // offset 0
     center: vec2<f32>,
+    // offset 8
     size: vec2<f32>,
+    // offset 16
     radius: f32,
+    // offset 20
     shape_type: u32,
+    // offset 24
     activation: f32,
+    // offset 28 — explicit pad so clip_rect starts at 32 (16-byte aligned)
+    _pad1: u32,
+    // offset 32
+    clip_rect: vec4<f32>,
+    // offset 48
+    clip_radius: f32,
+    // offset 52 — explicit pad so motion starts at 64 (16-byte aligned)
+    _pad2_a: u32,
+    _pad2_b: u32,
+    _pad2_c: u32,
+    // offset 64
     motion: vec4<f32>,
 };
 
@@ -59,6 +75,25 @@ fn sdf_rrect(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let rr = min(r, shortest);
     let q = abs(p) - b + vec2<f32>(rr);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - rr;
+}
+
+/// Returns true when `pixel` falls inside the rounded rectangle defined by
+/// `rect = (min_x, min_y, width, height)` with corner radius `r`.
+/// When r <= 0.0, the check degrades to a plain axis-aligned rectangle test.
+fn point_in_rounded_rect(pixel: vec2<f32>, rect: vec4<f32>, r: f32) -> bool {
+    // Fast AABB reject: half-open on max edges, matching Rect::contains.
+    if pixel.x < rect.x || pixel.y < rect.y
+    || pixel.x >= rect.x + rect.z
+    || pixel.y >= rect.y + rect.w {
+        return false;
+    }
+    if r <= 0.0 {
+        return true;
+    }
+    let half = vec2<f32>(rect.z, rect.w) * 0.5;
+    let center = vec2<f32>(rect.x + half.x, rect.y + half.y);
+    let sd = sdf_rrect(pixel - center, half, r);
+    return sd <= 0.0;
 }
 
 fn smooth_union(d1: f32, d2: f32, k: f32) -> f32 {
@@ -116,6 +151,15 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
         if shape.shape_type == 3u {
             continue;
         }
+        // Per-shape clip: if clip_rect has positive width, only contribute
+        // SDF inside that rounded rectangle. Outside pixels see the shape's
+        // distance as "far away" (the loop skips it), so smooth_union ignores
+        // it — the glass alpha becomes 0 where the shape is clipped away.
+        if (shape.clip_rect.z > 0.0) {
+            if (!point_in_rounded_rect(pixel, shape.clip_rect, shape.clip_radius)) {
+                continue;
+            }
+        }
         // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
         // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
         let local = resolved_local(shape, pixel);
@@ -134,6 +178,12 @@ fn frame_sdf(pixel: vec2<f32>) -> f32 {
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
         if shape.shape_type == 1u || shape.shape_type == 3u {
+            // Clip the frame shape itself if it carries a per-shape clip.
+            if (shape.clip_rect.z > 0.0) {
+                if (!point_in_rounded_rect(pixel, shape.clip_rect, shape.clip_radius)) {
+                    continue;
+                }
+            }
             let local = pixel - shape.center;
             d = sdf_rrect(local, shape.size * 0.5, shape.radius);
             return d;
@@ -152,6 +202,12 @@ fn control_sdf(pixel: vec2<f32>) -> f32 {
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
         if shape.shape_type == 2u || shape.shape_type == 6u {
+            // Per-shape clip for control shapes.
+            if (shape.clip_rect.z > 0.0) {
+                if (!point_in_rounded_rect(pixel, shape.clip_rect, shape.clip_radius)) {
+                    continue;
+                }
+            }
             let local = resolved_local(shape, pixel);
             let shape_d = sdf_rrect(local, shape.size * 0.5, shape.radius);
             d = smooth_union(d, shape_d, u.blend);

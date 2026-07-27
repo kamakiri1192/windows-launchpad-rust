@@ -27,13 +27,19 @@ use super::Renderer;
 fn shape_for(surface: &GlassSurface) -> GlassShape {
     let center = [surface.rect.center().x, surface.rect.center().y];
     let size = [surface.rect.width, surface.rect.height];
-    let shape = match surface.behavior {
+    let mut shape = match surface.behavior {
         GlassBehavior::Scrolling => GlassShape::rounded_rect(center, size, surface.radius),
         GlassBehavior::FixedFrame => GlassShape::fixed_rounded_rect(center, size, surface.radius),
         GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
         GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
     };
-    shape.with_activation(surface.activation)
+    shape = shape.with_activation(surface.activation);
+    // Pack the optional clip region into the per-shape clip fields.
+    // Sentinels: clip_rect = [0,0,0,0] (width <= 0) and clip_radius = 0.0
+    // mean "no clip" — the WGSL side checks clip_rect.z > 0.0.
+    let (clip_rect, clip_radius_packed) = clip_to_packed(&surface.clip);
+    shape = shape.with_clip(clip_rect, clip_radius_packed[0]);
+    shape
 }
 
 fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape {
@@ -43,7 +49,7 @@ fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape 
         tile.id == surface.id
             && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0
     });
-    if let Some(tile) = animated_parent {
+    let mut shape = if let Some(tile) = animated_parent {
         if surface.behavior == GlassBehavior::Control {
             GlassShape::animated_control_rounded_rect(
                 center,
@@ -60,8 +66,27 @@ fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape 
             )
         }
     } else {
-        shape_for(surface)
-    }
+        shape_for_geometry_only(surface)
+    };
+    // Propagate the optional clip region so grid/drag overlays respect the
+    // clip stack (e.g. Toggle thumb inside a scrollable settings panel).
+    let (clip_rect, clip_radius_packed) = clip_to_packed(&surface.clip);
+    shape = shape.with_clip(clip_rect, clip_radius_packed[0]);
+    shape
+}
+
+/// Like `shape_for` but without clip packing (used as a base by callers that
+/// apply clip themselves).
+fn shape_for_geometry_only(surface: &GlassSurface) -> GlassShape {
+    let center = [surface.rect.center().x, surface.rect.center().y];
+    let size = [surface.rect.width, surface.rect.height];
+    let shape = match surface.behavior {
+        GlassBehavior::Scrolling => GlassShape::rounded_rect(center, size, surface.radius),
+        GlassBehavior::FixedFrame => GlassShape::fixed_rounded_rect(center, size, surface.radius),
+        GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
+        GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
+    };
+    shape.with_activation(surface.activation)
 }
 
 /// The current Liquid Glass modal pass accepts one surface. Select the
