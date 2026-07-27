@@ -27,8 +27,14 @@ impl App {
         let now = Instant::now();
         let vp = self.viewport_phys();
 
+        // Profiling: begin frame.
+        self.profiler.begin_frame();
+
         // Tick the continuous settings scroller (Phase 3 pixel-level scroll).
+        let scroller_tick_start = Instant::now();
         self.settings_scroll.tick(now);
+        self.profiler
+            .record_scroller_tick(scroller_tick_start.elapsed());
 
         let profile_scroll_position = self.profile_scroll.as_ref().and_then(|profile| {
             profile.position(
@@ -152,6 +158,7 @@ impl App {
 
         // Upload the control's capsule + overlays before the render.
         // This also measures query + preedit width for the IME cursor.
+        self.profiler.begin_tick_body();
         let control_shape = self.render_bottom_control();
         self.refresh_interaction_glass();
         // Upload the corner gear capsule + glyph (if shown).
@@ -169,13 +176,16 @@ impl App {
 
         // Submit one complete renderer-neutral frame model. Renderer-side
         // dirty tracking updates only lanes whose model data changed.
+        let prepare_start = Instant::now();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.prepare(&self.render_model);
         }
+        self.profiler.record_prepare(prepare_start.elapsed());
 
         // Render the frame (consumes the uploaded buffers).
         let qa_capture_path = self.qa_capture_path(now);
         let qa_enabled = self.qa_enabled();
+        let render_start = Instant::now();
         if let Some(r) = self.renderer.as_mut() {
             if let Some(path) = qa_capture_path {
                 r.qa_shot = Some(path);
@@ -211,6 +221,7 @@ impl App {
                 drag_pos: (self.drag_x, self.drag_y),
             });
         }
+        self.profiler.record_render(render_start.elapsed());
 
         if !self.first_frame_rendered {
             self.first_frame_rendered = true;
@@ -239,5 +250,8 @@ impl App {
         {
             self.request_redraw();
         }
+
+        self.profiler.end_frame();
+        self.profiler.maybe_report();
     }
 }

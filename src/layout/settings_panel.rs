@@ -1730,4 +1730,222 @@ mod tests {
             .collect();
         assert_eq!(knobs.len(), 5, "5 slider knobs");
     }
+
+    // ------------------------------------------------------------------
+    // Profiling benchmarks: measure build_with_ui CPU cost and model counts.
+    // These are informational tests that print timings; they do not assert
+    // specific values (timings vary by machine).
+    // ------------------------------------------------------------------
+
+    /// Measure `build_with_ui` for the Debug category, which has the most
+    /// toggles (~11). Prints timing and shape/view counts for analysis.
+    #[test]
+    fn profile_build_with_ui_debug_category() {
+        use std::time::Instant;
+
+        let inp = input(SettingsCategoryId::Debug);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        // Warm-up: run once to avoid first-run allocation noise.
+        let _warm = build_with_ui(inp, &c, &mut scroll);
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        // Timed runs.
+        const RUNS: usize = 100;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _model = build_with_ui(inp, &c, &mut scroll);
+            // Reset scroll for next iteration (build_with_ui mutates it).
+            scroll = ContinuousScroller::new(ContinuousConfig::default());
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        // Run one more time to extract counts.
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+
+        let modal_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Modal)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+        let overlay_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Overlay)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+        let ink_count: usize = model.result.render.ink.iter().map(|b| b.views.len()).sum();
+        let glyph_count: usize = model
+            .result
+            .render
+            .glyphs
+            .iter()
+            .map(|b| b.views.len())
+            .sum();
+        let text_count = model.result.render.text.len();
+        let region_count = model.result.hits.len();
+
+        eprintln!();
+        eprintln!("=== PROFILE: build_with_ui (Debug category) ===");
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  Avg per call:       {:.3} us ({:.3} ms)",
+            avg_us,
+            avg_us / 1000.0
+        );
+        eprintln!("  Modal glass shapes: {}", modal_glass);
+        eprintln!("  Overlay glass:      {} (toggle thumbs)", overlay_glass);
+        eprintln!("  Ink views:          {}", ink_count);
+        eprintln!("  Glyph views:        {}", glyph_count);
+        eprintln!("  Text views:         {}", text_count);
+        eprintln!("  Hit regions:        {}", region_count);
+        eprintln!();
+
+        // The Debug category should produce ~11 toggle thumbs (glass overlay
+        // shapes) plus helper shapes. Overlay >= 11 is an indicator.
+        assert!(
+            overlay_glass >= 11,
+            "expected at least 11 toggle glass thumbs"
+        );
+    }
+
+    /// Measure `build_with_ui` for the Apps category (fewest toggles: 1-2),
+    /// to compare against the Debug category. The ratio reveals the overhead
+    /// of ~11 toggles vs ~1 toggle.
+    #[test]
+    fn profile_build_with_ui_apps_category() {
+        use std::time::Instant;
+
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        // Warm-up.
+        let _warm = build_with_ui(inp, &c, &mut scroll);
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+
+        const RUNS: usize = 100;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _model = build_with_ui(inp, &c, &mut scroll);
+            scroll = ContinuousScroller::new(ContinuousConfig::default());
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        // Extract counts.
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+
+        let modal_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Modal)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+        let overlay_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Overlay)
+            .map(|b| b.surfaces.len())
+            .unwrap_or(0);
+
+        eprintln!();
+        eprintln!("=== PROFILE: build_with_ui (Apps category) ===");
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  Avg per call:       {:.3} us ({:.3} ms)",
+            avg_us,
+            avg_us / 1000.0
+        );
+        eprintln!("  Modal glass shapes: {}", modal_glass);
+        eprintln!("  Overlay glass:      {}", overlay_glass);
+        eprintln!();
+    }
+
+    /// Measure `HitMap::clone()` cost for the Debug category's hit map.
+    #[test]
+    fn profile_hitmap_clone_debug() {
+        use std::time::Instant;
+
+        let inp = input(SettingsCategoryId::Debug);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let hits = &model.result.hits;
+
+        eprintln!("  HitMap regions: {}", hits.len());
+
+        const RUNS: usize = 1000;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _clone = hits.clone();
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        eprintln!();
+        eprintln!(
+            "=== PROFILE: HitMap::clone() (Debug, {} regions) ===",
+            hits.len()
+        );
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  Avg per clone:      {:.3} us ({:.6} ms)",
+            avg_us,
+            avg_us / 1000.0
+        );
+        eprintln!();
+    }
+
+    /// Measure Ui::new() overhead (HashMap allocation etc.).
+    #[test]
+    fn profile_ui_construction() {
+        use crate::ui::context::Ui;
+        use crate::ui::theme::Theme;
+        use std::time::Instant;
+
+        let theme = Theme::default();
+        const RUNS: usize = 1000;
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            let _ui = Ui::new(theme, 1280.0, 800.0);
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / RUNS as f64;
+
+        eprintln!();
+        eprintln!("=== PROFILE: Ui::new() ===");
+        eprintln!("  Runs:               {}", RUNS);
+        eprintln!(
+            "  Total time:         {:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!("  Avg per call:       {:.3} us", avg_us);
+        eprintln!();
+    }
 }

@@ -602,26 +602,38 @@ impl LiquidGlassRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("liquid glass control geometry pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.overlay_geometry_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.control_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
+        // Caching: skip geometry pass when shapes + params are unchanged,
+        // matching the base pass geometry_key pattern.
+        let current_key = self
+            .last_control_geometry_key
+            .wrapping_add((width as u64) << 32 | height as u64)
+            .wrapping_add(self.params.thickness.to_bits() as u64)
+            .wrapping_add(self.params.refractive_index.to_bits() as u64)
+            .wrapping_add(self.params.blend.to_bits() as u64);
+        let geometry_changed = current_key != self.control_geometry_rendered_key;
+        if geometry_changed {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("liquid glass control geometry pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.control_geometry_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.geometry_pipeline);
+                pass.set_bind_group(0, &self.control_geometry_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.control_geometry_rendered_key = current_key;
         }
 
         {

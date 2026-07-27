@@ -365,6 +365,9 @@ pub struct App {
     /// AppKit local event monitor and retained native click packets.
     #[cfg(target_os = "macos")]
     pub _macos_input: Option<crate::platform::macos::input_passthrough::MacInputPassthrough>,
+
+    // ---- profiling ---------------------------------------------------------
+    pub profiler: crate::profiling::FrameProfiler,
 }
 
 use crate::domain::app_registry::AppLaunchInfo;
@@ -454,6 +457,7 @@ impl App {
             _macos: None,
             #[cfg(target_os = "macos")]
             _macos_input: None,
+            profiler: crate::profiling::FrameProfiler::new(),
         }
     }
 }

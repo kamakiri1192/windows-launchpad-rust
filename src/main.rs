@@ -37,6 +37,7 @@ mod input_routing;
 mod layout;
 mod liquid_glass;
 mod platform;
+mod profiling;
 mod qa;
 mod renderer;
 mod scroll;

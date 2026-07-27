@@ -72,6 +72,7 @@ impl App {
         // Capture the settings_scroll into a local ref for the builder.
         // We use a trick: split borrow of settings_scroll while we still need
         // other fields of self. Build the input first, then pass &mut scroll.
+        self.profiler.begin_settings_build();
         let model = {
             let input = layout::settings_panel::SettingsPanelInput {
                 viewport: self.viewport_phys(),
@@ -101,8 +102,81 @@ impl App {
             };
             layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
         };
+        self.profiler.end_settings_build();
+
         // Cache the HitMap for next frame's input processing (1-frame delay).
+        let clone_start = std::time::Instant::now();
         self.cached_settings_hit_map = Some(model.result.hits.clone());
+        self.profiler.record_hitmap_clone(clone_start.elapsed());
+
+        // Record shape/model counts for profiling.
+        let overlay_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Overlay)
+            .map(|b| b.surfaces.len() as u64)
+            .unwrap_or(0);
+        let modal_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|b| b.layer == GlassLayer::Modal)
+            .map(|b| b.surfaces.len() as u64)
+            .unwrap_or(0);
+        let ink_count = model
+            .result
+            .render
+            .ink
+            .iter()
+            .map(|b| b.views.len() as u64)
+            .sum::<u64>();
+        let glyph_count = model
+            .result
+            .render
+            .glyphs
+            .iter()
+            .map(|b| b.views.len() as u64)
+            .sum::<u64>();
+        let text_count = model.result.render.text.len() as u64;
+        // Count existing overlay glass that's merged in (from bottom control etc.)
+        let existing_overlay = self
+            .render_model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Overlay)
+            .map(|batch| batch.surfaces.len() as u64)
+            .unwrap_or(0);
+        let existing_modal = self
+            .render_model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .map(|batch| batch.surfaces.len() as u64)
+            .unwrap_or(0);
+        // Also get base/control shapes from the render_model.
+        let base_count = self
+            .render_model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Base)
+            .map(|batch| batch.surfaces.len() as u64)
+            .unwrap_or(0);
+        let control_overlay = existing_overlay; // Overlay = control + settings glass
+        let region_count = model.result.hits.len() as u64;
+        self.profiler.record_counts(
+            overlay_glass + existing_overlay,
+            modal_glass + existing_modal,
+            control_overlay,
+            base_count,
+            region_count,
+            ink_count,
+            glyph_count,
+            text_count,
+        );
+
         let panel = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
@@ -164,7 +238,12 @@ impl App {
                 .find(|batch| batch.layer == GlassLayer::Overlay)
                 .map(|batch| batch.surfaces.clone())
                 .unwrap_or_default();
-            let merged: Vec<_> = existing_overlay.into_iter().chain(ui_overlay).collect();
+            let panel_rect = model.layout.rect();
+            let merged: Vec<_> = existing_overlay
+                .into_iter()
+                .chain(ui_overlay)
+                .filter(|s| s.rect.intersects(panel_rect))
+                .collect();
             self.render_model
                 .set_glass_batch(GlassLayer::Overlay, merged);
         }
