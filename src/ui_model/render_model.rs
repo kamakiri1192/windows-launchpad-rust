@@ -170,6 +170,13 @@ pub enum ControlKind {
     Checkmark,
     Chevron,
     Divider,
+    /// Horizontal slider track (rounded bar). Drawn by `shader_control.wgsl`
+    /// kind 10.
+    SliderTrack,
+    /// Slider knob (filled disk). Drawn by kind 11.
+    SliderKnob,
+    /// Per-row reset arrow (↺). Drawn by kind 12.
+    ResetIcon,
 }
 
 /// Draw-order lane for procedural foreground ink.

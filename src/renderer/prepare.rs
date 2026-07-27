@@ -14,7 +14,7 @@ use crate::ui_model::render_model::{
 
 use super::controls::{
     ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_GEAR,
-    KIND_MAGNIFIER, KIND_ROUND_RECT,
+    KIND_MAGNIFIER, KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
 };
 use super::counters::Category;
 use super::icon_pipeline::IconInstance;
@@ -85,6 +85,9 @@ fn control_kind(kind: &ControlKind) -> f32 {
         ControlKind::RowBackground | ControlKind::Toggle | ControlKind::Divider => KIND_ROUND_RECT,
         ControlKind::Checkmark => KIND_CHECK,
         ControlKind::Chevron => KIND_CHEVRON,
+        ControlKind::SliderTrack => KIND_SLIDER_TRACK,
+        ControlKind::SliderKnob => KIND_SLIDER_KNOB,
+        ControlKind::ResetIcon => KIND_RESET_ICON,
         // These are container/semantic views rather than foreground ink.
         ControlKind::SearchPill
         | ControlKind::PageIndicator

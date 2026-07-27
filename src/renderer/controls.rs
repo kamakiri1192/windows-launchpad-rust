@@ -51,6 +51,12 @@ pub const KIND_ROUND_RECT: f32 = 6.0;
 pub const KIND_CHECK: f32 = 7.0;
 /// Chevron used by settings action rows.
 pub const KIND_CHEVRON: f32 = 8.0;
+/// Slider track (wide rounded bar) used by the settings panel.
+pub const KIND_SLIDER_TRACK: f32 = 10.0;
+/// Slider knob (filled disk) used by the settings panel.
+pub const KIND_SLIDER_KNOB: f32 = 11.0;
+/// Reset arrow (↺) used by the settings panel's per-row reset.
+pub const KIND_RESET_ICON: f32 = 12.0;
 
 /// Uniform for the bottom-control overlay + text shaders. The bottom control
 /// uses only the viewport; edit badges also use scroll and the page frame clip.

@@ -1689,6 +1689,138 @@ impl LiquidGlassRenderer {
             3
         }
     }
+
+    // ----- Settings-panel accessors -------------------------------------
+    //
+    // These mirror what the keyboard debug handler does, but expose the same
+    // state to the settings overlay. Numeric setters clamp to the same ranges
+    // as the keyboard handler and flip `blur_dirty` so the next frame picks
+    // up the change. The settings layer (`domain::settings::LiquidGlassSettings`)
+    // is intentionally not referenced here to keep this module free of the
+    // `domain` layer; the `App` bridges between the two.
+
+    /// Snapshot of the current Liquid Glass parameters.
+    pub fn params(&self) -> LiquidGlassParams {
+        self.params
+    }
+
+    /// Snapshot of the current debug options (debug-view overlays and the
+    /// C/E/L disable flags). Session-only — never persisted.
+    pub fn debug_options(&self) -> DebugOptions {
+        self.debug
+    }
+
+    /// Master switch for the Liquid Glass effect (keyboard equivalent: `V`).
+    pub fn set_enabled(&mut self, enabled: bool) {
+        if self.params.enabled != enabled {
+            self.params.enabled = enabled;
+            self.blur_dirty = true;
+        }
+    }
+
+    pub fn set_thickness(&mut self, value: f32) {
+        self.params.thickness = value.clamp(6.0, 48.0);
+        self.blur_dirty = true;
+    }
+
+    pub fn set_refractive_index(&mut self, value: f32) {
+        self.params.refractive_index = value.clamp(1.02, 1.75);
+        self.blur_dirty = true;
+    }
+
+    pub fn set_saturation(&mut self, value: f32) {
+        self.params.saturation = value.clamp(0.5, 2.0);
+        self.blur_dirty = true;
+    }
+
+    pub fn set_chromatic_aberration(&mut self, value: f32) {
+        self.params.chromatic_aberration = value.clamp(0.0, 0.18);
+        self.blur_dirty = true;
+    }
+
+    pub fn set_blur_radius(&mut self, value: f32) {
+        self.params.blur_radius = value.clamp(0.0, 40.0);
+        self.blur_dirty = true;
+    }
+
+    /// Reset every persisted parameter to the coded baseline. Debug options
+    /// (overlays + disable flags) are left untouched — those are session-only
+    /// and the user may still want them on while tuning.
+    pub fn reset_params_to_defaults(&mut self) {
+        let default = LiquidGlassParams::default();
+        self.params.enabled = default.enabled;
+        self.params.thickness = default.thickness;
+        self.params.refractive_index = default.refractive_index;
+        self.params.saturation = default.saturation;
+        self.params.chromatic_aberration = default.chromatic_aberration;
+        self.params.blur_radius = default.blur_radius;
+        self.blur_dirty = true;
+    }
+
+    /// Apply the six persisted fields from a settings snapshot. Debug options
+    /// are not touched. Used at startup to restore the user's last values.
+    pub fn apply_persisted_params(
+        &mut self,
+        enabled: bool,
+        thickness: f32,
+        refractive_index: f32,
+        saturation: f32,
+        chromatic_aberration: f32,
+        blur_radius: f32,
+    ) {
+        self.params.enabled = enabled;
+        self.params.thickness = thickness.clamp(6.0, 48.0);
+        self.params.refractive_index = refractive_index.clamp(1.02, 1.75);
+        self.params.saturation = saturation.clamp(0.5, 2.0);
+        self.params.chromatic_aberration = chromatic_aberration.clamp(0.0, 0.18);
+        self.params.blur_radius = blur_radius.clamp(0.0, 40.0);
+        self.blur_dirty = true;
+    }
+
+    /// Toggle one of the B/G/D/A/F debug-view overlays or the C/E/L disable
+    /// flags from the settings panel. Session-only — never persisted.
+    pub fn toggle_debug_flag(&mut self, flag: SettingsDebugFlag) {
+        match flag {
+            SettingsDebugFlag::ShowBackdropTexture => {
+                self.debug.show_backdrop_texture = !self.debug.show_backdrop_texture
+            }
+            SettingsDebugFlag::ShowGeometryTexture => {
+                self.debug.show_geometry_texture = !self.debug.show_geometry_texture
+            }
+            SettingsDebugFlag::ShowDisplacement => {
+                self.debug.show_displacement = !self.debug.show_displacement
+            }
+            SettingsDebugFlag::ShowAlphaMask => {
+                self.debug.show_alpha_mask = !self.debug.show_alpha_mask
+            }
+            SettingsDebugFlag::ShowFinalGlassOnly => {
+                self.debug.show_final_glass_only = !self.debug.show_final_glass_only
+            }
+            SettingsDebugFlag::DisableChromaticAberration => {
+                self.debug.disable_chromatic_aberration = !self.debug.disable_chromatic_aberration
+            }
+            SettingsDebugFlag::DisableEdgeLighting => {
+                self.debug.disable_edge_lighting = !self.debug.disable_edge_lighting
+            }
+            SettingsDebugFlag::DisableBlur => self.debug.disable_blur = !self.debug.disable_blur,
+        }
+        self.blur_dirty = true;
+    }
+}
+
+/// Identifies which debug flag the settings panel wants to toggle. This is
+/// the renderer's own mirror of `domain::settings::LiquidGlassDebugFlag` so
+/// this module stays independent of the `domain` layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsDebugFlag {
+    ShowBackdropTexture,
+    ShowGeometryTexture,
+    ShowDisplacement,
+    ShowAlphaMask,
+    ShowFinalGlassOnly,
+    DisableChromaticAberration,
+    DisableEdgeLighting,
+    DisableBlur,
 }
 
 fn log_capture_status(status: &CaptureStatus) {

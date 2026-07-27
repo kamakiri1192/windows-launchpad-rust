@@ -83,6 +83,24 @@ impl App {
         }
     }
 
+    /// Push the persisted Liquid Glass parameters from `self.settings` into
+    /// the renderer. Called once at startup (after the renderer is created)
+    /// and after any reset. Debug-only flags are never touched here.
+    pub(crate) fn apply_persisted_liquid_glass_to_renderer(&mut self) {
+        let Some(r) = self.renderer.as_mut() else {
+            return;
+        };
+        let lg = &self.settings.liquid_glass;
+        r.apply_persisted_liquid_glass(
+            lg.enabled,
+            lg.thickness,
+            lg.refractive_index,
+            lg.saturation,
+            lg.chromatic_aberration,
+            lg.blur_radius,
+        );
+    }
+
     /// Hide the launcher window and reset transient UI state (search field,
     /// scroll position, IME), but keep the process + event loop alive so it
     /// can be summoned again. Idempotent: a no-op if already hidden.
