@@ -704,18 +704,44 @@ impl Ui {
             thumb_diam,
         );
 
-        let thumb_glass = GlassSurface {
-            id: t.id.clone(),
-            rect: thumb_rect,
-            radius: thumb_display_r,
-            material: GlassMaterial::Regular,
-            behavior: GlassBehavior::Control,
-            z: Z_CONTROL + 2,
-            clip: None,
-            activation: glass_a,
-            tint: None,
-        };
-        self.push_glass(GlassLayer::Overlay, thumb_glass);
+        // Thumb material: render as a Liquid Glass lens only while the toggle
+        // is being interacted with (glass_activation > threshold). At rest the
+        // thumb is a cheap Ink dot, which (a) keeps the Debug category fast —
+        // ~11 idle toggles no longer feed the Overlay glass SDF union every
+        // frame — and (b) makes the per-instance clip region (set by
+        // ScrollView) actually apply, since GlassSurface has no clip path in
+        // the renderer today. InkView's clip is enforced by the shader.
+        if glass_a > 0.01 {
+            let thumb_glass = GlassSurface {
+                id: t.id.clone(),
+                rect: thumb_rect,
+                radius: thumb_display_r,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: Z_CONTROL + 2,
+                clip: None,
+                activation: glass_a,
+                tint: None,
+            };
+            self.push_glass(GlassLayer::Overlay, thumb_glass);
+        } else {
+            // White dot thumb. `push_ink` inherits the current clip_stack top.
+            let thumb_alpha = if t.enabled { 0.92 } else { 0.92 * 0.4 };
+            let dot = InkView {
+                id: t.id.clone(),
+                center: Point::new(thumb_cx, track_cy),
+                extent: thumb_display_r,
+                opacity: thumb_alpha,
+                scene_blur: 0.0,
+                stroke: 0.0,
+                corner_radius: 0.0,
+                color: Color::rgba(1.0, 1.0, 1.0, thumb_alpha),
+                kind: ControlKind::Dot,
+                z: Z_CONTROL + 2,
+                clip: None,
+            };
+            self.push_ink(dot);
+        }
 
         // ------------------------------------------------------------------
         // Hit region
@@ -839,22 +865,22 @@ mod tests {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(false));
         let (render, _hits, _reg) = ui.take();
-        // Should have glass surface (thumb) and ink track.
-        let glass = render
-            .glass
-            .iter()
-            .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
-            .unwrap();
-        let ink = render
+        // At rest the thumb is an Ink Dot (glass only appears on interaction).
+        let track = render
             .ink
             .iter()
             .flat_map(|b| &b.views)
             .find(|v| v.kind == ControlKind::RowBackground)
             .unwrap();
-        // Thumb center X should be left of track center X.
+        let dot = render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Dot)
+            .unwrap();
+        // Thumb (dot) center X should be left of track center X.
         assert!(
-            glass.rect.center().x < ink.center.x,
+            dot.center.x < track.center.x,
             "OFF thumb should be left of track center"
         );
     }
@@ -864,20 +890,20 @@ mod tests {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(true));
         let (render, _hits, _reg) = ui.take();
-        let glass = render
-            .glass
-            .iter()
-            .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
-            .unwrap();
-        let ink = render
+        let track = render
             .ink
             .iter()
             .flat_map(|b| &b.views)
             .find(|v| v.kind == ControlKind::RowBackground)
             .unwrap();
+        let dot = render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Dot)
+            .unwrap();
         assert!(
-            glass.rect.center().x > ink.center.x,
+            dot.center.x > track.center.x,
             "ON thumb should be right of track center"
         );
     }
@@ -1004,7 +1030,9 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn toggle_off_has_low_glass_activation() {
+    fn toggle_off_has_no_glass_at_idle() {
+        // At rest the thumb renders as an Ink dot, not a Liquid Glass surface,
+        // so no Control glass surface is pushed (keeps idle cost low).
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(false));
         let (render, _hits, _reg) = ui.take();
@@ -1012,12 +1040,18 @@ mod tests {
             .glass
             .iter()
             .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
-            .unwrap();
+            .find(|s| s.behavior == GlassBehavior::Control);
         assert!(
-            glass.activation < 0.2,
-            "idle activation should be near zero"
+            glass.is_none(),
+            "idle toggle should not emit a glass surface"
         );
+        // And the ink dot thumb should be present.
+        let dot = render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Dot);
+        assert!(dot.is_some(), "idle toggle should emit an ink dot thumb");
     }
 
     #[test]
