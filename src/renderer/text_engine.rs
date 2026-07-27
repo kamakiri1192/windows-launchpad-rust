@@ -20,7 +20,7 @@ use cosmic_text::{
 };
 
 /// A drawable glyph quad, matching the WGSL instance attributes for the text
-/// pipeline. 48 bytes for clean GPU alignment.
+/// pipeline. 80 bytes for clean GPU alignment (5 vec4s).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlyphQuad {
@@ -36,11 +36,22 @@ pub struct GlyphQuad {
     pub v1: f32,
     /// Non-premultiplied RGBA tint applied in the fragment shader.
     pub color: [f32; 4],
+    /// Clip rectangle in physical px: (min_x, min_y, width, height).
+    /// Sentinel: clip_rect.z <= 0.0 means "no clip".
+    pub clip_rect: [f32; 4],
+    /// Clip corner radius in physical px (0 = sharp corners).
+    /// Packed as vec4 with padding: (radius, 0, 0, 0).
+    pub clip_radius: [f32; 4],
 }
 
 impl GlyphQuad {
-    pub const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
+    pub const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x4,
+        1 => Float32x4,
+        2 => Float32x4,
+        3 => Float32x4,
+        4 => Float32x4
+    ];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GlyphQuad>() as wgpu::BufferAddress,
@@ -439,6 +450,8 @@ impl TextRenderer {
                 u1: (entry.x + entry.w) as f32 / ATLAS_W as f32,
                 v1: (entry.y + entry.h) as f32 / ATLAS_H as f32,
                 color: g.color,
+                clip_rect: [0.0; 4],
+                clip_radius: [0.0; 4],
             });
         }
 

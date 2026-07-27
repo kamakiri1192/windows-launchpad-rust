@@ -78,10 +78,10 @@ pub enum AppAction {
     },
     PointerRelease(ReleaseAction),
     CursorLeft,
-    /// Vertical mouse-wheel / trackpad scroll, pre-quantized to whole rows
-    /// (positive = scroll down). Consumed by the settings overlay.
+    /// Vertical mouse-wheel / trackpad scroll delta in logical px.
+    /// Positive y = scroll down. (x is reserved for future horizontal scroll.)
     MouseWheel {
-        delta_rows: i32,
+        delta_px: (f32, f32),
     },
 }
 
@@ -526,11 +526,11 @@ impl App {
             AppAction::CursorLeft => {
                 self.handle_cursor_left();
             }
-            AppAction::MouseWheel { delta_rows } => {
+            AppAction::MouseWheel { delta_px } => {
                 // Wheel only drives the settings overlay for now; the grid
                 // scroll stays pointer-drag based.
                 if self.settings_panel_active() {
-                    self.scroll_settings_by(delta_rows);
+                    self.scroll_settings_by_px(delta_px.1);
                 }
             }
         }
@@ -965,6 +965,7 @@ impl App {
             .as_ref()
             .map(|s| s.is_animating())
             .unwrap_or(false);
+        let settings_scroll_animating = self.settings_scroll.is_animating();
         let folder_scroller_animating = self
             .folder_scroller
             .as_ref()
@@ -980,6 +981,7 @@ impl App {
                 crate::features::bottom_control::Mode::Field
             );
         if scroller_animating
+            || settings_scroll_animating
             || folder_scroller_animating
             || control_animating
             || self.editing

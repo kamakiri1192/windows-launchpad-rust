@@ -286,12 +286,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                // Only the settings overlay consumes wheel events today.
-                let rows = Self::wheel_delta_to_rows(delta, self.scale_factor);
-                if rows == 0 {
+                let px = Self::wheel_delta_to_px(delta, self.scale_factor);
+                if px.0 == 0.0 && px.1 == 0.0 {
                     return;
                 }
-                AppAction::MouseWheel { delta_rows: rows }
+                AppAction::MouseWheel { delta_px: px }
             }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
             WindowEvent::Focused(focused) => AppAction::Focused(focused),
@@ -305,22 +304,12 @@ impl ApplicationHandler<UserEvent> for App {
         &mut self,
         _event_loop: &ActiveEventLoop,
         _device_id: winit::event::DeviceId,
-        event: winit::event::DeviceEvent,
+        _event: winit::event::DeviceEvent,
     ) {
-        // macOS trackpads can deliver scroll as a DeviceEvent rather than a
-        // WindowEvent. Mirror the WindowEvent::MouseWheel handling here so
-        // the settings overlay scrolls regardless of which path the OS took.
-        if let winit::event::DeviceEvent::MouseWheel { delta } = event {
-            if !self.settings_panel_active() {
-                return;
-            }
-            let rows = Self::wheel_delta_to_rows(delta, self.scale_factor);
-            if rows == 0 {
-                return;
-            }
-            self.handle_action(AppAction::MouseWheel { delta_rows: rows });
-            self.publish_input_routing_snapshot();
-        }
+        // DeviceEvent::MouseWheel was previously mirrored here for macOS
+        // trackpads, but this caused double-delivery (both DeviceEvent and
+        // WindowEvent fire). The WindowEvent path is now sufficient and
+        // produces pixel-level deltas. This handler is intentionally a no-op.
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -359,35 +348,20 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 impl App {
-    /// Translate a winit mouse-wheel / trackpad scroll delta into whole-row
-    /// units for the settings overlay. Positive = scroll down. Shared by the
-    /// `WindowEvent::MouseWheel` and `DeviceEvent::MouseWheel` paths so the
-    /// overlay scrolls regardless of which path the OS delivers on.
-    fn wheel_delta_to_rows(delta: winit::event::MouseScrollDelta, scale_factor: f32) -> i32 {
+    /// Translate a winit mouse-wheel / trackpad scroll delta into logical
+    /// pixel units. Positive y = scroll down. Returns (dx, dy) in logical px.
+    fn wheel_delta_to_px(delta: winit::event::MouseScrollDelta, scale_factor: f32) -> (f32, f32) {
         match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                if y.abs() < 0.25 {
-                    0
-                } else if y > 0.0 {
-                    1
-                } else {
-                    -1
-                }
+            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                let scale = scale_factor.max(0.1);
+                let px_per_line = crate::layout::settings_panel::row_step(scale);
+                (x * px_per_line, y * px_per_line)
             }
             winit::event::MouseScrollDelta::PixelDelta(px) => {
-                // Physical px → logical, then ~62px per row. Note: winit's
-                // PixelDelta.y is positive for scroll-down on most platforms,
-                // matching the sign convention used here.
                 let scale = scale_factor.max(0.1);
-                let logical = (px.y as f32) / scale;
-                let rows_f = logical / crate::layout::settings_panel::row_step(scale);
-                if rows_f.abs() < 0.5 {
-                    0
-                } else if rows_f > 0.0 {
-                    rows_f.ceil() as i32
-                } else {
-                    rows_f.floor() as i32
-                }
+                let logical_x = (px.x as f32) / scale;
+                let logical_y = (px.y as f32) / scale;
+                (logical_x, logical_y)
             }
         }
     }

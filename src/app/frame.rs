@@ -26,6 +26,10 @@ impl App {
     pub(crate) fn tick_frame(&mut self) {
         let now = Instant::now();
         let vp = self.viewport_phys();
+
+        // Tick the continuous settings scroller (Phase 3 pixel-level scroll).
+        self.settings_scroll.tick(now);
+
         let profile_scroll_position = self.profile_scroll.as_ref().and_then(|profile| {
             profile.position(
                 now,

@@ -8,6 +8,7 @@
 pub mod button;
 pub mod divider;
 pub mod label;
+pub mod scroll_view;
 pub mod slider;
 pub mod toggle;
 

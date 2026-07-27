@@ -603,6 +603,387 @@ impl Spring2 {
     }
 }
 
+// ---- Vertical continuous-scroll model (iOS-style, no page snap) --------------
+
+/// Configuration for [`ContinuousScroller`] physics.
+#[derive(Debug, Clone, Copy)]
+pub struct ContinuousConfig {
+    /// Exponential decay factor per second for inertial coasting.
+    pub inertia_decay: f32,
+    /// Inertial velocity below which we cut to spring settling (px/s).
+    pub inertia_cutoff: f32,
+    /// Spring angular frequency ω₀ (rad/s).
+    pub spring_omega: f32,
+    /// Damping ratio ζ.
+    pub spring_zeta: f32,
+    /// Rubber-band stiffness divisor (Apple: 0.55).
+    pub rubber_c: f32,
+    /// Below this speed & distance we consider the spring settled.
+    pub settle_eps: f32,
+    /// Maximum frame dt before we subdivide (s).
+    pub max_dt: f32,
+}
+
+impl Default for ContinuousConfig {
+    fn default() -> Self {
+        Self {
+            inertia_decay: 3.2,
+            inertia_cutoff: 18.0,
+            spring_omega: 22.0,
+            spring_zeta: 0.82,
+            rubber_c: 0.55,
+            settle_eps: 0.35,
+            max_dt: 1.0 / 60.0,
+        }
+    }
+}
+
+/// Vertical continuous-scroll phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuousPhase {
+    Idle,
+    Dragging,
+    Inertial,
+    Settling,
+}
+
+/// Vertical continuous-scroll physics (iOS-style): 1:1 drag tracking,
+/// inertia, rubber-band at bounds, spring return. Reuses Spring/rubber
+/// from the paging Scroller but without page snapping.
+pub struct ContinuousScroller {
+    /// Current content offset in logical px. 0 = top of content.
+    pub position: f32,
+    /// Current velocity in px/s.
+    pub velocity: f32,
+    pub phase: ContinuousPhase,
+    pub cfg: ContinuousConfig,
+    /// Total content height in logical px.
+    content_size: f32,
+    /// Viewport height in logical px.
+    viewport_size: f32,
+    /// Content position captured at drag start.
+    drag_anchor: f32,
+    /// Pointer position captured at drag start.
+    drag_start_pointer: f32,
+    /// Pointer history for velocity estimation: (seconds since clock_origin, pos).
+    samples: [(f32, f32); VEL_SAMPLES],
+    sample_count: usize,
+    /// Target position the spring settles toward.
+    settle_target: f32,
+    /// Last clock reading for dt, in seconds.
+    last_time: Option<Instant>,
+    /// Monotonic clock origin.
+    clock_origin: Instant,
+}
+
+impl ContinuousScroller {
+    pub fn new(cfg: ContinuousConfig) -> Self {
+        let clock_origin = Instant::now();
+        Self {
+            position: 0.0,
+            velocity: 0.0,
+            phase: ContinuousPhase::Idle,
+            cfg,
+            content_size: 0.0,
+            viewport_size: 0.0,
+            drag_anchor: 0.0,
+            drag_start_pointer: 0.0,
+            samples: [(0.0, 0.0); VEL_SAMPLES],
+            sample_count: 0,
+            settle_target: 0.0,
+            last_time: None,
+            clock_origin,
+        }
+    }
+
+    /// Update content and viewport sizes. Clamps position if needed.
+    pub fn set_sizes(&mut self, content_size: f32, viewport_size: f32) {
+        self.content_size = content_size;
+        self.viewport_size = viewport_size;
+        // If idle, clamp position into the new valid range immediately.
+        let max = self.max_offset();
+        if self.phase == ContinuousPhase::Idle {
+            self.position = self.position.clamp(0.0, max);
+        }
+    }
+
+    /// Minimum scroll offset (always 0 for vertical: content starts at top).
+    #[inline]
+    pub fn min_offset(&self) -> f32 {
+        0.0
+    }
+
+    /// Maximum scroll offset in px: max(0, content - viewport).
+    #[inline]
+    pub fn max_offset(&self) -> f32 {
+        (self.content_size - self.viewport_size).max(0.0)
+    }
+
+    /// Begin a drag gesture from the current pointer y position.
+    pub fn drag_start(&mut self, pointer_y: f32, now: Instant) {
+        self.phase = ContinuousPhase::Dragging;
+        self.drag_anchor = self.position;
+        self.drag_start_pointer = pointer_y;
+        self.velocity = 0.0;
+        self.sample_count = 0;
+        self.last_time = Some(now);
+    }
+
+    /// Update the drag with the latest pointer y. Returns new position.
+    pub fn drag_move(&mut self, pointer_y: f32, now: Instant) -> f32 {
+        if self.phase != ContinuousPhase::Dragging {
+            return self.position;
+        }
+        // Direct manipulation: content offset tracks pointer displacement.
+        // Sign: dragging down (pointer_y increases) → content scrolls down
+        // (position increases). pointer_y - drag_start_pointer positive → scroll down.
+        let raw = self.drag_anchor + (pointer_y - self.drag_start_pointer);
+        let pos = self.clamp_with_rubber(raw);
+        let prev = self.position;
+        self.position = pos;
+        self.push_sample(pos, prev);
+        // Update last_time so tick-based animation integrates correctly.
+        self.last_time = Some(now);
+        pos
+    }
+
+    /// End the drag and transition to inertia (if velocity is significant)
+    /// or settling.
+    pub fn drag_end(&mut self, now: Instant) {
+        if self.phase != ContinuousPhase::Dragging {
+            return;
+        }
+        let v = self.estimate_velocity();
+        self.velocity = v;
+        self.last_time = Some(now);
+
+        let min = self.min_offset();
+        let max = self.max_offset();
+        let out_of_bounds = self.position < min || self.position > max;
+
+        if v.abs() > self.cfg.inertia_cutoff && !out_of_bounds {
+            // Launch into inertia with the estimated velocity.
+            self.phase = ContinuousPhase::Inertial;
+        } else {
+            // Settle to nearest bound or current position.
+            let target = self.position.clamp(min, max);
+            self.begin_settle_to(target);
+        }
+    }
+
+    /// Apply a wheel / trackpad delta (in logical px) directly. This is for
+    /// OS momentum scroll events which already include inertia; we do NOT
+    /// accumulate velocity, just move the position. Positive delta = scroll down.
+    /// Returns the new position.
+    pub fn apply_wheel(&mut self, delta_px: f32, now: Instant) -> f32 {
+        self.last_time = Some(now);
+        let raw = self.position + delta_px;
+        let pos = self.clamp_with_rubber(raw);
+
+        // If we were idle and moved position, go to settling. If already
+        // animating, stay in the current phase (or switch to settling if
+        // rubber-banded).
+        if self.phase == ContinuousPhase::Idle {
+            let min = self.min_offset();
+            let max = self.max_offset();
+            let clamped = pos.clamp(min, max);
+            if (clamped - pos).abs() > 0.001 {
+                // Rubber-banded: settle back to bound.
+                self.position = pos;
+                self.begin_settle_to(clamped);
+            } else {
+                self.position = clamped;
+                self.velocity = 0.0;
+            }
+        } else {
+            self.position = pos;
+        }
+        self.position
+    }
+
+    /// Advance the simulation by real elapsed time. Returns the new phase.
+    pub fn tick(&mut self, now: Instant) -> ContinuousPhase {
+        let dt = match self.last_time {
+            None => {
+                self.last_time = Some(now);
+                return self.phase;
+            }
+            Some(t) => {
+                let d = now.duration_since(t).as_secs_f32();
+                self.last_time = Some(now);
+                d.min(0.1)
+            }
+        };
+        if dt <= 0.0 {
+            return self.phase;
+        }
+
+        let mut remaining = dt;
+        while remaining > 0.0 {
+            let step = remaining.min(self.cfg.max_dt);
+            remaining -= step;
+            self.step_once(step);
+            if self.phase == ContinuousPhase::Idle {
+                break;
+            }
+        }
+        self.phase
+    }
+
+    /// True while content is moving.
+    pub fn is_animating(&self) -> bool {
+        self.phase != ContinuousPhase::Idle
+    }
+
+    /// Set position immediately (for `ensure_visible` etc.).
+    pub fn set_position(&mut self, pos: f32) {
+        let min = self.min_offset();
+        let max = self.max_offset();
+        self.position = pos.clamp(min, max);
+        self.velocity = 0.0;
+        self.phase = ContinuousPhase::Idle;
+    }
+
+    /// Reset the timer used for dt (call when the app resumes after a pause).
+    pub fn reset_clock(&mut self, now: Instant) {
+        self.last_time = Some(now);
+    }
+
+    /// Adjust position so the given item rect (in content coordinates) is
+    /// fully visible inside the viewport. If scrolling is needed, transitions
+    /// to Settling.
+    pub fn ensure_visible(&mut self, item_top: f32, item_bottom: f32) {
+        let vp_h = self.viewport_size;
+        let min = self.min_offset();
+        let max = self.max_offset();
+
+        let mut target = self.position;
+        if item_top < self.position {
+            target = item_top;
+        } else if item_bottom > self.position + vp_h {
+            target = item_bottom - vp_h;
+        }
+        target = target.clamp(min, max);
+
+        if (target - self.position).abs() > self.cfg.settle_eps {
+            self.settle_target = target;
+            self.velocity = 0.0;
+            self.phase = ContinuousPhase::Settling;
+        }
+    }
+
+    // ---- internals -------------------------------------------------------
+
+    fn step_once(&mut self, dt: f32) {
+        match self.phase {
+            ContinuousPhase::Idle | ContinuousPhase::Dragging => {
+                // Position is driven directly by pointer events.
+            }
+            ContinuousPhase::Inertial => {
+                let decay = (-self.cfg.inertia_decay * dt).exp();
+                self.velocity *= decay;
+                self.position += self.velocity * dt;
+
+                let min = self.min_offset();
+                let max = self.max_offset();
+                let overshot = self.position < min || self.position > max;
+                let stalled = self.velocity.abs() < self.cfg.inertia_cutoff;
+                if overshot || stalled {
+                    let target = self.position.clamp(min, max);
+                    self.begin_settle_to(target);
+                }
+            }
+            ContinuousPhase::Settling => {
+                // Semi-implicit Euler on the spring ODE:
+                //   a = -ω₀²·(x - target) - 2·ζ·ω₀·v
+                let dx = self.position - self.settle_target;
+                let acc = -self.cfg.spring_omega * self.cfg.spring_omega * dx
+                    - 2.0 * self.cfg.spring_zeta * self.cfg.spring_omega * self.velocity;
+                self.velocity += acc * dt;
+                self.position += self.velocity * dt;
+
+                if dx.abs() < self.cfg.settle_eps && self.velocity.abs() < self.cfg.settle_eps {
+                    self.position = self.settle_target;
+                    self.velocity = 0.0;
+                    self.phase = ContinuousPhase::Idle;
+                }
+            }
+        }
+    }
+
+    fn begin_settle_to(&mut self, target: f32) {
+        self.settle_target = target;
+        self.phase = ContinuousPhase::Settling;
+    }
+
+    /// Clamp `raw` to [min, max] with rubber-band past the ends.
+    fn clamp_with_rubber(&self, raw: f32) -> f32 {
+        let min = self.min_offset();
+        let max = self.max_offset();
+        if raw > max {
+            let over = raw - max;
+            max + self.rubber(over)
+        } else if raw < min {
+            let over = min - raw;
+            min - self.rubber(over)
+        } else {
+            raw
+        }
+    }
+
+    /// Apple's rubber-band curve.
+    #[inline]
+    fn rubber(&self, x: f32) -> f32 {
+        let c = self.cfg.rubber_c;
+        let d = self.viewport_size.max(1.0);
+        (1.0 - 1.0 / (x * c / d + 1.0)) * d
+    }
+
+    fn push_sample(&mut self, pos: f32, _prev: f32) {
+        let t = self.clock_origin.elapsed().as_secs_f32();
+        for i in 0..(VEL_SAMPLES - 1) {
+            self.samples[i] = self.samples[i + 1];
+        }
+        self.samples[VEL_SAMPLES - 1] = (t, pos);
+        if self.sample_count < VEL_SAMPLES {
+            self.sample_count += 1;
+        }
+    }
+
+    /// Estimate current velocity from the last ~80ms of samples.
+    fn estimate_velocity(&self) -> f32 {
+        if self.sample_count < 2 {
+            return 0.0;
+        }
+        let last = self.samples[VEL_SAMPLES - 1];
+        let mut chosen = last;
+        let first_valid = VEL_SAMPLES - self.sample_count;
+        for i in (first_valid..VEL_SAMPLES - 1).rev() {
+            let s = self.samples[i];
+            let dt = last.0 - s.0;
+            if dt >= 0.016 {
+                chosen = s;
+                if dt <= 0.12 {
+                    break;
+                }
+            }
+        }
+        let dt = last.0 - chosen.0;
+        if dt < 1e-4 {
+            return 0.0;
+        }
+        (last.1 - chosen.1) / dt
+    }
+}
+
+/// Convert a line-scroll delta to logical pixels.
+///
+/// `px_per_line` is typically the row height (e.g. ~62 px for settings rows).
+/// This is a convenience for callers that have line-based deltas.
+pub fn line_delta_to_px(lines: f32, px_per_line: f32) -> f32 {
+    lines * px_per_line
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -968,5 +1349,198 @@ mod tests {
         assert!(!animating);
         assert!((s.x.value - 20.0).abs() < cfg.settle_eps);
         assert!((s.y.value - 30.0).abs() < cfg.settle_eps);
+    }
+
+    // ---- ContinuousScroller -------------------------------------------------
+
+    fn default_cfg() -> ContinuousConfig {
+        ContinuousConfig::default()
+    }
+
+    #[test]
+    fn continuous_scroller_apply_wheel_changes_pixel_offset() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        let now = Instant::now();
+        let pos = s.apply_wheel(50.0, now);
+        assert!((pos - 50.0).abs() < 0.01);
+        assert!((s.position - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn continuous_scroller_min_max_clamp() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(200.0, 400.0); // content smaller than viewport
+        assert_eq!(s.min_offset(), 0.0);
+        assert_eq!(s.max_offset(), 0.0);
+    }
+
+    #[test]
+    fn continuous_scroller_max_offset_correct() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        assert_eq!(s.min_offset(), 0.0);
+        assert_eq!(s.max_offset(), 600.0); // 1000 - 400
+    }
+
+    #[test]
+    fn line_delta_to_px_converts_correctly() {
+        assert_eq!(line_delta_to_px(3.0, 62.0), 186.0);
+        assert_eq!(line_delta_to_px(-1.5, 20.0), -30.0);
+        assert_eq!(line_delta_to_px(0.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn continous_scroller_rubber_is_sublinear() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0); // max=600
+        let r50 = s.rubber(50.0);
+        let r500 = s.rubber(500.0);
+        assert!(r50 < 50.0, "rubber attenuates overshoot");
+        assert!(r500 < 500.0, "rubber attenuates large overshoot");
+        assert!(
+            r500 / 500.0 < r50 / 50.0,
+            "larger pull must feel stiffer per pixel"
+        );
+    }
+
+    #[test]
+    fn continous_scroller_rubber_clamps_position() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0); // max=600, viewport=400
+                                    // Move past max. In the rubber-band, visible position should be
+                                    // less than the overshoot amount.
+        let raw = s.max_offset() + 100.0; // 700
+        let clamped = s.clamp_with_rubber(raw);
+        assert!(clamped < raw);
+        assert!(clamped > s.max_offset());
+    }
+
+    #[test]
+    fn continous_scroller_spring_returns_to_bounds() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        let now = Instant::now();
+        s.apply_wheel(100.0, now); // at 100
+                                   // Manually push out of bounds to simulate rubber-band release
+        s.position = 700.0; // past max of 600
+        s.phase = ContinuousPhase::Settling;
+        s.settle_target = 600.0;
+        s.velocity = 0.0;
+
+        for _ in 0..2000 {
+            s.step_once(1.0 / 120.0);
+            if s.phase == ContinuousPhase::Idle {
+                break;
+            }
+        }
+        assert_eq!(s.phase, ContinuousPhase::Idle);
+        assert!((s.position - 600.0).abs() < s.cfg.settle_eps);
+    }
+
+    #[test]
+    fn continous_scroller_inertia_decay() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(2000.0, 400.0);
+        let now = Instant::now();
+        s.drag_start(200.0, now);
+        s.drag_move(205.0, now); // small move to build velocity sample
+                                 // Fake velocity for inertia test
+        s.velocity = 500.0;
+        s.phase = ContinuousPhase::Inertial;
+
+        let v_before = s.velocity;
+        s.step_once(1.0 / 60.0);
+        assert!(s.velocity.abs() < v_before.abs(), "velocity should decay");
+    }
+
+    #[test]
+    fn continous_scroller_60hz_120hz_consistent() {
+        // Same drag sequence, different dt rates → final positions should be close.
+        let run = |dt: f32, steps: usize| -> f32 {
+            let mut s = ContinuousScroller::new(default_cfg());
+            s.set_sizes(2000.0, 400.0);
+            let now = Instant::now();
+            s.drag_start(100.0, now);
+            s.drag_move(150.0, now);
+            s.drag_move(200.0, now);
+            s.drag_end(now);
+
+            for _ in 0..steps {
+                s.step_once(dt);
+                if s.phase == ContinuousPhase::Idle {
+                    break;
+                }
+            }
+            s.position
+        };
+
+        let pos_60 = run(1.0 / 60.0, 6000);
+        let pos_120 = run(1.0 / 120.0, 12000);
+        assert!(
+            (pos_60 - pos_120).abs() < 3.0,
+            "60Hz pos={pos_60}, 120Hz pos={pos_120}, diff too large"
+        );
+    }
+
+    #[test]
+    fn continous_scroller_ensure_visible_scrolls_into_view() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0); // max = 600
+
+        // Item at bottom (900..950) is not visible when position=0
+        s.position = 0.0;
+        s.phase = ContinuousPhase::Idle;
+        s.ensure_visible(900.0, 950.0);
+
+        // Should have started a settle to make the item visible.
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        // Target: 900 - 400 = 500 (bottom aligned) or 550 (item_bottom - vp)?
+        // ensure_visible uses: if item_bottom > position + vp_h → target = item_bottom - vp_h.
+        // 950 > 0 + 400 → target = 950 - 400 = 550.
+        assert!((s.settle_target - 550.0).abs() < 1.0);
+
+        // Settle it
+        for _ in 0..2000 {
+            s.step_once(1.0 / 120.0);
+            if s.phase == ContinuousPhase::Idle {
+                break;
+            }
+        }
+        // After settling, item should be visible.
+        assert!(s.position <= 900.0); // item_top visible
+        assert!(s.position + 400.0 >= 950.0); // item_bottom visible
+    }
+
+    #[test]
+    fn continous_scroller_ensure_visible_top_item() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        s.position = 300.0;
+        s.phase = ContinuousPhase::Idle;
+        s.ensure_visible(50.0, 100.0); // item above viewport
+
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert!((s.settle_target - 50.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn continous_scroller_set_position_immediate() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        s.set_position(300.0);
+        assert_eq!(s.position, 300.0);
+        assert_eq!(s.phase, ContinuousPhase::Idle);
+        assert_eq!(s.velocity, 0.0);
+    }
+
+    #[test]
+    fn continous_scroller_drag_move_is_1_to_1() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(2000.0, 400.0);
+        let now = Instant::now();
+        s.drag_start(100.0, now);
+        let pos = s.drag_move(150.0, now); // +50 px pointer → +50 px content
+        assert!((pos - 50.0).abs() < 1.0);
     }
 }

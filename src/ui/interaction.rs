@@ -1,5 +1,7 @@
 //! Per-widget interaction phase and transient visual state.
 
+use crate::ui::widgets::scroll_view::ScrollbarState;
+
 /// Interaction phase for a widget, following a simple state machine:
 ///
 /// ```text
@@ -26,7 +28,7 @@ pub enum InteractionPhase {
 ///
 /// `hover_amount` and `press_amount` are stored as 0.0 / 1.0 for now.
 /// Continuous animation values (springs, etc.) will be added in Phase 5.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ElementState {
     pub hovered: bool,
     pub pressed: bool,
@@ -37,6 +39,22 @@ pub struct ElementState {
     /// 0.0 = not pressed, 1.0 = fully pressed.
     pub press_amount: f32,
     pub phase: InteractionPhase,
+    /// Scrollbar state for ScrollView widgets. `None` for non-scroll widgets.
+    pub scrollbar: Option<ScrollbarState>,
+}
+
+impl Default for ElementState {
+    fn default() -> Self {
+        Self {
+            hovered: false,
+            pressed: false,
+            focused: false,
+            hover_amount: 0.0,
+            press_amount: 0.0,
+            phase: InteractionPhase::default(),
+            scrollbar: None,
+        }
+    }
 }
 
 #[cfg(test)]

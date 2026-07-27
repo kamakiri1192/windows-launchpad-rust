@@ -98,15 +98,31 @@ fn control_kind(kind: &ControlKind) -> f32 {
 
 fn ink_instance(view: &InkView) -> Option<ControlInstance> {
     let kind = control_kind(&view.kind);
+    let clip = clip_to_packed(&view.clip);
     (kind >= 0.0).then_some(ControlInstance {
         center: [view.center.x, view.center.y],
         params: [view.extent, view.opacity, view.stroke, view.corner_radius],
         color: [view.color.r, view.color.g, view.color.b, view.color.a],
         kind: [kind, 0.0, 0.0, 0.0],
+        clip_rect: clip.0,
+        clip_radius: clip.1,
     })
 }
 
+/// Pack an optional ClipRegion into shader-facing (clip_rect, clip_radius) pairs.
+/// Returns sentinel (width <= 0) for None.
+fn clip_to_packed(clip: &Option<crate::ui_model::geometry::ClipRegion>) -> ([f32; 4], [f32; 4]) {
+    match clip {
+        Some(c) => (
+            [c.rect.x, c.rect.y, c.rect.width, c.rect.height],
+            [c.radius, 0.0, 0.0, 0.0],
+        ),
+        None => ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]),
+    }
+}
+
 fn glyph_quad(view: &GlyphView) -> GlyphQuad {
+    let clip = clip_to_packed(&view.clip);
     GlyphQuad {
         x: view.rect.x,
         y: view.rect.y,
@@ -117,6 +133,8 @@ fn glyph_quad(view: &GlyphView) -> GlyphQuad {
         u1: view.uv.u1,
         v1: view.uv.v1,
         color: [view.color.r, view.color.g, view.color.b, view.color.a],
+        clip_rect: clip.0,
+        clip_radius: clip.1,
     }
 }
 

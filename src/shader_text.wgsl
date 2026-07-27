@@ -38,6 +38,8 @@ fn vs_main(
     @location(0) xywh: vec4<f32>,  // (x, y, w, h) top-left + size, content px
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
+    @location(3) _clip_rect: vec4<f32>,   // unused (grid text has no clip)
+    @location(4) _clip_radius: vec4<f32>, // unused (grid text has no clip)
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),

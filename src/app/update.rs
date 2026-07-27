@@ -322,10 +322,12 @@ impl App {
                 self.request_redraw();
             }
             SettingsPressTarget::SettingsScrollUp => {
-                self.scroll_settings_by(-1);
+                let px = -crate::layout::settings_panel::row_step(self.scale_factor);
+                self.scroll_settings_by_px(px);
             }
             SettingsPressTarget::SettingsScrollDown => {
-                self.scroll_settings_by(1);
+                let px = crate::layout::settings_panel::row_step(self.scale_factor);
+                self.scroll_settings_by_px(px);
             }
             SettingsPressTarget::Inside | SettingsPressTarget::Outside => {}
         }
@@ -376,19 +378,31 @@ impl App {
         }
     }
 
-    /// Scroll the settings content by `delta_rows`, clamped to the visible
-    /// range. `max_rows` is the total overflow (how many rows are hidden
-    /// below the fold); 0 means no scrolling.
-    pub(crate) fn scroll_settings_by(&mut self, delta_rows: i32) {
+    /// Scroll the settings content by `delta_px` logical pixels.
+    /// Uses the continuous scroller for pixel-level smooth scrolling.
+    pub(crate) fn scroll_settings_by_px(&mut self, delta_px: f32) {
         let max = self.settings_max_scroll_rows();
         eprintln!(
-            "settings-scroll: scroll_settings_by(delta={}) called, max={}, current={}",
-            delta_rows, max, self.settings_scroll_rows
+            "settings-scroll: scroll_settings_by_px(delta={:.1}px) called, max={}, scroll_rows={}",
+            delta_px, max, self.settings_scroll_rows
         );
         if max <= 0 {
             self.settings_scroll_rows = 0;
             return;
         }
+        // Also apply via the continuous scroller (new Phase 3 pixel path).
+        let now = std::time::Instant::now();
+        self.settings_scroll.apply_wheel(delta_px, now);
+        // Update the legacy row-based counter for compatibility with existing
+        // row-oriented layout code. Phase 6 will remove this line.
+        let logical = delta_px / crate::layout::settings_panel::row_step(self.scale_factor);
+        let delta_rows = if logical > 0.0 {
+            logical.ceil() as i32
+        } else if logical < 0.0 {
+            logical.floor() as i32
+        } else {
+            0
+        };
         let next = self.settings_scroll_rows + delta_rows;
         self.settings_scroll_rows = next.clamp(0, max);
         eprintln!(
@@ -415,6 +429,7 @@ impl App {
     /// Reset the per-category scroll when the category changes.
     pub(crate) fn reset_settings_scroll(&mut self) {
         self.settings_scroll_rows = 0;
+        self.settings_scroll.set_position(0.0);
     }
 
     /// Drain the shared inbox and dispatch each message.
