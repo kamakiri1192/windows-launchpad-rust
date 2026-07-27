@@ -71,6 +71,11 @@ pub struct GlassSurface {
     pub behavior: GlassBehavior,
     pub z: i16,
     pub clip: Option<ClipRegion>,
+    /// Per-surface glass activation level (0.0 = idle, 1.0 = fully active).
+    /// Controls blur/edge-light/saturation/chromatic-aberration intensity per-shape.
+    pub activation: f32,
+    /// Optional per-surface tint override applied to the glass color.
+    pub tint: Option<Color>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

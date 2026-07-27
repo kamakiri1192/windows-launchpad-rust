@@ -103,6 +103,7 @@ impl LiquidGlassRenderer {
             scroll_x,
             self.shape_count,
             0.0,
+            0.0,
             self.backdrop_mapping,
         );
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -283,6 +284,7 @@ impl LiquidGlassRenderer {
             scroll_x,
             self.grid_overlay_shape_count,
             time,
+            0.0,
             self.backdrop_mapping,
         );
         queue.write_buffer(
@@ -359,6 +361,7 @@ impl LiquidGlassRenderer {
             0.0,
             self.drag_overlay_shape_count,
             time,
+            0.0,
             self.backdrop_mapping,
         );
         queue.write_buffer(
@@ -438,6 +441,7 @@ impl LiquidGlassRenderer {
             scroll_x,
             self.badge_shape_count,
             time,
+            0.0,
             self.backdrop_mapping,
         );
         queue.write_buffer(&self.badge_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -508,6 +512,7 @@ impl LiquidGlassRenderer {
             0.0,
             self.modal_badge_shape_count,
             time,
+            0.0,
             self.backdrop_mapping,
         );
         queue.write_buffer(
@@ -575,6 +580,12 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
+        // Compute max activation from control shapes for interactive glass.
+        let control_activation = self
+            .control_shapes
+            .iter()
+            .map(|s| s.activation)
+            .fold(0.0f32, f32::max);
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
@@ -582,6 +593,7 @@ impl LiquidGlassRenderer {
             0.0,
             self.control_shape_count,
             0.0,
+            control_activation,
             self.backdrop_mapping,
         );
         queue.write_buffer(
@@ -657,6 +669,7 @@ impl LiquidGlassRenderer {
             (width, height),
             0.0,
             self.settings_panel_shape_count,
+            0.0,
             0.0,
             self.backdrop_mapping,
         );

@@ -390,6 +390,8 @@ fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSu
         behavior: GlassBehavior::Control,
         z: 0,
         clip: None,
+        activation: 0.0,
+        tint: None,
     })
 }
 
@@ -407,6 +409,8 @@ fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometr
         behavior: GlassBehavior::Control,
         z: 10,
         clip: None,
+        activation: 0.0,
+        tint: None,
     }
 }
 

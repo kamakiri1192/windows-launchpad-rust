@@ -711,6 +711,8 @@ pub fn build_with_copy(
             behavior: GlassBehavior::Control,
             z: Z_PANEL,
             clip: None,
+            activation: 0.0,
+            tint: None,
         }],
     });
 
@@ -782,6 +784,8 @@ pub fn build_with_ui(
             behavior: GlassBehavior::Control,
             z: Z_PANEL,
             clip: None,
+            activation: 0.0,
+            tint: None,
         },
     );
 
@@ -3312,15 +3316,19 @@ mod tests {
             .flat_map(|b| &b.views)
             .collect();
         // Sort segment buttons (4 RowBackgrounds)
-        // Frequent toggle (track RowBackground + thumb Dot)
-        // Steam toggle (track RowBackground + thumb Dot)
+        // Frequent toggle (track RowBackground + thumb Glass)
+        // Steam toggle (track RowBackground + thumb Glass)
         // Hidden row (chevron + RowBackground)
         // Plus sidebar category RowBackgrounds
-        let dots: Vec<_> = all_ink
+        let toggles: Vec<_> = model
+            .result
+            .render
+            .glass
             .iter()
-            .filter(|v| v.kind == ControlKind::Dot)
+            .flat_map(|b| &b.surfaces)
+            .filter(|s| s.behavior == GlassBehavior::Control)
             .collect();
-        assert!(dots.len() >= 2, "at least 2 toggle thumbs"); // frequent + steam toggles
+        assert!(toggles.len() >= 2, "at least 2 toggle thumbs"); // frequent + steam toggles
 
         let chevrons: Vec<_> = all_ink
             .iter()
@@ -3345,18 +3353,15 @@ mod tests {
     #[test]
     fn build_with_ui_search_has_toggle() {
         let model = build_with_ui_model(SettingsCategoryId::Search);
-        let all_ink: Vec<_> = model
+        let toggles: Vec<_> = model
             .result
             .render
-            .ink
+            .glass
             .iter()
-            .flat_map(|b| &b.views)
+            .flat_map(|b| &b.surfaces)
+            .filter(|s| s.behavior == GlassBehavior::Control)
             .collect();
-        let dots: Vec<_> = all_ink
-            .iter()
-            .filter(|v| v.kind == ControlKind::Dot)
-            .collect();
-        assert!(!dots.is_empty(), "search hidden toggle thumb");
+        assert!(!toggles.is_empty(), "search hidden toggle thumb");
     }
 
     #[test]
@@ -3369,11 +3374,15 @@ mod tests {
             .iter()
             .flat_map(|b| &b.views)
             .collect();
-        let dots: Vec<_> = all_ink
+        let toggles: Vec<_> = model
+            .result
+            .render
+            .glass
             .iter()
-            .filter(|v| v.kind == ControlKind::Dot)
+            .flat_map(|b| &b.surfaces)
+            .filter(|s| s.behavior == GlassBehavior::Control)
             .collect();
-        assert!(!dots.is_empty(), "FPS toggle thumb");
+        assert!(!toggles.is_empty(), "FPS toggle thumb");
 
         let chevrons: Vec<_> = all_ink
             .iter()
@@ -3408,14 +3417,19 @@ mod tests {
             .collect();
         // Should have debug keys toggle thumb, window decorations toggle thumb,
         // Liquid Glass enabled toggle thumb, and debug-view toggle thumbs.
-        let dots: Vec<_> = all_ink
+        // Toggle thumbs are now GlassSurface (Control behavior).
+        let toggles: Vec<_> = model
+            .result
+            .render
+            .glass
             .iter()
-            .filter(|v| v.kind == ControlKind::Dot)
+            .flat_map(|b| &b.surfaces)
+            .filter(|s| s.behavior == GlassBehavior::Control)
             .collect();
         assert!(
-            dots.len() >= 10,
+            toggles.len() >= 10,
             "many toggle thumbs in Debug (got {})",
-            dots.len()
+            toggles.len()
         );
 
         // Should have slider tracks and knobs (5 params)
@@ -3484,21 +3498,19 @@ mod tests {
         // At scroll position 100, the top content should have negative y
         // and the bottom content should be visible. Verify that toggle thumbs
         // still exist (content was rendered).
-        let all_ink: Vec<_> = model
+        // Toggle thumbs are now GlassSurface (Control behavior).
+        let toggles: Vec<_> = model
             .result
             .render
-            .ink
+            .glass
             .iter()
-            .flat_map(|b| &b.views)
-            .collect();
-        let dots: Vec<_> = all_ink
-            .iter()
-            .filter(|v| v.kind == ControlKind::Dot)
+            .flat_map(|b| &b.surfaces)
+            .filter(|s| s.behavior == GlassBehavior::Control)
             .collect();
         assert!(
-            dots.len() >= 10,
+            toggles.len() >= 10,
             "toggles still rendered after scrolling (got {})",
-            dots.len()
+            toggles.len()
         );
     }
 
@@ -3528,21 +3540,17 @@ mod tests {
         let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
         let model = build_with_ui(inp, &copy, &mut scroll);
 
-        // The LG enabled toggle should have its thumb on the left (Dot left of track).
-        let all_ink: Vec<_> = model
+        // The LG enabled toggle should have its thumb on the left.
+        // Toggle thumbs are now GlassSurface (Control behavior).
+        let toggles: Vec<_> = model
             .result
             .render
-            .ink
+            .glass
             .iter()
-            .flat_map(|b| &b.views)
+            .flat_map(|b| &b.surfaces)
+            .filter(|s| s.behavior == GlassBehavior::Control)
             .collect();
-        // Find the toggle row for lg-enabled by checking the id patterns.
-        // We just verify that there are dots (toggles exist).
-        let dots: Vec<_> = all_ink
-            .iter()
-            .filter(|v| v.kind == ControlKind::Dot)
-            .collect();
-        assert!(!dots.is_empty());
+        assert!(!toggles.is_empty());
     }
 
     #[test]

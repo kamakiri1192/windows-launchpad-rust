@@ -163,6 +163,8 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             behavior: GlassBehavior::Control,
             z: 100,
             clip: None,
+            activation: 0.0,
+            tint: None,
         }],
     );
 

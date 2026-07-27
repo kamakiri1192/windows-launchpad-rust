@@ -20,6 +20,7 @@ use crate::ui_model::text::TextView;
 use super::interaction::ElementState;
 use super::registry::Registry;
 use super::theme::Theme;
+use super::widgets::toggle::ToggleVisualState;
 
 // Used by tests; will be referenced by widget code in Phase 2.
 #[allow(unused_imports)]
@@ -81,6 +82,8 @@ pub struct Ui {
 
     // ---- transient per-element state ------------------------------------
     element_states: HashMap<UiId, ElementState>,
+    /// Phase 5: per-toggle animation state (springs, phase, drag tracking).
+    pub(crate) toggle_visual_states: HashMap<UiId, ToggleVisualState>,
     focused_id: Option<UiId>,
 
     // ---- input ----------------------------------------------------------
@@ -124,6 +127,7 @@ impl Ui {
             hits: HitMap::new(),
             registry: Registry::new(),
             element_states: HashMap::new(),
+            toggle_visual_states: HashMap::new(),
             focused_id: None,
             pointer_pos: None,
             pointer_pressed: false,

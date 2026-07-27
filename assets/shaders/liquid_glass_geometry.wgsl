@@ -27,6 +27,7 @@ struct GlassShape {
     size: vec2<f32>,
     radius: f32,
     shape_type: u32,
+    activation: f32,
     motion: vec4<f32>,
 };
 

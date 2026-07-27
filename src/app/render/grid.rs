@@ -259,6 +259,8 @@ impl App {
                 behavior: GlassBehavior::Control,
                 z: 20,
                 clip: None,
+                activation: 0.0,
+                tint: None,
             },
             GlassSurface {
                 id: UiId::backdrop("folder-hover-drag"),
@@ -273,6 +275,8 @@ impl App {
                 behavior: GlassBehavior::Control,
                 z: 21,
                 clip: None,
+                activation: 0.0,
+                tint: None,
             },
         ]);
         surfaces
@@ -298,6 +302,8 @@ impl App {
             behavior: GlassBehavior::Control,
             z: 22,
             clip: None,
+            activation: 0.0,
+            tint: None,
         })
     }
 
@@ -577,6 +583,8 @@ mod tests {
             behavior: GlassBehavior::Control,
             z: 22,
             clip: None,
+            activation: 0.0,
+            tint: None,
         };
         let mut surfaces = vec![surface(10.0)];
         upsert_glass_surface(&mut surfaces, surface(240.0));
@@ -596,6 +604,8 @@ mod tests {
             behavior: GlassBehavior::FixedFrame,
             z: -10,
             clip: None,
+            activation: 0.0,
+            tint: None,
         };
         let app_id = UiId::launcher_item("app");
         let app = GlassSurface {
@@ -606,6 +616,8 @@ mod tests {
             behavior: GlassBehavior::Scrolling,
             z: 0,
             clip: None,
+            activation: 0.0,
+            tint: None,
         };
         let folder_surface = GlassSurface {
             id: folder_id.clone(),

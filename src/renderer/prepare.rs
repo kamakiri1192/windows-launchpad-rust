@@ -27,12 +27,13 @@ use super::Renderer;
 fn shape_for(surface: &GlassSurface) -> GlassShape {
     let center = [surface.rect.center().x, surface.rect.center().y];
     let size = [surface.rect.width, surface.rect.height];
-    match surface.behavior {
+    let shape = match surface.behavior {
         GlassBehavior::Scrolling => GlassShape::rounded_rect(center, size, surface.radius),
         GlassBehavior::FixedFrame => GlassShape::fixed_rounded_rect(center, size, surface.radius),
         GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
         GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
-    }
+    };
+    shape.with_activation(surface.activation)
 }
 
 fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape {
@@ -513,6 +514,8 @@ mod tests {
             behavior: GlassBehavior::Control,
             z,
             clip: None,
+            activation: 0.0,
+            tint: None,
         }
     }
 

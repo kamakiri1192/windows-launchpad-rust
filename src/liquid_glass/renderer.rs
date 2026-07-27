@@ -35,7 +35,8 @@ pub(super) struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    _pad: [f32; 3],
+    activation: f32,
+    _pad: [f32; 2],
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
 }
@@ -442,6 +443,7 @@ impl LiquidGlassRenderer {
             (width, height),
             0.0,
             0,
+            0.0,
             0.0,
             backdrop_mapping,
         );
@@ -1834,6 +1836,7 @@ fn should_refresh_blur(dirty: bool, captured: bool) -> bool {
     dirty || captured
 }
 
+#[allow(clippy::too_many_arguments)]
 fn uniforms_from_params(
     params: &LiquidGlassParams,
     debug: DebugOptions,
@@ -1841,6 +1844,7 @@ fn uniforms_from_params(
     scroll_x: f32,
     shape_count: u32,
     time: f32,
+    activation: f32,
     backdrop: BackdropMapping,
 ) -> GlassUniforms {
     let (width, height) = viewport;
@@ -1869,7 +1873,8 @@ fn uniforms_from_params(
         shape_count,
         debug_flags: debug.flags(),
         time,
-        _pad: [0.0; 3],
+        activation,
+        _pad: [0.0; 2],
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }

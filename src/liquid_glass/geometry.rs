@@ -13,9 +13,11 @@ pub struct GlassShape {
     /// 0 = scrolling rounded rect (moves with `scroll_x`, e.g. tile halos),
     /// 1 = fixed rounded rect (ignores `scroll_x`, e.g. the page frame).
     pub shape_type: u32,
+    /// Per-shape glass activation (0.0 = idle, 1.0 = fully active).
+    pub activation: f32,
     /// Explicit padding so `motion` starts at the WGSL-required 16-byte
     /// boundary (offset 32).
-    pub _pad: [u32; 2],
+    pub _pad: u32,
     /// Optional GPU animation payload: `(pivot_x, pivot_y, phase, flags)`.
     pub motion: [f32; 4],
 }
@@ -106,9 +108,16 @@ impl GlassShape {
             size,
             radius,
             shape_type,
-            _pad: [0; 2],
+            activation: 0.0,
+            _pad: 0,
             motion: [0.0; 4],
         }
+    }
+
+    /// Set the per-shape glass activation level.
+    pub fn with_activation(mut self, activation: f32) -> Self {
+        self.activation = activation;
+        self
     }
 
     pub(crate) fn is_frame(self) -> bool {
