@@ -19,9 +19,9 @@ Apple HIG（research §15）の核心: **「統一すべきは外接矩形の寸
 3 カテゴリ分類（`solid_fill` = bbox 内 alpha>=128 充填度、で判定）:
 
 ```
-solid_fill >= 0.75  →  FullBleed   (scale = 1.00, 不変)
+solid_fill >= 0.80  →  FullBleed   (scale = 1.00, 不変)
 solid_fill <  0.40  →  ThinLine    (scale = 0.92, 細線画・控えめ縮小)
-それ以外(0.40-0.75) →  Solid       (scale = 0.74, Apple §6.2 準拠)
+それ以外(0.40-0.80) →  Solid       (scale = 0.74, Apple §6.2 準拠)
 ```
 
 決定根拠（原画像 259 アプリ実測）:
@@ -34,12 +34,13 @@ solid_fill <  0.40  →  ThinLine    (scale = 0.92, 細線画・控えめ縮小)
 検証済みパラメータ表（実測値、ユーザ確認済み）:
 
 | アプリ | solid_fill | 判定 | scale | ユーザ評価 |
-|---|---|---|---|---|
-| Safari, App Store, Notes | 0.85 | FullBleed | 1.00 | ✓ 不変 |
+|---|---|---|---|---|---|
+| Safari, App Store, Notes | 0.955 | FullBleed | 1.00 | ✓ 不変 |
 | sbv2-gui, Remote Codetrol, TouchOSC | 1.00 | FullBleed | 1.00 | ✓ 不変 |
 | MIDI Monitor | 0.31 | ThinLine | 0.92 | ✓ |
 | Synthesizer V | 0.37 | ThinLine | 0.92 | ✓ |
-| VLC, Unity Hub, Cinema 4D, Barrier | 0.50-0.73 | Solid | 0.74 | ✓ 完璧 |
+| VLC, Barrier, Parsec | 0.50-0.72 | Solid | 0.74 | ✓ 完璧 |
+| Unity Hub, VRoidStudio | 0.75-0.76 | Solid | 0.74 | ✓ 適正 |
 
 既知の制限（合意済み）: FileZilla（solid_fill=0.94、α 形状）は FullBleed 判定になる。「α 形状だが高充填」の自動判別は困難。将来の手動指定機能で対応。
 
@@ -69,20 +70,20 @@ solid_fill <  0.40  →  ThinLine    (scale = 0.92, 細線画・控えめ縮小)
 ### 3.2 分類ルール（確定）
 
 ```
-if solid_fill >= 0.75:  FullBleed
+if solid_fill >= 0.80:  FullBleed
 elif solid_fill < 0.40: ThinLine
 else:                   Solid
 ```
 
-**核心**: macOS squircle（Safari 等）は角が大きく丸く透明のため、四辺接触率は全て 0.000 になる（「四辺接触→FullBleed」は成立しない）。しかし bbox 内は 85% 以上が不透明（背景が塗られている）なので `solid_fill` は 0.85 程度になり、Logo 系（0.31-0.73）と明確に分離する。
+**核心**: macOS squircle（Safari 等）は角が大きく丸く透明のため、四辺接触率は全て 0.000 になる（「四辺接触→FullBleed」は成立しない）。しかし bbox 内は 95% 以上が不透明（背景が塗られている）なので `solid_fill` は 0.955 程度になり、Logo 系（0.27-0.76）と明確に分離する。
 
 ### 3.3 検証データ（原画像 259 アプリ）
 
 | カテゴリ | solid_fill 範囲 | 代表例 | 件数 |
-|---|---|---|---|
-| FullBleed | 0.75 - 1.00 | Safari(0.853), sbv2-gui(1.000), TouchOSC(1.000) | 200 |
-| Solid | 0.40 - 0.75 | VLC(0.546), Unity Hub(0.725), Barrier(0.503) | 52 |
-| ThinLine | 0.27 - 0.40 | MIDI Monitor(0.311), SynthV(0.369), Civ6(0.273) | 7 |
+|---|---|---|---|---|
+| FullBleed | 0.80 - 1.00 | Safari(0.955), sbv2-gui(1.000), TouchOSC(1.000) | 152 |
+| Solid | 0.40 - 0.80 | VLC(0.546), Unity Hub(0.750), VRoidStudio(0.759) | 9 |
+| ThinLine | 0.27 - 0.40 | MIDI Monitor(0.340), SynthV(0.371), Civ6(0.273) | 6 |
 
 ## 4. スケール計算アルゴリズム（簡素化・確定）
 
@@ -140,7 +141,7 @@ dy = (S - new_h) / 2
 
 ```rust
 pub const ALPHA_HARD: u8 = 128;
-pub const FULLBLEED_FILL: f64 = 0.75;
+pub const FULLBLEED_FILL: f64 = 0.80;
 pub const THINLINE_FILL: f64 = 0.40;
 pub const SCALE_FULLBLEED: f64 = 1.00;
 pub const SCALE_THINLINE: f64 = 0.92;

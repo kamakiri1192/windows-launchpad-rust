@@ -26,7 +26,7 @@ use super::normalize::DecodedIcon;
 pub const ALPHA_HARD: u8 = 128;
 
 /// Solid-fill threshold above which an icon is considered full-bleed.
-pub const FULLBLEED_FILL: f64 = 0.75;
+pub const FULLBLEED_FILL: f64 = 0.80;
 
 /// Solid-fill threshold *below* which an icon is considered thin-line art.
 pub const THINLINE_FILL: f64 = 0.40;
@@ -191,7 +191,7 @@ pub fn analyze(src: &DecodedIcon) -> Option<IconMetrics> {
 /// Classify an icon by its solid-fill ratio alone.
 ///
 /// ```text
-/// solid_fill >= FULLBLEED_FILL (0.75) → FullBleed
+/// solid_fill >= FULLBLEED_FILL (0.80) → FullBleed
 /// solid_fill <  THINLINE_FILL (0.40)  → ThinLine
 /// else                                 → Solid
 /// ```
@@ -254,9 +254,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_boundary_exact_075() {
-        // Boundary: >= 0.75 is FullBleed.
-        assert_eq!(classify(0.75), IconCategory::FullBleed);
+    fn classify_boundary_exact_080() {
+        // Boundary: >= 0.80 is FullBleed.
+        assert_eq!(classify(0.80), IconCategory::FullBleed);
     }
 
     #[test]

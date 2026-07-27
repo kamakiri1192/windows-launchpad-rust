@@ -584,8 +584,39 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
         )
         .unwrap_or(0);
     if stored as u32 != SCHEMA_VERSION {
-        // Version mismatch: wipe icons so everything is re-extracted.
+        // Schema version mismatch: run any pending column migrations
+        // before wiping cached rows so that subsequent INSERTs succeed.
+        migrate_icons_schema(conn)?;
+        // Wipe icons so everything is re-extracted.
         conn.execute("DELETE FROM icons", [])?;
+    }
+    Ok(())
+}
+
+/// Add any columns that may be missing in an older icons table schema.
+///
+/// This handles the v1→v2 migration where `category` and `scale` columns were
+/// added. SQLite does not support `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so
+/// we query `PRAGMA table_info` to check for column existence first.
+fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
+    // Collect existing column names.
+    let mut stmt = conn.prepare("PRAGMA table_info(icons)")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))? // column 1 = name
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if !existing.iter().any(|c| c == "category") {
+        conn.execute(
+            "ALTER TABLE icons ADD COLUMN category TEXT NOT NULL DEFAULT 'fullbleed'",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|c| c == "scale") {
+        conn.execute(
+            "ALTER TABLE icons ADD COLUMN scale REAL NOT NULL DEFAULT 1.0",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -860,5 +891,139 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
         // open_at on a fresh memory DB still works:
         let _ = cache();
+    }
+
+    // -- schema migration (v1 → v2) ---------------------------------------------
+
+    /// Regression test (Bug #48): opening a v1 database (icons table without
+    /// `category` / `scale` columns) must add those columns via ALTER TABLE
+    /// before clearing rows for re-extraction. Without this, the schema version
+    /// is bumped to 2 but the columns remain missing, and subsequent INSERTs
+    /// fail silently because the new column names are not recognised.
+    #[test]
+    fn migration_adds_category_and_scale_columns_to_v1_db() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Create v1-style schema (without category/scale columns).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_meta (
+                key   TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS icons (
+                app_id             TEXT PRIMARY KEY,
+                link_path          TEXT NOT NULL,
+                display_name       TEXT NOT NULL,
+                link_mtime         INTEGER NOT NULL,
+                target_path        TEXT NOT NULL,
+                target_mtime       INTEGER NOT NULL,
+                icon_location      TEXT NOT NULL,
+                icon_index         INTEGER NOT NULL,
+                image_w            INTEGER NOT NULL,
+                image_h            INTEGER NOT NULL,
+                image_rgba         BLOB NOT NULL,
+                extraction_version INTEGER NOT NULL,
+                last_seen_at       INTEGER NOT NULL,
+                deleted_at         INTEGER
+            );
+            INSERT INTO schema_meta(key, value) VALUES ('schema_version', 1);
+        ",
+        )
+        .unwrap();
+
+        // Insert a dummy row — it will be wiped by check_schema_version.
+        conn.execute(
+            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, \
+             target_path, target_mtime, icon_location, icon_index, image_w, image_h, \
+             image_rgba, extraction_version, last_seen_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                "test-app",
+                "",
+                "",
+                0i64,
+                "",
+                0i64,
+                "",
+                0i64,
+                128i64,
+                128i64,
+                vec![0u8; 128 * 128 * 4],
+                5i64,
+                0i64,
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM icons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        // Run the full version-check path (migration + wipe).
+        check_schema_version(&conn).unwrap();
+
+        // Columns must now exist.
+        let mut stmt = conn.prepare("PRAGMA table_info(icons)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"category".to_string()),
+            "category column should exist after migration; got {:?}",
+            cols
+        );
+        assert!(
+            cols.contains(&"scale".to_string()),
+            "scale column should exist after migration; got {:?}",
+            cols
+        );
+
+        // The old row should have been wiped by the version mismatch.
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM icons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "v1 rows should be wiped for re-extraction"
+        );
+
+        // Insert a new row using the migrated columns to confirm they work.
+        conn.execute(
+            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, \
+             target_path, target_mtime, icon_location, icon_index, image_w, image_h, \
+             image_rgba, extraction_version, category, scale, last_seen_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            params![
+                "re-extracted",
+                "",
+                "",
+                0i64,
+                "",
+                0i64,
+                "",
+                0i64,
+                128i64,
+                128i64,
+                vec![0u8; 128 * 128 * 4],
+                EXTRACTION_VERSION as i64,
+                "solid",
+                0.74f64,
+                0i64,
+            ],
+        )
+        .unwrap();
+
+        let (cat, scl): (String, f64) = conn
+            .query_row(
+                "SELECT category, scale FROM icons WHERE app_id = 're-extracted'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cat, "solid");
+        assert!((scl - 0.74).abs() < 0.001);
     }
 }
