@@ -63,6 +63,10 @@ pub struct Slider {
     pub control_size: super::super::theme::ControlSize,
     pub enabled: bool,
     pub reset: bool,
+    /// Explicit hit-target for the track HitRegion.
+    pub hit_target: Option<HitTarget>,
+    /// Explicit hit-target for the reset HitRegion.
+    pub hit_target_reset: Option<HitTarget>,
 }
 
 impl Slider {
@@ -78,6 +82,8 @@ impl Slider {
             control_size: super::super::theme::ControlSize::Regular,
             enabled: true,
             reset: true,
+            hit_target: None,
+            hit_target_reset: None,
         }
     }
 
@@ -114,6 +120,18 @@ impl Slider {
     /// Show or hide the reset icon.
     pub fn reset_opt(mut self, reset: bool) -> Self {
         self.reset = reset;
+        self
+    }
+
+    /// Override the hit-test target for the track HitRegion.
+    pub fn hit_target(mut self, target: HitTarget) -> Self {
+        self.hit_target = Some(target);
+        self
+    }
+
+    /// Override the hit-test target for the reset HitRegion.
+    pub fn hit_target_reset(mut self, target: HitTarget) -> Self {
+        self.hit_target_reset = Some(target);
         self
     }
 
@@ -385,10 +403,14 @@ impl Ui {
             track_hh * 2.0 + 8.0 * scale,
         );
         if s.enabled {
+            let track_target = s
+                .hit_target
+                .clone()
+                .unwrap_or_else(|| HitTarget::settings_toggle(format!("{}-track", s.id.as_str())));
             self.push_hit(crate::layout::hit_map::HitRegion::new(
                 format_slider_id(&s.id, "track"),
                 track_hit_rect,
-                HitTarget::settings_toggle(format!("{}-track", s.id.as_str())),
+                track_target,
                 Z_CONTROL + 2,
             ));
         }
@@ -401,10 +423,14 @@ impl Ui {
             reset_r * 3.2,
         );
         if s.reset && s.enabled {
+            let reset_target = s
+                .hit_target_reset
+                .clone()
+                .unwrap_or_else(|| HitTarget::settings_action(format!("{}-reset", s.id.as_str())));
             self.push_hit(crate::layout::hit_map::HitRegion::new(
                 format_slider_id(&s.id, "reset"),
                 reset_hit_rect,
-                HitTarget::settings_action(format!("{}-reset", s.id.as_str())),
+                reset_target,
                 Z_CONTROL + 2,
             ));
         }

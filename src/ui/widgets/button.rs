@@ -60,6 +60,9 @@ pub struct Button {
     pub enabled: bool,
     /// Show a chevron (>) on the right side.
     pub chevron: bool,
+    /// Explicit hit-target for the HitRegion. When `Some`, replaces the
+    /// id-derived default (`HitTarget::settings_action(b.id.as_str())`).
+    pub hit_target: Option<HitTarget>,
 }
 
 impl Button {
@@ -74,6 +77,7 @@ impl Button {
             tint: None,
             enabled: true,
             chevron: true,
+            hit_target: None,
         }
     }
 
@@ -122,6 +126,12 @@ impl Button {
     /// Show or hide the chevron indicator.
     pub fn chevron_opt(mut self, show: bool) -> Self {
         self.chevron = show;
+        self
+    }
+
+    /// Override the hit-test target for the HitRegion.
+    pub fn hit_target(mut self, target: HitTarget) -> Self {
+        self.hit_target = Some(target);
         self
     }
 
@@ -257,10 +267,14 @@ impl Ui {
 
         // --- Hit region ---
         if b.enabled {
+            let target = b
+                .hit_target
+                .clone()
+                .unwrap_or_else(|| HitTarget::settings_action(b.id.as_str()));
             self.push_hit(crate::layout::hit_map::HitRegion::new(
                 b.id.clone(),
                 rect,
-                HitTarget::settings_action(b.id.as_str()),
+                target,
                 Z_CONTROL + 2,
             ));
         }
@@ -330,6 +344,9 @@ pub struct IconButton {
     pub hit_radius: f32,
     pub tint: Option<[f32; 4]>,
     pub label: Option<String>,
+    /// Explicit hit-target for the HitRegion. When `Some`, replaces the
+    /// id-derived default (`HitTarget::settings_action(ib.id.as_str())`).
+    pub hit_target: Option<HitTarget>,
 }
 
 impl IconButton {
@@ -345,6 +362,7 @@ impl IconButton {
             hit_radius: 16.0,
             tint: None,
             label: None,
+            hit_target: None,
         }
     }
 
@@ -375,6 +393,12 @@ impl IconButton {
     /// Set a tooltip / accessibility label (not currently rendered as text).
     pub fn label_opt(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// Override the hit-test target for the HitRegion.
+    pub fn hit_target(mut self, target: HitTarget) -> Self {
+        self.hit_target = Some(target);
         self
     }
 
@@ -427,10 +451,14 @@ impl Ui {
         self.push_ink(ink);
 
         // --- Hit region ---
+        let hit_target = ib
+            .hit_target
+            .clone()
+            .unwrap_or_else(|| HitTarget::settings_action(ib.id.as_str()));
         self.push_hit(crate::layout::hit_map::HitRegion::new(
             ib.id.clone(),
             hit_rect,
-            HitTarget::settings_action(ib.id.as_str()),
+            hit_target,
             Z_CONTROL + 2,
         ));
 

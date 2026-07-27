@@ -12,7 +12,7 @@ use crate::scroll::Phase;
 use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
 
-use crate::app::render::{settings_category_id, settings_press_target_from_layout_hit};
+use crate::app::render::settings_press_target_from_hit_target;
 use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
 
 impl App {
@@ -195,19 +195,15 @@ impl App {
     }
 
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {
-        let layout = self.settings_panel_layout();
-        // Pass the pixel-precise continuous scroller position directly so
-        // hit testing stays in sync with the rendered (pixel) layout instead
-        // of drifting from accumulated integer-row rounding.
-        let scroll_px = self.settings_scroll.position;
-        let hit = crate::layout::settings_panel::hit_test(
-            &layout,
-            self.scale_factor,
-            settings_category_id(self.settings_category),
-            scroll_px,
-            crate::ui_model::geometry::Point::new(x, y),
-        );
-        settings_press_target_from_layout_hit(hit)
+        let point = crate::ui_model::geometry::Point::new(x, y);
+        let region = self
+            .cached_settings_hit_map
+            .as_ref()
+            .and_then(|map| map.hit_test(point));
+        match region {
+            None => SettingsPressTarget::Outside,
+            Some(r) => settings_press_target_from_hit_target(&r.target),
+        }
     }
 
     pub(crate) fn handle_settings_click(&mut self, target: SettingsPressTarget) {

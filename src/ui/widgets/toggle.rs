@@ -80,6 +80,9 @@ pub struct Toggle {
     pub control_size: super::super::theme::ControlSize,
     pub tint: Option<[f32; 4]>,
     pub enabled: bool,
+    /// Explicit hit-target for the HitRegion. When `Some`, replaces the
+    /// id-derived default (`HitTarget::settings_toggle(t.id.as_str())`).
+    pub hit_target: Option<HitTarget>,
 }
 
 impl Toggle {
@@ -94,6 +97,7 @@ impl Toggle {
             control_size: super::super::theme::ControlSize::Regular,
             tint: None,
             enabled: true,
+            hit_target: None,
         }
     }
 
@@ -136,6 +140,12 @@ impl Toggle {
     /// Enable or disable the toggle.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Override the hit-test target for the HitRegion.
+    pub fn hit_target(mut self, target: HitTarget) -> Self {
+        self.hit_target = Some(target);
         self
     }
 
@@ -718,10 +728,14 @@ impl Ui {
             let hit_y = rect.center().y - hit_h * 0.5;
             let hit_rect = Rect::new(hit_x, hit_y, hit_w, hit_h);
 
+            let target = t
+                .hit_target
+                .clone()
+                .unwrap_or_else(|| HitTarget::settings_toggle(t.id.as_str()));
             self.push_hit(crate::layout::hit_map::HitRegion::new(
                 t.id.clone(),
                 hit_rect,
-                HitTarget::settings_toggle(t.id.as_str()),
+                target,
                 Z_CONTROL + 2,
             ));
         }

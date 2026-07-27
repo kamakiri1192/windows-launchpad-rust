@@ -4,7 +4,6 @@ use crate::domain::settings::{
     LiquidGlassDebugFlag, LiquidGlassParamField, SettingsCategory, SortOrder,
 };
 use crate::layout;
-use crate::layout::settings_panel::{LiquidGlassDebugId, LiquidGlassParamId};
 use crate::renderer::text_engine as text;
 use crate::ui_model;
 use crate::ui_model::geometry::{Rect, UvRect};
@@ -102,6 +101,8 @@ impl App {
             };
             layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
         };
+        // Cache the HitMap for next frame's input processing (1-frame delay).
+        self.cached_settings_hit_map = Some(model.result.hits.clone());
         let panel = model.layout;
         let visual_scale = model.visual_scale;
         let visual_alpha = model.visual_alpha;
@@ -211,33 +212,12 @@ pub(crate) fn settings_category_id(
     }
 }
 
-pub(crate) fn settings_category_from_id(
-    category: layout::settings_panel::SettingsCategoryId,
-) -> SettingsCategory {
-    match category {
-        layout::settings_panel::SettingsCategoryId::Apps => SettingsCategory::Apps,
-        layout::settings_panel::SettingsCategoryId::Search => SettingsCategory::Search,
-        layout::settings_panel::SettingsCategoryId::System => SettingsCategory::System,
-        layout::settings_panel::SettingsCategoryId::About => SettingsCategory::About,
-        layout::settings_panel::SettingsCategoryId::Debug => SettingsCategory::Debug,
-    }
-}
-
 pub(crate) fn sort_order_id(order: SortOrder) -> layout::settings_panel::SortOrderId {
     match order {
         SortOrder::Name => layout::settings_panel::SortOrderId::Name,
         SortOrder::Manual => layout::settings_panel::SortOrderId::Manual,
         SortOrder::Recent => layout::settings_panel::SortOrderId::Recent,
         SortOrder::Frequent => layout::settings_panel::SortOrderId::Frequent,
-    }
-}
-
-pub(crate) fn sort_order_from_id(order: layout::settings_panel::SortOrderId) -> SortOrder {
-    match order {
-        layout::settings_panel::SortOrderId::Name => SortOrder::Name,
-        layout::settings_panel::SortOrderId::Manual => SortOrder::Manual,
-        layout::settings_panel::SortOrderId::Recent => SortOrder::Recent,
-        layout::settings_panel::SortOrderId::Frequent => SortOrder::Frequent,
     }
 }
 
@@ -332,95 +312,107 @@ fn settings_panel_copy<'a>(
     }
 }
 
-pub(crate) fn settings_press_target_from_layout_hit(
-    hit: layout::settings_panel::SettingsPanelHit,
+/// Convert a [`HitTarget`] (from the cached HitMap) to a
+/// [`SettingsPressTarget`] by matching on the `SettingsTarget` key strings.
+/// This replaces `settings_press_target_from_layout_hit` which operated on
+/// the now-removed `SettingsPanelHit` enum.
+pub(crate) fn settings_press_target_from_hit_target(
+    target: &crate::ui_model::hit::HitTarget,
 ) -> crate::app::state::SettingsPressTarget {
-    match hit {
-        layout::settings_panel::SettingsPanelHit::Close => {
-            crate::app::state::SettingsPressTarget::Close
+    use crate::app::state::SettingsPressTarget;
+    use crate::ui_model::hit::{HitTarget, SettingsTarget};
+
+    match target {
+        HitTarget::Settings {
+            target: SettingsTarget::Close,
+        } => SettingsPressTarget::Close,
+        HitTarget::Settings {
+            target: SettingsTarget::Panel,
+        } => SettingsPressTarget::Inside,
+        HitTarget::Settings {
+            target: SettingsTarget::Category { key },
+        } => {
+            let cat = match key.as_str() {
+                "apps" => crate::domain::settings::SettingsCategory::Apps,
+                "search" => crate::domain::settings::SettingsCategory::Search,
+                "system" => crate::domain::settings::SettingsCategory::System,
+                "about" => crate::domain::settings::SettingsCategory::About,
+                "debug" => crate::domain::settings::SettingsCategory::Debug,
+                _ => return SettingsPressTarget::Inside,
+            };
+            SettingsPressTarget::Category(cat)
         }
-        layout::settings_panel::SettingsPanelHit::Category(category) => {
-            crate::app::state::SettingsPressTarget::Category(settings_category_from_id(category))
+        HitTarget::Settings {
+            target: SettingsTarget::SortOption { key },
+        } => {
+            let order = match key.as_str() {
+                "name" => crate::domain::settings::SortOrder::Name,
+                "manual" => crate::domain::settings::SortOrder::Manual,
+                "recent" => crate::domain::settings::SortOrder::Recent,
+                "frequent" => crate::domain::settings::SortOrder::Frequent,
+                _ => return SettingsPressTarget::Inside,
+            };
+            SettingsPressTarget::Sort(order)
         }
-        layout::settings_panel::SettingsPanelHit::Sort(order) => {
-            crate::app::state::SettingsPressTarget::Sort(sort_order_from_id(order))
-        }
-        layout::settings_panel::SettingsPanelHit::FrequentToggle => {
-            crate::app::state::SettingsPressTarget::FrequentToggle
-        }
-        layout::settings_panel::SettingsPanelHit::SteamToggle => {
-            crate::app::state::SettingsPressTarget::SteamToggle
-        }
-        layout::settings_panel::SettingsPanelHit::SearchHiddenToggle => {
-            crate::app::state::SettingsPressTarget::SearchHiddenToggle
-        }
-        layout::settings_panel::SettingsPanelHit::DebugToggle => {
-            crate::app::state::SettingsPressTarget::DebugToggle
-        }
-        layout::settings_panel::SettingsPanelHit::FpsToggle => {
-            crate::app::state::SettingsPressTarget::FpsToggle
-        }
-        layout::settings_panel::SettingsPanelHit::ResetCache => {
-            crate::app::state::SettingsPressTarget::ResetCache
-        }
-        layout::settings_panel::SettingsPanelHit::ResetSettings => {
-            crate::app::state::SettingsPressTarget::ResetSettings
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassEnabled => {
-            crate::app::state::SettingsPressTarget::LiquidGlassEnabled
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassParam(id) => {
-            crate::app::state::SettingsPressTarget::LiquidGlassParam(param_field_from_id(id))
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassParamReset(id) => {
-            crate::app::state::SettingsPressTarget::LiquidGlassParamReset(param_field_from_id(id))
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassResetAll => {
-            crate::app::state::SettingsPressTarget::LiquidGlassResetAll
-        }
-        layout::settings_panel::SettingsPanelHit::LiquidGlassDebug(id) => {
-            crate::app::state::SettingsPressTarget::LiquidGlassDebug(debug_flag_from_id(id))
-        }
-        layout::settings_panel::SettingsPanelHit::WindowDecorations => {
-            crate::app::state::SettingsPressTarget::WindowDecorations
-        }
-        layout::settings_panel::SettingsPanelHit::ScrollUp => {
-            crate::app::state::SettingsPressTarget::SettingsScrollUp
-        }
-        layout::settings_panel::SettingsPanelHit::ScrollDown => {
-            crate::app::state::SettingsPressTarget::SettingsScrollDown
-        }
-        layout::settings_panel::SettingsPanelHit::Inside => {
-            crate::app::state::SettingsPressTarget::Inside
-        }
-        layout::settings_panel::SettingsPanelHit::Outside => {
-            crate::app::state::SettingsPressTarget::Outside
-        }
+        HitTarget::Settings {
+            target: SettingsTarget::Toggle { key },
+        } => match key.as_str() {
+            "frequent-apps" => SettingsPressTarget::FrequentToggle,
+            "steam-apps" => SettingsPressTarget::SteamToggle,
+            "search-hidden" => SettingsPressTarget::SearchHiddenToggle,
+            "debug" => SettingsPressTarget::DebugToggle,
+            "show-fps" => SettingsPressTarget::FpsToggle,
+            "lg-enabled" => SettingsPressTarget::LiquidGlassEnabled,
+            "window-decorations" => SettingsPressTarget::WindowDecorations,
+            key if key.starts_with("lg-param-") => {
+                let field = param_field_from_key(&key["lg-param-".len()..]);
+                SettingsPressTarget::LiquidGlassParam(field)
+            }
+            key if key.starts_with("lg-debug-") => {
+                let flag = debug_flag_from_key(&key["lg-debug-".len()..]);
+                SettingsPressTarget::LiquidGlassDebug(flag)
+            }
+            _ => SettingsPressTarget::Inside,
+        },
+        HitTarget::Settings {
+            target: SettingsTarget::Action { key },
+        } => match key.as_str() {
+            "reset-cache" => SettingsPressTarget::ResetCache,
+            "reset-settings" => SettingsPressTarget::ResetSettings,
+            "lg-reset-all" => SettingsPressTarget::LiquidGlassResetAll,
+            key if key.starts_with("lg-param-reset-") => {
+                let field = param_field_from_key(&key["lg-param-reset-".len()..]);
+                SettingsPressTarget::LiquidGlassParamReset(field)
+            }
+            _ => SettingsPressTarget::Inside,
+        },
+        HitTarget::Backdrop { .. } => SettingsPressTarget::Outside,
+        _ => SettingsPressTarget::Inside,
     }
 }
 
-fn param_field_from_id(id: LiquidGlassParamId) -> LiquidGlassParamField {
-    match id {
-        LiquidGlassParamId::Thickness => LiquidGlassParamField::Thickness,
-        LiquidGlassParamId::RefractiveIndex => LiquidGlassParamField::RefractiveIndex,
-        LiquidGlassParamId::Saturation => LiquidGlassParamField::Saturation,
-        LiquidGlassParamId::ChromaticAberration => LiquidGlassParamField::ChromaticAberration,
-        LiquidGlassParamId::BlurRadius => LiquidGlassParamField::BlurRadius,
+fn param_field_from_key(key: &str) -> LiquidGlassParamField {
+    match key {
+        "thickness" => LiquidGlassParamField::Thickness,
+        "refractive-index" => LiquidGlassParamField::RefractiveIndex,
+        "saturation" => LiquidGlassParamField::Saturation,
+        "chromatic-aberration" => LiquidGlassParamField::ChromaticAberration,
+        "blur-radius" => LiquidGlassParamField::BlurRadius,
+        _ => LiquidGlassParamField::Thickness,
     }
 }
 
-fn debug_flag_from_id(id: LiquidGlassDebugId) -> LiquidGlassDebugFlag {
-    match id {
-        LiquidGlassDebugId::DisableChromaticAberration => {
-            LiquidGlassDebugFlag::DisableChromaticAberration
-        }
-        LiquidGlassDebugId::DisableEdgeLighting => LiquidGlassDebugFlag::DisableEdgeLighting,
-        LiquidGlassDebugId::DisableBlur => LiquidGlassDebugFlag::DisableBlur,
-        LiquidGlassDebugId::ShowBackdropTexture => LiquidGlassDebugFlag::ShowBackdropTexture,
-        LiquidGlassDebugId::ShowGeometryTexture => LiquidGlassDebugFlag::ShowGeometryTexture,
-        LiquidGlassDebugId::ShowDisplacement => LiquidGlassDebugFlag::ShowDisplacement,
-        LiquidGlassDebugId::ShowAlphaMask => LiquidGlassDebugFlag::ShowAlphaMask,
-        LiquidGlassDebugId::ShowFinalGlassOnly => LiquidGlassDebugFlag::ShowFinalGlassOnly,
+fn debug_flag_from_key(key: &str) -> LiquidGlassDebugFlag {
+    match key {
+        "disable-chromatic-aberration" => LiquidGlassDebugFlag::DisableChromaticAberration,
+        "disable-edge-lighting" => LiquidGlassDebugFlag::DisableEdgeLighting,
+        "disable-blur" => LiquidGlassDebugFlag::DisableBlur,
+        "show-backdrop-texture" => LiquidGlassDebugFlag::ShowBackdropTexture,
+        "show-geometry-texture" => LiquidGlassDebugFlag::ShowGeometryTexture,
+        "show-displacement" => LiquidGlassDebugFlag::ShowDisplacement,
+        "show-alpha-mask" => LiquidGlassDebugFlag::ShowAlphaMask,
+        "show-final-glass-only" => LiquidGlassDebugFlag::ShowFinalGlassOnly,
+        _ => LiquidGlassDebugFlag::DisableChromaticAberration,
     }
 }
 
@@ -599,4 +591,112 @@ fn push_text_right(
         center: (right - width * 0.5, center_y),
         scale_factor: scale,
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::SettingsPressTarget;
+    use crate::domain::settings::{LiquidGlassDebugFlag, LiquidGlassParamField};
+    use crate::ui_model::hit::{HitTarget, SettingsTarget};
+
+    #[test]
+    fn press_target_from_hit_target_toggle_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("frequent-apps")),
+            SettingsPressTarget::FrequentToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("steam-apps")),
+            SettingsPressTarget::SteamToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("search-hidden")),
+            SettingsPressTarget::SearchHiddenToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("debug")),
+            SettingsPressTarget::DebugToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("show-fps")),
+            SettingsPressTarget::FpsToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-enabled")),
+            SettingsPressTarget::LiquidGlassEnabled
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "window-decorations"
+            )),
+            SettingsPressTarget::WindowDecorations
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_action_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action("reset-cache")),
+            SettingsPressTarget::ResetCache
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action("reset-settings")),
+            SettingsPressTarget::ResetSettings
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action("lg-reset-all")),
+            SettingsPressTarget::LiquidGlassResetAll
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_lg_param_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-param-thickness"
+            )),
+            SettingsPressTarget::LiquidGlassParam(LiquidGlassParamField::Thickness)
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_action(
+                "lg-param-reset-thickness"
+            )),
+            SettingsPressTarget::LiquidGlassParamReset(LiquidGlassParamField::Thickness)
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_lg_debug_keys() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-debug-disable-chromatic-aberration"
+            )),
+            SettingsPressTarget::LiquidGlassDebug(LiquidGlassDebugFlag::DisableChromaticAberration)
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_close_and_panel() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::Settings {
+                target: SettingsTarget::Close
+            }),
+            SettingsPressTarget::Close
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::Settings {
+                target: SettingsTarget::Panel
+            }),
+            SettingsPressTarget::Inside
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_backdrop_is_outside() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::modal_dismiss_backdrop()),
+            SettingsPressTarget::Outside
+        );
+    }
 }
