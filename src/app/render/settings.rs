@@ -238,12 +238,18 @@ impl App {
                 .find(|batch| batch.layer == GlassLayer::Overlay)
                 .map(|batch| batch.surfaces.clone())
                 .unwrap_or_default();
+            // Cull only the settings-panel glass (toggle thumbs) that has
+            // scrolled fully past the panel AABB. The existing_overlay
+            // (bottom control capsule, gear, etc.) is left untouched —
+            // the list-virtualization idea applies to our own scrollable
+            // content, not to ambient UI that happens to share the Overlay
+            // lane.
             let panel_rect = model.layout.rect();
-            let merged: Vec<_> = existing_overlay
+            let ui_overlay: Vec<_> = ui_overlay
                 .into_iter()
-                .chain(ui_overlay)
                 .filter(|s| s.rect.intersects(panel_rect))
                 .collect();
+            let merged: Vec<_> = existing_overlay.into_iter().chain(ui_overlay).collect();
             self.render_model
                 .set_glass_batch(GlassLayer::Overlay, merged);
         }
