@@ -612,14 +612,8 @@ mod tests {
             "CFBundleIdentifier".into(),
             Value::String("com.example.linked".into()),
         );
-        info.insert(
-            "CFBundleName".into(),
-            Value::String("Linked".into()),
-        );
-        info.insert(
-            "CFBundleExecutable".into(),
-            Value::String("Linked".into()),
-        );
+        info.insert("CFBundleName".into(), Value::String("Linked".into()));
+        info.insert("CFBundleExecutable".into(), Value::String("Linked".into()));
         Value::Dictionary(info)
             .to_file_xml(bundle.join("Contents/Info.plist"))
             .unwrap();
@@ -655,14 +649,8 @@ mod tests {
             "CFBundleIdentifier".into(),
             Value::String("com.example.hidden".into()),
         );
-        info.insert(
-            "CFBundleName".into(),
-            Value::String("Hidden".into()),
-        );
-        info.insert(
-            "CFBundleExecutable".into(),
-            Value::String("Hidden".into()),
-        );
+        info.insert("CFBundleName".into(), Value::String("Hidden".into()));
+        info.insert("CFBundleExecutable".into(), Value::String("Hidden".into()));
         Value::Dictionary(info)
             .to_file_xml(bundle.join("Contents/Info.plist"))
             .unwrap();
