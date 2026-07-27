@@ -15,6 +15,10 @@ struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
+    // Per-lane glass activation (0.0 = standard glass, 1.0 = fully active).
+    // Currently unused by this shader: the field exists to keep the uniform
+    // layout in sync with the Rust `GlassUniforms` struct. Existing surfaces
+    // pass activation = 0.0 and render exactly as before.
     activation: f32,
     pad1: f32,
     pad2: f32,
@@ -72,8 +76,7 @@ fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
 }
 
 fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
-    // When activation is very low, skip expensive blur and use sharp backdrop.
-    if has_flag(7u) || u.blur_radius < 0.5 || u.activation < 0.15 {
+    if has_flag(7u) || u.blur_radius < 0.5 {
         return sample_backdrop(uv);
     }
     return sample_blurred_backdrop(uv);
@@ -127,9 +130,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // zero. Preserve the same color equation with one blurred and one sharp
     // sample instead of paying for chromatic separation, reflection, normal
     // reconstruction, and caustics across the large flat interior.
-    // When activation is very low, skip even the interior processing.
-    if normalized_height >= 1.0 || u.activation < 0.01 {
-        if u.activation < 0.01 { return vec4<f32>(0.0); }
+    if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
         let sharp_color = sample_backdrop(screen_uv);
         var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, 0.12);
@@ -140,21 +141,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             + interior_rgb * (1.0 - u.glass_color.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-        let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92) * u.activation;
+        let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92);
         return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
     }
 
     let refract_uv = screen_uv + displacement * inv_viewport;
-    // Modulate edge factor by activation: idle surfaces have weaker edges.
-    let edge_factor = pow(1.0 - clamp(normalized_height, 0.0, 1.0), 1.75) * u.activation;
+    let edge_factor = pow(1.0 - clamp(normalized_height, 0.0, 1.0), 1.75);
 
     var refract_color: vec4<f32>;
-    // Modulate chromatic aberration strength by activation.
-    let effective_chromatic = u.chromatic_aberration * u.activation;
-    if effective_chromatic < 0.01 {
+    if u.chromatic_aberration < 0.01 {
         refract_color = sample_glass_backdrop(refract_uv);
     } else {
-        let dispersion = effective_chromatic * (0.45 + edge_factor * 1.7);
+        let dispersion = u.chromatic_aberration * (0.45 + edge_factor * 1.7);
         let tangent = normalize(vec2<f32>(-displacement.y, displacement.x) + vec2<f32>(0.001, 0.0));
         let prism = tangent * edge_factor * 3.0;
         let red_uv = screen_uv + (displacement * (1.0 + dispersion) + prism) * inv_viewport;
@@ -170,7 +168,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
     let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
     var final_rgb = mix(refract_color.rgb, sharp_color.rgb, 0.12);
-    // Modulate reflection blend by activation.
     final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * 0.22);
 
     let bg_luma = luminance(final_rgb);
@@ -178,9 +175,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     final_rgb = mix(final_rgb, final_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
     final_rgb = u.glass_color.rgb * u.glass_color.a
         + final_rgb * (1.0 - u.glass_color.a);
-    // Modulate saturation by activation.
-    let effective_saturation = mix(1.0, u.saturation, u.activation);
-    final_rgb = apply_saturation(final_rgb, effective_saturation);
+    final_rgb = apply_saturation(final_rgb, u.saturation);
 
     if !has_flag(6u) {
         let thickness_scale = clamp(40.0 / max(u.thickness, 1.0), 1.0, 4.0);
@@ -200,8 +195,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let total_influence = main_light + opposite_light * 0.8;
             let directional = pow(total_influence, 1.5) * u.light_intensity * 3.0;
             let ambient = u.ambient_strength * 0.5;
-            // Modulate edge brightness by activation.
-            let brightness = (directional + ambient) * rim * thickness_scale * 0.8 * u.activation;
+            let brightness = (directional + ambient) * rim * thickness_scale * 0.8;
 
             let bg = sharp_color.rgb;
             let bg_luma = luminance(bg);
@@ -222,15 +216,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let caustic = pow(clamp(length(height_gradient) * 18.0 + rim * 0.45, 0.0, 1.0), 2.0)
                 * (0.55 + 0.45 * caustic_phase)
                 * u.light_intensity;
-            // Modulate specular and caustic by activation.
-            final_rgb += vec3<f32>(1.0, 0.96, 0.88) * specular * u.activation;
-            final_rgb += mix(vec3<f32>(0.25, 0.55, 1.0), vec3<f32>(1.0, 0.92, 0.55), main_light) * caustic * 0.18 * u.activation;
+            final_rgb += vec3<f32>(1.0, 0.96, 0.88) * specular;
+            final_rgb += mix(vec3<f32>(0.25, 0.55, 1.0), vec3<f32>(1.0, 0.92, 0.55), main_light) * caustic * 0.18;
         }
     }
 
     final_rgb = clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-    // Modulate glass alpha by activation.
-    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5) * u.activation, 0.0, 0.92);
+    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5), 0.0, 0.92);
 
     if has_flag(4u) {
         return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
