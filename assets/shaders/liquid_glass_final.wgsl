@@ -146,13 +146,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     let refract_uv = screen_uv + displacement * inv_viewport;
-    let edge_factor = pow(1.0 - clamp(normalized_height, 0.0, 1.0), 1.75);
+    // Per-surface activation (0 = standard glass, 1 = enhanced): a wider rim
+    // makes an interactive lens (e.g. a toggle thumb) read as "pressed".
+    let edge_power = mix(1.75, 1.15, u.activation);
+    let edge_factor = pow(1.0 - clamp(normalized_height, 0.0, 1.0), edge_power);
 
     var refract_color: vec4<f32>;
-    if u.chromatic_aberration < 0.01 {
+    let effective_chromatic = u.chromatic_aberration * (1.0 + u.activation * 0.6);
+    if effective_chromatic < 0.01 {
         refract_color = sample_glass_backdrop(refract_uv);
     } else {
-        let dispersion = u.chromatic_aberration * (0.45 + edge_factor * 1.7);
+        let dispersion = effective_chromatic * (0.45 + edge_factor * 1.7);
         let tangent = normalize(vec2<f32>(-displacement.y, displacement.x) + vec2<f32>(0.001, 0.0));
         let prism = tangent * edge_factor * 3.0;
         let red_uv = screen_uv + (displacement * (1.0 + dispersion) + prism) * inv_viewport;
@@ -168,14 +172,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
     let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
     var final_rgb = mix(refract_color.rgb, sharp_color.rgb, 0.12);
-    final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * 0.22);
+    // Stronger reflection pull on the rim when the lens is active.
+    final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * (0.22 + 0.18 * u.activation));
 
     let bg_luma = luminance(final_rgb);
     let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
     final_rgb = mix(final_rgb, final_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
     final_rgb = u.glass_color.rgb * u.glass_color.a
         + final_rgb * (1.0 - u.glass_color.a);
-    final_rgb = apply_saturation(final_rgb, u.saturation);
+    // Saturation stays at the configured value at activation = 0 and pushes a
+    // touch further only when active (never *reduces* it below standard).
+    let effective_saturation = u.saturation + 0.12 * u.activation;
+    final_rgb = apply_saturation(final_rgb, effective_saturation);
 
     if !has_flag(6u) {
         let thickness_scale = clamp(40.0 / max(u.thickness, 1.0), 1.0, 4.0);
@@ -195,7 +203,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let total_influence = main_light + opposite_light * 0.8;
             let directional = pow(total_influence, 1.5) * u.light_intensity * 3.0;
             let ambient = u.ambient_strength * 0.5;
-            let brightness = (directional + ambient) * rim * thickness_scale * 0.8;
+            // Edge lighting brightens with activation but keeps its standard
+            // strength at activation = 0.
+            let brightness = (directional + ambient) * rim * thickness_scale * 0.8 * (1.0 + 0.6 * u.activation);
 
             let bg = sharp_color.rgb;
             let bg_luma = luminance(bg);
@@ -211,11 +221,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let view3 = vec3<f32>(0.0, 0.0, 1.0);
             let specular = pow(max(dot(reflect(-light3, n3), view3), 0.0), 42.0)
                 * u.light_intensity
-                * (0.25 + rim * 1.65);
+                * (0.25 + rim * 1.65)
+                * (1.0 + u.activation);
             let caustic_phase = sin((screen_uv.x * 19.0 + screen_uv.y * 13.0 + u.scroll_x * 0.012) * 6.28318);
             let caustic = pow(clamp(length(height_gradient) * 18.0 + rim * 0.45, 0.0, 1.0), 2.0)
                 * (0.55 + 0.45 * caustic_phase)
-                * u.light_intensity;
+                * u.light_intensity
+                * (1.0 + 0.5 * u.activation);
             final_rgb += vec3<f32>(1.0, 0.96, 0.88) * specular;
             final_rgb += mix(vec3<f32>(0.25, 0.55, 1.0), vec3<f32>(1.0, 0.92, 0.55), main_light) * caustic * 0.18;
         }
