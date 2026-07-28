@@ -3,9 +3,8 @@
     2x artwork for the 18pt macOS menu-bar slot.
 
     The four transparent windows preserve the app icon's core identity. The
-    small central diamond adds a highlight-like signature without relying on
-    colour, while the shared outer body keeps the glyph legible at status-bar
-    size.
+    shared outer body keeps the glyph legible at status-bar size without
+    adding decorative elements that need explanation.
   -->
   <mask id="glyph">
     <rect width="36" height="36" fill="black"/>
@@ -14,7 +13,6 @@
     <rect x="20" y="6" width="10" height="10" rx="3.5" fill="black"/>
     <rect x="6" y="20" width="10" height="10" rx="3.5" fill="black"/>
     <rect x="20" y="20" width="10" height="10" rx="3.5" fill="black"/>
-    <path d="M18 15.5 20.5 18 18 20.5 15.5 18Z" fill="black"/>
   </mask>
   <rect width="36" height="36" fill="black" mask="url(#glyph)"/>
 </svg>
