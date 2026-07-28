@@ -1,9 +1,10 @@
 //! Shared application icon asset loading.
 
-/// Canonical launcher icon artwork, used for the window/taskbar icon and tray
-/// icon at runtime. The `.ico` generated from the same source is embedded into
-/// the Windows executable by `build.rs`.
+/// Canonical launcher icon artwork, used for the window/taskbar icon at
+/// runtime. The `.ico` generated from the same source is embedded into the
+/// Windows executable by `build.rs`.
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/app-icon-liquid-glass-neutral.png");
+const MENU_BAR_ICON_PNG: &[u8] = include_bytes!("../assets/macos/menu-bar-icon-template.png");
 
 pub struct RgbaIcon {
     pub rgba: Vec<u8>,
@@ -27,4 +28,46 @@ pub fn load_rgba(size: Option<u32>) -> Option<RgbaIcon> {
         height: img.height(),
         rgba: img.into_raw(),
     })
+}
+
+/// Load the dedicated macOS menu-bar glyph at 2× status-bar resolution.
+///
+/// Menu-bar artwork deliberately does not reuse the colourful application
+/// icon. A rounded outline preserves its glass frame while four solid tiles
+/// communicate the launcher function at status-bar size.
+/// `platform::macos::integration` marks the image as an AppKit template, so
+/// macOS tints it appropriately in both light and dark menu bars.
+pub fn load_menu_bar_template_rgba() -> Option<RgbaIcon> {
+    let image = image::load_from_memory(MENU_BAR_ICON_PNG)
+        .ok()?
+        .into_rgba8();
+    Some(RgbaIcon {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_menu_bar_template_rgba;
+
+    #[test]
+    fn menu_bar_icon_is_a_monochrome_transparent_template() {
+        let icon = load_menu_bar_template_rgba().expect("menu-bar icon should decode");
+        let alpha_at = |x: u32, y: u32| icon.rgba[((y * icon.width + x) * 4 + 3) as usize];
+
+        assert_eq!((icon.width, icon.height), (36, 36));
+        assert_eq!(icon.rgba.len(), 36 * 36 * 4);
+        assert_eq!(&icon.rgba[..4], &[0, 0, 0, 0]);
+        assert_eq!(alpha_at(18, 3), 255, "outer frame should be opaque");
+        assert_eq!(alpha_at(12, 12), 255, "tile center should be opaque");
+        assert_eq!(alpha_at(6, 12), 0, "outer padding should remain clear");
+        assert_eq!(alpha_at(18, 12), 0, "center gap should remain clear");
+        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        assert!(icon
+            .rgba
+            .chunks_exact(4)
+            .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0));
+    }
 }
