@@ -290,9 +290,25 @@ impl ApplicationHandler<UserEvent> for App {
                 phase: touch_phase,
                 ..
             } => {
-                let (px, is_precise) = Self::wheel_delta_to_px(delta, self.scale_factor);
+                let (mut px, is_precise) = Self::wheel_delta_to_px(delta, self.scale_factor);
                 if px.0 == 0.0 && px.1 == 0.0 {
                     return;
+                }
+                // macOS "natural scrolling" (the default) inverts the trackpad
+                // delta sign, but winit 0.30 hands us the raw value without
+                // applying the preference. homepad compensates via
+                // `isDirectionInvertedFromDevice`; we read the same preference
+                // ourselves so the grid pages in the direction the user
+                // expects. Only the horizontal (grid-paging) axis needs this —
+                // the settings panel uses the vertical axis with its own
+                // continuous scroller whose sign convention already expects the
+                // raw winit delta.
+                #[cfg(target_os = "macos")]
+                if is_precise
+                    && px.0 != 0.0
+                    && crate::platform::macos::scroll::natural_scroll_enabled()
+                {
+                    px.0 = -px.0;
                 }
                 AppAction::MouseWheel {
                     delta_px: px,

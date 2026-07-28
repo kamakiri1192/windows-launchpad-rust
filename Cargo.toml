@@ -100,6 +100,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSNotification",
     "NSObject",
     "NSString",
+    "NSUserDefaults",
     "std",
 ] }
 plist = "1.7.0"
