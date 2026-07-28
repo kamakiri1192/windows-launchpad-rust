@@ -55,10 +55,15 @@ mod tests {
     #[test]
     fn menu_bar_icon_is_a_monochrome_transparent_template() {
         let icon = load_menu_bar_template_rgba().expect("menu-bar icon should decode");
+        let alpha_at = |x: u32, y: u32| icon.rgba[((y * icon.width + x) * 4 + 3) as usize];
 
         assert_eq!((icon.width, icon.height), (36, 36));
         assert_eq!(icon.rgba.len(), 36 * 36 * 4);
         assert_eq!(&icon.rgba[..4], &[0, 0, 0, 0]);
+        assert_eq!(alpha_at(18, 3), 255, "outer frame should be opaque");
+        assert_eq!(alpha_at(12, 12), 255, "tile center should be opaque");
+        assert_eq!(alpha_at(6, 12), 0, "outer padding should remain clear");
+        assert_eq!(alpha_at(18, 12), 0, "center gap should remain clear");
         assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
         assert!(icon
             .rgba

@@ -2,24 +2,25 @@
   <!--
     2x artwork for the 18pt macOS menu-bar slot.
 
-    The rounded outline preserves the app icon's glass frame, while four solid
-    tiles communicate the launcher function at status-bar size. The restrained
-    outline weight lets the tiles lead while keeping the frame legible.
+    Pixel-fitted for both Retina (36px) and 1x (18px) menu bars:
+    - 2px outer stroke (1px at 1x)
+    - 8px tiles with 2px corners (4px / 1px at 1x)
+    - 4px from the frame's inner edge to each tile, matching the 4px center gap
   -->
   <rect
     x="3"
     y="3"
     width="30"
     height="30"
-    rx="7.5"
+    rx="7"
     fill="none"
     stroke="black"
-    stroke-width="2.5"
+    stroke-width="2"
   />
   <g fill="black">
-    <rect x="8" y="8" width="7.5" height="7.5" rx="2.25"/>
-    <rect x="20.5" y="8" width="7.5" height="7.5" rx="2.25"/>
-    <rect x="8" y="20.5" width="7.5" height="7.5" rx="2.25"/>
-    <rect x="20.5" y="20.5" width="7.5" height="7.5" rx="2.25"/>
+    <rect x="8" y="8" width="8" height="8" rx="2"/>
+    <rect x="20" y="8" width="8" height="8" rx="2"/>
+    <rect x="8" y="20" width="8" height="8" rx="2"/>
+    <rect x="20" y="20" width="8" height="8" rx="2"/>
   </g>
 </svg>
