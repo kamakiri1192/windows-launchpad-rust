@@ -228,6 +228,14 @@ pub struct Scroller {
     /// move at most one page away from here, exactly like a pointer drag
     /// (`gesture_start_snap`).
     wheel_from_snap: f32,
+    /// Accumulated displacement of the active wheel gesture, in logical px.
+    /// This is the wheel equivalent of `(pointer_x - drag_start_pointer)`:
+    /// `position` is derived as `clamp_with_rubber(wheel_from_snap +
+    /// wheel_accumulated)`, so the rubber-band resistance and the implicit
+    /// one-page clamp behave identically to a pointer drag. Accumulating the
+    /// raw deltas (instead of mutating `position` directly) is what keeps the
+    /// edge rubber-band from being overwhelmed by sustained OS momentum.
+    wheel_accumulated: f32,
     /// Smoothed instantaneous velocity (px/s) of the wheel gesture, used by the
     /// snap-direction decision. Positive = scrolling toward the previous page.
     wheel_velocity: f32,
@@ -270,6 +278,7 @@ impl Scroller {
             last_time: None,
             clock_origin,
             wheel_from_snap: 0.0,
+            wheel_accumulated: 0.0,
             wheel_velocity: 0.0,
             last_wheel_time: None,
             prev_wheel_time: None,
@@ -314,6 +323,7 @@ impl Scroller {
         // over: cancel the wheel (drop its residual momentum) and start a
         // clean direct-manipulation drag from the current position.
         if self.phase == Phase::WheelGesture {
+            self.wheel_accumulated = 0.0;
             self.wheel_velocity = 0.0;
             self.last_wheel_time = None;
             self.prev_wheel_time = None;
@@ -415,11 +425,14 @@ impl Scroller {
                 // Stray terminal event with no open gesture: nothing to end.
                 return;
             }
-            // Open a new gesture anchored on the current page. If we were
-            // mid-settle (e.g. a previous snap still gliding), the new gesture
-            // captures the live position and re-anchors the snap origin so a
-            // quick second swipe can reverse direction cleanly.
+            // Open a new gesture anchored on the current page, exactly like
+            // drag_start captures `gesture_start_snap`. The position is then
+            // derived from `wheel_from_snap + wheel_accumulated`, so the same
+            // one-page clamp + rubber-band curve as a pointer drag applies —
+            // sustained OS momentum cannot push the content past one page or
+            // overwhelm the edge rubber-band.
             self.wheel_from_snap = self.bounds.snap_target(self.position);
+            self.wheel_accumulated = 0.0;
             self.wheel_velocity = 0.0;
             self.prev_wheel_time = Some(now);
             self.phase = Phase::WheelGesture;
@@ -440,11 +453,22 @@ impl Scroller {
         }
         self.last_wheel_time = Some(now);
 
-        // Apply the delta with the same rubber-band curve as a pointer drag,
-        // so overshoot at the first/last page feels identical to dragging.
+        // Accumulate the raw displacement and derive `position` from the
+        // gesture anchor — the wheel equivalent of
+        // `drag_anchor + (pointer_x - drag_start_pointer)`. We then clamp to a
+        // ±1-page window around the anchor with the same rubber-band curve as
+        // a pointer drag, so:
+        //   - a single gesture can never run away past the adjacent page
+        //     (iOS-style paging), and
+        //   - the further past ±1 page the swipe pulls, the more each extra
+        //     pixel is resisted (diminishing returns), matching the bounce
+        //     feel at the content's first/last page.
+        // The content's hard bounds still apply on top, so the first/last page
+        // rubber-bands against the content edge rather than a phantom page.
         if dx != 0.0 {
-            let raw = self.position + dx;
-            self.position = self.clamp_with_rubber(raw);
+            self.wheel_accumulated += dx;
+            let raw = self.wheel_from_snap + self.wheel_accumulated;
+            self.position = self.clamp_wheel_target(raw);
         }
 
         if terminal {
@@ -473,6 +497,7 @@ impl Scroller {
             self.velocity = 0.0;
             self.begin_settle_to(target, false);
         }
+        self.wheel_accumulated = 0.0;
         self.wheel_velocity = 0.0;
         self.prev_wheel_time = None;
         // Keep `last_wheel_time`: the Settling branch still consults it to
@@ -633,6 +658,40 @@ impl Scroller {
         } else if raw < min {
             let over = min - raw;
             min - self.rubber(over)
+        } else {
+            raw
+        }
+    }
+
+    /// Clamp a wheel-gesture target to the ±1-page window around
+    /// [`Self::wheel_from_snap`], reusing the same [`Self::rubber`] curve as
+    /// [`Self::clamp_with_rubber`] so the bounce feel is identical. The
+    /// content's hard bounds are applied on top: at the first/last page the
+    /// one-page window would extend past the content edge, so we rubber-band
+    /// against the content bound there instead of a phantom page.
+    ///
+    /// This is what makes a single trackpad swipe behave like iOS paging — it
+    /// can never run past the adjacent page, no matter how much OS momentum
+    /// arrives, yet it still pulls elastically at the limit.
+    fn clamp_wheel_target(&self, raw: f32) -> f32 {
+        let page = self.bounds.page_extent;
+        // Soft window around the gesture anchor: at most one page either way.
+        let soft_min = self.wheel_from_snap - page;
+        let soft_max = self.wheel_from_snap + page;
+        // Hard content bounds.
+        let hard_min = self.bounds.min_pos();
+        let hard_max = self.bounds.max_pos();
+        // The effective rubber-band limits are the tighter of the two at each
+        // end (max of the mins, min of the maxes).
+        let lim_min = soft_min.max(hard_min);
+        let lim_max = soft_max.min(hard_max);
+
+        if raw > lim_max {
+            let over = raw - lim_max;
+            lim_max + self.rubber(over)
+        } else if raw < lim_min {
+            let over = lim_min - raw;
+            lim_min - self.rubber(over)
         } else {
             raw
         }
@@ -1698,6 +1757,58 @@ mod tests {
             s.position
         );
         assert!(s.position > 0.0, "should still pull past the bound a bit");
+    }
+
+    #[test]
+    fn wheel_gesture_cannot_pass_one_page_without_release() {
+        // Regression guard: sustained OS momentum with no terminal Ended must
+        // NOT push the content more than one page away from the gesture anchor.
+        // Previously, accumulating deltas directly onto `position` let a long
+        // swipe run away to page+2/page+3. The anchored model derives position
+        // from `wheel_from_snap + accumulated`, so once accumulated exceeds one
+        // page the rubber-band asymptotes and further deltas are resisted.
+        let mut s = Scroller::new(bounds(6));
+        s.position = -1000.0; // page 1
+        let t0 = Instant::now();
+        s.apply_wheel_delta(-10.0, t0, WheelPhase::Started);
+        // Feed a large amount of momentum, way beyond one page (page_extent=1000).
+        for i in 1..=20 {
+            s.apply_wheel_delta(
+                -200.0,
+                t0 + Duration::from_millis(16 * i),
+                WheelPhase::Moved,
+            );
+        }
+        // Total accumulated = -4010, but content must stay within page 1..2
+        // (i.e. position in [-2000, -1000], rubber-banded just past -2000).
+        assert!(
+            s.position > -3000.0,
+            "sustained swipe must not reach page 3, got {}",
+            s.position
+        );
+        assert_eq!(s.phase, Phase::WheelGesture);
+    }
+
+    #[test]
+    fn wheel_gesture_edge_rubber_band_resists_sustained_momentum() {
+        // Regression guard: at the first page (0), sustained rightward momentum
+        // must NOT overwhelm the rubber-band and run away. The visible pull
+        // asymptotes (it's bounded above by rubber_dimension = page_extent),
+        // so a long press-and-hold swipe stays glued near the edge.
+        let mut s = Scroller::new(bounds(4));
+        let t0 = Instant::now();
+        s.apply_wheel_delta(10.0, t0, WheelPhase::Started);
+        for i in 1..=30 {
+            s.apply_wheel_delta(100.0, t0 + Duration::from_millis(16 * i), WheelPhase::Moved);
+        }
+        // Total accumulated = +3010, but rubber-band asymptotes near
+        // rubber_dimension (== page_extent == 1000) above 0.
+        assert!(
+            s.position < 1000.0,
+            "sustained edge swipe must asymptote, got {}",
+            s.position
+        );
+        assert!(s.position > 0.0);
     }
 
     #[test]
