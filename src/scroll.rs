@@ -22,6 +22,9 @@
 
 use std::time::Instant;
 
+#[cfg(test)]
+use std::time::Duration;
+
 /// Target page the content should rest on. `position` is the *content origin*,
 /// so larger values scroll the viewport to the right. Page `n` rests at
 /// `position = n * page_extent`.
@@ -31,6 +34,33 @@ pub enum Phase {
     Dragging,
     Inertial,
     Settling,
+    /// A trackpad wheel gesture is driving `position` directly from OS
+    /// momentum deltas (see [`Scroller::apply_wheel_delta`]). Like
+    /// [`Phase::Dragging`] the position is event-driven — we only integrate
+    /// here on a timeout, once the OS stops streaming deltas. This keeps the
+    /// macOS trackpad's native inertia intact and hands off to the same spring
+    /// snap as a pointer drag once the gesture ends.
+    WheelGesture,
+}
+
+/// Phase of a wheel/trackpad gesture, mirroring winit's `TouchPhase` without
+/// taking a winit dependency in this pure-physics module. The handler layer
+/// converts before calling [`Scroller::apply_wheel_delta`].
+///
+/// - [`WheelPhase::Started`]: first delta of a new finger gesture (finger(s)
+///   just touched the trackpad).
+/// - [`WheelPhase::Moved`]: an intermediate delta (fingers still down, or the
+///   OS-synthesised momentum coast that follows `Ended`).
+/// - [`WheelPhase::Ended`]: fingers lifted with no further OS momentum
+///   expected — start the snap immediately.
+/// - [`WheelPhase::Cancelled`]: the gesture was interrupted; snap to the
+///   nearest page from rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
 }
 
 /// Bounds for the scrollable content, in physical pixels.
@@ -132,6 +162,15 @@ pub struct PhysicsConfig {
     pub settle_eps: f32,
     /// Maximum frame dt before we subdivide (s).
     pub max_dt: f32,
+    /// While in [`Phase::WheelGesture`], if no new wheel delta arrives within
+    /// this many seconds we assume the OS momentum has stopped and start the
+    /// snap ourselves. This is the safety net for platforms/events that omit a
+    /// terminal `Ended`/`Cancelled` phase.
+    pub wheel_gesture_timeout: f32,
+    /// Wheel-event EMA smoothing factor for the instantaneous velocity used by
+    /// the snap-direction decision. Each Moved delta blends
+    /// `new = old + a·(sample - old)`; smaller = smoother but laggier.
+    pub wheel_velocity_smoothing: f32,
 }
 
 impl Default for PhysicsConfig {
@@ -148,6 +187,10 @@ impl Default for PhysicsConfig {
             spring_zeta: 0.82,
             settle_eps: 0.35,
             max_dt: 1.0 / 60.0,
+            // macOS momentum deltas arrive at ~16ms cadence; 120ms is ~7 missed
+            // events, a safe "momentum truly stopped" threshold.
+            wheel_gesture_timeout: 0.12,
+            wheel_velocity_smoothing: 0.4,
         }
     }
 }
@@ -180,6 +223,23 @@ pub struct Scroller {
     last_time: Option<Instant>,
     /// Monotonic clock origin (so we can store f32 sample times without overflow).
     clock_origin: Instant,
+    // ---- trackpad wheel gesture state -----------------------------------
+    /// Snap position the active wheel gesture started from. The gesture can
+    /// move at most one page away from here, exactly like a pointer drag
+    /// (`gesture_start_snap`).
+    wheel_from_snap: f32,
+    /// Smoothed instantaneous velocity (px/s) of the wheel gesture, used by the
+    /// snap-direction decision. Positive = scrolling toward the previous page.
+    wheel_velocity: f32,
+    /// Wall-clock of the most recent wheel delta. While the OS keeps streaming
+    /// momentum deltas we must not run the Settling spring (the two fight and
+    /// jitter); we only hand off once deltas stop arriving (see
+    /// [`PhysicsConfig::wheel_gesture_timeout`] and the gesture-timeout branch
+    /// in [`Scroller::tick`]).
+    last_wheel_time: Option<Instant>,
+    /// Wall-clock of the previous wheel delta, for the per-event velocity
+    /// sample (`dx / dt`).
+    prev_wheel_time: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,6 +269,10 @@ impl Scroller {
             settle_flick: false,
             last_time: None,
             clock_origin,
+            wheel_from_snap: 0.0,
+            wheel_velocity: 0.0,
+            last_wheel_time: None,
+            prev_wheel_time: None,
         }
     }
 
@@ -246,6 +310,14 @@ impl Scroller {
     /// pointer right moves the content right (reveals the previous page);
     /// moving left reveals the next page.
     pub fn drag_start(&mut self, pointer_x: f32) {
+        // If a trackpad wheel gesture is mid-flight, a pointer press takes
+        // over: cancel the wheel (drop its residual momentum) and start a
+        // clean direct-manipulation drag from the current position.
+        if self.phase == Phase::WheelGesture {
+            self.wheel_velocity = 0.0;
+            self.last_wheel_time = None;
+            self.prev_wheel_time = None;
+        }
         self.phase = Phase::Dragging;
         self.drag_anchor = self.position;
         // Remember the page we started on (rounded to a boundary). Inertia is
@@ -307,6 +379,106 @@ impl Scroller {
         }
     }
 
+    /// Feed a trackpad wheel delta (logical px) into the paging scroller.
+    ///
+    /// This is the trackpad counterpart of [`Self::drag_move`]/[`Self::drag_end`]:
+    /// each OS delta is applied directly to `position` (with the same
+    /// rubber-band resistance as a pointer drag), and the gesture ends with
+    /// the *same* [`ScrollBounds::paging_target`] snap decision as `drag_end`.
+    /// The OS-supplied momentum is preserved verbatim — we do **not** run our
+    /// own inertia here — so a two-finger swipe feels exactly like macOS.
+    ///
+    /// Sign convention (matches winit on macOS, *after* the handler has
+    /// already accounted for the user's "natural scrolling" preference):
+    /// a positive `dx` scrolls the content to the right (toward the previous
+    /// page), i.e. `position` increases — the same sign as a rightward pointer
+    /// drag. Callers should pass the horizontal pixel delta unchanged.
+    ///
+    /// `phase` selects the gesture lifecycle:
+    /// - [`WheelPhase::Started`] begins a new gesture from the current page.
+    /// - [`WheelPhase::Moved`] applies the delta and refreshes the velocity
+    ///   estimate used by the eventual snap decision.
+    /// - [`WheelPhase::Ended`] / [`WheelPhase::Cancelled`] start the snap.
+    pub fn apply_wheel_delta(&mut self, dx: f32, now: Instant, phase: WheelPhase) {
+        // A pointer drag owns the scroller; ignore wheel input while one is
+        // active so the two can't fight over `position`.
+        if self.phase == Phase::Dragging {
+            return;
+        }
+
+        // `Ended`/`Cancelled` may arrive with a zero delta — handle the
+        // terminal transition first, then apply any residual delta below.
+        let terminal = matches!(phase, WheelPhase::Ended | WheelPhase::Cancelled);
+
+        if self.phase != Phase::WheelGesture {
+            if terminal {
+                // Stray terminal event with no open gesture: nothing to end.
+                return;
+            }
+            // Open a new gesture anchored on the current page. If we were
+            // mid-settle (e.g. a previous snap still gliding), the new gesture
+            // captures the live position and re-anchors the snap origin so a
+            // quick second swipe can reverse direction cleanly.
+            self.wheel_from_snap = self.bounds.snap_target(self.position);
+            self.wheel_velocity = 0.0;
+            self.prev_wheel_time = Some(now);
+            self.phase = Phase::WheelGesture;
+            self.last_time = Some(now);
+        } else {
+            // Gesture already open: blend the instantaneous velocity with an
+            // EMA so a single noisy delta can't flip the snap direction. We
+            // need a real dt (≥1ms) for a meaningful sample.
+            if let Some(prev) = self.prev_wheel_time {
+                let dt = now.duration_since(prev).as_secs_f32();
+                if dt >= 1e-3 && dx != 0.0 {
+                    let sample = dx / dt;
+                    let a = self.cfg.wheel_velocity_smoothing.clamp(0.0, 1.0);
+                    self.wheel_velocity = self.wheel_velocity * (1.0 - a) + sample * a;
+                }
+            }
+            self.prev_wheel_time = Some(now);
+        }
+        self.last_wheel_time = Some(now);
+
+        // Apply the delta with the same rubber-band curve as a pointer drag,
+        // so overshoot at the first/last page feels identical to dragging.
+        if dx != 0.0 {
+            let raw = self.position + dx;
+            self.position = self.clamp_with_rubber(raw);
+        }
+
+        if terminal {
+            self.begin_wheel_release();
+        }
+    }
+
+    /// Transition out of [`Phase::WheelGesture`] into [`Phase::Settling`] using
+    /// the same page-selection logic as [`Self::drag_end`]: at most one page
+    /// from the gesture's anchor, in the direction of the (smoothed) velocity.
+    fn begin_wheel_release(&mut self) {
+        let v = self.wheel_velocity;
+        let target = self
+            .bounds
+            .paging_target(self.wheel_from_snap, self.position, v);
+        let is_flick = (target - self.wheel_from_snap).abs() > 1.0 && v.abs() > 50.0;
+
+        // Cap the carried velocity, exactly as drag_end does, so a fast swipe
+        // can't blow past the one-page target in the first substep.
+        let max_v = self.bounds.page_extent * 8.0;
+        self.velocity = v.clamp(-max_v, max_v);
+
+        if is_flick {
+            self.begin_settle_to(target, true);
+        } else {
+            self.velocity = 0.0;
+            self.begin_settle_to(target, false);
+        }
+        self.wheel_velocity = 0.0;
+        self.prev_wheel_time = None;
+        // Keep `last_wheel_time`: the Settling branch still consults it to
+        // avoid fighting a late-arriving momentum delta during the first frame.
+    }
+
     /// Advance the simulation by real elapsed time. Returns the new phase.
     pub fn tick(&mut self, now: Instant) -> Phase {
         let dt = match self.last_time {
@@ -322,6 +494,19 @@ impl Scroller {
         };
         if dt <= 0.0 {
             return self.phase;
+        }
+
+        // While waiting for the next wheel delta, watch for the OS-momentum
+        // timeout. If no delta arrives within `wheel_gesture_timeout`, the OS
+        // has stopped (or never sent an `Ended`) — start the snap ourselves.
+        if self.phase == Phase::WheelGesture {
+            let stopped = self
+                .last_wheel_time
+                .map(|t| now.duration_since(t).as_secs_f32() >= self.cfg.wheel_gesture_timeout)
+                .unwrap_or(true);
+            if stopped {
+                self.begin_wheel_release();
+            }
         }
 
         // Substep so integration is frame-rate independent.
@@ -389,9 +574,11 @@ impl Scroller {
 
     fn step_once(&mut self, dt: f32) {
         match self.phase {
-            Phase::Idle | Phase::Dragging => {
-                // Position is driven directly by pointer events; nothing to
-                // integrate here. We just keep the clock warm.
+            Phase::Idle | Phase::Dragging | Phase::WheelGesture => {
+                // Position is driven directly by events (pointer moves for
+                // Dragging, OS wheel deltas for WheelGesture); nothing to
+                // integrate here. WheelGesture's timeout→Settling hand-off is
+                // handled in `tick`, not per-substep.
             }
             Phase::Inertial => {
                 // Free exponential coasting: v *= exp(-k·dt). This phase is not
@@ -1364,6 +1551,232 @@ mod tests {
         s.position = -1000.0;
         assert!(!s.settle_to_page(1));
         assert_eq!(s.phase, Phase::Idle);
+    }
+
+    // ---- wheel gesture paging (trackpad) --------------------------------
+
+    /// Run a trackpad wheel gesture end-to-end: feed a sequence of
+    /// `(dx, phase)` deltas at 16ms cadence, then let the Settling spring run
+    /// to idle. Returns the resting position.
+    fn run_wheel_gesture(
+        mut s: Scroller,
+        start_pos: f32,
+        deltas: &[(f32, WheelPhase)],
+    ) -> (f32, f32) {
+        s.position = start_pos;
+        let t0 = Instant::now();
+        let mut t = t0;
+        for &(dx, phase) in deltas {
+            s.apply_wheel_delta(dx, t, phase);
+            t += std::time::Duration::from_millis(16);
+        }
+        assert_eq!(
+            s.phase,
+            Phase::Settling,
+            "wheel gesture should end in Settling"
+        );
+        for _ in 0..20_000 {
+            s.tick(t);
+            t += std::time::Duration::from_millis(16);
+            if s.phase == Phase::Idle {
+                break;
+            }
+        }
+        (s.position, s.cfg.settle_eps)
+    }
+
+    #[test]
+    fn wheel_gesture_advances_one_page_on_flick() {
+        // Start on page 1 (-1000). A strong leftward swipe (negative dx in the
+        // winit/natural-scroll convention: dx<0 scrolls content left → next
+        // page). Total delta ≈ -1100px over ~6 frames → page 2 (-2000).
+        let s = Scroller::new(bounds(4));
+        let deltas = vec![
+            (-10.0, WheelPhase::Started),
+            (-200.0, WheelPhase::Moved),
+            (-250.0, WheelPhase::Moved),
+            (-240.0, WheelPhase::Moved),
+            (-200.0, WheelPhase::Moved),
+            (-200.0, WheelPhase::Ended),
+        ];
+        let (rest, eps) = run_wheel_gesture(s, -1000.0, &deltas);
+        assert!(
+            (-rest - 2000.0).abs() < eps,
+            "strong swipe should land on page 2 (-2000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn wheel_gesture_advances_backwards_on_reverse_swipe() {
+        // Start on page 2 (-2000). A rightward swipe (positive dx) returns to
+        // page 1 (-1000).
+        let s = Scroller::new(bounds(4));
+        let deltas = vec![
+            (10.0, WheelPhase::Started),
+            (200.0, WheelPhase::Moved),
+            (250.0, WheelPhase::Moved),
+            (240.0, WheelPhase::Moved),
+            (200.0, WheelPhase::Moved),
+            (200.0, WheelPhase::Ended),
+        ];
+        let (rest, eps) = run_wheel_gesture(s, -2000.0, &deltas);
+        assert!(
+            (-rest - 1000.0).abs() < eps,
+            "reverse swipe should land on page 1 (-1000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn wheel_gesture_small_swipe_returns_to_start() {
+        // A genuinely slow, small swipe that doesn't cross half a page and has
+        // sub-threshold velocity must return to the start page. The deltas are
+        // spaced out (~100ms apart) and tiny so the EMA velocity stays well
+        // below the 400 px/s paging threshold.
+        let mut s = Scroller::new(bounds(4));
+        s.position = -1000.0;
+        let t0 = Instant::now();
+        s.apply_wheel_delta(-2.0, t0, WheelPhase::Started);
+        s.apply_wheel_delta(-4.0, t0 + Duration::from_millis(100), WheelPhase::Moved);
+        s.apply_wheel_delta(-3.0, t0 + Duration::from_millis(200), WheelPhase::Moved);
+        s.apply_wheel_delta(-2.0, t0 + Duration::from_millis(300), WheelPhase::Ended);
+        assert_eq!(s.phase, Phase::Settling);
+        // Total displacement ~-11px, far under half a page; velocity ~30px/s.
+        // Drive the spring to rest.
+        let mut t = t0 + Duration::from_millis(400);
+        for _ in 0..10_000 {
+            s.tick(t);
+            t += Duration::from_millis(16);
+            if s.phase == Phase::Idle {
+                break;
+            }
+        }
+        assert!(
+            (-s.position - 1000.0).abs() < s.cfg.settle_eps,
+            "small swipe should return to start page (-1000), got {}",
+            s.position
+        );
+    }
+
+    #[test]
+    fn wheel_gesture_caps_at_one_page() {
+        // Even a very fast/large swipe can only reach one page away from the
+        // gesture's anchor — never two.
+        let s = Scroller::new(bounds(6));
+        let deltas = vec![
+            (-50.0, WheelPhase::Started),
+            (-2000.0, WheelPhase::Moved),
+            (-2000.0, WheelPhase::Moved),
+            (-2000.0, WheelPhase::Moved),
+            (-2000.0, WheelPhase::Ended),
+        ];
+        let (rest, eps) = run_wheel_gesture(s, -2000.0, &deltas);
+        assert!(
+            (-rest - 3000.0).abs() < eps,
+            "huge swipe must cap at one page (-3000), got {rest}"
+        );
+    }
+
+    #[test]
+    fn wheel_gesture_rubber_bands_at_first_page() {
+        // At the first page (0), a rightward swipe (previous-page direction)
+        // hits the boundary. The visible displacement must be sub-linear
+        // (less than the raw delta) thanks to clamp_with_rubber, and the
+        // gesture must still be active (not yet Ended).
+        let mut s = Scroller::new(bounds(4));
+        let t = Instant::now();
+        s.apply_wheel_delta(50.0, t, WheelPhase::Started);
+        s.apply_wheel_delta(
+            300.0,
+            t + std::time::Duration::from_millis(16),
+            WheelPhase::Moved,
+        );
+        assert_eq!(s.phase, Phase::WheelGesture);
+        // Raw input total = 350px; rubber band makes the visible pull smaller.
+        assert!(
+            s.position < 350.0,
+            "rubber band must attenuate the edge pull, got {}",
+            s.position
+        );
+        assert!(s.position > 0.0, "should still pull past the bound a bit");
+    }
+
+    #[test]
+    fn wheel_gesture_timeout_snaps_when_no_ended_event() {
+        // Some event streams omit a terminal Ended. The gesture-timeout in
+        // `tick` must start the snap itself once deltas stop arriving.
+        let mut s = Scroller::new(bounds(4));
+        s.position = -1000.0;
+        let t0 = Instant::now();
+        // Strong swipe, no Ended event.
+        s.apply_wheel_delta(-10.0, t0, WheelPhase::Started);
+        s.apply_wheel_delta(-250.0, t0 + Duration::from_millis(16), WheelPhase::Moved);
+        s.apply_wheel_delta(-250.0, t0 + Duration::from_millis(32), WheelPhase::Moved);
+        s.apply_wheel_delta(-250.0, t0 + Duration::from_millis(48), WheelPhase::Moved);
+        assert_eq!(s.phase, Phase::WheelGesture);
+
+        // Tick past the gesture timeout (>120ms with no new delta) and let the
+        // resulting Settling spring converge.
+        let mut t = t0 + Duration::from_millis(64);
+        for _ in 0..20_000 {
+            s.tick(t);
+            t += Duration::from_millis(16);
+            if s.phase == Phase::Idle {
+                break;
+            }
+        }
+        assert_eq!(s.phase, Phase::Idle);
+        assert!(
+            (-s.position - 2000.0).abs() < s.cfg.settle_eps,
+            "timeout should snap to page 2 (-2000), got {}",
+            s.position
+        );
+    }
+
+    #[test]
+    fn wheel_gesture_ignored_during_pointer_drag() {
+        // A wheel delta arriving while a pointer drag owns the scroller must be
+        // ignored (position/phase unchanged by the wheel call).
+        let mut s = Scroller::new(bounds(4));
+        s.position = -1000.0;
+        s.drag_start(500.0);
+        s.drag_move(450.0); // content now at ~-1050
+        let pos_before = s.position;
+        s.apply_wheel_delta(-500.0, Instant::now(), WheelPhase::Moved);
+        assert_eq!(s.phase, Phase::Dragging);
+        assert_eq!(
+            s.position, pos_before,
+            "wheel must not move content during a pointer drag"
+        );
+    }
+
+    #[test]
+    fn pointer_drag_cancels_in_flight_wheel_gesture() {
+        // A pointer press during a wheel gesture cancels the wheel's residual
+        // momentum and starts a clean drag from the live position.
+        let mut s = Scroller::new(bounds(4));
+        s.position = -1000.0;
+        let t = Instant::now();
+        s.apply_wheel_delta(-200.0, t, WheelPhase::Started);
+        s.apply_wheel_delta(-200.0, t + Duration::from_millis(16), WheelPhase::Moved);
+        assert_eq!(s.phase, Phase::WheelGesture);
+        let live = s.position;
+
+        s.drag_start(300.0);
+        assert_eq!(s.phase, Phase::Dragging);
+        assert_eq!(
+            s.position, live,
+            "drag should start from the live wheel position"
+        );
+    }
+
+    #[test]
+    fn wheel_gesture_is_animating_true() {
+        // While a wheel gesture is open, is_animating must be true so the main
+        // loop keeps redrawing.
+        let mut s = Scroller::new(bounds(4));
+        assert!(!s.is_animating());
+        s.apply_wheel_delta(-10.0, Instant::now(), WheelPhase::Started);
+        assert!(s.is_animating());
     }
 
     // ---- generic Spring ----

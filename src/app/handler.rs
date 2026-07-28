@@ -285,12 +285,20 @@ impl ApplicationHandler<UserEvent> for App {
                     pressed: state == ElementState::Pressed,
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let px = Self::wheel_delta_to_px(delta, self.scale_factor);
+            WindowEvent::MouseWheel {
+                delta,
+                phase: touch_phase,
+                ..
+            } => {
+                let (px, is_precise) = Self::wheel_delta_to_px(delta, self.scale_factor);
                 if px.0 == 0.0 && px.1 == 0.0 {
                     return;
                 }
-                AppAction::MouseWheel { delta_px: px }
+                AppAction::MouseWheel {
+                    delta_px: px,
+                    is_precise,
+                    touch_phase,
+                }
             }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
             WindowEvent::Focused(focused) => AppAction::Focused(focused),
@@ -349,19 +357,26 @@ impl ApplicationHandler<UserEvent> for App {
 
 impl App {
     /// Translate a winit mouse-wheel / trackpad scroll delta into logical
-    /// pixel units. Positive y = scroll down. Returns (dx, dy) in logical px.
-    fn wheel_delta_to_px(delta: winit::event::MouseScrollDelta, scale_factor: f32) -> (f32, f32) {
+    /// pixel units. Positive y = scroll down. Returns `((dx, dy), is_precise)`
+    /// in logical px, where `is_precise` is true for pixel-delta (trackpad)
+    /// events and false for line-delta (notched mouse wheel) events. The grid
+    /// pager uses this flag to accept trackpad input while leaving mouse-wheel
+    /// behavior untouched.
+    fn wheel_delta_to_px(
+        delta: winit::event::MouseScrollDelta,
+        scale_factor: f32,
+    ) -> ((f32, f32), bool) {
         match delta {
             winit::event::MouseScrollDelta::LineDelta(x, y) => {
                 let scale = scale_factor.max(0.1);
                 let px_per_line = crate::layout::settings_panel::row_step(scale);
-                (x * px_per_line, y * px_per_line)
+                ((x * px_per_line, y * px_per_line), false)
             }
             winit::event::MouseScrollDelta::PixelDelta(px) => {
                 let scale = scale_factor.max(0.1);
                 let logical_x = (px.x as f32) / scale;
                 let logical_y = (px.y as f32) / scale;
-                (logical_x, logical_y)
+                ((logical_x, logical_y), true)
             }
         }
     }

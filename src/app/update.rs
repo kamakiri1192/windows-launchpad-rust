@@ -8,7 +8,7 @@ use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
 use crate::domain::launcher_item::LauncherItem;
 use crate::domain::settings::{Settings, SortOrder};
-use crate::scroll::Phase;
+use crate::scroll::{Phase, WheelPhase};
 use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
 
@@ -391,6 +391,19 @@ impl App {
         }
         let now = std::time::Instant::now();
         self.settings_scroll.apply_wheel(delta_px, now);
+        self.request_redraw();
+    }
+
+    /// Drive the grid's paging scroller from a trackpad wheel gesture
+    /// (horizontal, logical px). Mirrors the settings-panel path but targets
+    /// [`crate::scroll::Scroller::apply_wheel_delta`] so the page grid gets the
+    /// same iOS-style inertia + snap as a pointer drag. `phase` is the winit
+    /// `TouchPhase` of the wheel event, converted to [`WheelPhase`] by the
+    /// caller.
+    pub(crate) fn scroll_grid_by_wheel(&mut self, dx_logical: f32, phase: WheelPhase) {
+        if let Some(s) = self.scroller.as_mut() {
+            s.apply_wheel_delta(dx_logical, Instant::now(), phase);
+        }
         self.request_redraw();
     }
 
