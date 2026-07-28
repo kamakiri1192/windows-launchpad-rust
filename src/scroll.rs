@@ -41,12 +41,6 @@ pub enum Phase {
     /// macOS trackpad's native inertia intact and hands off to the same spring
     /// snap as a pointer drag once the gesture ends.
     WheelGesture,
-    /// A trackpad gesture has ended and we are gliding to the target page via a
-    /// fixed-duration cubic-bezier ease (homepad style), separate from the
-    /// spring-based [`Phase::Settling`] used by pointer drags. See
-    /// [`Scroller::begin_wheel_snap`] and the `WheelSnap` arm of
-    /// [`Scroller::step_once`].
-    WheelSnap,
 }
 
 /// Phase of a wheel/trackpad gesture, mirroring winit's `TouchPhase` without
@@ -190,17 +184,14 @@ impl Default for PhysicsConfig {
     }
 }
 
-/// Trackpad wheel-gesture tunables, ported from homepad's `PagingNSScrollView`.
-/// These are intentionally separate from [`PhysicsConfig`] so the mouse-drag
-/// feel is never disturbed by trackpad tuning.
+/// Trackpad wheel-gesture tunables. Separate from [`PhysicsConfig`] so the
+/// mouse-drag feel is never disturbed by trackpad tuning.
 ///
-/// All constants mirror homepad verbatim so the two apps feel identical:
-/// - `delta_multiplier` = `preciseScrollMultiplier` (0.7)
-/// - `rubber_stiffness_ratio` = `edgeRubberBandStiffnessMultiplier` (0.028)
-/// - `rubber_max_pages` = `edgeRubberBandPageMultiplier` (3)
-/// - `velocity_threshold` = homepad's `velocityThreshold` (700 pt/s)
-/// - `snap_duration` = homepad's `snapReleaseDuration` (0.5 s)
-/// - `snap_bezier` = homepad's `CAMediaTimingFunction(0.15, 0.0, 0.1, 1.0)`
+/// The snap itself reuses the same under-damped spring ODE as pointer drags
+/// (see [`Phase::Settling`]) — this is what gives the Apple-like "吸い付き感":
+/// a slight overshoot and settle, matching WWDC 2018 Session 803's guidance
+/// (dampingRatio ≈ 0.8 for gesture-driven animations). Only the rubber-band
+/// curve and delta multiplier are ported from homepad.
 #[derive(Debug, Clone, Copy)]
 pub struct WheelConfig {
     /// Scale applied to every trackpad delta (homepad `preciseScrollMultiplier`).
@@ -213,17 +204,21 @@ pub struct WheelConfig {
     /// Maximum rubber-band pull as a multiple of page extent
     /// (homepad `edgeRubberBandPageMultiplier`).
     pub rubber_max_pages: f32,
-    /// Velocity (px/s) above which the snap target follows the flick direction
-    /// regardless of position; below it the nearest page wins (homepad 700).
-    pub velocity_threshold: f32,
-    /// Fixed duration of the snap ease in seconds (homepad 0.5).
-    pub snap_duration: f32,
+    /// Spring angular frequency ω₀ (rad/s) for the wheel snap. Slightly
+    /// snappier than the pointer-drag `spring_omega` (26 vs 22, response ≈
+    /// 0.24 s) so a trackpad flick feels responsive.
+    pub spring_omega: f32,
+    /// Spring damping ratio ζ for the wheel snap. WWDC 2018 recommends 0.8 for
+    /// gesture-driven animations (a touch more bounce than the pointer drag's
+    /// 0.82) — this is what produces the Apple-like "吸い付き感" overshoot.
+    pub spring_zeta: f32,
+    /// Momentum-projection horizon (s) used to pick the snap target page
+    /// (WWDC: `projected = position + velocity · horizon`). Larger = a gentler
+    /// flick still advances a page.
+    pub projection_horizon: f32,
     /// If no wheel delta arrives within this many seconds during a gesture, we
     /// assume OS momentum stopped and start the snap ourselves (safety net).
     pub momentum_coalesce: f32,
-    /// Cubic-bezier control points (x1, y1, x2, y2) for the snap ease, matching
-    /// homepad's `CAMediaTimingFunction(controlPoints: 0.15, 0.0, 0.1, 1.0)`.
-    pub snap_bezier: (f32, f32, f32, f32),
 }
 
 impl Default for WheelConfig {
@@ -232,12 +227,12 @@ impl Default for WheelConfig {
             delta_multiplier: 0.7,
             rubber_stiffness_ratio: 0.028,
             rubber_max_pages: 3.0,
-            velocity_threshold: 700.0,
-            snap_duration: 0.5,
+            spring_omega: 26.0,
+            spring_zeta: 0.80,
+            projection_horizon: 0.35,
             // macOS momentum deltas arrive at ~16ms cadence; 120ms is ~7 missed
             // events, a safe "momentum truly stopped" threshold.
             momentum_coalesce: 0.12,
-            snap_bezier: (0.15, 0.0, 0.1, 1.0),
         }
     }
 }
@@ -295,13 +290,10 @@ pub struct Scroller {
     /// Wall-clock of the previous wheel delta, for the per-event velocity
     /// sample (`dx / dt`).
     prev_wheel_time: Option<Instant>,
-    // ---- WheelSnap animation state (fixed-duration cubic-bezier ease) ---
-    /// Position when the snap started.
-    wheel_snap_from: f32,
-    /// Target page position for the snap.
-    wheel_snap_to: f32,
-    /// Elapsed snap time in seconds.
-    wheel_snap_elapsed: f32,
+    /// True while a [`Phase::Settling`] was initiated by a wheel gesture, so
+    /// the spring integrator picks the (bouncier) [`WheelConfig`] parameters
+    /// instead of the pointer-drag [`PhysicsConfig`].
+    settling_from_wheel: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -338,9 +330,7 @@ impl Scroller {
             ignore_momentum: false,
             last_wheel_time: None,
             prev_wheel_time: None,
-            wheel_snap_from: 0.0,
-            wheel_snap_to: 0.0,
-            wheel_snap_elapsed: 0.0,
+            settling_from_wheel: false,
         }
     }
 
@@ -381,12 +371,15 @@ impl Scroller {
         // If a trackpad wheel gesture/snap is mid-flight, a pointer press takes
         // over: cancel the wheel (drop its residual momentum) and start a
         // clean direct-manipulation drag from the current position.
-        if matches!(self.phase, Phase::WheelGesture | Phase::WheelSnap) {
+        if self.phase == Phase::WheelGesture
+            || (self.phase == Phase::Settling && self.settling_from_wheel)
+        {
             self.wheel_accumulated = 0.0;
             self.wheel_velocity = 0.0;
             self.ignore_momentum = false;
             self.last_wheel_time = None;
             self.prev_wheel_time = None;
+            self.settling_from_wheel = false;
         }
         self.phase = Phase::Dragging;
         self.drag_anchor = self.position;
@@ -514,9 +507,10 @@ impl Scroller {
         self.prev_wheel_time = Some(now);
         self.last_wheel_time = Some(now);
 
-        // Finger lift: immediately snap and start ignoring OS momentum.
+        // Finger lift: immediately settle (spring snap) and start ignoring OS
+        // momentum so it can't fight the spring.
         if phase == WheelPhase::Ended || phase == WheelPhase::Cancelled {
-            self.begin_wheel_snap();
+            self.begin_wheel_settle();
         }
     }
 
@@ -532,47 +526,43 @@ impl Scroller {
         self.last_time = Some(now);
     }
 
-    /// Decide the snap target page (homepad's `decideTargetPage`) and start the
-    /// fixed-duration bezier ease (homepad's `snapToPage`). At most one page
-    /// from the gesture anchor; a velocity above the threshold overrides the
-    /// nearest-page pick in the flick direction.
-    fn begin_wheel_snap(&mut self) {
+    /// Decide the snap target page via **momentum projection** (WWDC 2018
+    /// Session 803) and start the spring settle — the *same* under-damped
+    /// spring ODE as a pointer-drag release, so a trackpad flick gets the
+    /// Apple-like glide + slight overshoot ("吸い付き感"). The release velocity
+    /// is preserved as the spring's initial velocity.
+    fn begin_wheel_settle(&mut self) {
         let target = self.decide_wheel_target_page();
-        self.wheel_snap_from = self.position;
-        self.wheel_snap_to = target;
-        self.wheel_snap_elapsed = 0.0;
+        let v = self.wheel_velocity;
+        // Cap the carried velocity so a violent flick can't blow past the
+        // one-page target in the first substep (same cap as drag_end).
+        let max_v = self.bounds.page_extent * 8.0;
+        self.velocity = v.clamp(-max_v, max_v);
+        self.settle_target = target;
+        self.settle_flick = (target - self.wheel_from_snap).abs() > 1.0 && v.abs() > 50.0;
         self.ignore_momentum = true;
-        self.phase = Phase::WheelSnap;
-        // Keep `last_time` as-is (set to `now` during the wheel session) so the
-        // very first tick after entering WheelSnap measures a real dt instead
-        // of warming the clock and wasting a frame.
+        self.settling_from_wheel = true;
+        self.phase = Phase::Settling;
     }
 
-    /// homepad's `decideTargetPage`: round to the nearest page, unless the
-    /// velocity exceeds the threshold, in which case advance one page in the
-    /// flick direction. Clamped to ±1 page from the gesture anchor and to the
-    /// content bounds.
+    /// Pick the snap target page by projecting the current position forward
+    /// along the release velocity (WWDC: `projected = pos + v · horizon`) and
+    /// rounding to the nearest page. This replaces homepad's fixed velocity
+    /// threshold (700 pt/s): the projection naturally incorporates both how
+    /// fast and how far the gesture moved. Clamped to ±1 page from the gesture
+    /// anchor and to the content bounds.
     ///
     /// Sign note: `position` *decreases* toward later pages, so a *negative*
     /// velocity means scrolling to the *next* page.
     fn decide_wheel_target_page(&self) -> f32 {
         let page = self.bounds.page_extent;
-        let raw_page = self.position / page;
-        let mut target_page = raw_page.round();
-
-        let v = self.wheel_velocity;
-        if v.abs() > self.wheel_cfg.velocity_threshold {
-            // Negative velocity → next page (more negative position).
-            if v < 0.0 {
-                target_page = raw_page.floor() - 1.0;
-            } else {
-                target_page = raw_page.ceil() + 1.0;
-            }
-        }
+        // Momentum projection: where would the content coast to?
+        let projected = self.position + self.wheel_velocity * self.wheel_cfg.projection_horizon;
+        let target_page = (projected / page).round();
 
         // Clamp to ±1 page from the gesture anchor.
         let anchor_page = self.wheel_from_snap / page;
-        target_page = target_page.clamp(anchor_page - 1.0, anchor_page + 1.0);
+        let target_page = target_page.clamp(anchor_page - 1.0, anchor_page + 1.0);
         // Clamp to content bounds.
         let min_page = self.bounds.min_pos() / page;
         let max_page = self.bounds.max_pos() / page;
@@ -649,7 +639,7 @@ impl Scroller {
                 .map(|t| now.duration_since(t).as_secs_f32() >= self.wheel_cfg.momentum_coalesce)
                 .unwrap_or(true);
             if stopped {
-                self.begin_wheel_snap();
+                self.begin_wheel_settle();
             }
         }
 
@@ -745,30 +735,23 @@ impl Scroller {
             Phase::Settling => {
                 // Semi-implicit Euler on the spring ODE:
                 //   a = -ω₀²·(x - target) - 2·ζ·ω₀·v
+                // Wheel-initiated settles use the (slightly bouncier) WheelConfig
+                // spring; pointer drags use PhysicsConfig. This is what gives a
+                // trackpad flick its Apple-like overshoot ("吸い付き感").
+                let (omega, zeta) = if self.settling_from_wheel {
+                    (self.wheel_cfg.spring_omega, self.wheel_cfg.spring_zeta)
+                } else {
+                    (self.cfg.spring_omega, self.cfg.spring_zeta)
+                };
                 let dx = self.position - self.settle_target;
-                let acc = -self.cfg.spring_omega * self.cfg.spring_omega * dx
-                    - 2.0 * self.cfg.spring_zeta * self.cfg.spring_omega * self.velocity;
+                let acc = -omega * omega * dx - 2.0 * zeta * omega * self.velocity;
                 self.velocity += acc * dt;
                 self.position += self.velocity * dt;
 
                 if dx.abs() < self.cfg.settle_eps && self.velocity.abs() < self.cfg.settle_eps {
                     self.position = self.settle_target;
                     self.velocity = 0.0;
-                    self.phase = Phase::Idle;
-                }
-            }
-            Phase::WheelSnap => {
-                // homepad-style fixed-duration cubic-bezier ease. Unlike the
-                // spring-based Settling above, this has no overshoot/bounce —
-                // it's a pure ease-out glide to the target page (the "settling
-                // into place" feel of macOS Launchpad).
-                self.wheel_snap_elapsed += dt;
-                let t = (self.wheel_snap_elapsed / self.wheel_cfg.snap_duration).min(1.0);
-                let e = cubic_bezier_easing_y(t, self.wheel_cfg.snap_bezier);
-                self.position =
-                    self.wheel_snap_from + (self.wheel_snap_to - self.wheel_snap_from) * e;
-                if t >= 1.0 {
-                    self.position = self.wheel_snap_to;
+                    self.settling_from_wheel = false;
                     self.phase = Phase::Idle;
                 }
             }
@@ -778,6 +761,7 @@ impl Scroller {
     fn begin_settle_to(&mut self, target: f32, flick: bool) {
         self.settle_target = target;
         self.settle_flick = flick;
+        self.settling_from_wheel = false;
         self.phase = Phase::Settling;
     }
 
@@ -1392,70 +1376,6 @@ pub fn line_delta_to_px(lines: f32, px_per_line: f32) -> f32 {
     lines * px_per_line
 }
 
-/// Evaluate the y component of a CSS-style cubic-bezier easing curve at
-/// progress `x` (0..=1), matching `CAMediaTimingFunction(controlPoints: x1,y1,
-/// x2,y2)`. Used by the wheel snap to reproduce homepad's
-/// `(0.15, 0.0, 0.1, 1.0)` ease-out glide.
-///
-/// Given the curve `B(s) = 3(1-s)²s·P1 + 3(1-s)s²·P2 + s³·1` (P0=(0,0),
-/// P3=(1,1)), we solve `Bx(s) = x` for `s` with Newton-Raphson, then return
-/// `By(s)`.
-pub fn cubic_bezier_easing_y(x: f32, ctrl: (f32, f32, f32, f32)) -> f32 {
-    let (cx1, cy1, cx2, cy2) = ctrl;
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    // Solve Bx(s) = x for s ∈ [0,1]. Bx(s) = 3(1-s)²s·cx1 + 3(1-s)s²·cx2 + s³.
-    let sample_curve_x = |s: f32| {
-        let one_minus = 1.0 - s;
-        3.0 * one_minus * one_minus * s * cx1 + 3.0 * one_minus * s * s * cx2 + s * s * s
-    };
-    let sample_curve_y = |s: f32| {
-        let one_minus = 1.0 - s;
-        3.0 * one_minus * one_minus * s * cy1 + 3.0 * one_minus * s * s * cy2 + s * s * s
-    };
-    let sample_curve_derivative_x = |s: f32| {
-        let one_minus = 1.0 - s;
-        3.0 * one_minus * one_minus * cx1
-            + 6.0 * one_minus * s * (cx2 - cx1)
-            + 3.0 * s * s * (1.0 - cx2)
-    };
-
-    // Newton-Raphson with a bisection fallback for robustness.
-    let mut s = x; // good initial guess
-    for _ in 0..8 {
-        let x_err = sample_curve_x(s) - x;
-        if x_err.abs() < 1e-6 {
-            return sample_curve_y(s);
-        }
-        let d = sample_curve_derivative_x(s);
-        if d.abs() < 1e-6 {
-            break;
-        }
-        s -= x_err / d;
-    }
-    // Bisection fallback.
-    let mut lo = 0.0f32;
-    let mut hi = 1.0f32;
-    s = x;
-    for _ in 0..32 {
-        let xv = sample_curve_x(s);
-        if (xv - x).abs() < 1e-6 {
-            return sample_curve_y(s);
-        }
-        if x < xv {
-            hi = s;
-        } else {
-            lo = s;
-        }
-        s = (lo + hi) * 0.5;
-    }
-    sample_curve_y(s)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1776,12 +1696,11 @@ mod tests {
         assert_eq!(s.phase, Phase::Idle);
     }
 
-    // ---- wheel gesture paging (homepad-style trackpad) ------------------
+    // ---- wheel gesture paging (trackpad, Apple-style spring snap) ------
 
-    /// Feed a wheel gesture: a sequence of `(dx, phase)` at ~16ms cadence,
-    /// with optional trailing momentum events. The handler is expected to
-    /// pre-invert the sign for natural scrolling, so these tests pass the raw
-    /// "content-space" sign (positive dx = scroll content toward previous page).
+    /// Feed a wheel gesture: a sequence of `(dx, phase)` at ~16ms cadence.
+    /// `dx` uses the "content-space" sign (positive = toward previous page),
+    /// i.e. the handler has already inverted for natural scrolling.
     fn run_wheel(s: &mut Scroller, start_pos: f32, events: &[(f32, WheelPhase)]) {
         s.position = start_pos;
         let t0 = Instant::now();
@@ -1792,118 +1711,108 @@ mod tests {
 
     #[test]
     fn wheel_delta_multiplier_is_07() {
-        // homepad's preciseScrollMultiplier: a 100px delta becomes 70px of
-        // accumulated displacement (position tracks the anchor + accumulated,
-        // so the move equals accumulated when in-range).
+        // A 100px delta becomes 70px of accumulated displacement (×0.7).
         let mut s = Scroller::new(bounds(4));
         s.position = -1000.0; // page 1, room both ways
-        let t = Instant::now();
-        s.apply_wheel_delta(100.0, t, WheelPhase::Started);
+        s.apply_wheel_delta(100.0, Instant::now(), WheelPhase::Started);
         assert!(
             (s.position - (-1000.0 + 70.0)).abs() < 0.5,
-            "100px delta * 0.7 should move 70px, got {}",
+            "100px × 0.7 should move 70px, got {}",
             s.position
         );
     }
 
     #[test]
-    fn wheel_ignores_momentum_after_release() {
-        // homepad's ignoreMomentum: after the finger-lift Ended starts the
-        // snap, subsequent OS-synthesized momentum Moved events must NOT move
-        // position (they'd fight the snap).
+    fn wheel_settle_preserves_velocity() {
+        // A flick's release velocity must carry into the spring (the "glide"
+        // feel), matching drag_end. Here a fast next-page flick on page 1.
         let mut s = Scroller::new(bounds(4));
         run_wheel(
             &mut s,
             -1000.0,
             &[
-                (-50.0, WheelPhase::Started),
-                (-100.0, WheelPhase::Moved),
-                (-100.0, WheelPhase::Ended),
+                (-5.0, WheelPhase::Started),
+                (-120.0, WheelPhase::Moved), // ~-7500 px/s
+                (0.0, WheelPhase::Ended),
             ],
         );
-        assert_eq!(s.phase, Phase::WheelSnap);
-        let pos_at_release = s.position;
-        // Momentum events arrive — must be ignored.
-        let t = Instant::now() + Duration::from_millis(100);
-        s.apply_wheel_delta(-300.0, t, WheelPhase::Moved);
-        assert_eq!(
-            s.position, pos_at_release,
-            "momentum after release must not move position"
+        assert_eq!(s.phase, Phase::Settling);
+        assert_eq!(s.settle_target, -2000.0, "should target page 2");
+        assert!(
+            s.velocity < -100.0,
+            "release velocity should carry into the spring, got {}",
+            s.velocity
         );
-        assert_eq!(s.phase, Phase::WheelSnap, "still snapping");
+        assert!(s.settling_from_wheel, "wheel settle must flag wheel origin");
     }
 
     #[test]
-    fn wheel_momentum_ended_clears_ignore_flag() {
-        // The terminal momentum Ended clears ignoreMomentum so a later gesture
-        // works normally (homepad resets the flag on momentum end).
+    fn wheel_settle_has_slight_overshoot() {
+        // The Apple "吸い付き感": an under-damped spring (zeta=0.8) overshoots
+        // the target slightly before settling. Track the spring and confirm
+        // position crosses past the target at least once.
         let mut s = Scroller::new(bounds(4));
-        run_wheel(
-            &mut s,
-            -1000.0,
-            &[
-                (-50.0, WheelPhase::Started),
-                (-100.0, WheelPhase::Moved),
-                (-100.0, WheelPhase::Ended), // finger lift → snap + ignore
-            ],
-        );
-        assert_eq!(s.phase, Phase::WheelSnap);
-        // Momentum events ignored until the terminal Ended.
-        let t0 = Instant::now() + Duration::from_millis(200);
-        s.apply_wheel_delta(-300.0, t0, WheelPhase::Moved); // ignored
-        assert_eq!(s.phase, Phase::WheelSnap);
-        s.apply_wheel_delta(-300.0, t0 + Duration::from_millis(16), WheelPhase::Ended);
-        // ignored_momentum now cleared; a new Started should open a fresh
-        // gesture (re-anchored at the current snapped position).
-        s.apply_wheel_delta(-10.0, t0 + Duration::from_millis(32), WheelPhase::Started);
-        assert_eq!(
-            s.phase,
-            Phase::WheelGesture,
-            "new gesture should open after momentum-Ended clears the flag"
-        );
-    }
-
-    #[test]
-    fn wheel_velocity_threshold_700_advances_page() {
-        // homepad: |velocity| > 700 pt/s overrides the nearest-page pick and
-        // advances one page in the flick direction. Here a fast next-page
-        // swipe (negative dx) on page 1 must target page 2.
-        let mut s = Scroller::new(bounds(4));
-        // Build a fast flick: -120px over 16ms = -7500 px/s (> 700).
         run_wheel(
             &mut s,
             -1000.0,
             &[
                 (-5.0, WheelPhase::Started),
                 (-120.0, WheelPhase::Moved),
-                (-0.0, WheelPhase::Ended),
+                (0.0, WheelPhase::Ended),
             ],
         );
-        assert_eq!(s.phase, Phase::WheelSnap);
-        assert_eq!(s.wheel_snap_to, -2000.0, "fast flick should target page 2");
+        let target = s.settle_target; // -2000
+        assert_eq!(target, -2000.0);
+        let mut overshot = false;
+        let step = 1.0 / 120.0;
+        for _ in 0..2000 {
+            s.step_once(step);
+            // Overshoot = position went more negative than the target.
+            if s.position < target - 1.0 {
+                overshot = true;
+            }
+            if s.phase == Phase::Idle {
+                break;
+            }
+        }
+        assert!(overshot, "spring must overshoot the target for Apple feel");
+        assert_eq!(s.phase, Phase::Idle);
+        assert!((s.position - target).abs() < s.cfg.settle_eps);
     }
 
     #[test]
-    fn wheel_below_threshold_snaps_to_nearest() {
-        // Below 700 pt/s, the target is the nearest page by position.
+    fn wheel_momentum_projection_picks_next_page() {
+        // A fast next-page flick: the projection pos + v·horizon lands well
+        // past the page-1/-2 midpoint, so the target is page 2.
         let mut s = Scroller::new(bounds(4));
-        // Slow drag: -700px over a long (1s) dt = -700 px/s, right at/below the
-        // threshold. Position lands at -1000 + 0.7*-700 = -1490, nearest page
-        // is -1000 (page 1).
-        let t0 = Instant::now();
-        s.position = -1000.0;
-        s.apply_wheel_delta(-2.0, t0, WheelPhase::Started);
-        // 1s gap → velocity sample = -700/1.0 = -700 (not > 700).
-        s.apply_wheel_delta(-700.0, t0 + Duration::from_millis(1000), WheelPhase::Moved);
-        s.apply_wheel_delta(0.0, t0 + Duration::from_millis(1016), WheelPhase::Ended);
-        assert_eq!(s.phase, Phase::WheelSnap);
-        // position ~ -1490 → raw_page 1.49 → round = 1 → page 1 (-1000).
-        assert_eq!(s.wheel_snap_to, -1000.0);
+        run_wheel(
+            &mut s,
+            -1000.0,
+            &[(-5.0, WheelPhase::Started), (-120.0, WheelPhase::Ended)],
+        );
+        assert_eq!(s.phase, Phase::Settling);
+        assert_eq!(s.settle_target, -2000.0);
+    }
+
+    #[test]
+    fn wheel_low_velocity_stays_on_nearest_page() {
+        // A slow, small swipe whose projection stays within the current page
+        // must target the current (nearest) page.
+        let mut s = Scroller::new(bounds(4));
+        // -20px*0.7 = -14px over 16ms → ~-875 px/s; projection ≈ -14 + (-875*0.35)
+        // ≈ -320 → position -1014, projection -1334 → page 1.33 → round 1.
+        run_wheel(
+            &mut s,
+            -1000.0,
+            &[(-2.0, WheelPhase::Started), (-20.0, WheelPhase::Ended)],
+        );
+        assert_eq!(s.phase, Phase::Settling);
+        assert_eq!(s.settle_target, -1000.0, "slow swipe stays on page 1");
     }
 
     #[test]
     fn wheel_caps_at_one_page_from_anchor() {
-        // Even a violent swipe targets at most one page from the gesture anchor.
+        // Even a violent swipe targets at most one page from the anchor.
         let mut s = Scroller::new(bounds(6));
         run_wheel(
             &mut s,
@@ -1914,33 +1823,79 @@ mod tests {
                 (0.0, WheelPhase::Ended),
             ],
         );
-        assert_eq!(s.phase, Phase::WheelSnap);
+        assert_eq!(s.phase, Phase::Settling);
+        assert_eq!(s.settle_target, -3000.0, "must cap at one page ahead");
+    }
+
+    #[test]
+    fn wheel_ignores_momentum_after_release() {
+        // ignoreMomentum: after finger-lift starts the snap, subsequent OS
+        // momentum Moved events must NOT move position.
+        let mut s = Scroller::new(bounds(4));
+        run_wheel(
+            &mut s,
+            -1000.0,
+            &[
+                (-50.0, WheelPhase::Started),
+                (-100.0, WheelPhase::Moved),
+                (-100.0, WheelPhase::Ended),
+            ],
+        );
+        assert_eq!(s.phase, Phase::Settling);
+        let pos_at_release = s.position;
+        s.apply_wheel_delta(
+            -300.0,
+            Instant::now() + Duration::from_millis(100),
+            WheelPhase::Moved,
+        );
         assert_eq!(
-            s.wheel_snap_to, -3000.0,
-            "must cap at one page ahead (-3000)"
+            s.position, pos_at_release,
+            "momentum must not move position"
+        );
+        assert_eq!(s.phase, Phase::Settling);
+    }
+
+    #[test]
+    fn wheel_momentum_ended_clears_ignore_flag() {
+        // The terminal momentum Ended clears ignoreMomentum so a later gesture
+        // works normally.
+        let mut s = Scroller::new(bounds(4));
+        run_wheel(
+            &mut s,
+            -1000.0,
+            &[
+                (-50.0, WheelPhase::Started),
+                (-100.0, WheelPhase::Moved),
+                (-100.0, WheelPhase::Ended),
+            ],
+        );
+        let t0 = Instant::now() + Duration::from_millis(200);
+        s.apply_wheel_delta(-300.0, t0, WheelPhase::Moved); // ignored
+        s.apply_wheel_delta(-300.0, t0 + Duration::from_millis(16), WheelPhase::Ended);
+        s.apply_wheel_delta(-10.0, t0 + Duration::from_millis(32), WheelPhase::Started);
+        assert_eq!(
+            s.phase,
+            Phase::WheelGesture,
+            "new gesture should open after momentum-Ended"
         );
     }
 
     #[test]
     fn wheel_rubber_homepad_curve_stiffens_fast() {
-        // homepad's rubber-band: factor = 1/(1+(over/k)²) with k = page*0.028.
-        // At the first page (0), pulling right (previous-page direction) must
-        // attenuate fast. A 100px*0.7=70px pull past 0 should land well under 70.
+        // homepad rubber: at the first page, pulling toward the previous page
+        // attenuates fast (100px*0.7=70px input → <70px move).
         let mut s = Scroller::new(bounds(4));
-        s.position = 0.0;
         run_wheel(&mut s, 0.0, &[(100.0, WheelPhase::Started)]);
         assert!(s.position > 0.0, "should pull past the edge a bit");
         assert!(
             s.position < 70.0,
-            "rubber band must attenuate (70px input → <70px move), got {}",
+            "rubber band must attenuate (70px input → <70px), got {}",
             s.position
         );
     }
 
     #[test]
     fn wheel_sustained_edge_momentum_asymptotes() {
-        // Sustained OS momentum at the first page must not run away — it
-        // asymptotes toward page*rubber_max_pages (3) above 0.
         let mut s = Scroller::new(bounds(4));
         let mut events = vec![(10.0, WheelPhase::Started)];
         for _ in 0..30 {
@@ -1955,100 +1910,9 @@ mod tests {
     }
 
     #[test]
-    fn wheel_snap_completes_in_fixed_duration() {
-        // homepad's snap is a fixed 0.5s ease. Step with a fixed dt (no wall
-        // clock) and confirm it reaches the target at ~0.5s, not before.
-        let mut s = Scroller::new(bounds(4));
-        run_wheel(
-            &mut s,
-            -1000.0,
-            &[
-                (-5.0, WheelPhase::Started),
-                (-120.0, WheelPhase::Moved),
-                (0.0, WheelPhase::Ended),
-            ],
-        );
-        assert_eq!(s.phase, Phase::WheelSnap);
-        let target = s.wheel_snap_to;
-        let dur = s.wheel_cfg.snap_duration;
-        let step = 1.0 / 120.0;
-        // Step to just before completion — should still be animating.
-        let n_before = ((dur - step) / step).floor() as usize;
-        for _ in 0..n_before {
-            if s.phase == Phase::Idle {
-                break;
-            }
-            s.step_once(step);
-        }
-        assert_ne!(
-            s.phase,
-            Phase::Idle,
-            "snap shouldn't finish before {}s",
-            dur
-        );
-        // Step past completion.
-        for _ in 0..40 {
-            if s.phase == Phase::Idle {
-                break;
-            }
-            s.step_once(step);
-        }
-        assert_eq!(s.phase, Phase::Idle);
-        assert!(
-            (s.position - target).abs() < 0.5,
-            "should rest at target {}, got {}",
-            target,
-            s.position
-        );
-    }
-
-    #[test]
-    fn wheel_snap_uses_bezier_midpoint() {
-        // The snap ease must follow the cubic-bezier (0.15,0,0.1,1) curve, not
-        // a linear interpolation. We step the WheelSnap with a fixed dt and
-        // check the eased fraction matches the bezier, independent of wall
-        // clock timing.
-        let mut s = Scroller::new(bounds(4));
-        run_wheel(
-            &mut s,
-            -1000.0,
-            &[
-                (-5.0, WheelPhase::Started),
-                (-120.0, WheelPhase::Moved),
-                (0.0, WheelPhase::Ended),
-            ],
-        );
-        let from = s.wheel_snap_from;
-        let to = s.wheel_snap_to;
-        let dur = s.wheel_cfg.snap_duration;
-        // Advance exactly half the snap duration in substeps (no wall clock).
-        let n = (dur / (1.0 / 120.0) / 2.0).round() as usize;
-        for _ in 0..n {
-            s.step_once(1.0 / 120.0);
-        }
-        // Expected eased position at the half-way time fraction.
-        let time_frac = (n as f32 * (1.0 / 120.0)) / dur;
-        let mid_bezier = cubic_bezier_easing_y(time_frac, s.wheel_cfg.snap_bezier);
-        let expected = from + (to - from) * mid_bezier;
-        assert!(
-            (s.position - expected).abs() < 1.0,
-            "snap at t={} should match bezier-eased {}, got {}",
-            time_frac,
-            expected,
-            s.position
-        );
-        // cubic-bezier(0.15,0,0.1,1) at the midpoint ≠ 0.5 (it's an ease-out).
-        assert!(
-            (mid_bezier - 0.5).abs() > 0.02,
-            "bezier at midpoint should differ from linear 0.5, got {}",
-            mid_bezier
-        );
-    }
-
-    #[test]
-    fn wheel_timeout_snaps_when_no_ended() {
-        // Safety net: if no Ended arrives, the momentum_coalesce timeout in
-        // tick starts the snap.
+    fn wheel_timeout_settles_when_no_ended() {
+        // Safety net: if no Ended arrives, the momentum_coalesce timeout
+        // starts the settle.
         let mut s = Scroller::new(bounds(4));
         run_wheel(
             &mut s,
@@ -2064,7 +1928,7 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(s.phase, Phase::WheelSnap, "timeout should start a snap");
+        assert_eq!(s.phase, Phase::Settling, "timeout should start a settle");
     }
 
     #[test]
@@ -2080,47 +1944,31 @@ mod tests {
     }
 
     #[test]
-    fn pointer_drag_cancels_wheel_snap() {
+    fn pointer_drag_cancels_wheel_settle() {
+        // A pointer press during a wheel settle cancels it and starts a drag.
         let mut s = Scroller::new(bounds(4));
         run_wheel(
             &mut s,
             -1000.0,
             &[(-5.0, WheelPhase::Started), (-120.0, WheelPhase::Ended)],
         );
-        assert_eq!(s.phase, Phase::WheelSnap);
+        assert_eq!(s.phase, Phase::Settling);
         let live = s.position;
         s.drag_start(300.0);
         assert_eq!(s.phase, Phase::Dragging);
         assert!((s.position - live).abs() < 1.0);
+        assert!(
+            !s.settling_from_wheel,
+            "wheel flag cleared on drag takeover"
+        );
     }
 
     #[test]
-    fn wheel_is_animating_in_gesture_and_snap() {
+    fn wheel_is_animating_in_gesture() {
         let mut s = Scroller::new(bounds(4));
         assert!(!s.is_animating());
         s.apply_wheel_delta(-10.0, Instant::now(), WheelPhase::Started);
         assert!(s.is_animating());
-    }
-
-    #[test]
-    fn cubic_bezier_endpoints_are_0_and_1() {
-        let b = (0.15, 0.0, 0.1, 1.0);
-        assert!((cubic_bezier_easing_y(0.0, b) - 0.0).abs() < 1e-4);
-        assert!((cubic_bezier_easing_y(1.0, b) - 1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn cubic_bezier_linear_identity() {
-        // A linear curve (0,0,1,1) must reproduce y=x.
-        let lin = (0.0, 0.0, 1.0, 1.0);
-        for &x in &[0.1, 0.25, 0.5, 0.75, 0.9] {
-            assert!(
-                (cubic_bezier_easing_y(x, lin) - x).abs() < 1e-3,
-                "linear bezier at {} should be {}",
-                x,
-                x
-            );
-        }
     }
 
     // ---- generic Spring ----
