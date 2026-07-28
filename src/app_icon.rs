@@ -33,8 +33,8 @@ pub fn load_rgba(size: Option<u32>) -> Option<RgbaIcon> {
 /// Load the dedicated macOS menu-bar glyph at 2× status-bar resolution.
 ///
 /// Menu-bar artwork deliberately does not reuse the colourful application
-/// icon. Its four transparent windows preserve the app icon's identity in a
-/// silhouette that remains legible at status-bar size.
+/// icon. A rounded outline preserves its glass frame while four solid tiles
+/// communicate the launcher function at status-bar size.
 /// `platform::macos::integration` marks the image as an AppKit template, so
 /// macOS tints it appropriately in both light and dark menu bars.
 pub fn load_menu_bar_template_rgba() -> Option<RgbaIcon> {
