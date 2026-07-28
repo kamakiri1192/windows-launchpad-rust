@@ -227,10 +227,11 @@ fn install_menu_bar(proxy: EventLoopProxy<UserEvent>) -> Option<TrayIcon> {
         }
     }));
 
-    let image = app_icon::menu_bar_template_rgba();
-    let icon = Icon::from_rgba(image.rgba, image.width, image.height)
-        .map_err(|error| eprintln!("macos-integration: menu-bar icon failed: {error}"))
-        .ok();
+    let icon = app_icon::load_menu_bar_template_rgba().and_then(|image| {
+        Icon::from_rgba(image.rgba, image.width, image.height)
+            .map_err(|error| eprintln!("macos-integration: menu-bar icon failed: {error}"))
+            .ok()
+    });
     let mut builder = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Launchpad")
