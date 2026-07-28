@@ -3,9 +3,8 @@
     2x artwork for the 18pt macOS menu-bar slot.
 
     The rounded outline preserves the app icon's glass frame, while four solid
-    tiles communicate the launcher function at status-bar size. The medium
-    outline weight and open spacing keep the mark legible without feeling like
-    a heavy filled block.
+    tiles communicate the launcher function at status-bar size. The restrained
+    outline weight lets the tiles lead while keeping the frame legible.
   -->
   <rect
     x="3"
@@ -15,7 +14,7 @@
     rx="7.5"
     fill="none"
     stroke="black"
-    stroke-width="3.5"
+    stroke-width="2.5"
   />
   <g fill="black">
     <rect x="8" y="8" width="7.5" height="7.5" rx="2.25"/>
