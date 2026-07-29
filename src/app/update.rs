@@ -242,15 +242,33 @@ impl App {
                         None => return,
                     }
                 } else {
-                    // Grid: reuse the launcher-item rect helper (includes scroll).
-                    match self.app_id_at_point(point.x, point.y) {
-                        Some(app_id) => {
+                    // Grid: hit-test in the SAME index space the renderer uses
+                    // (visible_launcher_items, which includes folder tiles), so
+                    // that a folder earlier in the grid does not shift the
+                    // resolved app id / rect of later apps. `hit_test_app` is
+                    // purely geometric; passing the launcher-items count keeps
+                    // its returned index aligned with visible_launcher_items.
+                    let visible_items = self.visible_launcher_items();
+                    let (w, _h) = self.viewport_phys();
+                    let scroll_x = self.scroller.as_ref().map_or(0.0, |s| s.position);
+                    let index = match self.layout.hit_test_app(
+                        w as f32,
+                        point.x,
+                        point.y,
+                        scroll_x,
+                        visible_items.len(),
+                    ) {
+                        Some(i) => i,
+                        None => return,
+                    };
+                    match visible_items.get(index) {
+                        Some(LauncherItem::App(app_id)) => {
                             let rect = self
                                 .launcher_item_rect(&LauncherItem::App(app_id.clone()))
                                 .map_or_else(click_fallback, |r| r);
-                            (app_id, rect)
+                            (app_id.clone(), rect)
                         }
-                        None => return,
+                        _ => return,
                     }
                 };
                 self.open_context_menu(app_id, icon_rect);
