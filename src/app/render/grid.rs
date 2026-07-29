@@ -62,7 +62,8 @@ impl App {
             let dirty = t.atlas_dirty;
             if dirty {
                 if let Some(r) = self.renderer.as_mut() {
-                    r.upload_atlas(t.atlas_rgba());
+                    let (aw, ah) = t.atlas_dimensions();
+                    r.upload_atlas(t.atlas_rgba(), aw, ah);
                 }
             }
             (grid_glyph_views(&quads), dirty)

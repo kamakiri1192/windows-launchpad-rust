@@ -109,7 +109,8 @@ impl App {
     ) {
         if atlas_dirty {
             if let (Some(r), Some(t)) = (self.renderer.as_mut(), self.text.as_ref()) {
-                r.upload_atlas(t.atlas_rgba());
+                let (aw, ah) = t.atlas_dimensions();
+                r.upload_atlas(t.atlas_rgba(), aw, ah);
             }
         }
         self.render_model

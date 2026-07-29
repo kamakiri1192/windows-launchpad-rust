@@ -2,8 +2,15 @@
 //!
 //! Uses `cosmic-text` to shape/layout each label (Japanese-capable) and
 //! `SwashCache` to rasterize glyphs into a CPU-side texture atlas. The atlas
-//! is uploaded once to the GPU; the renderer instance-draws one quad per
-//! glyph, sampling the atlas.
+//! is re-uploaded to the GPU whenever it becomes dirty; the renderer
+//! instance-draws one quad per glyph, sampling the atlas.
+//!
+//! When the atlas fills up it **grows** (doubling, up to [`ATLAS_MAX_SIZE`]):
+//! existing glyphs keep their exact pixel positions so nothing is evicted or
+//! re-rasterized. Growth only changes the UV denominators, so the app layer
+//! rebuilds every glyph lane once per growth (see
+//! [`TextRenderer::take_atlas_grew`]) — the same pattern the icon atlas
+//! already uses.
 //!
 //! The layout works in **two phases** to keep Rust's borrow checker happy
 //! (both `Buffer` layout and `SwashCache` need `&mut FontSystem`):
@@ -135,8 +142,13 @@ pub struct CenteredLineSpec<'a> {
 pub struct TextRenderer {
     font_system: FontSystem,
     swash: SwashCache,
-    /// Atlas RGBA buffer (CPU side), row-major, `ATLAS_W * ATLAS_H * 4` bytes.
+    /// Atlas RGBA buffer (CPU side), row-major, `atlas_w * atlas_h * 4` bytes.
     atlas: Vec<u8>,
+    /// Current atlas dimensions in pixels. Start at [`ATLAS_INITIAL_SIZE`]
+    /// and double (up to [`ATLAS_MAX_SIZE`]) whenever the row packer runs
+    /// out of space; existing glyphs keep their pixel positions.
+    atlas_w: u32,
+    atlas_h: u32,
     /// Cache key → atlas placement.
     cache: HashMap<cosmic_text::CacheKey, AtlasEntry>,
     /// Next free cell cursor for the row packer.
@@ -145,14 +157,22 @@ pub struct TextRenderer {
     row_height: u32,
     /// True if the atlas changed since the last GPU upload.
     pub atlas_dirty: bool,
+    /// True if the atlas grew since the last [`Self::take_atlas_grew`] call.
+    /// Growth changes the UV denominators of every previously built glyph
+    /// quad, so the app must rebuild all glyph lanes once.
+    atlas_grew: bool,
     /// Shaping is independent of a label's on-screen position. Folder paging
     /// changes only that position, so retain relative glyph layouts instead
     /// of asking cosmic-text to shape every visible name on every frame.
     label_layout_cache: HashMap<LabelLayoutKey, Vec<CachedLabelGlyph>>,
 }
 
-const ATLAS_W: u32 = 1024;
-const ATLAS_H: u32 = 1024;
+/// Initial (square) atlas size in pixels. The GPU texture is created at this
+/// size and reallocated when the atlas grows.
+pub const ATLAS_INITIAL_SIZE: u32 = 1024;
+/// Maximum (square) atlas size in pixels. 4096² is safely within every
+/// wgpu-supported device's texture limits.
+const ATLAS_MAX_SIZE: u32 = 4096;
 /// 1px padding between glyphs to avoid bleeding at UV edges.
 const PAD: u32 = 1;
 #[cfg(target_os = "macos")]
@@ -174,18 +194,27 @@ const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
 
 impl TextRenderer {
     pub fn new() -> Self {
+        Self::with_atlas_size(ATLAS_INITIAL_SIZE, ATLAS_INITIAL_SIZE)
+    }
+
+    /// Construct with an explicit initial atlas size. Used by tests to force
+    /// growth without rasterizing thousands of glyphs.
+    fn with_atlas_size(atlas_w: u32, atlas_h: u32) -> Self {
         let font_system = platform_font_system();
         let swash = SwashCache::new();
-        let atlas = vec![0u8; (ATLAS_W * ATLAS_H * 4) as usize];
+        let atlas = vec![0u8; (atlas_w * atlas_h * 4) as usize];
         Self {
             font_system,
             swash,
             atlas,
+            atlas_w,
+            atlas_h,
             cache: HashMap::new(),
             cursor_x: PAD,
             cursor_y: PAD,
             row_height: 0,
             atlas_dirty: true,
+            atlas_grew: false,
             label_layout_cache: HashMap::new(),
         }
     }
@@ -194,8 +223,16 @@ impl TextRenderer {
         &self.atlas
     }
 
-    pub const fn atlas_dimensions() -> (u32, u32) {
-        (ATLAS_W, ATLAS_H)
+    pub fn atlas_dimensions(&self) -> (u32, u32) {
+        (self.atlas_w, self.atlas_h)
+    }
+
+    /// Returns true (and clears the flag) if the atlas grew since the last
+    /// call. On growth every previously built glyph quad's normalized UVs
+    /// are stale (the denominators changed), so the caller must rebuild all
+    /// glyph lanes before the next render.
+    pub fn take_atlas_grew(&mut self) -> bool {
+        std::mem::take(&mut self.atlas_grew)
     }
 
     /// Lay out all labels and return one `GlyphQuad` per glyph.
@@ -315,9 +352,13 @@ impl TextRenderer {
         if let Some(run) = buffer.layout_runs().next() {
             let run_w = run.line_w;
             let centered_x = (center.0 / scale_factor - run_w * 0.5).max(0.0);
+            // Round the physical origin: `CacheKey` bins glyphs by subpixel
+            // position, so an animated fractional origin would rasterize up
+            // to 4 atlas entries per glyph. Snapping to whole physical px
+            // keeps one entry per glyph and is visually indistinguishable.
             let line_origin = (
-                centered_x * scale_factor,
-                baseline_y + run.line_y * scale_factor,
+                (centered_x * scale_factor).round(),
+                (baseline_y + run.line_y * scale_factor).round(),
             );
             for glyph in run.glyphs.iter() {
                 let physical = glyph.physical(line_origin, scale_factor);
@@ -429,12 +470,21 @@ impl TextRenderer {
         scale_factor: f32,
         shadow_layers: &[(f32, f32, f32)],
     ) -> Vec<GlyphQuad> {
-        let mut glyphs = Vec::with_capacity(placed.len());
+        // Ensure every glyph is in the atlas *before* computing UVs: a
+        // mid-batch atlas grow changes the UV denominators, and computing
+        // them per-glyph would leave earlier quads in this batch stale.
+        let mut entries = Vec::with_capacity(placed.len());
         for g in placed {
             let entry = match self.ensure_glyph(&g.physical) {
                 Some(e) => e,
                 None => continue,
             };
+            entries.push((entry, g));
+        }
+
+        let (aw, ah) = (self.atlas_w as f32, self.atlas_h as f32);
+        let mut glyphs = Vec::with_capacity(entries.len());
+        for (entry, g) in entries {
             // The bitmap's top-left relative to the pen position:
             //   x = pen_x + placement.left
             //   y = pen_y - placement.top   (swash Y is up-positive)
@@ -445,10 +495,10 @@ impl TextRenderer {
                 y: by,
                 w: entry.w as f32,
                 h: entry.h as f32,
-                u0: entry.x as f32 / ATLAS_W as f32,
-                v0: entry.y as f32 / ATLAS_H as f32,
-                u1: (entry.x + entry.w) as f32 / ATLAS_W as f32,
-                v1: (entry.y + entry.h) as f32 / ATLAS_H as f32,
+                u0: entry.x as f32 / aw,
+                v0: entry.y as f32 / ah,
+                u1: (entry.x + entry.w) as f32 / aw,
+                v1: (entry.y + entry.h) as f32 / ah,
                 color: g.color,
                 clip_rect: [0.0; 4],
                 clip_radius: [0.0; 4],
@@ -491,15 +541,32 @@ impl TextRenderer {
             return None;
         }
 
+        // A glyph that cannot fit even at the maximum atlas size is dropped.
+        if w + 2 * PAD > ATLAS_MAX_SIZE || h + 2 * PAD > ATLAS_MAX_SIZE {
+            return None;
+        }
+        // Grow until the glyph fits within the atlas width (pathological
+        // ultra-wide glyphs only; normal UI text never triggers this).
+        while w + 2 * PAD > self.atlas_w {
+            if !self.grow_atlas() {
+                return None;
+            }
+        }
         // Find a slot in the current row, wrapping to a new row if needed.
-        if self.cursor_x + w + PAD > ATLAS_W {
+        if self.cursor_x + w + PAD > self.atlas_w {
             self.cursor_y += self.row_height + PAD;
             self.cursor_x = PAD;
             self.row_height = 0;
         }
-        if self.cursor_y + h + PAD > ATLAS_H {
-            eprintln!("text atlas full; glyph dropped");
-            return None;
+        // Out of rows: grow the atlas instead of evicting. Existing glyphs
+        // keep their pixel positions, so retained quads never point at
+        // repurposed texels — only the UV denominators change, which the
+        // app layer handles via `take_atlas_grew`.
+        while self.cursor_y + h + PAD > self.atlas_h {
+            if !self.grow_atlas() {
+                // Already at the maximum size; drop the glyph.
+                return None;
+            }
         }
 
         let dst_x = self.cursor_x;
@@ -520,6 +587,32 @@ impl TextRenderer {
         self.cache.insert(physical.cache_key, entry);
         self.atlas_dirty = true;
         Some(entry)
+    }
+
+    /// Double the atlas (capped at [`ATLAS_MAX_SIZE`]), copying every
+    /// existing row to the same pixel position in the new buffer. Cache
+    /// entries and the row-packer cursor stay valid as-is. Returns false if
+    /// the atlas is already at its maximum size.
+    fn grow_atlas(&mut self) -> bool {
+        if self.atlas_w >= ATLAS_MAX_SIZE && self.atlas_h >= ATLAS_MAX_SIZE {
+            return false;
+        }
+        let new_w = (self.atlas_w * 2).min(ATLAS_MAX_SIZE);
+        let new_h = (self.atlas_h * 2).min(ATLAS_MAX_SIZE);
+        let mut new_atlas = vec![0u8; (new_w * new_h * 4) as usize];
+        let old_row_bytes = (self.atlas_w * 4) as usize;
+        for y in 0..self.atlas_h {
+            let src = (y * self.atlas_w * 4) as usize;
+            let dst = (y * new_w * 4) as usize;
+            new_atlas[dst..dst + old_row_bytes]
+                .copy_from_slice(&self.atlas[src..src + old_row_bytes]);
+        }
+        self.atlas = new_atlas;
+        self.atlas_w = new_w;
+        self.atlas_h = new_h;
+        self.atlas_dirty = true;
+        self.atlas_grew = true;
+        true
     }
 
     /// Copy a swash image into the RGBA atlas, normalizing Mask/Color forms.
@@ -575,7 +668,7 @@ impl TextRenderer {
 
     #[inline]
     fn write_pixel(&mut self, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
-        let idx = ((y * ATLAS_W + x) * 4) as usize;
+        let idx = ((y * self.atlas_w + x) * 4) as usize;
         let px = &mut self.atlas[idx..idx + 4];
         px[0] = r;
         px[1] = g;

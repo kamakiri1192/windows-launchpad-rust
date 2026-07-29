@@ -62,6 +62,17 @@ impl App {
             .as_ref()
             .map(|s| s.is_animating())
             .unwrap_or(false);
+
+        // If the glyph atlas grew during the previous frame's label/layout
+        // work, the retained grid label quads still reference the old UV
+        // denominators. Rebuild them once now (and re-upload) so no stale
+        // quads reach the GPU this frame. Every other text lane is
+        // regenerated below with the current atlas size, so they are fine.
+        if let Some(text) = self.text.as_mut() {
+            if text.take_atlas_grew() {
+                self.relayout();
+            }
+        }
         let folder_scroller_animating = if let Some(scroller) = self.folder_scroller.as_mut() {
             scroller.tick(now);
             scroller.is_animating()

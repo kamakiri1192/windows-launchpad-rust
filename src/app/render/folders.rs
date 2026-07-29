@@ -433,7 +433,8 @@ impl App {
             }
             if text.atlas_dirty {
                 if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.upload_atlas(text.atlas_rgba());
+                    let (aw, ah) = text.atlas_dimensions();
+                    renderer.upload_atlas(text.atlas_rgba(), aw, ah);
                 }
                 text.atlas_dirty = false;
             }
