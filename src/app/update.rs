@@ -212,20 +212,48 @@ impl App {
                 // children. `open_context_menu` closes the folder first so the
                 // Modal glass lane stays exclusive (one surface) and the Liquid
                 // Glass modal pass stays stable.
-                let app_id = if self.folders.is_active() {
-                    self.folder_hit_target(point.x, point.y)
-                        .and_then(|t| match t {
-                            crate::ui_model::hit::HitTarget::FolderChild { child, .. } => {
-                                Some(crate::domain::app_id::AppId::from_normalized(child))
-                            }
-                            _ => None,
+                //
+                // The icon rect (physical on-screen px) is resolved alongside
+                // the app_id so the menu can attach to the icon edge (iOS-style)
+                // rather than to the raw click point.
+                let click_fallback =
+                    || crate::ui_model::geometry::Rect::new(point.x, point.y, 1.0, 1.0);
+                let (app_id, icon_rect) = if self.folders.is_active() {
+                    // Folder child: read the HitRegion rect directly (already in
+                    // physical on-screen px, panel-clipped to the visible part).
+                    let resolved = self
+                        .folder_layout
+                        .as_ref()
+                        .and_then(|layout| {
+                            layout
+                                .result
+                                .hits
+                                .hit_test(crate::ui_model::geometry::Point::new(point.x, point.y))
                         })
+                        .and_then(|hit| match &hit.target {
+                            crate::ui_model::hit::HitTarget::FolderChild { child, .. } => Some((
+                                crate::domain::app_id::AppId::from_normalized(child),
+                                hit.rect,
+                            )),
+                            _ => None,
+                        });
+                    match resolved {
+                        Some((id, rect)) => (id, rect),
+                        None => return,
+                    }
                 } else {
-                    self.app_id_at_point(point.x, point.y)
+                    // Grid: reuse the launcher-item rect helper (includes scroll).
+                    match self.app_id_at_point(point.x, point.y) {
+                        Some(app_id) => {
+                            let rect = self
+                                .launcher_item_rect(&LauncherItem::App(app_id.clone()))
+                                .map_or_else(click_fallback, |r| r);
+                            (app_id, rect)
+                        }
+                        None => return,
+                    }
                 };
-                if let Some(app_id) = app_id {
-                    self.open_context_menu(app_id, point.x, point.y);
-                }
+                self.open_context_menu(app_id, icon_rect);
             }
             return;
         }

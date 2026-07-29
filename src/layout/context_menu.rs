@@ -152,43 +152,64 @@ pub fn open_panel_size_logical(item_count: usize, max_label_width_logical: f32) 
     (width, height)
 }
 
-/// Clamp an open panel rect so it stays inside the viewport, anchored near the
-/// click point. Returns the panel top-left in physical px.
-pub fn open_panel_origin(anchor: (f32, f32), size: (f32, f32), viewport: (u32, u32)) -> (f32, f32) {
-    let vw = viewport.0 as f32;
-    let vh = viewport.1 as f32;
-    // Prefer placing the panel so the anchor sits at its top-left area; shift
-    // left/up if it would overflow the viewport.
-    let margin = 8.0;
-    let mut x = anchor.x() - size.0 * 0.25;
-    let mut y = anchor.y() - size.1 * 0.25;
-    if x + size.0 > vw - margin {
-        x = (vw - margin - size.0).max(margin);
-    }
-    if y + size.1 > vh - margin {
-        y = (vh - margin - size.1).max(margin);
-    }
-    if x < margin {
-        x = margin;
-    }
-    if y < margin {
-        y = margin;
-    }
-    (x, y)
-}
+/// Gap between the icon edge and the menu edge when attached (physical px).
+const ATTACH_GAP: f32 = 4.0;
+/// Viewport safety margin kept around the menu (physical px).
+const VIEWPORT_MARGIN: f32 = 8.0;
 
-trait TupleXy {
-    fn x(&self) -> f32;
-    fn y(&self) -> f32;
-}
+/// Attach the open panel to the icon's edge, flipping sides when there is no
+/// room — an iOS-style placement. Returns `(panel_top_left, seed_anchor)` in
+/// physical px, where `seed_anchor` is the icon center the 40×40 seed should be
+/// centered on so the menu appears to bloom out of the icon regardless of which
+/// side it lands on (no fly-through).
+///
+/// Priority: right of icon (top-aligned) → left of icon (top-aligned) →
+/// bottom-aligned on the chosen side → centered clamp when neither side fits.
+pub fn open_panel_origin(
+    icon: Rect,
+    size: (f32, f32),
+    viewport: (u32, u32),
+) -> ((f32, f32), (f32, f32)) {
+    let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
+    let (w, h) = size;
 
-impl TupleXy for (f32, f32) {
-    fn x(&self) -> f32 {
-        self.0
-    }
-    fn y(&self) -> f32 {
-        self.1
-    }
+    // --- Horizontal: prefer the icon's right edge, flip to the left, else clamp.
+    let right_x = icon.max_x() + ATTACH_GAP; // menu left edge at icon's right
+    let fits_right = right_x + w <= vw - VIEWPORT_MARGIN;
+    let left_x = icon.min_x() - ATTACH_GAP - w; // menu right edge at icon's left
+    let fits_left = left_x >= VIEWPORT_MARGIN;
+
+    let x = if fits_right {
+        right_x
+    } else if fits_left {
+        left_x
+    } else {
+        // Neither side fits: center on the icon, clamped into the viewport.
+        (icon.center().x - w * 0.5).clamp(
+            VIEWPORT_MARGIN,
+            (vw - VIEWPORT_MARGIN - w).max(VIEWPORT_MARGIN),
+        )
+    };
+
+    // --- Vertical: top-align with the icon first, flip to bottom-align, else clamp.
+    let top_y = icon.min_y();
+    let fits_top = top_y + h <= vh - VIEWPORT_MARGIN;
+    let bottom_y = icon.max_y() - h; // menu bottom aligns with icon bottom
+    let fits_bottom = bottom_y >= VIEWPORT_MARGIN;
+
+    let y = if fits_top {
+        top_y
+    } else if fits_bottom {
+        bottom_y
+    } else {
+        (icon.center().y - h * 0.5).clamp(
+            VIEWPORT_MARGIN,
+            (vh - VIEWPORT_MARGIN - h).max(VIEWPORT_MARGIN),
+        )
+    };
+
+    let center = icon.center();
+    ((x, y), (center.x, center.y))
 }
 
 /// Build the renderer-neutral model for the context menu.
@@ -386,5 +407,58 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
         ContextMenuItem::IconLarger => ControlKind::Plus,
         ContextMenuItem::IconSmaller => ControlKind::Minus,
         ContextMenuItem::AppInfo => ControlKind::Info,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{open_panel_origin, Rect};
+
+    /// Icon near the right of the viewport so the menu cannot fit on its right
+    /// side, but has ample room on the left: it must flip to the left edge,
+    /// top-aligned with the icon.
+    #[test]
+    fn menu_flips_left_when_no_room_on_the_right() {
+        let icon = Rect::new(200.0, 100.0, 60.0, 60.0); // max_x = 260
+        let ((x, y), _seed) = open_panel_origin(icon, (120.0, 80.0), (350, 300));
+        // Right side: 264 + 120 = 384 > 350 − 8 → no fit. Left side:
+        // menu right edge = icon left edge (200) − gap (4) → x = 200 − 4 − 120.
+        assert!((x - (200.0 - 4.0 - 120.0)).abs() < 0.5);
+        // Top-aligned with the icon.
+        assert!((y - 100.0).abs() < 0.5);
+    }
+
+    /// Icon near the left with ample room on the right: menu attaches to the
+    /// right edge, top-aligned.
+    #[test]
+    fn menu_attaches_to_the_right_by_default() {
+        let icon = Rect::new(40.0, 40.0, 60.0, 60.0);
+        let ((x, y), seed) = open_panel_origin(icon, (120.0, 80.0), (400, 300));
+        // Right side: menu left edge = icon right edge (100) + gap (4).
+        assert!((x - (40.0 + 60.0 + 4.0)).abs() < 0.5);
+        assert!((y - 40.0).abs() < 0.5);
+        // Seed is the icon center.
+        assert!((seed.0 - 70.0).abs() < 0.5);
+        assert!((seed.1 - 70.0).abs() < 0.5);
+    }
+
+    /// Menu taller than the room below the icon: flip to bottom-aligned so the
+    /// menu grows upward from the icon's bottom edge.
+    #[test]
+    fn menu_flips_to_bottom_alignment_when_top_overflows() {
+        let icon = Rect::new(40.0, 240.0, 60.0, 60.0); // icon bottom = 300 = vh
+        let ((_, y), _) = open_panel_origin(icon, (120.0, 80.0), (400, 300));
+        // Top (240) + 80 = 320 > 300 − margin → flip to bottom-aligned:
+        // menu bottom = icon bottom (300) → y = 300 − 80.
+        assert!((y - (300.0 - 80.0)).abs() < 0.5);
+    }
+
+    /// Menu wider than the viewport on both sides of the icon: clamp centered.
+    #[test]
+    fn menu_clamps_centered_when_neither_side_fits() {
+        let icon = Rect::new(90.0, 40.0, 20.0, 20.0); // tiny viewport, big menu
+        let ((x, _), _) = open_panel_origin(icon, (300.0, 80.0), (200, 300));
+        // Centered on icon center (100), clamped: 100 − 150 = −50 → clamp to margin.
+        assert!((x - 8.0).abs() < 0.5);
     }
 }

@@ -11,6 +11,7 @@ use crate::layout::context_menu::{
     self, open_panel_origin, open_panel_size_logical, ContextMenuInput,
 };
 use crate::renderer::text_engine::{self, GlyphQuad, UI_FONT_FAMILY};
+use crate::ui_model::geometry::Rect;
 use crate::ui_model::render_model::{GlassLayer, GlyphLane, InkLane};
 
 /// Menu font metrics, in logical px at 1× DPI. Match the app-icon label size
@@ -20,11 +21,12 @@ const MENU_FONT_SIZE: f32 = 14.0;
 const MENU_LINE_HEIGHT: f32 = 18.0;
 
 impl App {
-    /// Open the context menu for `app_id`, anchored at the physical-px click
-    /// point. The menu uses its own `ContextMenu` glass lane, isolated from the
-    /// folder/settings `Modal` lane, so an open folder panel stays visible
-    /// while the menu is shown and remains open after it closes.
-    pub(crate) fn open_context_menu(&mut self, app_id: AppId, x: f32, y: f32) {
+    /// Open the context menu for `app_id`, attached to the right-clicked icon's
+    /// `icon_rect` (physical on-screen px). The menu attaches to the icon edge,
+    /// flipping sides when there is no room (iOS-style), and the open seed
+    /// blooms from the icon center. The menu uses its own `ContextMenu` glass
+    /// lane, isolated from the folder/settings `Modal` lane.
+    pub(crate) fn open_context_menu(&mut self, app_id: AppId, icon_rect: Rect) {
         if self.control.wants_keyboard() {
             self.control.press_close();
         }
@@ -38,14 +40,15 @@ impl App {
         let (lw, lh) =
             open_panel_size_logical(context_menu::ContextMenuItem::ALL.len(), max_label_w);
         let size_phys = (lw * scale, lh * scale);
-        let origin = open_panel_origin((x, y), size_phys, self.viewport_phys());
+        let ((origin_x, origin_y), seed) =
+            open_panel_origin(icon_rect, size_phys, self.viewport_phys());
         let target = MenuTarget {
-            x: origin.0,
-            y: origin.1,
+            x: origin_x,
+            y: origin_y,
             width: size_phys.0,
             height: size_phys.1,
         };
-        self.context_menu.open(app_id, x, y, target);
+        self.context_menu.open(app_id, seed.0, seed.1, target);
         self.request_redraw();
     }
 
