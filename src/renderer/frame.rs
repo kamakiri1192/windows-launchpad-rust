@@ -743,8 +743,12 @@ impl Renderer {
                 }
                 // Text (labels).
                 if let Some(buf) = self.context_menu_text_instance_buffer.as_ref() {
-                    pass.set_pipeline(&self.text_pipeline);
-                    pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+                    // Use control_text_pipeline (not text_pipeline): the grid
+                    // text shader applies scroll_x and page-frame clipping,
+                    // which would shift and clip menu labels. The control-text
+                    // shader renders at absolute screen positions.
+                    pass.set_pipeline(&self.control_text_pipeline);
+                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.context_menu_text_instance_buffer.len());
                 }

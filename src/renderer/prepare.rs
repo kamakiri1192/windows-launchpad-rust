@@ -220,9 +220,7 @@ impl Renderer {
         let modal_clip = model
             .glass
             .iter()
-            .find(|batch| {
-                batch.layer == GlassLayer::Modal || batch.layer == GlassLayer::ContextMenu
-            })
+            .find(|batch| batch.layer == GlassLayer::Modal)
             .and_then(|batch| {
                 batch
                     .surfaces
@@ -233,6 +231,24 @@ impl Renderer {
             });
         self.modal_clip_rect = modal_clip.map(|(rect, _)| rect);
         self.modal_clip_radius = modal_clip.map_or(0.0, |(_, radius)| radius);
+        // Context menu clip is computed independently so that, when both a
+        // folder panel (Modal) and the menu (ContextMenu) are open, each
+        // content pass scissored to its own glass surface rather than sharing
+        // one rect (which could clip menu content to the folder bounds).
+        let context_menu_clip = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| (surface.rect, surface.radius))
+            });
+        self.context_menu_clip_rect = context_menu_clip.map(|(rect, _)| rect);
+        self.context_menu_clip_radius = context_menu_clip.map_or(0.0, |(_, radius)| radius);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self

@@ -188,7 +188,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     // opaque tile is drawn beneath the glass to give the menu a solid white-ish
     // body. This also visually separates the menu from an open folder panel,
     // whose glass would otherwise smooth-union with this one.
-    render.modal_tiles = Some(vec![TileView {
+    render.context_menu_tiles = Some(vec![TileView {
         id: UiId::context_menu_panel(),
         rect: panel_rect,
         radius: input.radius,

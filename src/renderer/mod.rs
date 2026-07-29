@@ -123,6 +123,8 @@ pub struct Renderer {
     /// outside their panel while sliding.
     modal_clip_rect: Option<crate::ui_model::geometry::Rect>,
     modal_clip_radius: f32,
+    context_menu_clip_rect: Option<crate::ui_model::geometry::Rect>,
+    context_menu_clip_radius: f32,
 
     // -- Bottom control overlays --------------------------------------
     // The control's glass capsule is drawn by the Liquid Glass pass (it's a
