@@ -276,7 +276,15 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 AppAction::ScaleFactorChanged { scale_factor }
             }
-            WindowEvent::Moved(_) => AppAction::Moved,
+            WindowEvent::Moved(_) => {
+                #[cfg(target_os = "macos")]
+                if let Some(passthrough) = &self._macos_input {
+                    if let Some(r) = &self.renderer {
+                        passthrough.refresh_geometry(&r.window);
+                    }
+                }
+                AppAction::Moved
+            }
             WindowEvent::CursorLeft { .. } => AppAction::CursorLeft,
             WindowEvent::CursorMoved { position, .. } => AppAction::PointerMoved {
                 x: position.x as f32,

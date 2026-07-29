@@ -10,15 +10,19 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSEvent, NSEventMask, NSEventPhase, NSEventType, NSView, NSWindow};
+use objc2_app_kit::{NSEvent, NSEventMask, NSEventPhase, NSEventType, NSScreen, NSView, NSWindow};
 use objc2_core_foundation::{
-    kCFRunLoopCommonModes, CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource, CGPoint,
+    kCFRunLoopDefaultMode, CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource, CGPoint, CGRect,
+    CGSize,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
@@ -28,8 +32,8 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::app::event::UserEvent;
 use crate::input_routing::{
-    DeliveryResult, InputRoutingPublisher, NativeScrollPhase, PointerButton, RawScrollEvent,
-    RouterState, ScrollPhaseCapability, ScrollSource,
+    DeliveryResult, InputRoutingPublisher, NativeScrollPhase, PhysicalPoint, PointerButton,
+    RawScrollEvent, RouterState, ScrollPhaseCapability, ScrollSource,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,26 +108,91 @@ impl NativeScrollClock {
     }
 }
 
+/// Wrapper to send a raw pointer through a channel (channels require `Send`).
+struct SendPtr(*mut c_void);
+unsafe impl Send for SendPtr {}
+
 struct EventTapRegistration {
     port: CFRetained<CFMachPort>,
     source: CFRetained<CFRunLoopSource>,
     run_loop: CFRetained<CFRunLoop>,
+    _thread: Option<JoinHandle<()>>,
 }
 
 impl Drop for EventTapRegistration {
     fn drop(&mut self) {
         self.run_loop
-            .remove_source(Some(&self.source), unsafe { kCFRunLoopCommonModes });
+            .remove_source(Some(&self.source), unsafe { kCFRunLoopDefaultMode });
+        CFRunLoop::stop(&self.run_loop);
+        // Dropping _thread detaches it; CFRunLoop::stop causes the thread's
+        // CFRunLoop::run() to exit, so the thread finishes shortly after.
+    }
+}
+
+/// Cached coordinate transform that lets the background tap thread convert a
+/// CGEvent global location into the launcher window's physical-pixel space
+/// without touching any AppKit `MainThreadOnly` object.
+///
+/// NSWindow's `frame()` reports coordinates in the AppKit global space
+/// (origin at the **bottom-left** of the primary display). CGEvent's global
+/// location uses the CoreGraphics space (origin at the **top-left**). We store
+/// the precomputed affine transform so the tap callback only needs arithmetic.
+#[derive(Clone, Copy)]
+struct GeometrySnapshot {
+    /// CG global x subtracted by this gives the window-relative logical x.
+    window_origin_cg_x: f64,
+    /// CG global y subtracted by this gives the window-relative logical y
+    /// (already flipped so that top of the window = 0).
+    window_origin_cg_y: f64,
+    scale_factor: f64,
+}
+
+impl Default for GeometrySnapshot {
+    fn default() -> Self {
+        Self {
+            window_origin_cg_x: 0.0,
+            window_origin_cg_y: 0.0,
+            scale_factor: 1.0,
+        }
+    }
+}
+
+impl GeometrySnapshot {
+    /// Convert a CGEvent global point to the launcher window's physical
+    /// backing-store pixel space, matching what `physical_point_in_window`
+    /// produced on the main thread.
+    fn to_physical_point(self, cg_global: CGPoint) -> PhysicalPoint {
+        let logical_x = cg_global.x - self.window_origin_cg_x;
+        let logical_y = cg_global.y - self.window_origin_cg_y;
+        PhysicalPoint::new(
+            (logical_x * self.scale_factor) as f32,
+            (logical_y * self.scale_factor) as f32,
+        )
+    }
+
+    /// Populate the snapshot from the main thread where NSWindow APIs are safe.
+    fn capture_from(window: &NSWindow, screen_height: f64) -> Self {
+        let frame = window.frame(); // AppKit global space: origin bottom-left
+        let scale = window.backingScaleFactor();
+        Self {
+            // CG x == AppKit x (both increase leftward).
+            window_origin_cg_x: frame.origin.x,
+            // AppKit y increases upward; CG y increases downward. The window's
+            // top edge in AppKit space is origin.y + size.height. Convert to
+            // CG space: cg_top = screen_height - (origin.y + size.height).
+            window_origin_cg_y: screen_height - (frame.origin.y + frame.size.height),
+            scale_factor: scale,
+        }
     }
 }
 
 struct TapContext {
     launcher_window_number: isize,
-    launcher_window: Retained<NSWindow>,
     publisher: InputRoutingPublisher,
-    scroll_target: RefCell<Option<MacTarget>>,
-    registration: RefCell<Option<EventTapRegistration>>,
-    permission_prompted: Cell<bool>,
+    scroll_target: Mutex<Option<MacTarget>>,
+    registration: Mutex<Option<EventTapRegistration>>,
+    permission_prompted: AtomicBool,
+    geometry: Mutex<GeometrySnapshot>,
 }
 
 impl TapContext {
@@ -133,7 +202,7 @@ impl TapContext {
     }
 
     fn request_permissions(&self) {
-        if self.permission_prompted.replace(true) {
+        if self.permission_prompted.swap(true, Ordering::SeqCst) {
             return;
         }
         let listen = objc2_core_graphics::CGRequestListenEventAccess();
@@ -145,8 +214,13 @@ impl TapContext {
         );
     }
 
+    /// Update the cached geometry. Must be called from the main thread.
+    fn update_geometry(&self, window: &NSWindow, screen_height: f64) {
+        *self.geometry.lock().unwrap() = GeometrySnapshot::capture_from(window, screen_height);
+    }
+
     fn ensure_event_tap(&self) -> bool {
-        if self.registration.borrow().is_some() {
+        if self.registration.lock().unwrap().is_some() {
             return true;
         }
         if !self.permissions_available() {
@@ -173,22 +247,61 @@ impl TapContext {
             eprintln!("input-routing: failed to create macOS event-tap run-loop source");
             return false;
         };
-        let Some(run_loop) = CFRunLoop::main() else {
-            eprintln!("input-routing: macOS main run loop unavailable for event tap");
-            return false;
+
+        // Spawn a dedicated thread with its own CFRunLoop so the tap callback
+        // is never blocked by the main thread's frame rendering. The tap's
+        // callback does not call any AppKit `MainThreadOnly` API; it uses only
+        // CoreGraphics/Quartz (thread-safe) and cached geometry.
+        //
+        // CFRunLoopSource and CFRetained<CFRunLoop> are technically !Send in
+        // objc2's type system, but CoreFoundation guarantees these are
+        // thread-safe once retained. We wrap them in a Send shim and only use
+        // them on the spawned thread.
+        let (run_loop_tx, run_loop_rx) = std::sync::mpsc::channel::<SendPtr>();
+        // Pass the run-loop source as a usize to avoid the `!Send` bound on
+        // CFRetained/NonNull<CFRunLoopSource>. We retain() an extra reference
+        // for the thread and release it there via CFRetained.
+        let source_ptr_addr = CFRetained::as_ptr(&source).as_ptr() as usize;
+        let thread = std::thread::Builder::new()
+            .name("launchpad-event-tap".to_string())
+            .spawn(move || {
+                // Reconstruct the retained source from the raw pointer. The
+                // original `source` in the main thread still holds its own
+                // retain, so this is a +1 for the thread.
+                let source_for_thread = unsafe {
+                    CFRetained::retain(std::ptr::NonNull::new_unchecked(
+                        source_ptr_addr as *mut CFRunLoopSource,
+                    ))
+                };
+                let run_loop = CFRunLoop::current().unwrap();
+                run_loop.add_source(Some(&source_for_thread), unsafe { kCFRunLoopDefaultMode });
+                let ptr = CFRetained::as_ptr(&run_loop).as_ptr().cast::<c_void>();
+                let _ = run_loop_tx.send(SendPtr(ptr));
+                CFRunLoop::run();
+            })
+            .expect("spawn launchpad-event-tap thread");
+        let run_loop_ptr = match run_loop_rx.recv() {
+            Ok(send_ptr) => send_ptr.0,
+            Err(_) => {
+                eprintln!("input-routing: event-tap thread failed to start its CFRunLoop");
+                return false;
+            }
         };
-        run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
-        *self.registration.borrow_mut() = Some(EventTapRegistration {
+        let run_loop = unsafe {
+            CFRetained::retain(std::ptr::NonNull::new_unchecked(run_loop_ptr.cast::<CFRunLoop>()))
+        };
+        *self.registration.lock().unwrap() = Some(EventTapRegistration {
             port,
             source,
             run_loop,
+            _thread: Some(thread),
         });
         crate::debug_log!("input-routing: installed macOS active session scroll event tap");
         true
     }
 
     fn reenable_event_tap(&self) {
-        if let Some(registration) = self.registration.borrow().as_ref() {
+        if let Some(registration) = self.registration.lock().unwrap().as_ref() {
             CGEvent::tap_enable(&registration.port, true);
             eprintln!("input-routing: re-enabled disabled macOS scroll event tap");
         }
@@ -211,14 +324,16 @@ impl MacInputPassthrough {
     ) -> Option<Self> {
         let launcher_window = launcher_ns_window(window)?;
         let launcher_window_number = launcher_window.windowNumber();
+        let screen_height = primary_screen_height().unwrap_or(0.0);
+        let initial_geometry = GeometrySnapshot::capture_from(&launcher_window, screen_height);
         let state = Rc::new(RefCell::new(MonitorState::default()));
         let tap_context = Rc::new(TapContext {
             launcher_window_number,
-            launcher_window,
             publisher: publisher.clone(),
-            scroll_target: RefCell::new(None),
-            registration: RefCell::new(None),
-            permission_prompted: Cell::new(false),
+            scroll_target: Mutex::new(None),
+            registration: Mutex::new(None),
+            permission_prompted: AtomicBool::new(false),
+            geometry: Mutex::new(initial_geometry),
         });
         crate::debug_log!(
             "input-routing: macOS permissions listen={} post={} launcher_window={} pid={}",
@@ -284,7 +399,7 @@ impl MacInputPassthrough {
                         NSEvent::mouseLocation()
                     );
                     if matches!(result, DeliveryResult::Failed { .. }) {
-                        callback_tap_context.scroll_target.borrow_mut().take();
+                        *callback_tap_context.scroll_target.lock().unwrap() = None;
                     }
                     return std::ptr::null_mut();
                 }
@@ -343,12 +458,13 @@ impl MacInputPassthrough {
                     } else {
                         PointerButton::Right
                     };
-                    let target = target_below(launcher_window_number, NSEvent::mouseLocation());
+                    let appkit_point = NSEvent::mouseLocation();
+                    let target = target_below(launcher_window_number, appkit_to_cg_point(appkit_point));
                     crate::debug_log!(
                         "input-routing: macOS captured {button:?} down target={target:?} \
                          launcher_window={launcher_window_number} event_window={} point={:?}",
                         event.windowNumber(),
-                        NSEvent::mouseLocation()
+                        appkit_point
                     );
                     callback_state.borrow_mut().click = target.map(|target| ClickCapture {
                         button,
@@ -430,6 +546,16 @@ impl MacInputPassthrough {
             return down_result;
         }
         post_hidden_click(&up)
+    }
+
+    /// Refresh the cached window geometry used by the background tap thread.
+    /// Must be called from the main thread (e.g. on `WindowEvent::Moved`).
+    pub fn refresh_geometry(&self, window: &winit::window::Window) {
+        let Some(ns_window) = launcher_ns_window(window) else {
+            return;
+        };
+        let screen_height = primary_screen_height().unwrap_or(0.0);
+        self._tap_context.update_geometry(&ns_window, screen_height);
     }
 }
 
@@ -526,19 +652,19 @@ unsafe extern "C-unwind" fn scroll_event_tap_callback(
     if event_type != CGEventType::ScrollWheel {
         return event_ptr.as_ptr();
     }
-    let pointer = NSEvent::mouseLocation();
-    let window_point = context.launcher_window.convertPointFromScreen(pointer);
-    let Some(physical_point) = physical_point_in_window(&context.launcher_window, window_point)
-    else {
-        context.scroll_target.borrow_mut().take();
-        return event_ptr.as_ptr();
-    };
+    // CGEvent::location returns the global CoreGraphics point (origin at the
+    // top-left of the primary display). This is thread-safe and does not touch
+    // any AppKit MainThreadOnly object, so the callback can run on the
+    // dedicated tap thread without blocking on the main thread.
+    let pointer = CGEvent::location(Some(event));
+    let geom = *context.geometry.lock().unwrap();
+    let physical_point = geom.to_physical_point(pointer);
     if !context
         .publisher
         .snapshot()
         .forwards_vertical_scroll_at(physical_point)
     {
-        context.scroll_target.borrow_mut().take();
+        *context.scroll_target.lock().unwrap() = None;
         return event_ptr.as_ptr();
     }
     let point_delta =
@@ -555,24 +681,7 @@ unsafe extern "C-unwind" fn scroll_event_tap_callback(
         crate::debug_log!("input-routing: macOS outside horizontal scroll suppressed");
         return std::ptr::null_mut();
     }
-    let Some(main_thread) = MainThreadMarker::new() else {
-        return std::ptr::null_mut();
-    };
-    let front_window =
-        NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(pointer, 0, main_thread);
-    if front_window != context.launcher_window_number {
-        context.scroll_target.borrow_mut().take();
-        return event_ptr.as_ptr();
-    }
-
-    let phase_began =
-        phase & (NSEventPhase::Began.bits() | NSEventPhase::MayBegin.bits()) as i64 != 0;
-    let unphased = phase == 0 && momentum == 0;
-    let mut scroll_target = context.scroll_target.borrow_mut();
-    if phase_began || unphased || scroll_target.is_none() {
-        *scroll_target = target_below(context.launcher_window_number, pointer);
-    }
-    let Some(target) = *scroll_target else {
+    let Some(target) = resolve_scroll_target(context, pointer, phase, momentum) else {
         crate::debug_log!(
             "input-routing: macOS scroll suppressed: no target below launcher window={} point={pointer:?}",
             context.launcher_window_number
@@ -599,48 +708,145 @@ unsafe extern "C-unwind" fn scroll_event_tap_callback(
          momentum={momentum:#x} point_delta={point_delta} raw_delta={raw_delta} \
          fixed_delta={fixed_delta}"
     );
-    if phase & NSEventPhase::Cancelled.bits() as i64 != 0
-        || momentum & NSEventPhase::Ended.bits() as i64 != 0
-    {
-        scroll_target.take();
-    }
     event_ptr.as_ptr()
 }
 
-fn current_target() -> Option<MacTarget> {
-    let main_thread = MainThreadMarker::new()?;
-    let target_window = NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(
-        NSEvent::mouseLocation(),
-        0,
-        main_thread,
-    );
-    if target_window <= 0 {
-        return None;
+/// Resolve and cache the scroll target window below the launcher. This runs on
+/// the dedicated tap thread and uses only CoreGraphics/Quartz APIs (thread-safe).
+fn resolve_scroll_target(
+    context: &TapContext,
+    pointer: CGPoint,
+    phase: i64,
+    momentum: i64,
+) -> Option<MacTarget> {
+    let phase_began = phase & (NSEventPhase::Began.bits() | NSEventPhase::MayBegin.bits()) as i64 != 0;
+    let unphased = phase == 0 && momentum == 0;
+    let mut scroll_target = context.scroll_target.lock().unwrap();
+    if phase_began || unphased || scroll_target.is_none() {
+        *scroll_target = target_below(context.launcher_window_number, pointer);
     }
-    owner_pid_for_window(target_window as u32).map(|pid| MacTarget {
-        window_number: target_window,
-        pid,
+    let target = (*scroll_target)?;
+    if phase & NSEventPhase::Cancelled.bits() as i64 != 0
+        || momentum & NSEventPhase::Ended.bits() as i64 != 0
+    {
+        *scroll_target = None;
+    }
+    Some(target)
+}
+
+/// Re-validate the current target at the cursor position. Called from the
+/// main thread (in `deliver_click`) after a confirmed click. We use
+/// `NSEvent::mouseLocation()` (AppKit coordinates, origin bottom-left) and
+/// flip Y to CoreGraphics coordinates before delegating to the shared
+/// `target_below` resolver.
+fn current_target() -> Option<MacTarget> {
+    let appkit_point = NSEvent::mouseLocation();
+    let cg_point = appkit_to_cg_point(appkit_point);
+    target_below(0, cg_point)
+}
+
+/// Convert an AppKit global point (origin bottom-left) to a CoreGraphics
+/// global point (origin top-left). We need the primary screen height.
+fn appkit_to_cg_point(point: objc2_foundation::NSPoint) -> CGPoint {
+    let screen_height = primary_screen_height().unwrap_or(0.0);
+    CGPoint {
+        x: point.x,
+        y: screen_height - point.y,
+    }
+}
+
+/// Primary screen height in points (AppKit coordinate space). Cached after the
+/// first lookup since it does not change during a session in practice.
+fn primary_screen_height() -> Option<f64> {
+    static HEIGHT: OnceLock<Option<f64>> = OnceLock::new();
+    *HEIGHT.get_or_init(|| {
+        let main_thread = MainThreadMarker::new()?;
+        let screen = NSScreen::mainScreen(main_thread)?;
+        Some(screen.frame().size.height)
     })
 }
 
-fn target_below(
-    launcher_window_number: isize,
-    point: objc2_foundation::NSPoint,
-) -> Option<MacTarget> {
-    let main_thread = MainThreadMarker::new()?;
-    let target_window = NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(
-        point,
-        launcher_window_number,
-        main_thread,
-    );
-    if target_window <= 0 {
+/// Find the topmost on-screen window at `point` that is not owned by this
+/// process. Uses only CoreGraphics/Quartz (thread-safe), so it can run on the
+/// dedicated tap thread. `point` is in global CoreGraphics coordinates.
+fn target_below(launcher_window_number: isize, point: CGPoint) -> Option<MacTarget> {
+    // kCGWindowListOptionOnScreenOnly (1<<0) | kCGWindowListExcludeDesktopElements (1<<4)
+    let descriptions = unsafe { CGWindowListCopyWindowInfo((1 << 0) | (1 << 4), 0) };
+    if descriptions.is_null() {
         return None;
     }
-    let pid = owner_pid_for_window(target_window as u32)?;
-    (pid != std::process::id() as i32).then_some(MacTarget {
-        window_number: target_window,
-        pid,
-    })
+    let result = unsafe {
+        let count = CFArrayGetCount(descriptions);
+        let mut found = None;
+        for index in 0..count {
+            let dict = CFArrayGetValueAtIndex(descriptions, index);
+            if dict.is_null() {
+                continue;
+            }
+            // Skip the launcher window itself.
+            let window_number = read_cf_number_i64(dict, kCGWindowNumber);
+            if window_number == Some(launcher_window_number as i64) {
+                continue;
+            }
+            // Skip windows on non-zero layers (menu bar, dock, etc.).
+            let layer = read_cf_number_i64(dict, kCGWindowLayer).unwrap_or(0);
+            if layer != 0 {
+                continue;
+            }
+            // Check if the point is inside this window's bounds.
+            let bounds_ptr = CFDictionaryGetValue(dict, kCGWindowBounds);
+            if bounds_ptr.is_null() {
+                continue;
+            }
+            let mut rect = CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize { width: 0.0, height: 0.0 },
+            };
+            if !CGRectMakeWithDictionaryRepresentation(bounds_ptr, &mut rect) {
+                continue;
+            }
+            if point.x < rect.origin.x
+                || point.x >= rect.origin.x + rect.size.width
+                || point.y < rect.origin.y
+                || point.y >= rect.origin.y + rect.size.height
+            {
+                continue;
+            }
+            // Found the topmost window at this point that is not the launcher.
+            // CGWindowListCopyWindowInfo returns windows front-to-back, so the
+            // first match is the topmost.
+            let pid = read_cf_number_i64(dict, kCGWindowOwnerPID).map(|p| p as i32);
+            if let Some(pid) = pid {
+                if pid != std::process::id() as i32 {
+                    found = Some(MacTarget {
+                        window_number: window_number.unwrap_or(0) as isize,
+                        pid,
+                    });
+                    break;
+                }
+            }
+        }
+        found
+    };
+    unsafe { CFRelease(descriptions) };
+    result
+}
+
+/// Read a CFNumber value from a CGWindow dictionary as i64.
+unsafe fn read_cf_number_i64(dict: *const c_void, key: *const c_void) -> Option<i64> {
+    unsafe {
+        let number = CFDictionaryGetValue(dict, key);
+        if number.is_null() {
+            return None;
+        }
+        let mut value: i64 = 0;
+        // kCFNumberSInt64Type = 4
+        if CFNumberGetValue(number, 4, (&mut value as *mut i64).cast()) {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 fn owner_pid_for_window(window_number: u32) -> Option<i32> {
@@ -664,7 +870,14 @@ fn owner_pid_for_window(window_number: u32) -> Option<i32> {
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     static kCGWindowOwnerPID: *const c_void;
+    static kCGWindowNumber: *const c_void;
+    static kCGWindowLayer: *const c_void;
+    static kCGWindowBounds: *const c_void;
     fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const c_void;
+    fn CGRectMakeWithDictionaryRepresentation(
+        dict: *const c_void,
+        rect: *mut CGRect,
+    ) -> bool;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
