@@ -193,13 +193,30 @@ impl App {
         // The menu owns the Modal lane exclusively (the folder/settings panels
         // are dismissed on open), so a plain replace is correct and keeps the
         // Liquid Glass modal pass on a single surface.
-        self.render_model
-            .set_glass_batch(GlassLayer::ContextMenu, modal);
-        self.render_model.set_ink_batch(InkLane::ContextMenu, ink);
-        self.render_model
-            .set_glyph_batch(GlyphLane::ContextMenu, glyph_views(&glyphs));
-        self.render_model.context_menu_tiles = model.result.render.context_menu_tiles.clone();
-        self.render_model.context_menu_icons = model.result.render.context_menu_icons.clone();
+        //
+        // Glass has no opacity field, so once the content has faded below the
+        // reveal threshold we drop the glass disc entirely — otherwise the
+        // collapsed seed (40×40, radius 130 = full disc) lingers until the slow
+        // close position spring settles. We still keep the layout so hit/dismiss
+        // logic stays valid during the close tail.
+        if opacity > 0.02 {
+            self.render_model
+                .set_glass_batch(GlassLayer::ContextMenu, modal);
+            self.render_model.set_ink_batch(InkLane::ContextMenu, ink);
+            self.render_model
+                .set_glyph_batch(GlyphLane::ContextMenu, glyph_views(&glyphs));
+            self.render_model.context_menu_tiles = model.result.render.context_menu_tiles.clone();
+            self.render_model.context_menu_icons = model.result.render.context_menu_icons.clone();
+        } else {
+            self.render_model
+                .set_glass_batch(GlassLayer::ContextMenu, Vec::new());
+            self.render_model
+                .set_ink_batch(InkLane::ContextMenu, Vec::new());
+            self.render_model
+                .set_glyph_batch(GlyphLane::ContextMenu, Vec::new());
+            self.render_model.context_menu_tiles = Some(Vec::new());
+            self.render_model.context_menu_icons = Some(Vec::new());
+        }
 
         // Keep the text atlas current so the renderer uploads any newly
         // rasterized menu glyphs. Every other text adapter does this;

@@ -109,6 +109,14 @@ const T_CONTENT_OPACITY: Transition = Transition::Spring {
     mass: 1.0,
     velocity: 0.0,
 };
+/// Close-only content opacity decay, matched to `T_CLOSE_SIZE` (0.25 s) so the
+/// body fades out exactly as the panel collapses to the seed disc. Without this
+/// the opacity spring takes ~0.4 s, leaving the collapsed glass disc visible
+/// well after the size has shrunk. Open keeps the spring (above).
+const T_CLOSE_CONTENT_OPACITY: Transition = Transition::Easing {
+    duration: 0.25,
+    ease: Ease::EaseOut,
+};
 /// `CONTENT_OPTICS_TRANSITION`: the easeIn decay applied to the activation bump.
 const T_OPTICS: Transition = Transition::Easing {
     duration: 0.3,
@@ -216,7 +224,7 @@ impl ContextMenuState {
             T_CLOSE_SIZE,
             T_RADIUS,
             T_CONTENT_SHAPE,
-            T_CONTENT_OPACITY,
+            T_CLOSE_CONTENT_OPACITY,
             T_CONTENT_SHAPE,
             Transition::Easing {
                 duration: 0.15,
