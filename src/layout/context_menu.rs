@@ -96,7 +96,9 @@ impl ContextMenuItem {
 pub struct ContextMenuInput<'a> {
     pub viewport: (u32, u32),
     pub scale_factor: f32,
-    pub app_id: &'a str,
+    /// Stable key of the right-clicked launcher item (e.g. `app:{id}` /
+    /// `folder:{id}`). Used only as the opaque UiId key for the rendered rows.
+    pub target: &'a str,
     /// Current animated panel top-left (physical px).
     pub pos: (f32, f32),
     /// Current animated panel size (physical px).
@@ -316,7 +318,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         );
 
         ink.push(InkView {
-            id: UiId::context_menu_item(input.app_id, index),
+            id: UiId::context_menu_item(input.target, index),
             center: Point::new(icon_cx, icon_cy),
             extent: icon_size * 0.5 * content_scale,
             opacity: reveal,
@@ -331,7 +333,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
 
         let label_width = (open_w - open_label_x - pad_x).max(1.0);
         text_views.push(TextView {
-            id: UiId::context_menu_item(input.app_id, index),
+            id: UiId::context_menu_item(input.target, index),
             text: (*label).to_string(),
             rect: Rect::new(
                 label_cx,
@@ -382,9 +384,9 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     if content_opacity > 0.5 {
         for (index, row) in rows.iter().enumerate() {
             hits.push(HitRegion::new(
-                UiId::context_menu_item(input.app_id, index),
+                UiId::context_menu_item(input.target, index),
                 row.rect,
-                HitTarget::context_menu_item(input.app_id, index),
+                HitTarget::context_menu_item(input.target, index),
                 140,
             ));
         }

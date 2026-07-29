@@ -5,7 +5,7 @@
 //! above an open folder without their Liquid Glass smooth-unioning together.
 
 use crate::app::state::App;
-use crate::domain::app_id::AppId;
+use crate::domain::launcher_item::LauncherItem;
 use crate::features::context_menu::MenuTarget;
 use crate::layout::context_menu::{
     self, open_panel_origin, open_panel_size_logical, ContextMenuInput,
@@ -21,12 +21,13 @@ const MENU_FONT_SIZE: f32 = 14.0;
 const MENU_LINE_HEIGHT: f32 = 18.0;
 
 impl App {
-    /// Open the context menu for `app_id`, attached to the right-clicked icon's
-    /// `icon_rect` (physical on-screen px). The menu attaches to the icon edge,
-    /// flipping sides when there is no room (iOS-style), and the open seed
-    /// blooms from the icon center. The menu uses its own `ContextMenu` glass
-    /// lane, isolated from the folder/settings `Modal` lane.
-    pub(crate) fn open_context_menu(&mut self, app_id: AppId, icon_rect: Rect) {
+    /// Open the context menu for `target` (an app or folder), attached to the
+    /// right-clicked icon's `icon_rect` (physical on-screen px). The menu
+    /// attaches to the icon edge, flipping sides when there is no room
+    /// (iOS-style), and the open seed blooms from the icon center. The menu
+    /// uses its own `ContextMenu` glass lane, isolated from the folder/settings
+    /// `Modal` lane.
+    pub(crate) fn open_context_menu(&mut self, target: LauncherItem, icon_rect: Rect) {
         if self.control.wants_keyboard() {
             self.control.press_close();
         }
@@ -42,13 +43,13 @@ impl App {
         let size_phys = (lw * scale, lh * scale);
         let ((origin_x, origin_y), seed) =
             open_panel_origin(icon_rect, size_phys, self.viewport_phys());
-        let target = MenuTarget {
+        let menu_target = MenuTarget {
             x: origin_x,
             y: origin_y,
             width: size_phys.0,
             height: size_phys.1,
         };
-        self.context_menu.open(app_id, seed.0, seed.1, target);
+        self.context_menu.open(target, seed.0, seed.1, menu_target);
         self.request_redraw();
     }
 
@@ -110,7 +111,7 @@ impl App {
     /// submit it to the Modal lanes. Called from the frame loop while the menu
     /// is active.
     pub(crate) fn render_context_menu(&mut self) {
-        let app_id = match self.context_menu.active_app.clone() {
+        let target = match self.context_menu.active_target.clone() {
             Some(id) => id,
             None => {
                 self.clear_context_menu_presentation();
@@ -130,10 +131,11 @@ impl App {
             open_panel_size_logical(items.len(), self.context_menu_open_width_logical);
         let open_size = (open_lw * scale, open_lh * scale);
 
+        let target_key = target.stable_key();
         let input = ContextMenuInput {
             viewport: self.viewport_phys(),
             scale_factor: scale,
-            app_id: app_id.as_str(),
+            target: target_key.as_str(),
             pos: (self.context_menu.pos_x(), self.context_menu.pos_y()),
             size: (self.context_menu.width(), self.context_menu.height()),
             open_size,

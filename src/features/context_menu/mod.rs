@@ -12,7 +12,7 @@
 //! independent channel with its own [`crate::spring_anim::Transition`], so
 //! position can spring fast while corner radius eases slowly.
 
-use crate::domain::app_id::AppId;
+use crate::domain::launcher_item::LauncherItem;
 use crate::spring_anim::{self, Channel, Ease, Transition};
 
 // Re-export the item enum from the pure layout layer so feature/app/render
@@ -125,10 +125,13 @@ const T_OPTICS: Transition = Transition::Easing {
 
 #[derive(Debug, Clone)]
 pub struct ContextMenuState {
-    pub active_app: Option<AppId>,
+    /// The launcher item the menu is open for (an app or a folder). Drives the
+    /// open/close lifecycle via `Some`/`None` and serves as the opaque UiId key
+    /// for the rendered rows; it never participates in launching.
+    pub active_target: Option<LauncherItem>,
     pub phase: ContextMenuPhase,
     /// Anchor point (physical px) the seed springs from — typically the center
-    /// of the right-clicked app icon.
+    /// of the right-clicked icon.
     pub anchor: (f32, f32),
     channels: [Channel; PROP_COUNT],
     /// Per-channel elapsed time (seconds). Parallel array to `channels` so the
@@ -141,7 +144,7 @@ pub struct ContextMenuState {
 impl Default for ContextMenuState {
     fn default() -> Self {
         Self {
-            active_app: None,
+            active_target: None,
             phase: ContextMenuPhase::Closed,
             anchor: (0.0, 0.0),
             channels: [Channel::rest(0.0); PROP_COUNT],
@@ -152,11 +155,11 @@ impl Default for ContextMenuState {
 }
 
 impl ContextMenuState {
-    /// Begin opening the menu for `app_id`, anchored at `(x, y)` (physical px).
-    /// `target_rect` is the fully-open panel rectangle in physical px; the seed
-    /// springs from the anchor toward it.
-    pub fn open(&mut self, app_id: AppId, x: f32, y: f32, target_rect: MenuTarget) {
-        self.active_app = Some(app_id);
+    /// Begin opening the menu for `target` (an app or folder), anchored at
+    /// `(x, y)` (physical px). `target_rect` is the fully-open panel rectangle
+    /// in physical px; the seed springs from the anchor toward it.
+    pub fn open(&mut self, target: LauncherItem, x: f32, y: f32, target_rect: MenuTarget) {
+        self.active_target = Some(target);
         self.anchor = (x, y);
         self.phase = ContextMenuPhase::Opening;
 
@@ -210,7 +213,7 @@ impl ContextMenuState {
     /// Begin closing the menu. The channels retarget back toward the seed state
     /// at the anchor.
     pub fn close(&mut self) {
-        if self.active_app.is_none() {
+        if self.active_target.is_none() {
             return;
         }
         self.phase = ContextMenuPhase::Closing;
@@ -250,7 +253,7 @@ impl ContextMenuState {
     /// Advance all channels by `dt` seconds. Returns `true` while any channel
     /// is still animating, mirroring [`FolderFeatureState::tick`].
     pub fn tick(&mut self, dt: f32) -> bool {
-        if self.active_app.is_none() {
+        if self.active_target.is_none() {
             return false;
         }
         let dt = dt.max(0.0);
@@ -288,7 +291,7 @@ impl ContextMenuState {
                 ContextMenuPhase::Opening => self.phase = ContextMenuPhase::Open,
                 ContextMenuPhase::Closing => {
                     self.phase = ContextMenuPhase::Closed;
-                    self.active_app = None;
+                    self.active_target = None;
                 }
                 _ => {}
             }
@@ -297,7 +300,7 @@ impl ContextMenuState {
     }
 
     pub fn is_active(&self) -> bool {
-        self.active_app.is_some()
+        self.active_target.is_some()
     }
 
     pub fn is_open(&self) -> bool {
@@ -349,6 +352,7 @@ pub struct MenuTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::app_id::AppId;
 
     fn target_at(x: f32, y: f32) -> MenuTarget {
         MenuTarget {
@@ -363,7 +367,7 @@ mod tests {
     fn open_then_close_returns_to_closed() {
         let mut state = ContextMenuState::default();
         state.open(
-            AppId::from_normalized("calc"),
+            LauncherItem::app(AppId::from_normalized("calc")),
             100.0,
             100.0,
             target_at(100.0, 100.0),
@@ -394,14 +398,14 @@ mod tests {
         assert!(!animating);
         assert_eq!(state.phase, ContextMenuPhase::Closed);
         assert!(!state.is_active());
-        assert!(state.active_app.is_none());
+        assert!(state.active_target.is_none());
     }
 
     #[test]
     fn radius_transitions_from_seed_to_open_value() {
         let mut state = ContextMenuState::default();
         state.open(
-            AppId::from_normalized("calc"),
+            LauncherItem::app(AppId::from_normalized("calc")),
             0.0,
             0.0,
             target_at(0.0, 0.0),
