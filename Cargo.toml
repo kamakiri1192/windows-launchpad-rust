@@ -9,6 +9,10 @@ default-run = "launchpad-windows"
 [features]
 default = []
 gpu-profile = ["dep:wgpu-profiler"]
+# Emit the raw and inverted horizontal deltas of each trackpad wheel event to
+# stderr, so the macOS "natural scrolling" sign convention can be verified on
+# real hardware. Enable with: cargo run --release --features wheel-debug
+wheel-debug = []
 
 [dependencies]
 wgpu = "29"

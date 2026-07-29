@@ -110,6 +110,7 @@ impl App {
             return;
         }
         debug_log!("hide: hiding window");
+        self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::HideWindow);
         if let Some(r) = self.renderer.as_mut() {
             r.set_backdrop_capture_active(false);
             r.window.set_visible(false);
@@ -124,6 +125,7 @@ impl App {
         self.settings_panel_progress = 0.0;
         self.folders = crate::features::folders::FolderFeatureState::default();
         self.folder_layout = None;
+        self.folder_scroll_pending_commit = false;
         self.pending_press = None;
         self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon

@@ -52,6 +52,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `fps`: 連番の取得頻度。1〜120に制限されます。
 - `duration_ms`: シナリオ終了時刻。
 - `fixture`: OS の Start Menu に依存しないアプリ、フォルダ、トップレベル順。
+- `scroll_expectations`: `scroll_sample`を使うscenarioに必須の受け入れ契約。
 - `actions`: `at_ms` で指定する時刻付き操作。
 
 主な操作:
@@ -61,8 +62,49 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `pointer_down` / `pointer_up`: production と同じ press/release classifier を通す。
 - `type_text` / `commit_rename`: フォルダ名入力を検証する。
 - `escape` / `exit_edit_mode`: 状態の優先順位を検証する。
+- `scroll_sample`: platform adapterで正規化済みのscroll sampleをproduction
+  `AppAction::ScrollSample`へ渡す。`gesture_id`、`timestamp_us`、
+  `canonical_dx/dy`、contact/momentum phase、`sequence_complete`を指定できる。
+- `native_scroll_sample`: AppKit/winitが供給するraw delta、phase、
+  `direction_inverted_from_device`をproduction `ScrollSampleAdapter`へ渡す。
+  `expected_canonical_dx/dy`によりOSが設定反映済みの符号を二重反転していないことを検証する。
 
 `move.target` は絶対座標のほか、`grid_item`、`folder_child`、`folder_title`、フォルダパネル内の相対位置を指定できます。レイアウト変更後も固定座標を書き直さずに同じ意図を再生できます。
+
+`scroll_sample`の`canonical_dx > 0`はvisible gridが右へ動くproduction内部座標です。
+`scroll_sample`単独ではnative deltaやnatural scrolling設定を検証せず、platform
+adapter通過後のroutingとphysicsを再生します。native符号まで対象にする場合は
+`native_scroll_sample`を使います。AppKitのscrolling deltaはNatural scrolling設定を
+すでに反映しているため、`direction_inverted_from_device`は診断metadataであり、
+canonical deltaはraw deltaの符号を保持します。contact phaseとmomentum phaseは同じ
+sampleへ同時指定できません。
+`sequence_complete=true`はphaseなし・delta 0のterminal signalだけに使用します。
+
+scenarioの`timestamp_us`はscenario開始相対です。dispatch時にrunner開始時刻と
+`App::scroll_clock_origin`の差を加え、production sampleと同じmonotonic epochへ変換します。
+manifestは読みやすい`timestamp_us`と実際にdispatchした`dispatch_timestamp_us`を併記します。
+
+`gesture_id`を省略した場合、runnerはcontact `began`ごとに1から単調採番し、同じ
+contactの`changed/ended`へ補完します。旧momentumと新contactが重なるscenarioでは
+曖昧さを避けるため、必ず両方のIDを明記します。active contact中の別`began`、
+active IDなしの`changed/ended`、terminal IDの再利用、timestamp逆行はscenario
+load errorです。contact `ended`だけが同じIDのnative momentumをquarantineへ移し、
+`cancelled`はactive contactを即終了して同じIDをcompleted扱いにするため、後続momentumは
+受理しません。
+
+`scroll_expectations`では`min_samples`、contact terminal総数、
+受理されるhorizontal release数、target decision数、spring generation数、
+最低zero crossing数、`required_surfaces`（`main` / `folder`）を宣言します。
+`expected_releases`はgestureごとにsurface、filtered velocity範囲、settle targetを固定し、
+必要なケースではrelease位置範囲、settle完了位置、完了期限も宣言します。
+target decisionとspring generationはhorizontal releaseごとにちょうど1回でなければ
+scenario load errorです。`scroll_sample`があるのに契約がないscenarioもload errorです。
+
+`qa/trackpad_native_sign_and_stay.json`はNatural ON相当の
+`raw_dx > 0 / direction_inverted_from_device=true`とNatural OFF相当の
+`raw_dx < 0 / false`をproduction adapterへ通します。両方でraw符号が保持され、軽い払いが
+target page 0を一度だけ選び、release位置から700 ms以内にposition 0 / Idleへ戻ることを
+GPU frameとmanifestで検証します。
 
 ## 長押しとスクロールの検証
 
@@ -88,6 +130,35 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして通常アプリと別フォルダの上へ順に移動します。Liquid Glass面と小アイコンが共通中心を保つ一体のプレビューとして最前面で拡大・wiggle・追従し、下のアプリアイコンへ潜らず、別フォルダのLiquid Glassとは融合しないことを確認します。
 - `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず対象行へ縦方向に25%入った時点でライブ並べ替えが成立することを確認します。
 - `qa/edit_drag_wiggle_continuity.json`: 先に編集モードへ入り、wiggleが進んだ状態でフォルダと通常アプリを順に持ち上げます。pointer downの前後で回転・上下動の位相が0へ戻らず、ドラッグ中も同じ波形を継続することを60fps連番で確認します。
+- `qa/trackpad_reversal_main.json`: 3ページmain gridで、2ページ目から
+  `+0.020P → -0.015P → +0.010P → -0.450P`をreleaseせず入力し、その後
+  `+0.700P → -0.850P → -0.300P`のdeep reverseを再生します。
+- `qa/trackpad_edge_and_folders.json`: mainの先頭・最終端を
+  `0.02P / 0.10P / 0.50P`相当まで引き、同じsigned reversalを複数ページfolderと
+  1ページfolderで再生します。
+- `qa/trackpad_old_momentum_new_contact.json`: gesture Aのrelease後にgesture Bを
+  開始し、Bのcontact中へAの旧momentum `changed/ended`を挿入します。Aのeventが
+  Bのposition、velocity、phase、springを変えないことを確認します。
+
+scroll scenarioの`manifest.json`には固定fpsの`frames`に加えて、各sample適用直前・
+直後の`scroll_trace`を記録します。snapshotはsurface、physics state、axis、
+signed displacement、position、velocity、filtered velocity、settle target、
+target decision / spring generation / re-anchor count、spring IDを含みます。
+`scroll_assertions`は次の不変条件を自動集計します。
+
+- release前のtarget decision、spring generation、re-anchorが0回。
+- signed displacementの0 crossingでphase変更、spring生成、re-anchor、説明不能な
+  position jumpが0回。
+- horizontalの非ゼロcontact inputに対する不当な静止が0回。
+- quarantined momentum sample適用前後でpager snapshotがbitwise同一。
+- 全sampleのbefore/after snapshotが存在し、同じsurfaceを指す。
+- 契約で要求したsurfaceがtraceへ現れる。
+- 受理されたhorizontal releaseごとにtarget decision / spring generationが各1回。
+- sample数、terminal contact数、horizontal release数、zero crossing数が
+  `scroll_expectations`を満たす。
+
+空trace、snapshot欠落、release count不足、target/springの0回または複数回は
+`scroll_assertions.passed=false`になります。
 
 ## 安全性
 

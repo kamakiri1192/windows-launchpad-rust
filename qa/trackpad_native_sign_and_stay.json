@@ -1,0 +1,161 @@
+{
+  "name": "trackpad-native-sign-and-stay",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 3500,
+  "output_dir": "target/qa-sequences",
+  "scroll_expectations": {
+    "min_samples": 10,
+    "expected_terminal_contacts": 2,
+    "expected_horizontal_releases": 2,
+    "expected_target_decisions": 2,
+    "expected_spring_generations": 2,
+    "expected_releases": [
+      {
+        "gesture_id": 1,
+        "surface": "main",
+        "min_filtered_velocity": 100.0,
+        "max_filtered_velocity": 150.0,
+        "target_x": 0.0,
+        "min_release_position_x": 34.0,
+        "max_release_position_x": 37.0,
+        "settled_position_x": 0.0,
+        "max_settle_duration_ms": 700
+      },
+      {
+        "gesture_id": 2,
+        "surface": "main",
+        "min_filtered_velocity": -250.0,
+        "max_filtered_velocity": -200.0,
+        "target_x": 0.0,
+        "min_release_position_x": -61.0,
+        "max_release_position_x": -59.0,
+        "settled_position_x": 0.0,
+        "max_settle_duration_ms": 700
+      }
+    ],
+    "min_zero_crossings": 0,
+    "required_surfaces": ["main"]
+  },
+  "fixture": {
+    "generated_apps": [
+      {
+        "prefix": "qa-native-sign",
+        "name_prefix": "Native Sign App",
+        "count": 36
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 100,
+      "type": "native_scroll_sample",
+      "timestamp_us": 100000,
+      "raw_dx": 0.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 0.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "began",
+      "direction_inverted_from_device": true
+    },
+    {
+      "at_ms": 150,
+      "type": "native_scroll_sample",
+      "timestamp_us": 150000,
+      "raw_dx": 12.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 12.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "changed",
+      "direction_inverted_from_device": true
+    },
+    {
+      "at_ms": 200,
+      "type": "native_scroll_sample",
+      "timestamp_us": 200000,
+      "raw_dx": 18.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 18.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "changed",
+      "direction_inverted_from_device": true
+    },
+    {
+      "at_ms": 250,
+      "type": "native_scroll_sample",
+      "timestamp_us": 250000,
+      "raw_dx": 30.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 30.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "changed",
+      "direction_inverted_from_device": true
+    },
+    {
+      "at_ms": 300,
+      "type": "native_scroll_sample",
+      "timestamp_us": 300000,
+      "raw_dx": 0.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 0.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "ended",
+      "direction_inverted_from_device": true
+    },
+    {
+      "at_ms": 1600,
+      "type": "native_scroll_sample",
+      "timestamp_us": 1600000,
+      "raw_dx": 0.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 0.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "began",
+      "direction_inverted_from_device": false
+    },
+    {
+      "at_ms": 1650,
+      "type": "native_scroll_sample",
+      "timestamp_us": 1650000,
+      "raw_dx": -12.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": -12.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "changed",
+      "direction_inverted_from_device": false
+    },
+    {
+      "at_ms": 1700,
+      "type": "native_scroll_sample",
+      "timestamp_us": 1700000,
+      "raw_dx": -18.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": -18.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "changed",
+      "direction_inverted_from_device": false
+    },
+    {
+      "at_ms": 1750,
+      "type": "native_scroll_sample",
+      "timestamp_us": 1750000,
+      "raw_dx": -30.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": -30.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "changed",
+      "direction_inverted_from_device": false
+    },
+    {
+      "at_ms": 1800,
+      "type": "native_scroll_sample",
+      "timestamp_us": 1800000,
+      "raw_dx": 0.0,
+      "raw_dy": 0.0,
+      "expected_canonical_dx": 0.0,
+      "expected_canonical_dy": 0.0,
+      "contact_phase": "ended",
+      "direction_inverted_from_device": false
+    }
+  ]
+}

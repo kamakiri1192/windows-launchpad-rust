@@ -63,6 +63,12 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::QuitRequested => AppAction::QuitRequested,
             UserEvent::ToggleSettings => AppAction::ToggleSettings,
+            UserEvent::NativeScroll(raw) => {
+                let Some(sample) = self.scroll_sample_adapter.adapt_native(raw) else {
+                    return;
+                };
+                AppAction::ScrollSample(sample)
+            }
         };
         self.handle_action(action);
         self.publish_input_routing_snapshot();
@@ -150,6 +156,8 @@ impl ApplicationHandler<UserEvent> for App {
                 crate::platform::macos::input_passthrough::MacInputPassthrough::install(
                     &window,
                     self.input_routing_publisher.clone(),
+                    self.event_proxy.clone(),
+                    self.scroll_clock_origin,
                 );
             if self._macos_input.is_none() {
                 eprintln!("input-routing: failed to install macOS local event monitor");
@@ -290,31 +298,61 @@ impl ApplicationHandler<UserEvent> for App {
                 phase: touch_phase,
                 ..
             } => {
-                let (mut px, is_precise) = Self::wheel_delta_to_px(delta, self.scale_factor);
-                if px.0 == 0.0 && px.1 == 0.0 {
+                #[cfg(target_os = "macos")]
+                if self._macos_input.is_some() {
+                    // The AppKit monitor already queued this exact native
+                    // packet with separate contact/momentum phases.
                     return;
                 }
-                // macOS "natural scrolling" (the default) inverts the trackpad
-                // delta sign, but winit 0.30 hands us the raw value without
-                // applying the preference. homepad compensates via
-                // `isDirectionInvertedFromDevice`; we read the same preference
-                // ourselves so the grid pages in the direction the user
-                // expects. Only the horizontal (grid-paging) axis needs this —
-                // the settings panel uses the vertical axis with its own
-                // continuous scroller whose sign convention already expects the
-                // raw winit delta.
+                let (px, source) = Self::wheel_delta_to_physical_px(delta, self.scale_factor);
+                let collapsed_phase = match touch_phase {
+                    winit::event::TouchPhase::Started => {
+                        crate::input_routing::CollapsedScrollPhase::Started
+                    }
+                    winit::event::TouchPhase::Moved => {
+                        crate::input_routing::CollapsedScrollPhase::Moved
+                    }
+                    winit::event::TouchPhase::Ended => {
+                        crate::input_routing::CollapsedScrollPhase::Ended
+                    }
+                    winit::event::TouchPhase::Cancelled => {
+                        crate::input_routing::CollapsedScrollPhase::Cancelled
+                    }
+                };
                 #[cfg(target_os = "macos")]
-                if is_precise
-                    && px.0 != 0.0
-                    && crate::platform::macos::scroll::natural_scroll_enabled()
-                {
-                    px.0 = -px.0;
-                }
-                AppAction::MouseWheel {
-                    delta_px: px,
-                    is_precise,
+                let direction_inverted_from_device = source
+                    == crate::input_routing::ScrollSource::Precise
+                    && crate::platform::macos::scroll::natural_scroll_enabled();
+                #[cfg(not(target_os = "macos"))]
+                let direction_inverted_from_device = false;
+                let timestamp_us = Instant::now()
+                    .saturating_duration_since(self.scroll_clock_origin)
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64;
+                let Some(sample) = self.scroll_sample_adapter.adapt_collapsed(
+                    timestamp_us,
+                    px,
+                    source,
+                    collapsed_phase,
+                    direction_inverted_from_device,
+                    self.scale_factor,
+                ) else {
+                    return;
+                };
+                #[cfg(feature = "wheel-debug")]
+                eprintln!(
+                    "wheel-event phase={:?} raw=({:.3},{:.3}) canonical=({:.3},{:.3}) source={:?} contact={:?} momentum={:?} gesture_id={}",
                     touch_phase,
-                }
+                    sample.raw_dx,
+                    sample.raw_dy,
+                    sample.canonical_dx,
+                    sample.canonical_dy,
+                    sample.source,
+                    sample.contact_phase,
+                    sample.momentum_phase,
+                    sample.gesture_id,
+                );
+                AppAction::ScrollSample(sample)
             }
             WindowEvent::RedrawRequested => AppAction::RedrawRequested,
             WindowEvent::Focused(focused) => AppAction::Focused(focused),
@@ -372,28 +410,26 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 impl App {
-    /// Translate a winit mouse-wheel / trackpad scroll delta into logical
-    /// pixel units. Positive y = scroll down. Returns `((dx, dy), is_precise)`
-    /// in logical px, where `is_precise` is true for pixel-delta (trackpad)
-    /// events and false for line-delta (notched mouse wheel) events. The grid
-    /// pager uses this flag to accept trackpad input while leaving mouse-wheel
-    /// behavior untouched.
-    fn wheel_delta_to_px(
+    /// Translate winit wheel input into physical pixels. PixelDelta is already
+    /// physical on winit 0.30; applying the scale factor again would make the
+    /// paging distance DPI-dependent.
+    fn wheel_delta_to_physical_px(
         delta: winit::event::MouseScrollDelta,
         scale_factor: f32,
-    ) -> ((f32, f32), bool) {
+    ) -> ((f32, f32), crate::input_routing::ScrollSource) {
         match delta {
             winit::event::MouseScrollDelta::LineDelta(x, y) => {
                 let scale = scale_factor.max(0.1);
                 let px_per_line = crate::layout::settings_panel::row_step(scale);
-                ((x * px_per_line, y * px_per_line), false)
+                (
+                    (x * px_per_line, y * px_per_line),
+                    crate::input_routing::ScrollSource::Line,
+                )
             }
-            winit::event::MouseScrollDelta::PixelDelta(px) => {
-                let scale = scale_factor.max(0.1);
-                let logical_x = (px.x as f32) / scale;
-                let logical_y = (px.y as f32) / scale;
-                ((logical_x, logical_y), true)
-            }
+            winit::event::MouseScrollDelta::PixelDelta(px) => (
+                (px.x as f32, px.y as f32),
+                crate::input_routing::ScrollSource::Precise,
+            ),
         }
     }
 

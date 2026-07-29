@@ -19,13 +19,12 @@
 
 use std::time::Instant;
 
-use winit::event::{Ime, TouchPhase};
+use winit::event::Ime;
 use winit::keyboard::KeyCode;
 
 use crate::app::event::AppCommand;
 use crate::app::state::App;
 use crate::debug_log;
-use crate::scroll::WheelPhase;
 
 use super::state::SettingsPressTarget;
 
@@ -79,22 +78,9 @@ pub enum AppAction {
     },
     PointerRelease(ReleaseAction),
     CursorLeft,
-    /// Vertical mouse-wheel / trackpad scroll delta in logical px.
-    /// Positive y = scroll down. (x is reserved for future horizontal scroll.)
-    MouseWheel {
-        /// (dx, dy) in logical px. `dy` drives the settings panel; `dx` drives
-        /// grid paging on trackpads.
-        delta_px: (f32, f32),
-        /// True when the delta came from a precise (pixel-delta) device, i.e. a
-        /// trackpad. False for notched mouse wheels (`LineDelta`). Only precise
-        /// devices feed the grid pager; mouse wheels stay no-op on the grid to
-        /// avoid changing existing mouse behavior.
-        is_precise: bool,
-        /// winit `TouchPhase` of the wheel event — the trackpad gesture
-        /// lifecycle (`Started`/`Moved`/`Ended`/`Cancelled`). The handler
-        /// converts this to [`WheelPhase`] before feeding the scroller.
-        touch_phase: TouchPhase,
-    },
+    /// Platform-normalized scroll input. Production MouseWheel events and
+    /// deterministic QA scenarios enter through this same routing boundary.
+    ScrollSample(crate::input_routing::ScrollSample),
 }
 
 /// Keyboard intent, classified by [`keyboard_action`] from the shell flags and
@@ -538,40 +524,8 @@ impl App {
             AppAction::CursorLeft => {
                 self.handle_cursor_left();
             }
-            AppAction::MouseWheel {
-                delta_px,
-                is_precise,
-                touch_phase,
-            } => {
-                if self.settings_panel_active() {
-                    // Settings overlay keeps all wheel input (mouse + trackpad,
-                    // vertical) exactly as before.
-                    self.scroll_settings_by_px(delta_px.1);
-                } else if !self.folders.is_active() && is_precise {
-                    // On the grid, only trackpads (precise deltas) page, and
-                    // only via the horizontal axis — a vertical trackpad swipe
-                    // does nothing here (matching macOS Launchpad). Mouse
-                    // wheels (`!is_precise`) stay no-op on the grid so existing
-                    // mouse behavior is untouched.
-                    if delta_px.0.abs() >= f32::EPSILON {
-                        self.scroll_grid_by_wheel(delta_px.0, map_touch_phase(touch_phase));
-                    }
-                }
-            }
+            AppAction::ScrollSample(sample) => self.handle_scroll_sample(sample),
         }
-    }
-}
-
-/// Map winit's `TouchPhase` to the physics module's winit-free [`WheelPhase`].
-/// `TouchPhase` defaults to `Moved` in winit for non-trackpad devices, but the
-/// grid-paging path is gated on `is_precise` upstream so this is only reached
-/// for real trackpad events.
-fn map_touch_phase(phase: TouchPhase) -> WheelPhase {
-    match phase {
-        TouchPhase::Started => WheelPhase::Started,
-        TouchPhase::Moved => WheelPhase::Moved,
-        TouchPhase::Ended => WheelPhase::Ended,
-        TouchPhase::Cancelled => WheelPhase::Cancelled,
     }
 }
 
@@ -1055,6 +1009,11 @@ impl App {
             return;
         }
         if !focused {
+            // Focus loss is a lifecycle boundary even when an edit/settings
+            // exception keeps the window visible. Deliver a single Cancelled
+            // to the sticky pager owner, then clear every continuation before
+            // any possible HideWindow command repeats the reset.
+            self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::FocusLoss);
             #[cfg(target_os = "macos")]
             if self.awaiting_initial_focus {
                 debug_log!("window_event: initial Focused(false) ignored until focus acquisition");
