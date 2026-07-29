@@ -25,6 +25,16 @@ const CONTENT_PAD_X: f32 = 30.0;
 const CONTENT_PAD_Y: f32 = 20.0;
 const ICON_SIZE: f32 = 20.0;
 const ICON_GAP: f32 = 17.0;
+/// Content-driven panel width is clamped to these bounds (logical px at 1× DPI)
+/// so very short or very long localized labels still render comfortably. The
+/// app shell measures the longest label and feeds it to
+/// [`open_panel_size_logical`].
+const MIN_MENU_WIDTH: f32 = 200.0;
+const MAX_MENU_WIDTH: f32 = 320.0;
+/// Conservative fallback for the longest label width (logical px) when the text
+/// engine is unavailable at open time. Roughly the width of the longest current
+/// label ("エクスプローラーで開く") at 14 px.
+pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
@@ -128,13 +138,16 @@ pub struct ContextMenuModel {
 
 /// Fully-open panel size for a given item count, in logical px at 1× DPI.
 /// Used by the app shell to build the open [`MenuTarget`](crate::features::context_menu::MenuTarget).
-pub fn open_panel_size_logical(item_count: usize) -> (f32, f32) {
+///
+/// The width is content-driven: `max_label_width_logical` is the measured width
+/// of the longest localized label (logical px at 1× DPI), and the panel fits
+/// `left content origin (pad_x + icon + gap) + label + right pad_x`, clamped to
+/// [`MIN_MENU_WIDTH`]..=[`MAX_MENU_WIDTH`]. Passing [`FALLBACK_MAX_LABEL_WIDTH`]
+/// keeps the menu reasonably sized when the text engine is unavailable.
+pub fn open_panel_size_logical(item_count: usize, max_label_width_logical: f32) -> (f32, f32) {
     let rows = item_count.max(1);
-    // Tightened from 320 so the longest label ("エクスプローラーで開く",
-    // ~155px) plus the left content origin (pad_x 30 + icon 20 + gap 17 = 67)
-    // and right pad_x 30 (~252px total) leaves only a small comfortable margin
-    // instead of a large gap.
-    let width = 260.0;
+    let width = (CONTENT_PAD_X + ICON_SIZE + ICON_GAP + max_label_width_logical + CONTENT_PAD_X)
+        .clamp(MIN_MENU_WIDTH, MAX_MENU_WIDTH);
     let height = CONTENT_PAD_Y * 2.0 + rows as f32 * ROW_HEIGHT;
     (width, height)
 }

@@ -293,6 +293,11 @@ pub struct App {
     /// Hit map for the most recently rendered context menu, used to resolve
     /// left-click releases into item selections.
     pub context_menu_layout: Option<crate::layout::context_menu::ContextMenuModel>,
+    /// Measured width (logical px at 1× DPI) of the longest menu label, set once
+    /// at open time and read by the per-frame layout so the open-animation
+    /// target and the laid-out rows agree on the same panel width. Mirrors the
+    /// `cached_done_width` pattern but persists across frames.
+    pub context_menu_open_width_logical: f32,
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
@@ -448,6 +453,7 @@ impl App {
             interaction_glass: Vec::new(),
             context_menu: crate::features::context_menu::ContextMenuState::default(),
             context_menu_layout: None,
+            context_menu_open_width_logical: crate::layout::context_menu::FALLBACK_MAX_LABEL_WIDTH,
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,

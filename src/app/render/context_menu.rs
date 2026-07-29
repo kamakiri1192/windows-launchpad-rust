@@ -31,7 +31,12 @@ impl App {
         self.pending_press = None;
 
         let scale = self.scale_factor.max(0.01);
-        let (lw, lh) = open_panel_size_logical(context_menu::ContextMenuItem::ALL.len());
+        // Measure the longest label once at open time so the open-animation
+        // target and the per-frame layout agree on the same panel width.
+        let max_label_w = self.measure_menu_max_label_width_logical(scale);
+        self.context_menu_open_width_logical = max_label_w;
+        let (lw, lh) =
+            open_panel_size_logical(context_menu::ContextMenuItem::ALL.len(), max_label_w);
         let size_phys = (lw * scale, lh * scale);
         let origin = open_panel_origin((x, y), size_phys, self.viewport_phys());
         let target = MenuTarget {
@@ -115,8 +120,11 @@ impl App {
         let labels: Vec<&str> = items.iter().map(|i| i.label()).collect();
 
         // The fully-open panel size is fixed at open time and stays constant
-        // through the animation; the live (animated) size is separate.
-        let (open_lw, open_lh) = open_panel_size_logical(items.len());
+        // through the animation; the live (animated) size is separate. We reuse
+        // the label width measured in `open_context_menu` so the laid-out rows
+        // match the animated panel exactly.
+        let (open_lw, open_lh) =
+            open_panel_size_logical(items.len(), self.context_menu_open_width_logical);
         let open_size = (open_lw * scale, open_lh * scale);
 
         let input = ContextMenuInput {
@@ -223,6 +231,30 @@ impl App {
         self.render_model.context_menu_tiles = Some(Vec::new());
         self.render_model.context_menu_icons = Some(Vec::new());
         self.context_menu_layout = None;
+    }
+
+    /// Measure the widest menu label and return its width in logical px at 1×
+    /// DPI (i.e. the physical measurement divided by `scale`). Used once at
+    /// open time to size the panel to its content. Falls back to the layout
+    /// layer's [`FALLBACK_MAX_LABEL_WIDTH`] when the text engine is absent.
+    fn measure_menu_max_label_width_logical(&mut self, scale: f32) -> f32 {
+        let Some(t) = self.text.as_mut() else {
+            return context_menu::FALLBACK_MAX_LABEL_WIDTH;
+        };
+        let mut widest_phys = 0.0f32;
+        for item in context_menu::ContextMenuItem::ALL {
+            let w = t.measure_text(&text_engine::CenteredLineSpec {
+                text: item.label(),
+                font_size: MENU_FONT_SIZE,
+                line_height: MENU_LINE_HEIGHT,
+                family: UI_FONT_FAMILY,
+                color: [1.0; 4],
+                center: (0.0, 0.0),
+                scale_factor: scale,
+            });
+            widest_phys = widest_phys.max(w);
+        }
+        (widest_phys / scale.max(0.01)).max(0.0)
     }
 }
 
