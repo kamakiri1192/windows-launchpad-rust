@@ -612,6 +612,9 @@ impl Renderer {
             top_level_dragged_tile_instance: false,
             modal_tile_instance_buffer: InstanceBuffer::new("modal tile instance buffer"),
             modal_dragged_tile_instance: false,
+            context_menu_tile_instance_buffer: InstanceBuffer::new(
+                "context menu tile instance buffer",
+            ),
             uniform_buffer,
             uniform_bind_group,
             surface_format,
@@ -629,6 +632,9 @@ impl Renderer {
             icon_instance_buffer: InstanceBuffer::new("icon instance buffer"),
             modal_icon_instance_buffer: InstanceBuffer::new("modal icon instance buffer"),
             modal_dragged_icon_instance: false,
+            context_menu_icon_instance_buffer: InstanceBuffer::new(
+                "context menu icon instance buffer",
+            ),
             dragged_icon_instance_count: 0,
             icon_atlas_texture,
             icon_atlas_bind_group,
@@ -659,6 +665,10 @@ impl Renderer {
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
             modal_instance_buffer: InstanceBuffer::new("modal ink instance buffer"),
             modal_text_instance_buffer: InstanceBuffer::new("modal text instance buffer"),
+            context_menu_instance_buffer: InstanceBuffer::new("context menu ink instance buffer"),
+            context_menu_text_instance_buffer: InstanceBuffer::new(
+                "context menu text instance buffer",
+            ),
             prepared_model: crate::ui_model::render_model::RenderModel::new(),
             counters: BufferCounters::default(),
             qa_shot: None,

@@ -466,13 +466,15 @@ impl App {
                 crate::layout::bottom_control::BottomControlPointerIntent::None
             )
         };
-        // The menu and folder panel are mutually exclusive (Modal lane holds
-        // one surface), so the folder check first is sufficient.
-        if self.folders.is_active() && self.drag_item.is_none() && !(self.editing && over_control) {
-            return PressAction::Folder;
-        }
+        // The context menu takes priority over the folder panel so that,
+        // while both are open, a click anywhere dismisses the menu without
+        // also triggering the folder panel (e.g. closing the folder via its
+        // dismiss backdrop).
         if self.context_menu.is_active() {
             return PressAction::ContextMenu;
+        }
+        if self.folders.is_active() && self.drag_item.is_none() && !(self.editing && over_control) {
+            return PressAction::Folder;
         }
         pointer_press_action(
             self.settings_open,
@@ -486,11 +488,12 @@ impl App {
     /// shell flags and the press/release state. This feeds
     /// [`AppAction::PointerRelease`].
     pub(crate) fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
-        if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
-            return ReleaseAction::Folder;
-        }
+        // The context menu takes priority over the folder panel on release too.
         if self.context_menu.is_active() {
             return ReleaseAction::ContextMenu;
+        }
+        if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
+            return ReleaseAction::Folder;
         }
         let settings_pressed = if self.settings_open {
             self.pressed_on_settings

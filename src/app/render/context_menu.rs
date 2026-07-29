@@ -1,7 +1,8 @@
 //! Context menu app adapter. Joins the live [`ContextMenuState`] to the pure
 //! [`layout::context_menu`] builder, then submits the result to the renderer
-//! model on the Modal glass/ink/glyph lanes — the same lanes the folder panel
-//! uses, since the two never coexist.
+//! model on the dedicated `ContextMenu` glass/ink/glyph lanes. These lanes
+//! are isolated from the folder panel's `Modal` lanes so the menu can float
+//! above an open folder without their Liquid Glass smooth-unioning together.
 
 use crate::app::state::App;
 use crate::domain::app_id::AppId;
@@ -20,20 +21,10 @@ const MENU_LINE_HEIGHT: f32 = 18.0;
 
 impl App {
     /// Open the context menu for `app_id`, anchored at the physical-px click
-    /// point. The menu shares the Modal glass lane with the folder/settings
-    /// panels, which accept only **one** glass surface at a time, so we dismiss
-    /// any open Modal surface first to keep the Liquid Glass pipeline stable.
-    /// (Folder-context right-click is deferred to a follow-up that gives the
-    /// menu its own glass lane.)
+    /// point. The menu uses its own `ContextMenu` glass lane, isolated from the
+    /// folder/settings `Modal` lane, so an open folder panel stays visible
+    /// while the menu is shown and remains open after it closes.
     pub(crate) fn open_context_menu(&mut self, app_id: AppId, x: f32, y: f32) {
-        // The Modal glass lane accepts exactly one surface; make it exclusive
-        // by dismissing any other Modal surface before we open.
-        if self.folders.is_active() {
-            self.close_folder();
-        }
-        if self.settings_open {
-            self.close_settings();
-        }
         if self.control.wants_keyboard() {
             self.control.press_close();
         }
@@ -151,7 +142,7 @@ impl App {
             .render
             .glass
             .iter()
-            .find(|batch| batch.layer == GlassLayer::Modal)
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
             .map(|batch| batch.surfaces.clone())
             .unwrap_or_default();
         let ink = model
@@ -159,7 +150,7 @@ impl App {
             .render
             .ink
             .iter()
-            .find(|batch| batch.lane == InkLane::Modal)
+            .find(|batch| batch.lane == InkLane::ContextMenu)
             .map(|batch| batch.views.clone())
             .unwrap_or_default();
 
@@ -191,12 +182,13 @@ impl App {
         // The menu owns the Modal lane exclusively (the folder/settings panels
         // are dismissed on open), so a plain replace is correct and keeps the
         // Liquid Glass modal pass on a single surface.
-        self.render_model.set_glass_batch(GlassLayer::Modal, modal);
-        self.render_model.set_ink_batch(InkLane::Modal, ink);
         self.render_model
-            .set_glyph_batch(GlyphLane::Modal, glyph_views(&glyphs));
-        self.render_model.modal_tiles = model.result.render.modal_tiles.clone();
-        self.render_model.modal_icons = model.result.render.modal_icons.clone();
+            .set_glass_batch(GlassLayer::ContextMenu, modal);
+        self.render_model.set_ink_batch(InkLane::ContextMenu, ink);
+        self.render_model
+            .set_glyph_batch(GlyphLane::ContextMenu, glyph_views(&glyphs));
+        self.render_model.context_menu_tiles = model.result.render.context_menu_tiles.clone();
+        self.render_model.context_menu_icons = model.result.render.context_menu_icons.clone();
 
         self.context_menu_layout = Some(model);
     }
@@ -206,12 +198,13 @@ impl App {
     /// are already dismissed — so a full clear is correct.
     pub(crate) fn clear_context_menu_presentation(&mut self) {
         self.render_model
-            .set_glass_batch(GlassLayer::Modal, Vec::new());
-        self.render_model.set_ink_batch(InkLane::Modal, Vec::new());
+            .set_glass_batch(GlassLayer::ContextMenu, Vec::new());
         self.render_model
-            .set_glyph_batch(GlyphLane::Modal, Vec::new());
-        self.render_model.modal_tiles = Some(Vec::new());
-        self.render_model.modal_icons = Some(Vec::new());
+            .set_ink_batch(InkLane::ContextMenu, Vec::new());
+        self.render_model
+            .set_glyph_batch(GlyphLane::ContextMenu, Vec::new());
+        self.render_model.context_menu_tiles = Some(Vec::new());
+        self.render_model.context_menu_icons = Some(Vec::new());
         self.context_menu_layout = None;
     }
 }

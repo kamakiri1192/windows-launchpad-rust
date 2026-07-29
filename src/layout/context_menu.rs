@@ -203,7 +203,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
 
     // --- Glass surface (the menu body) --------------------------------------
     render.set_glass_batch(
-        GlassLayer::Modal,
+        GlassLayer::ContextMenu,
         vec![GlassSurface {
             id: UiId::context_menu_panel(),
             rect: panel_rect,
@@ -316,8 +316,10 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         });
     }
 
-    render.set_ink_batch(InkLane::Modal, ink);
-    render.text = text_views;
+    render.set_ink_batch(InkLane::ContextMenu, ink);
+    // TextViews are not pushed to `render.text` (which routes through
+    // GlyphLane::Grid); the render adapter shapes labels into GlyphQuads and
+    // submits them on GlyphLane::ContextMenu instead.
 
     // --- Hit map ------------------------------------------------------------
     let mut hits = HitMap::new();

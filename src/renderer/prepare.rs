@@ -220,7 +220,9 @@ impl Renderer {
         let modal_clip = model
             .glass
             .iter()
-            .find(|batch| batch.layer == GlassLayer::Modal)
+            .find(|batch| {
+                batch.layer == GlassLayer::Modal || batch.layer == GlassLayer::ContextMenu
+            })
             .and_then(|batch| {
                 batch
                     .surfaces
@@ -277,6 +279,11 @@ impl Renderer {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
                         .set_modal_shapes(&self.device, &self.queue, &shapes);
+                }
+                GlassLayer::ContextMenu => {
+                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    self.liquid_glass
+                        .set_context_menu_shapes(&self.device, &self.queue, &shapes);
                 }
                 GlassLayer::Base => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
@@ -393,6 +400,45 @@ impl Renderer {
                 .modal_icons
                 .clone_from(&model.modal_icons);
         }
+        if model.context_menu_tiles != self.prepared_model.context_menu_tiles {
+            let views = model.context_menu_tiles.as_deref().unwrap_or_default();
+            let instances: Vec<_> = views
+                .iter()
+                .enumerate()
+                .map(|(index, view)| tile_instance(view, index))
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.context_menu_tile_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Tile,
+            );
+            self.prepared_model
+                .context_menu_tiles
+                .clone_from(&model.context_menu_tiles);
+        }
+        if model.context_menu_icons != self.prepared_model.context_menu_icons {
+            let instances: Vec<_> = model
+                .context_menu_icons
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(icon_instance)
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.context_menu_icon_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Icon,
+            );
+            self.prepared_model
+                .context_menu_icons
+                .clone_from(&model.context_menu_icons);
+        }
 
         for batch in &model.ink {
             if self
@@ -448,6 +494,14 @@ impl Renderer {
                     &mut self.counters,
                     Category::Settings,
                 ),
+                InkLane::ContextMenu => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.context_menu_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Settings,
+                ),
             }
             self.prepared_model
                 .set_ink_batch(batch.lane, batch.views.clone());
@@ -494,6 +548,14 @@ impl Renderer {
                     &self.device,
                     &self.queue,
                     &mut self.modal_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::SettingsText,
+                ),
+                GlyphLane::ContextMenu => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.context_menu_text_instance_buffer,
                     &quads,
                     &mut self.counters,
                     Category::SettingsText,
