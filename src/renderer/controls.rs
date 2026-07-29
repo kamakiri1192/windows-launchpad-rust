@@ -69,6 +69,18 @@ pub const KIND_SLIDER_TRACK: f32 = 10.0;
 pub const KIND_SLIDER_KNOB: f32 = 11.0;
 /// Reset arrow (↺) used by the settings panel's per-row reset.
 pub const KIND_RESET_ICON: f32 = 12.0;
+/// Pencil glyph used by the context menu (edit home).
+pub const KIND_PENCIL: f32 = 13.0;
+/// Eye-with-slash glyph used by the context menu (hide app).
+pub const KIND_EYE_OFF: f32 = 14.0;
+/// Folder glyph used by the context menu (reveal in Finder/Explorer).
+pub const KIND_FOLDER: f32 = 15.0;
+/// Plus glyph used by the context menu (larger icon).
+pub const KIND_PLUS: f32 = 16.0;
+/// Minus glyph used by the context menu (smaller icon).
+pub const KIND_MINUS: f32 = 17.0;
+/// Info glyph used by the context menu (app info).
+pub const KIND_INFO: f32 = 18.0;
 
 /// Uniform for the bottom-control overlay + text shaders. The bottom control
 /// uses only the viewport; edit badges also use scroll and the page frame clip.

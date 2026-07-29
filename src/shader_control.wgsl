@@ -34,6 +34,12 @@ struct Uniforms {
 //  10 = slider track (wide rounded bar) — params: (half_h, alpha, half_w, radius)
 //  11 = slider knob (filled disk) — params: (radius, alpha, _, _)
 //  12 = reset arrow (counterclockwise ↺) — params: (radius, alpha, stroke, _)
+//  13 = pencil (context menu: edit home) — params: (size, alpha, stroke, _)
+//  14 = eye-off (context menu: hide app) — params: (size, alpha, stroke, _)
+//  15 = folder (context menu: reveal in Finder/Explorer) — params: (size, alpha, stroke, _)
+//  16 = plus (context menu: larger icon) — params: (size, alpha, stroke, _)
+//  17 = minus (context menu: smaller icon) — params: (size, alpha, stroke, _)
+//  18 = info (context menu: app info) — params: (size, alpha, stroke, _)
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -151,6 +157,10 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
     }
     if kind > 6.5 {
         return size * 1.8;
+    }
+    // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
+    if kind > 12.5 {
+        return size * 1.2;
     }
     // dot / caret / close: a square of side ~2*size fits the shape.
     return size * 1.6;
@@ -318,7 +328,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let r = in.params.x;
         let d = sd_circle(p, r);
         coverage = 1.0 - smoothstep(-1.0, 1.0, d);
-    } else {
+    } else if kind < 12.5 {
         // Reset arrow (↺): an open ring (≈270°) plus an arrowhead at the
         // upper-left opening. Local space is Y-down, so "upper-left" maps to
         // negative-x / negative-y. params: (radius, alpha, stroke, _).
@@ -349,6 +359,113 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let d_a2 = sd_segment(p - tip, dir2 * al, aw);
         let arrow = 1.0 - smoothstep(-1.0, 1.0, min(d_a1, d_a2));
         coverage = max(ring * (1.0 - opening), arrow);
+    } else if kind < 13.5 {
+        // Pencil: a diagonal body (rounded box) + triangular tip. Local space
+        // is Y-down; the pencil points toward the lower-left (writing tip).
+        // params: (size, alpha, stroke, _).
+        let size = in.params.x;
+        let stroke = max(in.params.z, 1.0);
+        // Body: a rounded box rotated ~45°, occupying the upper-right half.
+        let body_len = size * 0.62;
+        let body_w = max(size * 0.16, stroke);
+        // Rotate p by +45° (CW in Y-down) so the body lies along the new x axis.
+        let ang = 0.785398; // 45°
+        let ca = cos(ang);
+        let sa = sin(ang);
+        let rp = vec2<f32>(p.x * ca + p.y * sa, -p.x * sa + p.y * ca);
+        let body = sd_round_box(
+            rp - vec2<f32>(size * 0.06, -size * 0.06),
+            vec2<f32>(body_len * 0.5, body_w),
+            body_w * 0.5,
+        );
+        coverage = 1.0 - smoothstep(-1.0, 1.0, body);
+    } else if kind < 14.5 {
+        // Eye-off: an eye outline (two arcs forming a lens shape) with a
+        // diagonal slash through it. params: (size, alpha, stroke, _).
+        let size = in.params.x;
+        let stroke = max(in.params.z, 1.0);
+        // Eye outline: approximate with two arcs. We build the eye as the
+        // region between an upper and lower parabola-ish boundary using sd_segment
+        // approximations is complex; instead draw the eye as a wide rounded
+        // lens: two horizontal segments forming top and bottom lids.
+        let w = size * 0.5;
+        let h = size * 0.28;
+        // Top lid: arc from (-w,0) up to (0,-h) down to (w,0).
+        let top_a = vec2<f32>(-w, 0.0);
+        let top_b = vec2<f32>(0.0, -h);
+        let top_c = vec2<f32>(w, 0.0);
+        let d_top1 = sd_segment(p - top_a, top_b - top_a, stroke * 0.5);
+        let d_top2 = sd_segment(p - top_b, top_c - top_b, stroke * 0.5);
+        // Bottom lid mirrors.
+        let bot_b = vec2<f32>(0.0, h);
+        let d_bot1 = sd_segment(p - top_a, bot_b - top_a, stroke * 0.5);
+        let d_bot2 = sd_segment(p - bot_b, top_c - bot_b, stroke * 0.5);
+        // Pupil: a small filled disk.
+        let pupil = sd_circle(p, size * 0.12);
+        let eye = min(min(d_top1, d_top2), min(d_bot1, d_bot2));
+        let eye_cov = 1.0 - smoothstep(-1.0, 1.0, eye);
+        let pupil_cov = 1.0 - smoothstep(-1.0, 1.0, pupil);
+        // Slash: a thick diagonal segment across the eye.
+        let slash_a = vec2<f32>(-size * 0.5, -size * 0.5);
+        let slash_b = vec2<f32>(size * 0.5, size * 0.5);
+        let d_slash = sd_segment(p - slash_a, slash_b - slash_a, stroke);
+        let slash = 1.0 - smoothstep(-1.0, 1.0, d_slash);
+        coverage = max(max(eye_cov, pupil_cov), slash);
+    } else if kind < 15.5 {
+        // Folder: a rounded body with a tab on the upper-left. params:
+        // (size, alpha, stroke, _). `size` is the folder's half-width.
+        let size = in.params.x;
+        let stroke = max(in.params.z, 1.0);
+        let hw = size * 0.5;
+        let hh = size * 0.4;
+        let r = size * 0.1;
+        // Main body: a rounded box centered slightly below origin.
+        let body = sd_round_box(
+            p - vec2<f32>(0.0, size * 0.06),
+            vec2<f32>(hw, hh),
+            r,
+        );
+        // Tab: a smaller rounded box on the upper-left.
+        let tab = sd_round_box(
+            p - vec2<f32>(-hw * 0.45, -hh * 0.85),
+            vec2<f32>(hw * 0.5, hh * 0.3),
+            r * 0.8,
+        );
+        // Outline stroke: we want just the border, so take abs of the union.
+        let shape = min(body, tab);
+        let outline = abs(shape) - stroke;
+        coverage = 1.0 - smoothstep(-1.0, 1.0, outline);
+    } else if kind < 16.5 {
+        // Plus: two crossed segments (horizontal + vertical). params:
+        // (size, alpha, stroke, _).
+        let size = in.params.x;
+        let w = max(in.params.z, 1.0);
+        let len = size * 0.5;
+        let dv = sd_segment(p - vec2<f32>(0.0, -len), vec2<f32>(0.0, 2.0 * len), w);
+        let dh = sd_segment(p - vec2<f32>(-len, 0.0), vec2<f32>(2.0 * len, 0.0), w);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, min(dv, dh));
+    } else if kind < 17.5 {
+        // Minus: a single horizontal segment. params: (size, alpha, stroke, _).
+        let size = in.params.x;
+        let w = max(in.params.z, 1.0);
+        let len = size * 0.5;
+        let d = sd_segment(p - vec2<f32>(-len, 0.0), vec2<f32>(2.0 * len, 0.0), w);
+        coverage = 1.0 - smoothstep(-1.0, 1.0, d);
+    } else {
+        // Info (i): a dot above a vertical stem. params: (size, alpha, stroke, _).
+        let size = in.params.x;
+        let w = max(in.params.z, 1.0);
+        // Dot at the top.
+        let dot_center = vec2<f32>(0.0, -size * 0.38);
+        let dot = sd_circle(p - dot_center, size * 0.11);
+        // Stem: a vertical segment below the dot.
+        let stem_a = vec2<f32>(0.0, -size * 0.14);
+        let stem_b = vec2<f32>(0.0, size * 0.42);
+        let stem = sd_segment(p - stem_a, stem_b - stem_a, w * 0.6);
+        coverage = max(
+            1.0 - smoothstep(-1.0, 1.0, dot),
+            1.0 - smoothstep(-1.0, 1.0, stem),
+        );
     }
 
     // Only the edit-badge glyph (kind 4) is masked to the page frame. The

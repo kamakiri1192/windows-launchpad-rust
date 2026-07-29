@@ -183,6 +183,18 @@ pub enum ControlKind {
     SliderKnob,
     /// Per-row reset arrow (↺). Drawn by kind 12.
     ResetIcon,
+    /// Pencil glyph (context menu: edit home). Drawn by kind 13.
+    Pencil,
+    /// Eye-with-slash glyph (context menu: hide app). Drawn by kind 14.
+    EyeOff,
+    /// Folder glyph (context menu: reveal in Finder/Explorer). Drawn by kind 15.
+    FolderIcon,
+    /// Plus glyph (context menu: larger icon). Drawn by kind 16.
+    Plus,
+    /// Minus glyph (context menu: smaller icon). Drawn by kind 17.
+    Minus,
+    /// Info glyph (context menu: app info). Drawn by kind 18.
+    Info,
 }
 
 /// Draw-order lane for procedural foreground ink.

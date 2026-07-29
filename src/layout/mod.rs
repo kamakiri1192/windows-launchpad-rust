@@ -1,4 +1,5 @@
 pub mod bottom_control;
+pub mod context_menu;
 pub mod control_geometry;
 pub mod edit_mode;
 pub mod folder_panel;

@@ -41,6 +41,7 @@ mod profiling;
 mod qa;
 mod renderer;
 mod scroll;
+mod spring_anim;
 mod startup_timer;
 mod ui;
 mod ui_model;

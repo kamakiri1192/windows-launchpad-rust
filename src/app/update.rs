@@ -200,6 +200,18 @@ impl App {
             {
                 let action = self.classify_pointer_press(point.x, point.y);
                 self.handle_pointer_press(action);
+            } else if button == crate::input_routing::PointerButton::Right
+                && matches!(decision, RouterAction::LaunchpadOwns)
+                && !self.folders.is_active()
+            {
+                // Right-click on a launcher-owned surface opens the context
+                // menu when it lands on an app tile. Left-button routing keeps
+                // its own classification path; the right button never flows
+                // through `classify_pointer_press`. Folder-context right-click
+                // is deferred until the menu gets its own glass lane.
+                if let Some(app_id) = self.app_id_at_point(point.x, point.y) {
+                    self.open_context_menu(app_id, point.x, point.y);
+                }
             }
             return;
         }

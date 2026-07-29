@@ -13,8 +13,9 @@ use crate::ui_model::render_model::{
 };
 
 use super::controls::{
-    ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_GEAR,
-    KIND_MAGNIFIER, KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
+    ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_EYE_OFF,
+    KIND_FOLDER, KIND_GEAR, KIND_INFO, KIND_MAGNIFIER, KIND_MINUS, KIND_PENCIL, KIND_PLUS,
+    KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
 };
 use super::counters::Category;
 use super::icon_pipeline::IconInstance;
@@ -114,6 +115,12 @@ fn control_kind(kind: &ControlKind) -> f32 {
         ControlKind::SliderTrack => KIND_SLIDER_TRACK,
         ControlKind::SliderKnob => KIND_SLIDER_KNOB,
         ControlKind::ResetIcon => KIND_RESET_ICON,
+        ControlKind::Pencil => KIND_PENCIL,
+        ControlKind::EyeOff => KIND_EYE_OFF,
+        ControlKind::FolderIcon => KIND_FOLDER,
+        ControlKind::Plus => KIND_PLUS,
+        ControlKind::Minus => KIND_MINUS,
+        ControlKind::Info => KIND_INFO,
         // These are container/semantic views rather than foreground ink.
         ControlKind::SearchPill
         | ControlKind::PageIndicator

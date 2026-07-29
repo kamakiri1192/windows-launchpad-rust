@@ -40,7 +40,7 @@ use crate::startup_timer::prefix;
 
 use super::action::{
     folder_keyboard_action, keyboard_action, pointer_press_action, pointer_release_action,
-    AppAction, PressAction, ReleaseAction,
+    AppAction, KeyAction, PressAction, ReleaseAction,
 };
 use super::event::UserEvent;
 use super::state::{
@@ -243,7 +243,14 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
-                let key_action = if self.folders.is_active() && !self.settings_open {
+                let key_action = if self.context_menu.is_active() {
+                    // ESC dismisses the context menu; any other key is swallowed
+                    // while the menu is open.
+                    if key_code == Some(winit::keyboard::KeyCode::Escape) {
+                        self.close_context_menu();
+                    }
+                    KeyAction::None
+                } else if self.folders.is_active() && !self.settings_open {
                     folder_keyboard_action(
                         self.folders.rename.is_some(),
                         self.editing,
@@ -459,8 +466,13 @@ impl App {
                 crate::layout::bottom_control::BottomControlPointerIntent::None
             )
         };
+        // The menu and folder panel are mutually exclusive (Modal lane holds
+        // one surface), so the folder check first is sufficient.
         if self.folders.is_active() && self.drag_item.is_none() && !(self.editing && over_control) {
             return PressAction::Folder;
+        }
+        if self.context_menu.is_active() {
+            return PressAction::ContextMenu;
         }
         pointer_press_action(
             self.settings_open,
@@ -476,6 +488,9 @@ impl App {
     pub(crate) fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
         if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
             return ReleaseAction::Folder;
+        }
+        if self.context_menu.is_active() {
+            return ReleaseAction::ContextMenu;
         }
         let settings_pressed = if self.settings_open {
             self.pressed_on_settings

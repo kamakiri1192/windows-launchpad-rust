@@ -1,0 +1,270 @@
+//! Context menu app adapter. Joins the live [`ContextMenuState`] to the pure
+//! [`layout::context_menu`] builder, then submits the result to the renderer
+//! model on the Modal glass/ink/glyph lanes — the same lanes the folder panel
+//! uses, since the two never coexist.
+
+use crate::app::state::App;
+use crate::domain::app_id::AppId;
+use crate::features::context_menu::MenuTarget;
+use crate::layout::context_menu::{
+    self, open_panel_origin, open_panel_size_logical, ContextMenuInput,
+};
+use crate::renderer::text_engine::{self, GlyphQuad, UI_FONT_FAMILY};
+use crate::ui_model::render_model::{GlassLayer, GlyphLane, InkLane};
+
+/// Menu font metrics, in logical px at 1× DPI. Match the app-icon label size
+/// (`LABEL_FONT_SIZE` = 14) so the menu reads at the same scale as the grid.
+/// The text renderer multiplies these by the DPI `scale_factor`.
+const MENU_FONT_SIZE: f32 = 14.0;
+const MENU_LINE_HEIGHT: f32 = 18.0;
+
+impl App {
+    /// Open the context menu for `app_id`, anchored at the physical-px click
+    /// point. The menu shares the Modal glass lane with the folder/settings
+    /// panels, which accept only **one** glass surface at a time, so we dismiss
+    /// any open Modal surface first to keep the Liquid Glass pipeline stable.
+    /// (Folder-context right-click is deferred to a follow-up that gives the
+    /// menu its own glass lane.)
+    pub(crate) fn open_context_menu(&mut self, app_id: AppId, x: f32, y: f32) {
+        // The Modal glass lane accepts exactly one surface; make it exclusive
+        // by dismissing any other Modal surface before we open.
+        if self.folders.is_active() {
+            self.close_folder();
+        }
+        if self.settings_open {
+            self.close_settings();
+        }
+        if self.control.wants_keyboard() {
+            self.control.press_close();
+        }
+        self.pending_press = None;
+
+        let scale = self.scale_factor.max(0.01);
+        let (lw, lh) = open_panel_size_logical(context_menu::ContextMenuItem::ALL.len());
+        let size_phys = (lw * scale, lh * scale);
+        let origin = open_panel_origin((x, y), size_phys, self.viewport_phys());
+        let target = MenuTarget {
+            x: origin.0,
+            y: origin.1,
+            width: size_phys.0,
+            height: size_phys.1,
+        };
+        self.context_menu.open(app_id, x, y, target);
+        self.request_redraw();
+    }
+
+    /// Begin the close animation. The menu stays visible until the close
+    /// animation finishes.
+    pub(crate) fn close_context_menu(&mut self) {
+        if !self.context_menu.is_active() {
+            return;
+        }
+        self.context_menu.close();
+        self.request_redraw();
+    }
+
+    /// Press while the menu is open. Outside the panel → dismiss; we let the
+    /// release handler finalize so a drag that returns inside still works.
+    pub(crate) fn handle_context_menu_pointer_press(&mut self, x: f32, y: f32) {
+        let inside = self
+            .context_menu_layout
+            .as_ref()
+            .map(|m| {
+                m.panel_rect
+                    .contains(crate::ui_model::geometry::Point::new(x, y))
+            })
+            .unwrap_or(false);
+        if !inside {
+            // Mark intent; the release confirms dismiss. For simplicity we
+            // close immediately on outside press — the menu has no drag.
+            self.close_context_menu();
+        }
+    }
+
+    /// Release while the menu is open. Inside a row → mock action (close);
+    /// outside → already closed by the press, or close now.
+    pub(crate) fn handle_context_menu_pointer_release(&mut self, x: f32, y: f32) {
+        if !self.context_menu.is_active() {
+            return;
+        }
+        let hit = self.context_menu_hit_target(x, y);
+        match hit {
+            // A row was selected: mock action — just close. Real actions are
+            // wired in a later iteration.
+            Some(_) => self.close_context_menu(),
+            None => self.close_context_menu(),
+        }
+    }
+
+    fn context_menu_hit_target(&self, x: f32, y: f32) -> Option<usize> {
+        let model = self.context_menu_layout.as_ref()?;
+        let p = crate::ui_model::geometry::Point::new(x, y);
+        for (index, row) in model.rows.iter().enumerate() {
+            if row.rect.contains(p) {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// Build the context-menu render model from the live animation state and
+    /// submit it to the Modal lanes. Called from the frame loop while the menu
+    /// is active.
+    pub(crate) fn render_context_menu(&mut self) {
+        let app_id = match self.context_menu.active_app.clone() {
+            Some(id) => id,
+            None => {
+                self.clear_context_menu_presentation();
+                return;
+            }
+        };
+
+        let scale = self.scale_factor.max(0.01);
+        let items = context_menu::ContextMenuItem::ALL;
+        let labels: Vec<&str> = items.iter().map(|i| i.label()).collect();
+
+        // The fully-open panel size is fixed at open time and stays constant
+        // through the animation; the live (animated) size is separate.
+        let (open_lw, open_lh) = open_panel_size_logical(items.len());
+        let open_size = (open_lw * scale, open_lh * scale);
+
+        let input = ContextMenuInput {
+            viewport: self.viewport_phys(),
+            scale_factor: scale,
+            app_id: app_id.as_str(),
+            pos: (self.context_menu.pos_x(), self.context_menu.pos_y()),
+            size: (self.context_menu.width(), self.context_menu.height()),
+            open_size,
+            radius: self.context_menu.radius(),
+            content_scale: self.context_menu.content_scale(),
+            content_opacity: self.context_menu.content_opacity(),
+            content_blur: self.context_menu.content_blur(),
+            activation: self.context_menu.activation(),
+            items: &items,
+            labels: &labels,
+        };
+        let model = context_menu::build(&input);
+
+        // Promote the layout's ink/glass into the shared Modal lanes.
+        let modal = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Modal)
+            .map(|batch| batch.surfaces.clone())
+            .unwrap_or_default();
+        let ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Modal)
+            .map(|batch| batch.views.clone())
+            .unwrap_or_default();
+
+        // Shape label text into glyph quads. We render only when the content
+        // has meaningfully revealed to avoid wasted raster work mid-collapse.
+        let mut glyphs: Vec<GlyphQuad> = Vec::new();
+        let opacity = self.context_menu.content_opacity();
+        if opacity > 0.02 {
+            let color = [0.95, 0.96, 0.98, opacity.clamp(0.0, 1.0)];
+            if let Some(text) = self.text.as_mut() {
+                for (row, label) in model.rows.iter().zip(labels.iter()) {
+                    let left = row.label_rect.x;
+                    let center_y = row.label_rect.y;
+                    push_menu_text(
+                        text,
+                        &mut glyphs,
+                        label,
+                        left,
+                        center_y,
+                        MENU_FONT_SIZE,
+                        MENU_LINE_HEIGHT,
+                        color,
+                        scale,
+                    );
+                }
+            }
+        }
+
+        // The menu owns the Modal lane exclusively (the folder/settings panels
+        // are dismissed on open), so a plain replace is correct and keeps the
+        // Liquid Glass modal pass on a single surface.
+        self.render_model.set_glass_batch(GlassLayer::Modal, modal);
+        self.render_model.set_ink_batch(InkLane::Modal, ink);
+        self.render_model
+            .set_glyph_batch(GlyphLane::Modal, glyph_views(&glyphs));
+        self.render_model.modal_tiles = model.result.render.modal_tiles.clone();
+        self.render_model.modal_icons = model.result.render.modal_icons.clone();
+
+        self.context_menu_layout = Some(model);
+    }
+
+    /// Drop the context menu's Modal-lane content (called when the menu is
+    /// fully closed). The Modal lane is exclusive — the folder/settings panels
+    /// are already dismissed — so a full clear is correct.
+    pub(crate) fn clear_context_menu_presentation(&mut self) {
+        self.render_model
+            .set_glass_batch(GlassLayer::Modal, Vec::new());
+        self.render_model.set_ink_batch(InkLane::Modal, Vec::new());
+        self.render_model
+            .set_glyph_batch(GlyphLane::Modal, Vec::new());
+        self.render_model.modal_tiles = Some(Vec::new());
+        self.render_model.modal_icons = Some(Vec::new());
+        self.context_menu_layout = None;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_menu_text(
+    t: &mut text_engine::TextRenderer,
+    quads: &mut Vec<GlyphQuad>,
+    value: &str,
+    left: f32,
+    center_y: f32,
+    font_size: f32,
+    line_height: f32,
+    color: [f32; 4],
+    scale: f32,
+) {
+    let width = t.measure_text(&text_engine::CenteredLineSpec {
+        text: value,
+        font_size,
+        line_height,
+        family: UI_FONT_FAMILY,
+        color,
+        center: (0.0, 0.0),
+        scale_factor: scale,
+    });
+    quads.append(&mut t.layout_centered_line(&text_engine::CenteredLineSpec {
+        text: value,
+        font_size,
+        line_height,
+        family: UI_FONT_FAMILY,
+        color,
+        center: (left + width * 0.5, center_y),
+        scale_factor: scale,
+    }));
+}
+
+fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphView> {
+    quads
+        .iter()
+        .map(|q| crate::ui_model::render_model::GlyphView {
+            id: crate::ui_model::ids::UiId::named("context-menu-glyph"),
+            rect: crate::ui_model::geometry::Rect::new(q.x, q.y, q.w, q.h),
+            uv: crate::ui_model::geometry::UvRect {
+                u0: q.u0,
+                v0: q.v0,
+                u1: q.u1,
+                v1: q.v1,
+            },
+            color: crate::ui_model::render_model::Color::rgba(
+                q.color[0], q.color[1], q.color[2], q.color[3],
+            ),
+            z: 141,
+            clip: None,
+        })
+        .collect()
+}
