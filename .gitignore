@@ -32,3 +32,6 @@ Desktop.ini
 
 # Local icon analysis
 /tmp_icon_analysis/
+
+# Local macOS app bundle build output (scripts/build_macos_app.sh)
+/dist/
