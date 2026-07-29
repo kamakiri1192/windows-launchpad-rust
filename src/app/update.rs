@@ -202,14 +202,28 @@ impl App {
                 self.handle_pointer_press(action);
             } else if button == crate::input_routing::PointerButton::Right
                 && matches!(decision, RouterAction::LaunchpadOwns)
-                && !self.folders.is_active()
             {
                 // Right-click on a launcher-owned surface opens the context
                 // menu when it lands on an app tile. Left-button routing keeps
                 // its own classification path; the right button never flows
-                // through `classify_pointer_press`. Folder-context right-click
-                // is deferred until the menu gets its own glass lane.
-                if let Some(app_id) = self.app_id_at_point(point.x, point.y) {
+                // through `classify_pointer_press`.
+                //
+                // When a folder is open, the hit resolves against the folder's
+                // children. `open_context_menu` closes the folder first so the
+                // Modal glass lane stays exclusive (one surface) and the Liquid
+                // Glass modal pass stays stable.
+                let app_id = if self.folders.is_active() {
+                    self.folder_hit_target(point.x, point.y)
+                        .and_then(|t| match t {
+                            crate::ui_model::hit::HitTarget::FolderChild { child, .. } => {
+                                Some(crate::domain::app_id::AppId::from_normalized(child))
+                            }
+                            _ => None,
+                        })
+                } else {
+                    self.app_id_at_point(point.x, point.y)
+                };
+                if let Some(app_id) = app_id {
                     self.open_context_menu(app_id, point.x, point.y);
                 }
             }
