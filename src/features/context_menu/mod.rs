@@ -61,7 +61,7 @@ const PROP_COUNT: usize = 9;
 /// renderer.
 pub const SEED_SIZE: f32 = 40.0;
 pub const SEED_RADIUS: f32 = 130.0;
-pub const MENU_WIDTH: f32 = 320.0;
+pub const MENU_WIDTH: f32 = 260.0;
 pub const OPEN_RADIUS: f32 = 70.0;
 pub const SEED_CONTENT_SCALE: f32 = 2.0;
 pub const SEED_CONTENT_BLUR: f32 = 8.0;

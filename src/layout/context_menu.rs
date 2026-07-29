@@ -130,7 +130,11 @@ pub struct ContextMenuModel {
 /// Used by the app shell to build the open [`MenuTarget`](crate::features::context_menu::MenuTarget).
 pub fn open_panel_size_logical(item_count: usize) -> (f32, f32) {
     let rows = item_count.max(1);
-    let width = 320.0;
+    // Tightened from 320 so the longest label ("エクスプローラーで開く",
+    // ~155px) plus the left content origin (pad_x 30 + icon 20 + gap 17 = 67)
+    // and right pad_x 30 (~252px total) leaves only a small comfortable margin
+    // instead of a large gap.
+    let width = 260.0;
     let height = CONTENT_PAD_Y * 2.0 + rows as f32 * ROW_HEIGHT;
     (width, height)
 }
