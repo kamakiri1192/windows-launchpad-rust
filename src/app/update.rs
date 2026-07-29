@@ -203,6 +203,11 @@ impl App {
             } else if button == crate::input_routing::PointerButton::Right
                 && matches!(decision, RouterAction::LaunchpadOwns)
             {
+                // In edit mode (home grid or an open folder) the context menu
+                // is suppressed everywhere — icons are being rearranged/deleted.
+                if self.editing {
+                    return;
+                }
                 // Right-click on a launcher-owned surface opens the context
                 // menu when it lands on an app tile. Left-button routing keeps
                 // its own classification path; the right button never flows
