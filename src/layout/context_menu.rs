@@ -200,6 +200,12 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
 
     let mut render = RenderModel::new();
 
+    // Content reveal 0..1. This drives the icons/labels *and* the background
+    // body alpha, so on close the collapsed disc fades out instead of lingering
+    // as an opaque dot (mirrors the folder panel's `progress`-driven opacity).
+    let content_opacity = input.content_opacity.clamp(0.0, 1.0);
+    let reveal = content_opacity;
+
     // --- Opaque background fill ---------------------------------------------
     // `GlassSurface.tint` is not wired into the glass pipeline, so an explicit
     // opaque tile is drawn beneath the glass to give the menu a solid white-ish
@@ -209,7 +215,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         id: UiId::context_menu_panel(),
         rect: panel_rect,
         radius: input.radius,
-        color: Color::rgba(0.93, 0.94, 0.96, 1.0),
+        color: Color::rgba(0.93, 0.94, 0.96, content_opacity),
         has_icon: false,
         motion: TileAnim {
             flags: TileAnim::FLAG_FIXED,
@@ -239,9 +245,6 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     // scaled by `content_scale` about the current animated panel center. Using
     // the fixed open size (not the animated one) keeps item positions stable
     // regardless of where the menu was opened.
-    let content_opacity = input.content_opacity.clamp(0.0, 1.0);
-    let reveal = content_opacity;
-
     let open_w = input.open_size.0.max(1.0);
     let open_h = input.open_size.1.max(1.0);
     let row_h = ROW_HEIGHT * scale;
