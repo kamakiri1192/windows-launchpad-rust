@@ -158,20 +158,23 @@ impl App {
         // has meaningfully revealed to avoid wasted raster work mid-collapse.
         let mut glyphs: Vec<GlyphQuad> = Vec::new();
         let opacity = self.context_menu.content_opacity();
+        let content_scale = self.context_menu.content_scale().max(0.0);
         if opacity > 0.02 {
             let color = [0.95, 0.96, 0.98, opacity.clamp(0.0, 1.0)];
             if let Some(text) = self.text.as_mut() {
                 for (row, label) in model.rows.iter().zip(labels.iter()) {
                     let left = row.label_rect.x;
                     let center_y = row.label_rect.y;
+                    // Scale the font with content_scale so the text shrinks/grows
+                    // in sync with the glass + ink during open/close morph.
                     push_menu_text(
                         text,
                         &mut glyphs,
                         label,
                         left,
                         center_y,
-                        MENU_FONT_SIZE,
-                        MENU_LINE_HEIGHT,
+                        MENU_FONT_SIZE * content_scale,
+                        MENU_LINE_HEIGHT * content_scale,
                         color,
                         scale,
                     );

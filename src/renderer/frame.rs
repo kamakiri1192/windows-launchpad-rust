@@ -683,7 +683,7 @@ impl Renderer {
         {
             let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
             let content_scissor = self
-                .modal_clip_rect
+                .context_menu_clip_rect
                 .map(|rect| {
                     let x = rect.x.floor().max(0.0) as u32;
                     let y = rect.y.floor().max(0.0) as u32;
