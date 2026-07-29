@@ -1,14 +1,14 @@
 //! App state transitions: the `&mut self` methods that mutate `App` state in
 //! response to routed input.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::debug_log;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
 use crate::domain::launcher_item::LauncherItem;
 use crate::domain::settings::{Settings, SortOrder};
-use crate::scroll::Phase;
+use crate::scroll::{Phase, WheelPhase};
 use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
 
@@ -42,9 +42,50 @@ impl App {
 
     pub(crate) fn publish_input_routing_snapshot(&mut self) {
         self.input_routing_generation = self.input_routing_generation.wrapping_add(1).max(1);
+        let modal_active = self.settings_panel_active() || self.folders.is_active();
+        let page_dragging = self
+            .scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging);
+        let viewport_owned = modal_active
+            || self.editing
+            || self.drag_item.is_some()
+            || page_dragging
+            || !self.input_router.is_idle();
+        let viewport = self.viewport_phys();
+        let (frame_cx, frame_cy, frame_width, frame_height) =
+            self.layout.frame_panel_rect(viewport.0.max(1) as f32);
+        let control_model = self.bottom_control_model();
+        let capsule = control_model.capsule_hit_geometry();
+        let edit_gear =
+            control_model
+                .layout
+                .gear
+                .map(|(gear, _)| crate::input_routing::InputCircle {
+                    center: crate::input_routing::PhysicalPoint::new(gear.center.0, gear.center.1),
+                    radius: gear.radius,
+                });
         let snapshot = crate::input_routing::InputRoutingSnapshot {
             visible: self.visible,
             region: self.input_region_at(self.pointer_phys_x, self.pointer_phys_y),
+            owned_geometry: crate::input_routing::InputOwnedGeometry {
+                viewport_owned,
+                page_frame: Some(crate::input_routing::InputRoundedRect {
+                    center: crate::input_routing::PhysicalPoint::new(frame_cx, frame_cy),
+                    half_width: frame_width * 0.5,
+                    half_height: frame_height * 0.5,
+                    radius: self.layout.scaled(crate::layout::grid::FRAME_CORNER_RADIUS),
+                }),
+                bottom_capsule: Some(crate::input_routing::InputCapsule {
+                    center: crate::input_routing::PhysicalPoint::new(
+                        capsule.center.0,
+                        capsule.center.1,
+                    ),
+                    half_width: capsule.half_size.0,
+                    half_height: capsule.half_size.1,
+                }),
+                edit_gear,
+            },
             router_state: self.input_router.state(),
             generation: self.input_routing_generation,
         };
@@ -378,20 +419,151 @@ impl App {
         }
     }
 
-    /// Scroll the settings content by `delta_px` logical pixels.
+    /// Route a platform-normalized scroll sample to its gesture owner. The
+    /// router keeps contact ownership sticky and quarantines pager momentum,
+    /// so only physical contact phases can reach a page Scroller.
+    pub(crate) fn handle_scroll_sample(&mut self, sample: crate::input_routing::ScrollSample) {
+        use crate::features::folders::FolderPhase;
+        use crate::input_routing::{FolderRoutePhase, ScrollRoute, ScrollRouteContext};
+
+        let folder_phase = match self.folders.phase {
+            FolderPhase::Closed => FolderRoutePhase::Closed,
+            FolderPhase::Opening => FolderRoutePhase::Opening,
+            FolderPhase::Open => FolderRoutePhase::Open,
+            FolderPhase::Closing => FolderRoutePhase::Closing,
+        };
+        let pointer_page_dragging = self
+            .scroller
+            .as_ref()
+            .is_some_and(|scroller| scroller.phase == Phase::Dragging)
+            || self
+                .folder_scroller
+                .as_ref()
+                .is_some_and(|scroller| scroller.phase == Phase::Dragging);
+        let context = ScrollRouteContext {
+            settings_active: self.settings_panel_active(),
+            folder_phase,
+            blocking_interaction: self.drag_item.is_some()
+                || self.folders.child_drag.is_some()
+                || self.folders.page_press.is_some()
+                || self.pending_press.is_some()
+                || self.pressed_on_control
+                || pointer_page_dragging,
+            main_available: self.scroller.is_some(),
+        };
+        let routed = self.pager_input_router.route(sample, context);
+        let sample = routed.sample;
+        let now = scroll_sample_instant(self.scroll_clock_origin, sample.timestamp_us);
+        match routed.route {
+            ScrollRoute::Settings => {
+                if sample.canonical_dy != 0.0 {
+                    self.scroll_settings_by_px_at(
+                        crate::input_routing::continuous_scroller_input_from_canonical_y(
+                            sample.canonical_dy,
+                        ),
+                        now,
+                    );
+                }
+            }
+            ScrollRoute::MainPager => {
+                if let Some(scroller) = self.scroller.as_mut() {
+                    apply_scroll_sample_to_pager(scroller, sample, self.scroll_clock_origin);
+                }
+                self.request_redraw();
+            }
+            ScrollRoute::FolderPager => {
+                if let Some(scroller) = self.folder_scroller.as_mut() {
+                    let applied =
+                        apply_scroll_sample_to_pager(scroller, sample, self.scroll_clock_origin);
+                    self.folder_scroll_pending_commit = folder_scroll_commit_pending_after_sample(
+                        self.folder_scroll_pending_commit,
+                        sample,
+                        applied,
+                    );
+                }
+                self.request_redraw();
+            }
+            ScrollRoute::Blocked | ScrollRoute::Quarantined | ScrollRoute::Dropped => {}
+        }
+    }
+
+    /// Scroll the settings content by `delta_px` physical pixels.
     /// Uses the continuous scroller for pixel-level smooth scrolling. The
     /// legacy row-based `settings_scroll_rows` counter is intentionally not
     /// updated here: hit testing derives its row offset from the live pixel
     /// position (`settings_scroll.position / row_step`) so the two never drift.
     pub(crate) fn scroll_settings_by_px(&mut self, delta_px: f32) {
+        self.scroll_settings_by_px_at(delta_px, Instant::now());
+    }
+
+    fn scroll_settings_by_px_at(&mut self, delta_px: f32, now: Instant) {
         let max = self.settings_max_scroll_rows();
         if max <= 0 {
             self.settings_scroll_rows = 0;
             return;
         }
-        let now = std::time::Instant::now();
         self.settings_scroll.apply_wheel(delta_px, now);
         self.request_redraw();
+    }
+
+    /// Drive the grid's paging scroller from a trackpad wheel gesture
+    /// (horizontal, physical px). Mirrors the settings-panel path but targets
+    /// [`crate::scroll::Scroller::apply_wheel_delta`] so the page grid gets the
+    /// same iOS-style inertia + snap as a pointer drag. `phase` is the physical
+    /// contact phase from the normalized [`crate::input_routing::ScrollSample`].
+    pub(crate) fn scroll_grid_by_wheel(
+        &mut self,
+        dx_logical: f32,
+        dy_logical: f32,
+        scale_factor: f32,
+        phase: WheelPhase,
+        now: Instant,
+    ) {
+        if let Some(s) = self.scroller.as_mut() {
+            s.apply_wheel_delta_scaled(dx_logical, dy_logical, scale_factor, now, phase);
+        }
+        self.request_redraw();
+    }
+
+    /// Drive the durable open folder's pager through the same physical contact
+    /// contract as the main grid.
+    pub(crate) fn scroll_folder_by_wheel(
+        &mut self,
+        dx_physical: f32,
+        dy_physical: f32,
+        scale_factor: f32,
+        phase: WheelPhase,
+        now: Instant,
+    ) {
+        if let Some(scroller) = self.folder_scroller.as_mut() {
+            scroller.apply_wheel_delta_scaled(dx_physical, dy_physical, scale_factor, now, phase);
+        }
+        self.request_redraw();
+    }
+
+    /// End any owned physical contact exactly once before a lifecycle reset.
+    /// The terminal sample is delivered through the normal sticky-owner path
+    /// so the correct pager receives `Cancelled`; continuation/quarantine state
+    /// is cleared only after that delivery.
+    pub(crate) fn cancel_and_reset_scroll_input(&mut self, boundary: ScrollLifecycleBoundary) {
+        let timestamp_us = Instant::now()
+            .saturating_duration_since(self.scroll_clock_origin)
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        let cancel = self
+            .scroll_sample_adapter
+            .cancel_active(timestamp_us)
+            .or_else(|| self.pager_input_router.active_cancel_sample(timestamp_us));
+        if let Some(cancel) = cancel {
+            self.handle_scroll_sample(cancel);
+        }
+        self.scroll_sample_adapter.reset();
+        self.pager_input_router.reset();
+        reset_settings_scroll_for_lifecycle(
+            &mut self.settings_scroll,
+            &mut self.settings_scroll_rows,
+            boundary,
+        );
     }
 
     /// How many content rows can be scrolled below the fold for the current
@@ -647,6 +819,7 @@ impl App {
             self.folders = crate::features::folders::FolderFeatureState::default();
             self.folder_scroller = None;
             self.folder_layout = None;
+            self.folder_scroll_pending_commit = false;
         }
         if self.editing {
             self.exit_edit_mode();
@@ -982,6 +1155,55 @@ impl App {
     }
 }
 
+pub(crate) fn scroll_sample_instant(origin: Instant, timestamp_us: u64) -> Instant {
+    origin
+        .checked_add(Duration::from_micros(timestamp_us))
+        .unwrap_or_else(Instant::now)
+}
+
+/// Final production dispatch shared by main and folder pagers. Keeping the
+/// timestamp conversion here makes the AppKit epoch contract directly
+/// integration-testable through Scroller diagnostics.
+pub(crate) fn apply_scroll_sample_to_pager(
+    scroller: &mut crate::scroll::Scroller,
+    sample: crate::input_routing::ScrollSample,
+    clock_origin: Instant,
+) -> bool {
+    let phase = match sample.contact_phase {
+        crate::input_routing::NativeScrollPhase::Began => WheelPhase::Started,
+        crate::input_routing::NativeScrollPhase::Changed => WheelPhase::Moved,
+        crate::input_routing::NativeScrollPhase::Ended => WheelPhase::Ended,
+        crate::input_routing::NativeScrollPhase::Cancelled => WheelPhase::Cancelled,
+        crate::input_routing::NativeScrollPhase::None => return false,
+    };
+    scroller.apply_wheel_delta_scaled(
+        sample.canonical_dx,
+        sample.canonical_dy,
+        sample.scale_factor,
+        scroll_sample_instant(clock_origin, sample.timestamp_us),
+        phase,
+    );
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollLifecycleBoundary {
+    FocusLoss,
+    HideWindow,
+}
+
+fn reset_settings_scroll_for_lifecycle(
+    scroller: &mut crate::scroll::ContinuousScroller,
+    rows: &mut i32,
+    boundary: ScrollLifecycleBoundary,
+) {
+    scroller.cancel_motion_preserving_position();
+    if boundary == ScrollLifecycleBoundary::HideWindow {
+        *rows = 0;
+        scroller.set_position(0.0);
+    }
+}
+
 impl App {
     pub(crate) fn folder_hover_candidate_at_pointer(
         &self,
@@ -1261,7 +1483,7 @@ impl App {
             crate::ui_model::geometry::Point::new(x, y),
             self.folders.page,
             layout.page_count,
-            self.scale_factor,
+            layout.effective_scale,
         )
     }
 
@@ -1303,7 +1525,7 @@ impl App {
             crate::ui_model::geometry::Point::new(x, y),
             self.folders.page,
             child_count,
-            self.scale_factor,
+            layout.effective_scale,
         )
     }
 
@@ -1321,8 +1543,11 @@ impl App {
         };
         let panel = layout.current_panel_rect;
         let pointer = crate::ui_model::geometry::Point::new(self.drag_x, self.drag_y);
-        let in_page_edge =
-            crate::features::folders::child_drag_in_page_edge(panel, pointer, self.scale_factor);
+        let in_page_edge = crate::features::folders::child_drag_in_page_edge(
+            panel,
+            pointer,
+            layout.effective_scale,
+        );
         match self.folder_child_boundary_intent(self.drag_x, self.drag_y) {
             crate::features::folders::ChildDragBoundaryIntent::Page(target)
                 if !self.folders.child_page_latched =>
@@ -1501,6 +1726,7 @@ impl App {
     fn settle_folder_page(&mut self, page: usize) {
         if let Some(scroller) = self.folder_scroller.as_mut() {
             scroller.settle_to_page(page);
+            self.folder_scroll_pending_commit = true;
         } else {
             self.folders.page = page;
         }
@@ -1515,10 +1741,46 @@ impl App {
             return;
         };
         let extent = layout.target_panel_rect.width.max(1.0);
-        self.folders.page = ((-scroller.position / extent).round() as isize)
-            .clamp(0, layout.page_count.saturating_sub(1) as isize)
-            as usize;
+        let (commit, pending) = folder_page_commit_after_settle(
+            scroller.position,
+            extent,
+            layout.page_count,
+            scroller.phase,
+            self.folder_scroll_pending_commit,
+        );
+        self.folder_scroll_pending_commit = pending;
+        if let Some(page) = commit {
+            self.folders.page = page;
+        }
     }
+}
+
+fn folder_page_commit_after_settle(
+    position: f32,
+    extent: f32,
+    page_count: usize,
+    phase: Phase,
+    was_pending: bool,
+) -> (Option<usize>, bool) {
+    if phase != Phase::Idle {
+        return (None, true);
+    }
+    if !was_pending {
+        return (None, false);
+    }
+    let page = ((-position / extent.max(1.0)).round() as isize)
+        .clamp(0, page_count.saturating_sub(1) as isize) as usize;
+    (Some(page), false)
+}
+
+fn folder_scroll_commit_pending_after_sample(
+    was_pending: bool,
+    sample: crate::input_routing::ScrollSample,
+    applied_to_folder: bool,
+) -> bool {
+    was_pending
+        || (applied_to_folder
+            && sample.contact_phase != crate::input_routing::NativeScrollPhase::None)
 }
 
 /// Push a single parameter value into the renderer.
@@ -1554,5 +1816,127 @@ fn debug_flag_to_renderer(
         D::ShowDisplacement => R::ShowDisplacement,
         D::ShowAlphaMask => R::ShowAlphaMask,
         D::ShowFinalGlassOnly => R::ShowFinalGlassOnly,
+    }
+}
+
+#[cfg(test)]
+mod folder_page_commit_tests {
+    use super::*;
+
+    #[test]
+    fn half_page_preview_does_not_change_durable_page() {
+        for phase in [Phase::Dragging, Phase::WheelGesture, Phase::Settling] {
+            let (commit, pending) = folder_page_commit_after_settle(-50.0, 100.0, 3, phase, false);
+            assert_eq!(commit, None);
+            assert!(pending);
+        }
+    }
+
+    #[test]
+    fn snapped_page_commits_once_after_idle() {
+        let (commit, pending) =
+            folder_page_commit_after_settle(-100.0, 100.0, 3, Phase::Idle, true);
+        assert_eq!(commit, Some(1));
+        assert!(!pending);
+        let (second_commit, second_pending) =
+            folder_page_commit_after_settle(-100.0, 100.0, 3, Phase::Idle, pending);
+        assert_eq!(second_commit, None);
+        assert!(!second_pending);
+    }
+
+    #[test]
+    fn batched_exact_page_release_commits_on_first_idle_frame() {
+        use crate::input_routing::{
+            NativeScrollPhase, ScrollPhaseCapability, ScrollSample, ScrollSource,
+        };
+
+        fn sample(timestamp_us: u64, dx: f32, phase: NativeScrollPhase) -> ScrollSample {
+            ScrollSample {
+                gesture_id: 1,
+                timestamp_us,
+                raw_dx: dx,
+                raw_dy: 0.0,
+                canonical_dx: dx,
+                canonical_dy: 0.0,
+                source: ScrollSource::Precise,
+                contact_phase: phase,
+                momentum_phase: NativeScrollPhase::None,
+                sequence_complete: false,
+                scale_factor: 1.0,
+                direction_inverted_from_device: false,
+                phase_capability: ScrollPhaseCapability::Separate,
+            }
+        }
+
+        let origin = Instant::now();
+        let mut scroller = crate::scroll::Scroller::new(crate::scroll::ScrollBounds {
+            page_extent: 1000.0,
+            page_count: 3,
+        });
+        let mut pending = false;
+        // All packets are intentionally delivered before any redraw/tick.
+        for sample in [
+            sample(0, 0.0, NativeScrollPhase::Began),
+            sample(16_000, -1000.0, NativeScrollPhase::Changed),
+            sample(96_000, 0.0, NativeScrollPhase::Ended),
+        ] {
+            let applied = apply_scroll_sample_to_pager(&mut scroller, sample, origin);
+            pending = folder_scroll_commit_pending_after_sample(pending, sample, applied);
+        }
+        assert!(pending);
+        assert_eq!(scroller.position, -1000.0);
+        assert_eq!(scroller.velocity, 0.0);
+        assert_eq!(scroller.phase, Phase::Settling);
+
+        scroller.tick(origin + Duration::from_millis(112));
+        assert_eq!(scroller.phase, Phase::Idle);
+        let (commit, pending) =
+            folder_page_commit_after_settle(scroller.position, 1000.0, 3, scroller.phase, pending);
+        assert_eq!(commit, Some(1));
+        assert!(!pending);
+    }
+
+    #[test]
+    fn ignored_focus_loss_preserves_settings_position_but_cancels_motion() {
+        let mut scroller =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        scroller.set_sizes(1000.0, 400.0);
+        scroller.set_position(180.0);
+        scroller.velocity = 200.0;
+        scroller.phase = crate::scroll::ContinuousPhase::Inertial;
+        let mut rows = 3;
+
+        reset_settings_scroll_for_lifecycle(
+            &mut scroller,
+            &mut rows,
+            ScrollLifecycleBoundary::FocusLoss,
+        );
+
+        assert_eq!(scroller.position, 180.0);
+        assert_eq!(scroller.velocity, 0.0);
+        assert_eq!(scroller.phase, crate::scroll::ContinuousPhase::Idle);
+        assert_eq!(rows, 3);
+    }
+
+    #[test]
+    fn actual_hide_resets_settings_position_after_cancelling_motion() {
+        let mut scroller =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        scroller.set_sizes(1000.0, 400.0);
+        scroller.set_position(180.0);
+        scroller.velocity = 200.0;
+        scroller.phase = crate::scroll::ContinuousPhase::Inertial;
+        let mut rows = 3;
+
+        reset_settings_scroll_for_lifecycle(
+            &mut scroller,
+            &mut rows,
+            ScrollLifecycleBoundary::HideWindow,
+        );
+
+        assert_eq!(scroller.position, 0.0);
+        assert_eq!(scroller.velocity, 0.0);
+        assert_eq!(scroller.phase, crate::scroll::ContinuousPhase::Idle);
+        assert_eq!(rows, 0);
     }
 }

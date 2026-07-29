@@ -315,7 +315,7 @@ pub fn hit_test(model: &BottomControlModel, point: Point) -> BottomControlPointe
 
 impl BottomControlModel {
     /// The capsule geometry used for hit-testing (non-edit-width resolve).
-    fn capsule_hit_geometry(&self) -> ControlGeometry {
+    pub fn capsule_hit_geometry(&self) -> ControlGeometry {
         let (geom, _) = resolve_scaled_with_edit_width(
             self.layout.input.state(),
             self.layout.input.viewport,

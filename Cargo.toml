@@ -9,6 +9,10 @@ default-run = "launchpad-windows"
 [features]
 default = []
 gpu-profile = ["dep:wgpu-profiler"]
+# Emit the raw and inverted horizontal deltas of each trackpad wheel event to
+# stderr, so the macOS "natural scrolling" sign convention can be verified on
+# real hardware. Enable with: cargo run --release --features wheel-debug
+wheel-debug = []
 
 [dependencies]
 wgpu = "29"
@@ -71,6 +75,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSResponder",
     "NSRunningApplication",
     "NSEvent",
+    "NSScreen",
     "NSScrollView",
     "NSView",
     "NSWindow",
@@ -100,6 +105,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSNotification",
     "NSObject",
     "NSString",
+    "NSUserDefaults",
     "std",
 ] }
 plist = "1.7.0"

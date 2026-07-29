@@ -34,6 +34,7 @@ impl App {
         self.folders.hover = None;
         self.folders.hover_opened = None;
         self.folder_scroller = None;
+        self.folder_scroll_pending_commit = false;
         self.folders.open(id);
         self.relayout();
         self.request_redraw();
@@ -78,6 +79,7 @@ impl App {
             let Some(folder) = self.launcher_state.folders.get(&folder_id).cloned() else {
                 self.folders = crate::features::folders::FolderFeatureState::default();
                 self.folder_scroller = None;
+                self.folder_scroll_pending_commit = false;
                 self.clear_folder_panel_presentation();
                 return;
             };
@@ -568,6 +570,7 @@ impl App {
     fn clear_folder_panel_presentation(&mut self) {
         if !self.folders.is_active() {
             self.folder_scroller = None;
+            self.folder_scroll_pending_commit = false;
             self.folder_child_springs.clear();
         }
         self.folder_layout = None;

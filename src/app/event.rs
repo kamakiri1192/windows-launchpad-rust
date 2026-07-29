@@ -43,6 +43,10 @@ pub enum UserEvent {
     QuitRequested,
     /// Toggle the settings overlay (tray "Settings" / gear button).
     ToggleSettings,
+    /// macOS AppKit packet retaining separate physical-contact and momentum
+    /// phases. The winit MouseWheel duplicate is suppressed while this monitor
+    /// is installed.
+    NativeScroll(crate::input_routing::RawScrollEvent),
 }
 
 /// A settings-overlay row/category hit, in shell-owned terms. Mirrors the

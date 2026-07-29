@@ -68,7 +68,7 @@ impl App {
         } else {
             false
         };
-        if folder_scroller_animating {
+        if self.folder_scroller.is_some() {
             self.update_folder_page_from_scroll();
         }
         let auto_scroll_started = self.maybe_autoscroll_edit_drag();
@@ -121,6 +121,7 @@ impl App {
         let folder_animating = self.folders.tick(anim_dt);
         if folder_was_active && !self.folders.is_active() {
             self.folder_scroller = None;
+            self.folder_scroll_pending_commit = false;
         }
         if folder_animating || hover_changed || (folder_was_active && !self.folders.is_active()) {
             self.relayout();

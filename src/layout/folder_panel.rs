@@ -33,6 +33,31 @@ const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.14;
 /// colored tile fill into its own center. Icons keep their full trajectory.
 const CHILD_FILL_COLLAPSE_PROGRESS: f32 = 0.42;
 
+/// Resolve the one geometry scale shared by folder drawing and every
+/// page/drag hit calculation.
+pub fn resolved_geometry_scale(
+    viewport: (u32, u32),
+    requested_scale: f32,
+    child_count: usize,
+) -> f32 {
+    let viewport_h = viewport.1.max(1) as f32;
+    let page_count = child_count.div_ceil(PAGE_SIZE).max(1);
+    let layout_count = child_count.min(PAGE_SIZE);
+    let rows = layout_count.div_ceil(COLS);
+    let base_content_height = if rows == 0 {
+        20.0
+    } else {
+        rows as f32 * (CELL_SIZE + LABEL_HEIGHT) + rows.saturating_sub(1) as f32 * CELL_GAP_Y
+    };
+    let base_indicator_height = if page_count > 1 { 24.0 } else { 8.0 };
+    let base_required_height = PANEL_PADDING_TOP
+        + base_content_height
+        + base_indicator_height
+        + PANEL_PADDING_BOTTOM
+        + VIEWPORT_MARGIN * 2.0;
+    sanitize_scale(requested_scale).min(viewport_h / base_required_height.max(1.0))
+}
+
 /// Resolve an insertion slot on the current folder page, including empty
 /// cells. Existing child hit regions remain the more precise target; this
 /// fallback lets a held child be dropped into unused cells after edge paging.
@@ -108,10 +133,13 @@ pub struct FolderPanelModel {
     pub child_rects: Vec<Rect>,
     pub page: usize,
     pub page_count: usize,
+    /// Effective physical geometry scale after fitting the complete 3×3
+    /// content. App-level drop/edge logic must use this, not the requested
+    /// backing scale.
+    pub effective_scale: f32,
 }
 
 pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
-    let scale = sanitize_scale(input.scale_factor);
     let viewport_w = input.viewport.0.max(1) as f32;
     let viewport_h = input.viewport.1.max(1) as f32;
     let page_count = input.children.len().div_ceil(PAGE_SIZE).max(1);
@@ -119,6 +147,13 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     let layout_count = input.children.len().min(PAGE_SIZE);
     let cols = layout_count.clamp(1, COLS);
     let rows = layout_count.div_ceil(COLS);
+    // A physical 800px-tall QA viewport is only 400pt at 2x. Scaling every
+    // 3x3 metric by backing scale would make the third row intrinsically
+    // taller than the viewport, then merely clamp the glass panel while
+    // leaving its children outside. Compress the folder's geometry as one
+    // coherent unit when necessary; text still receives the real backing
+    // scale for raster sharpness.
+    let scale = resolved_geometry_scale(input.viewport, input.scale_factor, input.children.len());
     let content_width =
         cols as f32 * CELL_SIZE * scale + cols.saturating_sub(1) as f32 * CELL_GAP_X * scale;
     let panel_w = (content_width + PANEL_PADDING_X * 2.0 * scale)
@@ -391,7 +426,21 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             HitTarget::folder_title(input.folder_key),
             130,
         ));
+        // Drawing intentionally includes neighboring pages during tracking and
+        // settling, but ordinary hit ownership remains on the durable page.
+        // A child drag is the sole exception: edge-dwell paging must be able
+        // to drop onto the visually selected destination before persistence
+        // catches up on the first idle frame.
+        let hit_page = if input.dragged_child_key.is_some() {
+            ((-input.page_scroll_x / target.width.max(1.0)).round() as isize)
+                .clamp(0, page_count.saturating_sub(1) as isize) as usize
+        } else {
+            page
+        };
         for (global_index, (child, rect)) in input.children.iter().zip(&child_rects).enumerate() {
+            if global_index / PAGE_SIZE != hit_page {
+                continue;
+            }
             if let Some(clipped) = intersect_rect(*rect, target) {
                 hits.push(HitRegion::new(
                     UiId::folder_child(input.folder_key, child.key),
@@ -465,6 +514,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         child_rects,
         page,
         page_count,
+        effective_scale: scale,
     }
 }
 
@@ -567,6 +617,26 @@ mod tests {
         page: usize,
         page_scroll_x: f32,
     ) -> FolderPanelModel {
+        model_with_page_in_viewport(
+            count,
+            progress,
+            scale,
+            source_rect,
+            page,
+            page_scroll_x,
+            (1280, 800),
+        )
+    }
+
+    fn model_with_page_in_viewport(
+        count: usize,
+        progress: f32,
+        scale: f32,
+        source_rect: Rect,
+        page: usize,
+        page_scroll_x: f32,
+        viewport: (u32, u32),
+    ) -> FolderPanelModel {
         let owned = children(count);
         let input: Vec<_> = owned
             .iter()
@@ -578,7 +648,7 @@ mod tests {
             })
             .collect();
         build(FolderPanelInput {
-            viewport: (1280, 800),
+            viewport,
             scale_factor: scale,
             folder_key: "folder-0",
             name: "仕事",
@@ -730,6 +800,37 @@ mod tests {
     }
 
     #[test]
+    fn half_page_draws_neighbor_but_hits_only_committed_page_until_settle_commit() {
+        let source = Rect::new(100.0, 120.0, 84.0, 84.0);
+        let first = model_with_page(18, 1.0, 1.0, source, 0, 0.0);
+        let page_width = first.target_panel_rect.width;
+        let halfway = model_with_page(18, 1.0, 1.0, source, 0, -page_width * 0.5);
+        let neighbor_point = halfway.child_rects[9].center();
+        assert!(
+            intersect_rect(halfway.child_rects[9], halfway.target_panel_rect).is_some(),
+            "neighbor must remain visible while tracking"
+        );
+        assert!(!matches!(
+            halfway
+                .result
+                .hits
+                .hit_test(neighbor_point)
+                .map(|hit| &hit.target),
+            Some(HitTarget::FolderChild { index: 9, .. })
+        ));
+
+        let committed = model_with_page(18, 1.0, 1.0, source, 1, -page_width);
+        assert!(matches!(
+            committed
+                .result
+                .hits
+                .hit_test(committed.child_rects[9].center())
+                .map(|hit| &hit.target),
+            Some(HitTarget::FolderChild { index: 9, .. })
+        ));
+    }
+
+    #[test]
     fn empty_cell_drop_on_second_page_resolves_to_that_page() {
         let panel = Rect::new(370.0, 44.0, 540.0, 712.0);
         let grid_width = 3.0 * CELL_SIZE + 2.0 * CELL_GAP_X;
@@ -760,6 +861,93 @@ mod tests {
         let first = model_with_page(10, 1.0, 1.0, source, 0, 0.0);
         let second = model_with_page(10, 1.0, 1.0, source, 1, -first.target_panel_rect.width);
         assert_eq!(first.target_panel_rect, second.target_panel_rect);
+    }
+
+    #[test]
+    fn three_by_three_labels_fit_at_common_hidpi_scales_in_800px_viewport() {
+        for scale in [1.0, 1.5, 2.0] {
+            let value = model_with_page_in_viewport(
+                18,
+                1.0,
+                scale,
+                Rect::new(100.0, 120.0, 84.0 * scale, 84.0 * scale),
+                0,
+                0.0,
+                (1280, 800),
+            );
+            let panel = value.target_panel_rect;
+            assert!(panel.y >= 0.0 && panel.max_y() <= 800.0);
+            let labels: Vec<_> = value
+                .result
+                .render
+                .text
+                .iter()
+                .filter(|text| text.style.role == TextRole::FolderItemLabel)
+                .filter(|text| {
+                    text.rect.center().x >= panel.x && text.rect.center().x <= panel.max_x()
+                })
+                .collect();
+            assert_eq!(labels.len(), 9);
+            assert!(labels
+                .iter()
+                .all(|label| { label.rect.y >= panel.y && label.rect.max_y() <= panel.max_y() }));
+            let last_label_bottom = labels
+                .iter()
+                .map(|label| label.rect.max_y())
+                .fold(f32::NEG_INFINITY, f32::max);
+            let first_dot_y = value
+                .result
+                .render
+                .ink
+                .iter()
+                .find(|batch| batch.lane == InkLane::Modal)
+                .and_then(|batch| {
+                    batch
+                        .views
+                        .iter()
+                        .find(|view| view.kind == ControlKind::Dot)
+                })
+                .map(|dot| dot.center.y)
+                .unwrap();
+            assert!(
+                last_label_bottom < first_dot_y,
+                "scale={scale}: labels must not collide with page dots"
+            );
+            assert!(value.title_rect.max_y() < value.child_rects[0].y);
+        }
+    }
+
+    #[test]
+    fn resolved_scale_maps_all_nine_rendered_cell_centers_to_their_drop_index() {
+        for requested_scale in [1.0, 1.5, 2.0] {
+            let value = model_with_page_in_viewport(
+                9,
+                1.0,
+                requested_scale,
+                Rect::new(100.0, 120.0, 84.0 * requested_scale, 84.0 * requested_scale),
+                0,
+                0.0,
+                (1280, 800),
+            );
+            assert_eq!(
+                value.effective_scale,
+                resolved_geometry_scale((1280, 800), requested_scale, 9)
+            );
+            for (index, rect) in value.child_rects.iter().take(9).enumerate() {
+                assert_eq!(
+                    child_drop_index(
+                        value.target_panel_rect,
+                        rect.center(),
+                        0,
+                        9,
+                        value.effective_scale,
+                    ),
+                    Some(index),
+                    "requested_scale={requested_scale}, effective_scale={}, index={index}",
+                    value.effective_scale,
+                );
+            }
+        }
     }
 
     #[test]

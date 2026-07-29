@@ -78,11 +78,9 @@ pub enum AppAction {
     },
     PointerRelease(ReleaseAction),
     CursorLeft,
-    /// Vertical mouse-wheel / trackpad scroll delta in logical px.
-    /// Positive y = scroll down. (x is reserved for future horizontal scroll.)
-    MouseWheel {
-        delta_px: (f32, f32),
-    },
+    /// Platform-normalized scroll input. Production MouseWheel events and
+    /// deterministic QA scenarios enter through this same routing boundary.
+    ScrollSample(crate::input_routing::ScrollSample),
 }
 
 /// Keyboard intent, classified by [`keyboard_action`] from the shell flags and
@@ -526,16 +524,12 @@ impl App {
             AppAction::CursorLeft => {
                 self.handle_cursor_left();
             }
-            AppAction::MouseWheel { delta_px } => {
-                // Wheel only drives the settings overlay for now; the grid
-                // scroll stays pointer-drag based.
-                if self.settings_panel_active() {
-                    self.scroll_settings_by_px(delta_px.1);
-                }
-            }
+            AppAction::ScrollSample(sample) => self.handle_scroll_sample(sample),
         }
     }
+}
 
+impl App {
     /// Handle a classified keyboard action. This replaces the historical inline
     /// `WindowEvent::KeyboardInput` branch: the precedence decision lives in
     /// [`keyboard_action`], this method runs the side effect.
@@ -1015,6 +1009,11 @@ impl App {
             return;
         }
         if !focused {
+            // Focus loss is a lifecycle boundary even when an edit/settings
+            // exception keeps the window visible. Deliver a single Cancelled
+            // to the sticky pager owner, then clear every continuation before
+            // any possible HideWindow command repeats the reset.
+            self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::FocusLoss);
             #[cfg(target_os = "macos")]
             if self.awaiting_initial_focus {
                 debug_log!("window_event: initial Focused(false) ignored until focus acquisition");

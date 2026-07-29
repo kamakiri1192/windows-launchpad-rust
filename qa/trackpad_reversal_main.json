@@ -1,0 +1,231 @@
+{
+  "name": "trackpad-reversal-main",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 7200,
+  "output_dir": "target/qa-sequences",
+  "scroll_expectations": {
+    "min_samples": 19,
+    "expected_terminal_contacts": 4,
+    "expected_horizontal_releases": 4,
+    "expected_target_decisions": 4,
+    "expected_spring_generations": 4,
+    "expected_releases": [
+      {
+        "gesture_id": 1,
+        "surface": "main",
+        "min_filtered_velocity": -50000.0,
+        "max_filtered_velocity": -40000.0,
+        "target_x": -1440.0
+      },
+      {
+        "gesture_id": 2,
+        "surface": "main",
+        "min_filtered_velocity": -7000.0,
+        "max_filtered_velocity": -4000.0,
+        "target_x": -2880.0
+      },
+      {
+        "gesture_id": 3,
+        "surface": "main",
+        "min_filtered_velocity": 40000.0,
+        "max_filtered_velocity": 70000.0,
+        "target_x": -1440.0
+      },
+      {
+        "gesture_id": 4,
+        "surface": "main",
+        "min_filtered_velocity": -18000.0,
+        "max_filtered_velocity": -10000.0,
+        "target_x": -2880.0
+      }
+    ],
+    "min_zero_crossings": 2,
+    "required_surfaces": ["main"]
+  },
+  "fixture": {
+    "generated_apps": [
+      {
+        "prefix": "qa-reversal-main",
+        "name_prefix": "Reversal App",
+        "count": 71
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 100,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 100000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 116,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 116000,
+      "canonical_dx": -900.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 132,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 132000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    {
+      "at_ms": 1500,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1500000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 1516,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1516000,
+      "canonical_dx": 16.64,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 1532,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1532000,
+      "canonical_dx": -12.48,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 1548,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1548000,
+      "canonical_dx": 8.32,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 1564,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1564000,
+      "canonical_dx": -374.4,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 1580,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1580000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+    {
+      "at_ms": 1600,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1600000,
+      "canonical_dx": -24.96,
+      "canonical_dy": 0.0,
+      "momentum_phase": "changed"
+    },
+    {
+      "at_ms": 1616,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 1616000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "momentum_phase": "ended"
+    },
+
+    {
+      "at_ms": 3100,
+      "type": "scroll_sample",
+      "gesture_id": 3,
+      "timestamp_us": 3100000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 3116,
+      "type": "scroll_sample",
+      "gesture_id": 3,
+      "timestamp_us": 3116000,
+      "canonical_dx": 900.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 3132,
+      "type": "scroll_sample",
+      "gesture_id": 3,
+      "timestamp_us": 3132000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    {
+      "at_ms": 4600,
+      "type": "scroll_sample",
+      "gesture_id": 4,
+      "timestamp_us": 4600000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 4616,
+      "type": "scroll_sample",
+      "gesture_id": 4,
+      "timestamp_us": 4616000,
+      "canonical_dx": 582.4,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 4632,
+      "type": "scroll_sample",
+      "gesture_id": 4,
+      "timestamp_us": 4632000,
+      "canonical_dx": -707.2,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 4648,
+      "type": "scroll_sample",
+      "gesture_id": 4,
+      "timestamp_us": 4648000,
+      "canonical_dx": -249.6,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 4664,
+      "type": "scroll_sample",
+      "gesture_id": 4,
+      "timestamp_us": 4664000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    }
+  ]
+}

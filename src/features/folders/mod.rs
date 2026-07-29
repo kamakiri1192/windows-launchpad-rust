@@ -729,6 +729,31 @@ mod tests {
     }
 
     #[test]
+    fn child_drag_edges_use_the_same_resolved_scale_as_hidpi_folder_geometry() {
+        for requested_scale in [1.0, 1.5, 2.0] {
+            let scale = crate::layout::folder_panel::resolved_geometry_scale(
+                (1280, 800),
+                requested_scale,
+                9,
+            );
+            let panel = Rect::new(100.0, 80.0, 364.0 * scale, 522.0 * scale);
+            let (edge_zone, vertical_exit_slop) = child_drag_boundary_sizes(panel, scale);
+            let side = Point::new(panel.max_x() - edge_zone * 0.5, panel.center().y);
+            assert!(child_drag_in_page_edge(panel, side, scale));
+            assert_eq!(
+                child_drag_boundary_intent(panel, side, 0, 2, scale),
+                ChildDragBoundaryIntent::Page(1)
+            );
+            let vertical_exit =
+                Point::new(panel.center().x, panel.y - vertical_exit_slop - 0.5 * scale);
+            assert_eq!(
+                child_drag_boundary_intent(panel, vertical_exit, 0, 2, scale),
+                ChildDragBoundaryIntent::Exit
+            );
+        }
+    }
+
+    #[test]
     fn child_reorder_is_presentation_only_until_caller_commits() {
         let original = vec![app("a"), app("b"), app("c")];
         let mut drag = ChildDrag {

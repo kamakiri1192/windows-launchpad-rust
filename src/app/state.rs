@@ -239,6 +239,9 @@ pub struct App {
     pub input_routing_publisher: crate::input_routing::InputRoutingPublisher,
     pub input_routing_generation: u64,
     pub input_qa_last_signature: Option<String>,
+    pub scroll_sample_adapter: crate::input_routing::ScrollSampleAdapter,
+    pub pager_input_router: crate::input_routing::PagerInputRouter,
+    pub scroll_clock_origin: Instant,
     pub drag_start_x: f32,
     pub drag_start_y: f32,
     pub first_frame_rendered: bool,
@@ -269,6 +272,11 @@ pub struct App {
     pub folders: crate::features::folders::FolderFeatureState,
     pub folder_scroller: Option<Scroller>,
     pub folder_layout: Option<crate::layout::folder_panel::FolderPanelModel>,
+    /// Set while the folder pager is Tracking/Dragging/Settling. The durable
+    /// `folders.page` and page-dependent hit targets are committed only after
+    /// the scroller returns to Idle; `folder_scroller.position` remains the
+    /// continuous visual preview.
+    pub folder_scroll_pending_commit: bool,
     /// Per-child position springs used by the open-folder grid. Stable AppId
     /// keys preserve the visible position while preview order changes, then
     /// glide each non-dragged child to its new cell like the main grid.
@@ -411,6 +419,9 @@ impl App {
             input_routing_publisher,
             input_routing_generation: 0,
             input_qa_last_signature: None,
+            scroll_sample_adapter: crate::input_routing::ScrollSampleAdapter::default(),
+            pager_input_router: crate::input_routing::PagerInputRouter::default(),
+            scroll_clock_origin: Instant::now(),
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
@@ -424,6 +435,7 @@ impl App {
             folders: crate::features::folders::FolderFeatureState::default(),
             folder_scroller: None,
             folder_layout: None,
+            folder_scroll_pending_commit: false,
             folder_child_springs: Vec::new(),
             folder_pointer_move_serial: 0,
             relayout_serial: 0,

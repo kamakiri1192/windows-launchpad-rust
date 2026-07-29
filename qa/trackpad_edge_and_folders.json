@@ -1,0 +1,345 @@
+{
+  "name": "trackpad-edge-and-folders",
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 14000,
+  "output_dir": "target/qa-sequences",
+  "scroll_expectations": {
+    "min_samples": 25,
+    "expected_terminal_contacts": 5,
+    "expected_horizontal_releases": 5,
+    "expected_target_decisions": 5,
+    "expected_spring_generations": 5,
+    "expected_releases": [
+      {
+        "gesture_id": 10,
+        "surface": "main",
+        "min_filtered_velocity": 2000.0,
+        "max_filtered_velocity": 3000.0,
+        "target_x": 0.0
+      },
+      {
+        "gesture_id": 11,
+        "surface": "main",
+        "min_filtered_velocity": -50000.0,
+        "max_filtered_velocity": -25000.0,
+        "target_x": -1440.0
+      },
+      {
+        "gesture_id": 12,
+        "surface": "main",
+        "min_filtered_velocity": -5000.0,
+        "max_filtered_velocity": -2000.0,
+        "target_x": -1440.0
+      },
+      {
+        "gesture_id": 13,
+        "surface": "folder",
+        "min_filtered_velocity": -6000.0,
+        "max_filtered_velocity": -3000.0,
+        "target_x": -490.2357,
+        "target_tolerance": 0.5
+      },
+      {
+        "gesture_id": 14,
+        "surface": "folder",
+        "min_filtered_velocity": -1800.0,
+        "max_filtered_velocity": -800.0,
+        "target_x": 0.0
+      }
+    ],
+    "min_zero_crossings": 4,
+    "required_surfaces": ["main", "folder"]
+  },
+  "fixture": {
+    "generated_apps": [
+      {
+        "prefix": "qa-edge-main",
+        "name_prefix": "Edge App",
+        "count": 36
+      },
+      {
+        "prefix": "qa-folder-multi",
+        "name_prefix": "Multi Folder Child",
+        "count": 18,
+        "top_level": false
+      },
+      {
+        "prefix": "qa-folder-single",
+        "name_prefix": "Single Folder Child",
+        "count": 4,
+        "top_level": false
+      }
+    ],
+    "folders": [
+      {
+        "id": "qa-folder-multi-id",
+        "name": "Multi Page Folder",
+        "children": [
+          "qa-folder-multi-000", "qa-folder-multi-001",
+          "qa-folder-multi-002", "qa-folder-multi-003",
+          "qa-folder-multi-004", "qa-folder-multi-005",
+          "qa-folder-multi-006", "qa-folder-multi-007",
+          "qa-folder-multi-008", "qa-folder-multi-009",
+          "qa-folder-multi-010", "qa-folder-multi-011",
+          "qa-folder-multi-012", "qa-folder-multi-013",
+          "qa-folder-multi-014", "qa-folder-multi-015",
+          "qa-folder-multi-016", "qa-folder-multi-017"
+        ]
+      },
+      {
+        "id": "qa-folder-single-id",
+        "name": "Single Page Folder",
+        "children": [
+          "qa-folder-single-000", "qa-folder-single-001",
+          "qa-folder-single-002", "qa-folder-single-003"
+        ]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-folder-multi-id" },
+      { "kind": "folder", "id": "qa-folder-single-id" }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 100,
+      "type": "scroll_sample",
+      "gesture_id": 10,
+      "timestamp_us": 100000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 116,
+      "type": "scroll_sample",
+      "gesture_id": 10,
+      "timestamp_us": 116000,
+      "canonical_dx": 16.64,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 132,
+      "type": "scroll_sample",
+      "gesture_id": 10,
+      "timestamp_us": 132000,
+      "canonical_dx": 66.56,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 148,
+      "type": "scroll_sample",
+      "gesture_id": 10,
+      "timestamp_us": 148000,
+      "canonical_dx": 332.8,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 164,
+      "type": "scroll_sample",
+      "gesture_id": 10,
+      "timestamp_us": 164000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    {
+      "at_ms": 1100,
+      "type": "scroll_sample",
+      "gesture_id": 11,
+      "timestamp_us": 1100000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 1116,
+      "type": "scroll_sample",
+      "gesture_id": 11,
+      "timestamp_us": 1116000,
+      "canonical_dx": -600.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 1132,
+      "type": "scroll_sample",
+      "gesture_id": 11,
+      "timestamp_us": 1132000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+    {
+      "at_ms": 2300,
+      "type": "scroll_sample",
+      "gesture_id": 12,
+      "timestamp_us": 2300000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 2316,
+      "type": "scroll_sample",
+      "gesture_id": 12,
+      "timestamp_us": 2316000,
+      "canonical_dx": -16.64,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 2332,
+      "type": "scroll_sample",
+      "gesture_id": 12,
+      "timestamp_us": 2332000,
+      "canonical_dx": -66.56,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 2348,
+      "type": "scroll_sample",
+      "gesture_id": 12,
+      "timestamp_us": 2348000,
+      "canonical_dx": -332.8,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 2364,
+      "type": "scroll_sample",
+      "gesture_id": 12,
+      "timestamp_us": 2364000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    {
+      "at_ms": 3200,
+      "type": "open_folder",
+      "id": "qa-folder-multi-id"
+    },
+    {
+      "at_ms": 6200,
+      "type": "scroll_sample",
+      "gesture_id": 13,
+      "timestamp_us": 6200000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 6216,
+      "type": "scroll_sample",
+      "gesture_id": 13,
+      "timestamp_us": 6216000,
+      "canonical_dx": 12.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 6232,
+      "type": "scroll_sample",
+      "gesture_id": 13,
+      "timestamp_us": 6232000,
+      "canonical_dx": -9.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 6248,
+      "type": "scroll_sample",
+      "gesture_id": 13,
+      "timestamp_us": 6248000,
+      "canonical_dx": 6.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 6264,
+      "type": "scroll_sample",
+      "gesture_id": 13,
+      "timestamp_us": 6264000,
+      "canonical_dx": -320.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 6280,
+      "type": "scroll_sample",
+      "gesture_id": 13,
+      "timestamp_us": 6280000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    { "at_ms": 7500, "type": "escape" },
+    {
+      "at_ms": 9500,
+      "type": "open_folder",
+      "id": "qa-folder-single-id"
+    },
+    {
+      "at_ms": 12500,
+      "type": "scroll_sample",
+      "gesture_id": 14,
+      "timestamp_us": 12500000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 12516,
+      "type": "scroll_sample",
+      "gesture_id": 14,
+      "timestamp_us": 12516000,
+      "canonical_dx": 16.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 12532,
+      "type": "scroll_sample",
+      "gesture_id": 14,
+      "timestamp_us": 12532000,
+      "canonical_dx": -32.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 12548,
+      "type": "scroll_sample",
+      "gesture_id": 14,
+      "timestamp_us": 12548000,
+      "canonical_dx": 48.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 12564,
+      "type": "scroll_sample",
+      "gesture_id": 14,
+      "timestamp_us": 12564000,
+      "canonical_dx": -400.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 12580,
+      "type": "scroll_sample",
+      "gesture_id": 14,
+      "timestamp_us": 12580000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    }
+  ]
+}

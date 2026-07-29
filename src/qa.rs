@@ -33,6 +33,8 @@ pub struct QaScenario {
     pub output_dir: PathBuf,
     pub fixture: QaFixture,
     #[serde(default)]
+    pub scroll_expectations: Option<QaScrollExpectations>,
+    #[serde(default)]
     pub actions: Vec<TimedAction>,
 }
 
@@ -45,11 +47,80 @@ fn default_fps() -> u32 {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QaScrollExpectations {
+    pub min_samples: usize,
+    pub expected_terminal_contacts: u32,
+    pub expected_horizontal_releases: u32,
+    pub expected_target_decisions: u32,
+    pub expected_spring_generations: u32,
+    pub expected_releases: Vec<QaReleaseExpectation>,
+    #[serde(default)]
+    pub min_zero_crossings: u32,
+    pub required_surfaces: Vec<QaPagerSurface>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QaReleaseExpectation {
+    pub gesture_id: u64,
+    pub surface: QaPagerSurface,
+    pub min_filtered_velocity: f32,
+    pub max_filtered_velocity: f32,
+    pub target_x: f32,
+    #[serde(default = "default_target_tolerance")]
+    pub target_tolerance: f32,
+    #[serde(default)]
+    pub min_release_position_x: Option<f32>,
+    #[serde(default)]
+    pub max_release_position_x: Option<f32>,
+    #[serde(default)]
+    pub settled_position_x: Option<f32>,
+    #[serde(default)]
+    pub max_settle_duration_ms: Option<u64>,
+}
+
+fn default_target_tolerance() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum QaPagerSurface {
+    Main,
+    Folder,
+}
+
+impl QaPagerSurface {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Folder => "folder",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QaFixture {
+    #[serde(default)]
     pub apps: Vec<QaApp>,
     #[serde(default)]
+    pub generated_apps: Vec<QaGeneratedApps>,
+    #[serde(default)]
     pub folders: Vec<QaFolder>,
+    #[serde(default)]
     pub items: Vec<QaItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QaGeneratedApps {
+    pub prefix: String,
+    pub name_prefix: String,
+    pub count: usize,
+    #[serde(default = "default_true")]
+    pub top_level: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -82,15 +153,432 @@ pub struct TimedAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QaAction {
-    OpenFolder { id: String },
-    Move { target: QaTarget },
+    OpenFolder {
+        id: String,
+    },
+    Move {
+        target: QaTarget,
+    },
     PointerDown,
     LongPress,
     PointerUp,
-    TypeText { value: String },
+    TypeText {
+        value: String,
+    },
     CommitRename,
     Escape,
     ExitEditMode,
+    /// Replay a production-normalized scroll sample. Deltas use the pager's
+    /// canonical display convention: positive x moves the visible grid right.
+    ScrollSample {
+        #[serde(default)]
+        gesture_id: Option<u64>,
+        timestamp_us: u64,
+        canonical_dx: f32,
+        canonical_dy: f32,
+        #[serde(default)]
+        source: QaScrollSource,
+        #[serde(default)]
+        contact_phase: QaScrollPhase,
+        #[serde(default)]
+        momentum_phase: QaScrollPhase,
+        #[serde(default)]
+        sequence_complete: bool,
+    },
+    /// Replay a raw native packet through the production `ScrollSampleAdapter`.
+    /// `expected_canonical_*` makes preservation of AppKit's already
+    /// preference-adjusted delta observable.
+    NativeScrollSample {
+        timestamp_us: u64,
+        raw_dx: f32,
+        raw_dy: f32,
+        expected_canonical_dx: f32,
+        expected_canonical_dy: f32,
+        #[serde(default)]
+        source: QaScrollSource,
+        #[serde(default)]
+        contact_phase: QaScrollPhase,
+        #[serde(default)]
+        momentum_phase: QaScrollPhase,
+        #[serde(default)]
+        sequence_complete: bool,
+        #[serde(default)]
+        direction_inverted_from_device: bool,
+        #[serde(default = "default_scale_factor")]
+        scale_factor: f32,
+    },
+}
+
+fn default_scale_factor() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QaScrollSource {
+    #[default]
+    Precise,
+    Line,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QaScrollPhase {
+    #[default]
+    None,
+    Began,
+    Changed,
+    Ended,
+    Cancelled,
+}
+
+impl QaScrollPhase {
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Ended | Self::Cancelled)
+    }
+}
+
+fn expand_generated_apps(fixture: &mut QaFixture) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    let mut ids = fixture
+        .apps
+        .iter()
+        .map(|app| app.id.clone())
+        .collect::<BTreeSet<_>>();
+    for generated in std::mem::take(&mut fixture.generated_apps) {
+        if generated.prefix.is_empty() {
+            return Err("generated_apps prefix cannot be empty".to_owned());
+        }
+        for index in 0..generated.count {
+            let id = format!("{}-{index:03}", generated.prefix);
+            if !ids.insert(id.clone()) {
+                return Err(format!("generated_apps produced duplicate id={id}"));
+            }
+            fixture.apps.push(QaApp {
+                id: id.clone(),
+                name: format!("{} {index:03}", generated.name_prefix),
+            });
+            if generated.top_level {
+                fixture.items.push(QaItem::App { id });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_scroll_actions(actions: &mut [TimedAction]) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    let mut next_gesture_id = 1_u64;
+    let mut active_contact = None;
+    let mut quarantined = BTreeSet::new();
+    let mut completed = BTreeSet::new();
+    let mut previous_timestamp = None;
+
+    for (index, timed) in actions.iter_mut().enumerate() {
+        let QaAction::ScrollSample {
+            gesture_id,
+            timestamp_us,
+            canonical_dx,
+            canonical_dy,
+            contact_phase,
+            momentum_phase,
+            sequence_complete,
+            ..
+        } = &mut timed.action
+        else {
+            continue;
+        };
+
+        if !canonical_dx.is_finite() || !canonical_dy.is_finite() {
+            return Err(format!(
+                "scroll_sample action {index} has a non-finite canonical delta"
+            ));
+        }
+        if previous_timestamp.is_some_and(|previous| *timestamp_us < previous) {
+            return Err(format!(
+                "scroll_sample action {index} timestamp_us={} moves backwards",
+                *timestamp_us
+            ));
+        }
+        previous_timestamp = Some(*timestamp_us);
+
+        let has_contact = *contact_phase != QaScrollPhase::None;
+        let has_momentum = *momentum_phase != QaScrollPhase::None;
+        if has_contact && has_momentum {
+            return Err(format!(
+                "scroll_sample action {index} cannot carry contact and momentum phases together"
+            ));
+        }
+        if *sequence_complete
+            && (has_contact || has_momentum || *canonical_dx != 0.0 || *canonical_dy != 0.0)
+        {
+            return Err(format!(
+                "scroll_sample action {index} sequence_complete must be a zero-delta phase-less terminal signal"
+            ));
+        }
+        if !has_contact && !has_momentum && !*sequence_complete {
+            return Err(format!(
+                "scroll_sample action {index} must carry a contact phase, momentum phase, or sequence_complete"
+            ));
+        }
+
+        let resolved = if has_contact {
+            match *contact_phase {
+                QaScrollPhase::Began => {
+                    if active_contact.is_some() {
+                        return Err(format!(
+                            "scroll_sample action {index} begins a second active contact"
+                        ));
+                    }
+                    let id = gesture_id.unwrap_or(next_gesture_id);
+                    if quarantined.contains(&id) || completed.contains(&id) {
+                        return Err(format!(
+                            "scroll_sample action {index} reuses terminal gesture_id={id}"
+                        ));
+                    }
+                    next_gesture_id = next_gesture_id.max(id.saturating_add(1));
+                    active_contact = Some(id);
+                    id
+                }
+                QaScrollPhase::Changed | QaScrollPhase::Ended | QaScrollPhase::Cancelled => {
+                    let active = active_contact.ok_or_else(|| {
+                        format!(
+                            "scroll_sample action {index} has {:?} without an active contact",
+                            *contact_phase
+                        )
+                    })?;
+                    let id = gesture_id.unwrap_or(active);
+                    if id != active {
+                        return Err(format!(
+                            "scroll_sample action {index} gesture_id={id} does not match active contact {active}"
+                        ));
+                    }
+                    if *contact_phase == QaScrollPhase::Ended {
+                        active_contact = None;
+                        quarantined.insert(id);
+                    } else if *contact_phase == QaScrollPhase::Cancelled {
+                        active_contact = None;
+                        completed.insert(id);
+                    }
+                    id
+                }
+                QaScrollPhase::None => unreachable!(),
+            }
+        } else {
+            let id = if let Some(id) = *gesture_id {
+                id
+            } else if quarantined.len() == 1 {
+                *quarantined.first().expect("length checked")
+            } else {
+                return Err(format!(
+                    "scroll_sample action {index} must name gesture_id because {} gestures await momentum completion",
+                    quarantined.len()
+                ));
+            };
+            if !quarantined.contains(&id) {
+                return Err(format!(
+                    "scroll_sample action {index} references non-quarantined gesture_id={id}"
+                ));
+            }
+            if *sequence_complete || momentum_phase.is_terminal() {
+                quarantined.remove(&id);
+                completed.insert(id);
+            }
+            id
+        };
+        *gesture_id = Some(resolved);
+    }
+    Ok(())
+}
+
+fn validate_native_scroll_actions(actions: &[TimedAction]) -> Result<(), String> {
+    let mut previous_timestamp = None;
+    for (index, timed) in actions.iter().enumerate() {
+        let QaAction::NativeScrollSample {
+            timestamp_us,
+            raw_dx,
+            raw_dy,
+            expected_canonical_dx,
+            expected_canonical_dy,
+            contact_phase,
+            momentum_phase,
+            sequence_complete,
+            direction_inverted_from_device,
+            scale_factor,
+            ..
+        } = &timed.action
+        else {
+            continue;
+        };
+        if [raw_dx, raw_dy, expected_canonical_dx, expected_canonical_dy]
+            .iter()
+            .any(|value| !value.is_finite())
+            || !scale_factor.is_finite()
+            || *scale_factor <= 0.0
+        {
+            return Err(format!(
+                "native_scroll_sample action {index} has non-finite deltas or invalid scale"
+            ));
+        }
+        if previous_timestamp.is_some_and(|previous| *timestamp_us < previous) {
+            return Err(format!(
+                "native_scroll_sample action {index} timestamp_us={timestamp_us} moves backwards"
+            ));
+        }
+        previous_timestamp = Some(*timestamp_us);
+        let has_contact = *contact_phase != QaScrollPhase::None;
+        let has_momentum = *momentum_phase != QaScrollPhase::None;
+        if has_contact && has_momentum {
+            return Err(format!(
+                "native_scroll_sample action {index} cannot carry contact and momentum phases together"
+            ));
+        }
+        if *sequence_complete && (has_contact || has_momentum || *raw_dx != 0.0 || *raw_dy != 0.0) {
+            return Err(format!(
+                "native_scroll_sample action {index} sequence_complete must be a zero-delta phase-less terminal signal"
+            ));
+        }
+        if !has_contact && !has_momentum && !*sequence_complete {
+            return Err(format!(
+                "native_scroll_sample action {index} must carry a contact phase, momentum phase, or sequence_complete"
+            ));
+        }
+        let legacy_y_sign = if *direction_inverted_from_device {
+            -1.0
+        } else {
+            1.0
+        };
+        if (*expected_canonical_dx - *raw_dx).abs() > 0.001
+            || (*expected_canonical_dy - *raw_dy * legacy_y_sign).abs() > 0.001
+        {
+            return Err(format!(
+                "native_scroll_sample action {index} disagrees with the production x/y contracts"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_scroll_expectations(scenario: &QaScenario) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    let sample_count = scenario
+        .actions
+        .iter()
+        .filter(|action| {
+            matches!(
+                action.action,
+                QaAction::ScrollSample { .. } | QaAction::NativeScrollSample { .. }
+            )
+        })
+        .count();
+    let Some(expected) = scenario.scroll_expectations.as_ref() else {
+        if sample_count > 0 {
+            return Err("scroll_sample actions require a scroll_expectations contract".to_owned());
+        }
+        return Ok(());
+    };
+    if sample_count == 0 {
+        return Err("scroll_expectations requires at least one scroll_sample action".to_owned());
+    }
+    if expected.min_samples == 0 {
+        return Err("scroll_expectations min_samples must be greater than zero".to_owned());
+    }
+    if expected.min_samples > sample_count {
+        return Err(format!(
+            "scroll_expectations min_samples={} exceeds the {} declared scroll_sample actions",
+            expected.min_samples, sample_count
+        ));
+    }
+    if expected.required_surfaces.is_empty() {
+        return Err("scroll_expectations required_surfaces cannot be empty".to_owned());
+    }
+    let unique = expected
+        .required_surfaces
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if unique.len() != expected.required_surfaces.len() {
+        return Err("scroll_expectations required_surfaces cannot contain duplicates".to_owned());
+    }
+    if expected.expected_horizontal_releases > expected.expected_terminal_contacts {
+        return Err(
+            "scroll_expectations horizontal releases cannot exceed terminal contacts".to_owned(),
+        );
+    }
+    if expected.expected_target_decisions != expected.expected_horizontal_releases
+        || expected.expected_spring_generations != expected.expected_horizontal_releases
+    {
+        return Err(
+            "scroll_expectations requires exactly one target decision and spring generation per horizontal release"
+                .to_owned(),
+        );
+    }
+    if expected.expected_releases.len() != expected.expected_horizontal_releases as usize {
+        return Err(
+            "scroll_expectations expected_releases must contain one entry per horizontal release"
+                .to_owned(),
+        );
+    }
+    let mut release_ids = BTreeSet::new();
+    for release in &expected.expected_releases {
+        if !release_ids.insert(release.gesture_id) {
+            return Err(
+                "scroll_expectations expected_releases cannot contain duplicate gesture_id values"
+                    .to_owned(),
+            );
+        }
+        if !expected.required_surfaces.contains(&release.surface) {
+            return Err(format!(
+                "scroll_expectations release gesture_id={} references a surface not listed in required_surfaces",
+                release.gesture_id
+            ));
+        }
+        if !release.min_filtered_velocity.is_finite()
+            || !release.max_filtered_velocity.is_finite()
+            || release.min_filtered_velocity > release.max_filtered_velocity
+        {
+            return Err(format!(
+                "scroll_expectations release gesture_id={} has an invalid filtered velocity range",
+                release.gesture_id
+            ));
+        }
+        if !release.target_x.is_finite()
+            || !release.target_tolerance.is_finite()
+            || release.target_tolerance < 0.0
+        {
+            return Err(format!(
+                "scroll_expectations release gesture_id={} has an invalid target contract",
+                release.gesture_id
+            ));
+        }
+        match (
+            release.min_release_position_x,
+            release.max_release_position_x,
+        ) {
+            (Some(min), Some(max)) if min.is_finite() && max.is_finite() && min <= max => {}
+            (None, None) => {}
+            _ => {
+                return Err(format!(
+                    "scroll_expectations release gesture_id={} has an invalid release position range",
+                    release.gesture_id
+                ));
+            }
+        }
+        match (release.settled_position_x, release.max_settle_duration_ms) {
+            (Some(position), Some(duration)) if position.is_finite() && duration > 0 => {}
+            (None, None) => {}
+            _ => {
+                return Err(format!(
+                    "scroll_expectations release gesture_id={} must declare settled_position_x and max_settle_duration_ms together",
+                    release.gesture_id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -134,6 +622,18 @@ pub struct QaFrameRecord {
     pub relayout_delta: u64,
     pub folder_child_page_target: Option<usize>,
     pub folder_child_page_hover_progress: Option<f32>,
+    pub pager_surface: Option<String>,
+    pub pager_state: Option<String>,
+    pub pager_axis: Option<String>,
+    pub pager_signed_displacement: Option<f32>,
+    pub pager_position_x: Option<f32>,
+    pub pager_velocity: Option<f32>,
+    pub pager_filtered_velocity: Option<f32>,
+    pub pager_settle_target_x: Option<f32>,
+    pub pager_target_decision_count: Option<u32>,
+    pub pager_spring_generation_count: Option<u32>,
+    pub pager_reanchor_count: Option<u32>,
+    pub pager_spring_id: Option<u64>,
 }
 
 struct QaFrameState {
@@ -154,6 +654,72 @@ struct QaFrameState {
     relayout_serial: u64,
     folder_child_page_target: Option<usize>,
     folder_child_page_hover_progress: Option<f32>,
+    pager: Option<QaPagerSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QaPagerSnapshot {
+    surface: String,
+    state: String,
+    axis: String,
+    signed_displacement: f32,
+    position_x: f32,
+    velocity: f32,
+    filtered_velocity: f32,
+    settle_target_x: Option<f32>,
+    target_decision_count: u32,
+    spring_generation_count: u32,
+    reanchor_count: u32,
+    spring_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QaScrollTraceRecord {
+    index: usize,
+    gesture_id: u64,
+    /// Scenario-relative time retained for readable, deterministic fixtures.
+    timestamp_us: u64,
+    /// The same sample translated into `App::scroll_clock_origin`'s epoch.
+    dispatch_timestamp_us: u64,
+    raw_dx: f32,
+    raw_dy: f32,
+    canonical_dx: f32,
+    canonical_dy: f32,
+    expected_canonical_dx: f32,
+    expected_canonical_dy: f32,
+    direction_inverted_from_device: bool,
+    source: QaScrollSource,
+    contact_phase: QaScrollPhase,
+    momentum_phase: QaScrollPhase,
+    sequence_complete: bool,
+    before: Option<QaPagerSnapshot>,
+    after: Option<QaPagerSnapshot>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct QaScrollAssertions {
+    passed: bool,
+    sample_count: usize,
+    snapshot_missing_count: u32,
+    snapshot_surface_mismatch_count: u32,
+    canonical_normalization_mismatch_count: u32,
+    required_surface_missing_count: u32,
+    zero_crossing_count: u32,
+    zero_crossing_violation_count: u32,
+    nonzero_input_stall_count: u32,
+    pre_terminal_target_decision_count: u32,
+    pre_terminal_spring_generation_count: u32,
+    pre_terminal_reanchor_count: u32,
+    release_count: u32,
+    horizontal_release_count: u32,
+    release_contract_violation_count: u32,
+    release_expectation_missing_count: u32,
+    release_expectation_mismatch_count: u32,
+    release_position_mismatch_count: u32,
+    settle_completion_missing_count: u32,
+    release_target_decision_count: u32,
+    release_spring_generation_count: u32,
+    momentum_mutation_count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +730,9 @@ struct QaManifest<'a> {
     duration_ms: u64,
     completed: bool,
     frames: &'a [QaFrameRecord],
+    scroll_trace: &'a [QaScrollTraceRecord],
+    scroll_expectations: Option<&'a QaScrollExpectations>,
+    scroll_assertions: QaScrollAssertions,
     video_command: String,
 }
 
@@ -176,6 +745,7 @@ pub struct QaRunner {
     next_capture_ms: u64,
     frame_index: u64,
     frames: Vec<QaFrameRecord>,
+    scroll_trace: Vec<QaScrollTraceRecord>,
     finalized: bool,
 }
 
@@ -195,7 +765,11 @@ impl QaRunner {
         scenario.fps = scenario.fps.clamp(1, 120);
         scenario.viewport[0] = scenario.viewport[0].max(320);
         scenario.viewport[1] = scenario.viewport[1].max(240);
+        expand_generated_apps(&mut scenario.fixture)?;
         scenario.actions.sort_by_key(|action| action.at_ms);
+        normalize_scroll_actions(&mut scenario.actions)?;
+        validate_native_scroll_actions(&scenario.actions)?;
+        validate_scroll_expectations(&scenario)?;
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -218,6 +792,7 @@ impl QaRunner {
             next_capture_ms: 0,
             frame_index: 0,
             frames: Vec::new(),
+            scroll_trace: Vec::new(),
             finalized: false,
         })
     }
@@ -319,6 +894,24 @@ impl QaRunner {
             relayout_delta,
             folder_child_page_target: state.folder_child_page_target,
             folder_child_page_hover_progress: state.folder_child_page_hover_progress,
+            pager_surface: state.pager.as_ref().map(|pager| pager.surface.clone()),
+            pager_state: state.pager.as_ref().map(|pager| pager.state.clone()),
+            pager_axis: state.pager.as_ref().map(|pager| pager.axis.clone()),
+            pager_signed_displacement: state.pager.as_ref().map(|pager| pager.signed_displacement),
+            pager_position_x: state.pager.as_ref().map(|pager| pager.position_x),
+            pager_velocity: state.pager.as_ref().map(|pager| pager.velocity),
+            pager_filtered_velocity: state.pager.as_ref().map(|pager| pager.filtered_velocity),
+            pager_settle_target_x: state.pager.as_ref().and_then(|pager| pager.settle_target_x),
+            pager_target_decision_count: state
+                .pager
+                .as_ref()
+                .map(|pager| pager.target_decision_count),
+            pager_spring_generation_count: state
+                .pager
+                .as_ref()
+                .map(|pager| pager.spring_generation_count),
+            pager_reanchor_count: state.pager.as_ref().map(|pager| pager.reanchor_count),
+            pager_spring_id: state.pager.as_ref().and_then(|pager| pager.spring_id),
         });
         self.frame_index += 1;
         let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
@@ -355,6 +948,13 @@ impl QaRunner {
             duration_ms: self.scenario.duration_ms,
             completed: true,
             frames: &self.frames,
+            scroll_trace: &self.scroll_trace,
+            scroll_expectations: self.scenario.scroll_expectations.as_ref(),
+            scroll_assertions: evaluate_scroll_assertions(
+                &self.scroll_trace,
+                &self.frames,
+                self.scenario.scroll_expectations.as_ref(),
+            ),
             video_command: format!(
                 "ffmpeg -framerate {} -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p {}.mp4",
                 self.scenario.fps,
@@ -371,6 +971,225 @@ impl QaRunner {
         eprintln!("qa sequence complete: {}", self.run_dir.display());
         self.finalized = true;
     }
+
+    fn record_scroll_sample(&mut self, mut record: QaScrollTraceRecord) {
+        record.index = self.scroll_trace.len();
+        self.scroll_trace.push(record);
+    }
+}
+
+fn qa_timestamp_in_app_epoch(
+    app_scroll_clock_origin: Instant,
+    qa_start: Instant,
+    scenario_timestamp_us: u64,
+) -> u64 {
+    let qa_epoch_offset_us = qa_start
+        .saturating_duration_since(app_scroll_clock_origin)
+        .as_micros();
+    let qa_epoch_offset_us = u64::try_from(qa_epoch_offset_us).unwrap_or(u64::MAX);
+    qa_epoch_offset_us.saturating_add(scenario_timestamp_us)
+}
+
+fn counter_delta(before: u32, after: u32) -> u32 {
+    after.saturating_sub(before)
+}
+
+fn snapshots_bitwise_equal(before: &QaPagerSnapshot, after: &QaPagerSnapshot) -> bool {
+    before.surface == after.surface
+        && before.state == after.state
+        && before.axis == after.axis
+        && before.signed_displacement.to_bits() == after.signed_displacement.to_bits()
+        && before.position_x.to_bits() == after.position_x.to_bits()
+        && before.velocity.to_bits() == after.velocity.to_bits()
+        && before.filtered_velocity.to_bits() == after.filtered_velocity.to_bits()
+        && before.settle_target_x.map(f32::to_bits) == after.settle_target_x.map(f32::to_bits)
+        && before.target_decision_count == after.target_decision_count
+        && before.spring_generation_count == after.spring_generation_count
+        && before.reanchor_count == after.reanchor_count
+        && before.spring_id == after.spring_id
+}
+
+fn evaluate_scroll_assertions(
+    trace: &[QaScrollTraceRecord],
+    frames: &[QaFrameRecord],
+    expected: Option<&QaScrollExpectations>,
+) -> QaScrollAssertions {
+    use std::collections::BTreeSet;
+
+    let mut result = QaScrollAssertions {
+        sample_count: trace.len(),
+        ..QaScrollAssertions::default()
+    };
+    let mut observed_surfaces = BTreeSet::new();
+
+    for sample in trace {
+        if (sample.canonical_dx - sample.expected_canonical_dx).abs() > 0.001
+            || (sample.canonical_dy - sample.expected_canonical_dy).abs() > 0.001
+        {
+            result.canonical_normalization_mismatch_count += 1;
+        }
+        let (Some(before), Some(after)) = (&sample.before, &sample.after) else {
+            result.snapshot_missing_count += 1;
+            continue;
+        };
+        observed_surfaces.insert(before.surface.as_str());
+        observed_surfaces.insert(after.surface.as_str());
+        if before.surface != after.surface {
+            result.snapshot_surface_mismatch_count += 1;
+        }
+        let target_delta = counter_delta(before.target_decision_count, after.target_decision_count);
+        let spring_delta = counter_delta(
+            before.spring_generation_count,
+            after.spring_generation_count,
+        );
+        let reanchor_delta = counter_delta(before.reanchor_count, after.reanchor_count);
+
+        if matches!(
+            sample.contact_phase,
+            QaScrollPhase::Began | QaScrollPhase::Changed
+        ) {
+            result.pre_terminal_target_decision_count += target_delta;
+            result.pre_terminal_spring_generation_count += spring_delta;
+            result.pre_terminal_reanchor_count += reanchor_delta;
+        }
+        if sample.contact_phase.is_terminal() {
+            result.release_count += 1;
+            result.release_target_decision_count += target_delta;
+            result.release_spring_generation_count += spring_delta;
+            let accepted_horizontal_release = before.state == "WheelGesture"
+                && after.state == "Settling"
+                && after.axis == "Horizontal";
+            if accepted_horizontal_release {
+                result.horizontal_release_count += 1;
+                if target_delta != 1
+                    || spring_delta != 1
+                    || reanchor_delta != 0
+                    || after.spring_id.is_none()
+                {
+                    result.release_contract_violation_count += 1;
+                }
+            }
+        }
+        if sample.momentum_phase != QaScrollPhase::None && !snapshots_bitwise_equal(before, after) {
+            result.momentum_mutation_count += 1;
+        }
+
+        let crossed_zero = sample.contact_phase == QaScrollPhase::Changed
+            && before.signed_displacement != 0.0
+            && before.signed_displacement != after.signed_displacement
+            && (after.signed_displacement == 0.0
+                || before.signed_displacement.signum() != after.signed_displacement.signum());
+        if crossed_zero {
+            result.zero_crossing_count += 1;
+            let unexplained_position_jump =
+                (after.position_x - before.position_x).abs() > sample.canonical_dx.abs() + 1.0;
+            let changed_phase = before.state != after.state;
+            if unexplained_position_jump
+                || changed_phase
+                || target_delta != 0
+                || spring_delta != 0
+                || reanchor_delta != 0
+            {
+                result.zero_crossing_violation_count += 1;
+            }
+        }
+
+        if sample.contact_phase == QaScrollPhase::Changed
+            && sample.canonical_dx != 0.0
+            && after.axis != "Vertical"
+            && before.position_x.to_bits() == after.position_x.to_bits()
+        {
+            result.nonzero_input_stall_count += 1;
+        }
+    }
+
+    if let Some(expected) = expected {
+        result.required_surface_missing_count = expected
+            .required_surfaces
+            .iter()
+            .filter(|surface| !observed_surfaces.contains(surface.as_str()))
+            .count() as u32;
+        for release in &expected.expected_releases {
+            let observed = trace.iter().find(|sample| {
+                if sample.gesture_id != release.gesture_id || !sample.contact_phase.is_terminal() {
+                    return false;
+                }
+                let (Some(before), Some(after)) = (&sample.before, &sample.after) else {
+                    return false;
+                };
+                before.surface == release.surface.as_str()
+                    && after.surface == release.surface.as_str()
+                    && before.state == "WheelGesture"
+                    && after.state == "Settling"
+                    && after.axis == "Horizontal"
+            });
+            let Some(observed) = observed else {
+                result.release_expectation_missing_count += 1;
+                continue;
+            };
+            let after = observed
+                .after
+                .as_ref()
+                .expect("release expectation lookup requires an after snapshot");
+            let velocity_matches = after.filtered_velocity >= release.min_filtered_velocity
+                && after.filtered_velocity <= release.max_filtered_velocity;
+            let target_matches = after.settle_target_x.is_some_and(|target| {
+                (target - release.target_x).abs() <= release.target_tolerance
+            });
+            if !velocity_matches || !target_matches {
+                result.release_expectation_mismatch_count += 1;
+            }
+            if let (Some(min), Some(max)) = (
+                release.min_release_position_x,
+                release.max_release_position_x,
+            ) {
+                if !(min..=max).contains(&after.position_x) {
+                    result.release_position_mismatch_count += 1;
+                }
+            }
+            if let (Some(settled_position), Some(max_duration_ms)) =
+                (release.settled_position_x, release.max_settle_duration_ms)
+            {
+                let release_ms = observed.timestamp_us / 1_000;
+                let deadline_ms = release_ms.saturating_add(max_duration_ms);
+                let completed_in_time = frames.iter().any(|frame| {
+                    frame.elapsed_ms >= release_ms
+                        && frame.elapsed_ms <= deadline_ms
+                        && frame.pager_surface.as_deref() == Some(release.surface.as_str())
+                        && frame.pager_state.as_deref() == Some("Idle")
+                        && frame.pager_position_x.is_some_and(|position| {
+                            (position - settled_position).abs() <= release.target_tolerance
+                        })
+                });
+                if !completed_in_time {
+                    result.settle_completion_missing_count += 1;
+                }
+            }
+        }
+        result.passed = !trace.is_empty()
+            && result.sample_count >= expected.min_samples
+            && result.snapshot_missing_count == 0
+            && result.snapshot_surface_mismatch_count == 0
+            && result.canonical_normalization_mismatch_count == 0
+            && result.required_surface_missing_count == 0
+            && result.zero_crossing_count >= expected.min_zero_crossings
+            && result.zero_crossing_violation_count == 0
+            && result.nonzero_input_stall_count == 0
+            && result.pre_terminal_target_decision_count == 0
+            && result.pre_terminal_spring_generation_count == 0
+            && result.pre_terminal_reanchor_count == 0
+            && result.release_count == expected.expected_terminal_contacts
+            && result.horizontal_release_count == expected.expected_horizontal_releases
+            && result.release_contract_violation_count == 0
+            && result.release_expectation_missing_count == 0
+            && result.release_expectation_mismatch_count == 0
+            && result.release_position_mismatch_count == 0
+            && result.settle_completion_missing_count == 0
+            && result.release_target_decision_count == expected.expected_target_decisions
+            && result.release_spring_generation_count == expected.expected_spring_generations
+            && result.momentum_mutation_count == 0;
+    }
+    result
 }
 
 impl App {
@@ -514,7 +1333,163 @@ impl App {
             QaAction::ExitEditMode => {
                 self.handle_action(AppAction::Keyboard(KeyAction::ExitEditMode))
             }
+            QaAction::ScrollSample {
+                gesture_id,
+                timestamp_us,
+                canonical_dx,
+                canonical_dy,
+                source,
+                contact_phase,
+                momentum_phase,
+                sequence_complete,
+            } => {
+                let gesture_id =
+                    gesture_id.expect("scroll gesture ids are resolved while loading the scenario");
+                let dispatch_timestamp_us = self
+                    .qa_runner
+                    .as_ref()
+                    .and_then(|runner| runner.start)
+                    .map(|qa_start| {
+                        qa_timestamp_in_app_epoch(self.scroll_clock_origin, qa_start, timestamp_us)
+                    })
+                    .unwrap_or(timestamp_us);
+                let before = self.qa_pager_snapshot();
+
+                self.handle_action(AppAction::ScrollSample(
+                    crate::input_routing::ScrollSample {
+                        gesture_id,
+                        timestamp_us: dispatch_timestamp_us,
+                        raw_dx: canonical_dx,
+                        raw_dy: canonical_dy,
+                        canonical_dx,
+                        canonical_dy,
+                        source: match source {
+                            QaScrollSource::Precise => crate::input_routing::ScrollSource::Precise,
+                            QaScrollSource::Line => crate::input_routing::ScrollSource::Line,
+                        },
+                        contact_phase: qa_native_scroll_phase(contact_phase),
+                        momentum_phase: qa_native_scroll_phase(momentum_phase),
+                        sequence_complete,
+                        scale_factor: 1.0,
+                        direction_inverted_from_device: false,
+                        phase_capability: crate::input_routing::ScrollPhaseCapability::Separate,
+                    },
+                ));
+
+                let after = self.qa_pager_snapshot();
+                if let Some(runner) = self.qa_runner.as_mut() {
+                    runner.record_scroll_sample(QaScrollTraceRecord {
+                        index: 0,
+                        gesture_id,
+                        timestamp_us,
+                        dispatch_timestamp_us,
+                        raw_dx: canonical_dx,
+                        raw_dy: canonical_dy,
+                        canonical_dx,
+                        canonical_dy,
+                        expected_canonical_dx: canonical_dx,
+                        expected_canonical_dy: canonical_dy,
+                        direction_inverted_from_device: false,
+                        source,
+                        contact_phase,
+                        momentum_phase,
+                        sequence_complete,
+                        before,
+                        after,
+                    });
+                }
+            }
+            QaAction::NativeScrollSample {
+                timestamp_us,
+                raw_dx,
+                raw_dy,
+                expected_canonical_dx,
+                expected_canonical_dy,
+                source,
+                contact_phase,
+                momentum_phase,
+                sequence_complete,
+                direction_inverted_from_device,
+                scale_factor,
+            } => {
+                let dispatch_timestamp_us = self
+                    .qa_runner
+                    .as_ref()
+                    .and_then(|runner| runner.start)
+                    .map(|qa_start| {
+                        qa_timestamp_in_app_epoch(self.scroll_clock_origin, qa_start, timestamp_us)
+                    })
+                    .unwrap_or(timestamp_us);
+                let before = self.qa_pager_snapshot();
+                let Some(sample) =
+                    self.scroll_sample_adapter
+                        .adapt_native(crate::input_routing::RawScrollEvent {
+                            timestamp_us: dispatch_timestamp_us,
+                            delta_physical_px: (raw_dx, raw_dy),
+                            source: match source {
+                                QaScrollSource::Precise => {
+                                    crate::input_routing::ScrollSource::Precise
+                                }
+                                QaScrollSource::Line => crate::input_routing::ScrollSource::Line,
+                            },
+                            contact_phase: qa_native_scroll_phase(contact_phase),
+                            momentum_phase: qa_native_scroll_phase(momentum_phase),
+                            sequence_complete,
+                            direction_inverted_from_device,
+                            scale_factor,
+                            phase_capability: crate::input_routing::ScrollPhaseCapability::Separate,
+                        })
+                else {
+                    return;
+                };
+                self.handle_action(AppAction::ScrollSample(sample));
+                let after = self.qa_pager_snapshot();
+                if let Some(runner) = self.qa_runner.as_mut() {
+                    runner.record_scroll_sample(QaScrollTraceRecord {
+                        index: 0,
+                        gesture_id: sample.gesture_id,
+                        timestamp_us,
+                        dispatch_timestamp_us,
+                        raw_dx,
+                        raw_dy,
+                        canonical_dx: sample.canonical_dx,
+                        canonical_dy: sample.canonical_dy,
+                        expected_canonical_dx,
+                        expected_canonical_dy,
+                        direction_inverted_from_device,
+                        source,
+                        contact_phase,
+                        momentum_phase,
+                        sequence_complete,
+                        before,
+                        after,
+                    });
+                }
+            }
         }
+    }
+
+    fn qa_pager_snapshot(&self) -> Option<QaPagerSnapshot> {
+        let (surface, scroller) = if self.folders.is_active() {
+            ("folder", self.folder_scroller.as_ref()?)
+        } else {
+            ("main", self.scroller.as_ref()?)
+        };
+        let diagnostics = scroller.wheel_diagnostics();
+        Some(QaPagerSnapshot {
+            surface: surface.to_owned(),
+            state: format!("{:?}", scroller.phase),
+            axis: format!("{:?}", diagnostics.axis),
+            signed_displacement: diagnostics.signed_displacement,
+            position_x: scroller.position,
+            velocity: scroller.velocity,
+            filtered_velocity: diagnostics.filtered_velocity,
+            settle_target_x: diagnostics.settle_target,
+            target_decision_count: diagnostics.target_decision_count,
+            spring_generation_count: diagnostics.spring_generation_count,
+            reanchor_count: diagnostics.reanchor_count,
+            spring_id: diagnostics.spring_id,
+        })
     }
 
     fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {
@@ -589,6 +1564,7 @@ impl App {
             self.folders.child_page_hover.as_ref().map(|hover| {
                 (hover.elapsed / crate::features::folders::CHILD_PAGE_EDGE_DWELL).clamp(0.0, 1.0)
             });
+        let pager = self.qa_pager_snapshot();
         self.qa_runner.as_mut()?.next_capture_path(
             now,
             QaFrameState {
@@ -609,6 +1585,7 @@ impl App {
                 relayout_serial: self.relayout_serial,
                 folder_child_page_target,
                 folder_child_page_hover_progress,
+                pager,
             },
         )
     }
@@ -633,6 +1610,16 @@ impl App {
         if let Some(runner) = self.qa_runner.as_mut() {
             runner.finalize();
         }
+    }
+}
+
+fn qa_native_scroll_phase(phase: QaScrollPhase) -> crate::input_routing::NativeScrollPhase {
+    match phase {
+        QaScrollPhase::None => crate::input_routing::NativeScrollPhase::None,
+        QaScrollPhase::Began => crate::input_routing::NativeScrollPhase::Began,
+        QaScrollPhase::Changed => crate::input_routing::NativeScrollPhase::Changed,
+        QaScrollPhase::Ended => crate::input_routing::NativeScrollPhase::Ended,
+        QaScrollPhase::Cancelled => crate::input_routing::NativeScrollPhase::Cancelled,
     }
 }
 
@@ -687,5 +1674,399 @@ mod tests {
     #[test]
     fn runner_orders_actions_and_sanitizes_run_name() {
         assert_eq!(sanitize_name("Folder QA / 1"), "Folder-QA---1");
+    }
+
+    fn scroll_action(
+        at_ms: u64,
+        gesture_id: Option<u64>,
+        timestamp_us: u64,
+        contact_phase: QaScrollPhase,
+        momentum_phase: QaScrollPhase,
+    ) -> TimedAction {
+        TimedAction {
+            at_ms,
+            action: QaAction::ScrollSample {
+                gesture_id,
+                timestamp_us,
+                canonical_dx: 0.0,
+                canonical_dy: 0.0,
+                source: QaScrollSource::Precise,
+                contact_phase,
+                momentum_phase,
+                sequence_complete: false,
+            },
+        }
+    }
+
+    fn gesture_id(action: &TimedAction) -> Option<u64> {
+        match action.action {
+            QaAction::ScrollSample { gesture_id, .. } => gesture_id,
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn scroll_schema_assigns_ids_and_keeps_old_momentum_separate() {
+        let mut actions = vec![
+            scroll_action(0, None, 0, QaScrollPhase::Began, QaScrollPhase::None),
+            scroll_action(
+                16,
+                None,
+                16_000,
+                QaScrollPhase::Changed,
+                QaScrollPhase::None,
+            ),
+            scroll_action(32, None, 32_000, QaScrollPhase::Ended, QaScrollPhase::None),
+            scroll_action(
+                48,
+                Some(2),
+                48_000,
+                QaScrollPhase::Began,
+                QaScrollPhase::None,
+            ),
+            scroll_action(
+                64,
+                Some(2),
+                64_000,
+                QaScrollPhase::Changed,
+                QaScrollPhase::None,
+            ),
+            scroll_action(
+                72,
+                Some(1),
+                72_000,
+                QaScrollPhase::None,
+                QaScrollPhase::Changed,
+            ),
+            scroll_action(
+                80,
+                Some(1),
+                80_000,
+                QaScrollPhase::None,
+                QaScrollPhase::Ended,
+            ),
+        ];
+
+        normalize_scroll_actions(&mut actions).unwrap();
+        assert_eq!(
+            actions.iter().map(gesture_id).collect::<Vec<_>>(),
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+                Some(1),
+                Some(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn scroll_schema_rejects_second_active_contact_and_timestamp_reversal() {
+        let mut overlapping = vec![
+            scroll_action(0, Some(7), 0, QaScrollPhase::Began, QaScrollPhase::None),
+            scroll_action(1, Some(8), 1, QaScrollPhase::Began, QaScrollPhase::None),
+        ];
+        assert!(normalize_scroll_actions(&mut overlapping)
+            .unwrap_err()
+            .contains("second active contact"));
+
+        let mut reversed_time = vec![
+            scroll_action(0, Some(7), 10, QaScrollPhase::Began, QaScrollPhase::None),
+            scroll_action(1, Some(7), 9, QaScrollPhase::Changed, QaScrollPhase::None),
+        ];
+        assert!(normalize_scroll_actions(&mut reversed_time)
+            .unwrap_err()
+            .contains("moves backwards"));
+    }
+
+    #[test]
+    fn cancelled_contact_completes_without_momentum_quarantine() {
+        let mut valid = vec![
+            scroll_action(0, Some(7), 0, QaScrollPhase::Began, QaScrollPhase::None),
+            scroll_action(1, Some(7), 1, QaScrollPhase::Cancelled, QaScrollPhase::None),
+            scroll_action(2, Some(8), 2, QaScrollPhase::Began, QaScrollPhase::None),
+        ];
+        normalize_scroll_actions(&mut valid).unwrap();
+
+        let mut stale_momentum = vec![
+            scroll_action(0, Some(7), 0, QaScrollPhase::Began, QaScrollPhase::None),
+            scroll_action(1, Some(7), 1, QaScrollPhase::Cancelled, QaScrollPhase::None),
+            scroll_action(2, Some(7), 2, QaScrollPhase::None, QaScrollPhase::Changed),
+        ];
+        assert!(normalize_scroll_actions(&mut stale_momentum)
+            .unwrap_err()
+            .contains("non-quarantined"));
+    }
+
+    #[test]
+    fn sequence_complete_must_be_phase_less_and_zero_delta() {
+        let mut actions = vec![TimedAction {
+            at_ms: 0,
+            action: QaAction::ScrollSample {
+                gesture_id: Some(1),
+                timestamp_us: 0,
+                canonical_dx: 1.0,
+                canonical_dy: 0.0,
+                source: QaScrollSource::Precise,
+                contact_phase: QaScrollPhase::None,
+                momentum_phase: QaScrollPhase::None,
+                sequence_complete: true,
+            },
+        }];
+        assert!(normalize_scroll_actions(&mut actions)
+            .unwrap_err()
+            .contains("zero-delta phase-less terminal"));
+    }
+
+    fn main_scroll_contract(
+        min_samples: usize,
+        terminal_contacts: u32,
+        horizontal_releases: u32,
+    ) -> QaScrollExpectations {
+        QaScrollExpectations {
+            min_samples,
+            expected_terminal_contacts: terminal_contacts,
+            expected_horizontal_releases: horizontal_releases,
+            expected_target_decisions: horizontal_releases,
+            expected_spring_generations: horizontal_releases,
+            expected_releases: (1..=u64::from(horizontal_releases))
+                .map(|gesture_id| QaReleaseExpectation {
+                    gesture_id,
+                    surface: QaPagerSurface::Main,
+                    min_filtered_velocity: -f32::MAX,
+                    max_filtered_velocity: f32::MAX,
+                    target_x: 0.0,
+                    target_tolerance: 1.0,
+                    min_release_position_x: None,
+                    max_release_position_x: None,
+                    settled_position_x: None,
+                    max_settle_duration_ms: None,
+                })
+                .collect(),
+            min_zero_crossings: 0,
+            required_surfaces: vec![QaPagerSurface::Main],
+        }
+    }
+
+    fn pager_snapshot(
+        state: &str,
+        target_decisions: u32,
+        spring_generations: u32,
+        spring_id: Option<u64>,
+    ) -> QaPagerSnapshot {
+        QaPagerSnapshot {
+            surface: "main".to_owned(),
+            state: state.to_owned(),
+            axis: "Horizontal".to_owned(),
+            signed_displacement: 0.0,
+            position_x: 0.0,
+            velocity: 0.0,
+            filtered_velocity: 0.0,
+            settle_target_x: (state == "Settling").then_some(0.0),
+            target_decision_count: target_decisions,
+            spring_generation_count: spring_generations,
+            reanchor_count: 0,
+            spring_id,
+        }
+    }
+
+    fn terminal_trace(
+        before: Option<QaPagerSnapshot>,
+        after: Option<QaPagerSnapshot>,
+    ) -> QaScrollTraceRecord {
+        QaScrollTraceRecord {
+            index: 0,
+            gesture_id: 1,
+            timestamp_us: 0,
+            dispatch_timestamp_us: 0,
+            raw_dx: 0.0,
+            raw_dy: 0.0,
+            canonical_dx: 0.0,
+            canonical_dy: 0.0,
+            expected_canonical_dx: 0.0,
+            expected_canonical_dy: 0.0,
+            direction_inverted_from_device: false,
+            source: QaScrollSource::Precise,
+            contact_phase: QaScrollPhase::Ended,
+            momentum_phase: QaScrollPhase::None,
+            sequence_complete: false,
+            before,
+            after,
+        }
+    }
+
+    #[test]
+    fn empty_trace_and_missing_snapshots_cannot_pass_scroll_contract() {
+        let contract = main_scroll_contract(1, 0, 0);
+        let empty = evaluate_scroll_assertions(&[], &[], Some(&contract));
+        assert!(!empty.passed);
+        assert_eq!(empty.required_surface_missing_count, 1);
+
+        let missing = evaluate_scroll_assertions(
+            &[terminal_trace(
+                None,
+                Some(pager_snapshot("Idle", 0, 0, None)),
+            )],
+            &[],
+            Some(&contract),
+        );
+        assert!(!missing.passed);
+        assert_eq!(missing.snapshot_missing_count, 1);
+    }
+
+    #[test]
+    fn release_requires_exactly_one_target_and_spring() {
+        let contract = main_scroll_contract(1, 1, 1);
+        for generated in [0, 2] {
+            let result = evaluate_scroll_assertions(
+                &[terminal_trace(
+                    Some(pager_snapshot("WheelGesture", 0, 0, None)),
+                    Some(pager_snapshot(
+                        "Settling",
+                        generated,
+                        generated,
+                        (generated > 0).then_some(1),
+                    )),
+                )],
+                &[],
+                Some(&contract),
+            );
+            assert!(!result.passed, "generated={generated} must fail");
+            assert_eq!(result.release_contract_violation_count, 1);
+        }
+
+        let valid = evaluate_scroll_assertions(
+            &[terminal_trace(
+                Some(pager_snapshot("WheelGesture", 0, 0, None)),
+                Some(pager_snapshot("Settling", 1, 1, Some(1))),
+            )],
+            &[],
+            Some(&contract),
+        );
+        assert!(valid.passed);
+    }
+
+    #[test]
+    fn release_velocity_and_target_contract_prevents_false_green() {
+        let mut contract = main_scroll_contract(1, 1, 1);
+        contract.expected_releases[0] = QaReleaseExpectation {
+            gesture_id: 1,
+            surface: QaPagerSurface::Main,
+            min_filtered_velocity: -6_000.0,
+            max_filtered_velocity: -4_000.0,
+            target_x: -1_440.0,
+            target_tolerance: 0.5,
+            min_release_position_x: None,
+            max_release_position_x: None,
+            settled_position_x: None,
+            max_settle_duration_ms: None,
+        };
+
+        let mut zero_velocity = pager_snapshot("Settling", 1, 1, Some(1));
+        zero_velocity.settle_target_x = Some(-1_440.0);
+        let result = evaluate_scroll_assertions(
+            &[terminal_trace(
+                Some(pager_snapshot("WheelGesture", 0, 0, None)),
+                Some(zero_velocity),
+            )],
+            &[],
+            Some(&contract),
+        );
+        assert!(!result.passed);
+        assert_eq!(result.release_expectation_mismatch_count, 1);
+
+        let mut wrong_target = pager_snapshot("Settling", 1, 1, Some(1));
+        wrong_target.filtered_velocity = -5_000.0;
+        wrong_target.settle_target_x = Some(0.0);
+        let result = evaluate_scroll_assertions(
+            &[terminal_trace(
+                Some(pager_snapshot("WheelGesture", 0, 0, None)),
+                Some(wrong_target),
+            )],
+            &[],
+            Some(&contract),
+        );
+        assert!(!result.passed);
+        assert_eq!(result.release_expectation_mismatch_count, 1);
+    }
+
+    #[test]
+    fn native_sign_and_settle_deadline_prevent_false_green() {
+        let mut contract = main_scroll_contract(1, 1, 1);
+        contract.expected_releases[0].settled_position_x = Some(0.0);
+        contract.expected_releases[0].max_settle_duration_ms = Some(500);
+
+        let mut sign_reversed = terminal_trace(
+            Some(pager_snapshot("WheelGesture", 0, 0, None)),
+            Some(pager_snapshot("Settling", 1, 1, Some(1))),
+        );
+        sign_reversed.canonical_dx = -24.0;
+        sign_reversed.expected_canonical_dx = 24.0;
+        let result = evaluate_scroll_assertions(&[sign_reversed], &[], Some(&contract));
+        assert!(!result.passed);
+        assert_eq!(result.canonical_normalization_mismatch_count, 1);
+        assert_eq!(result.settle_completion_missing_count, 1);
+    }
+
+    #[test]
+    fn qa_timestamp_is_translated_to_the_app_scroll_epoch() {
+        let app_origin = Instant::now();
+        let qa_start = app_origin + Duration::from_millis(3_250);
+
+        assert_eq!(
+            qa_timestamp_in_app_epoch(app_origin, qa_start, 1_500_000),
+            4_750_000
+        );
+    }
+
+    #[test]
+    fn scroll_actions_require_an_expectation_contract() {
+        let mut scenario: QaScenario = serde_json::from_value(serde_json::json!({
+            "name": "missing-contract",
+            "duration_ms": 100,
+            "output_dir": "target/qa",
+            "fixture": {},
+            "actions": [{
+                "at_ms": 0,
+                "type": "scroll_sample",
+                "timestamp_us": 0,
+                "canonical_dx": 0.0,
+                "canonical_dy": 0.0,
+                "contact_phase": "began"
+            }]
+        }))
+        .unwrap();
+        normalize_scroll_actions(&mut scenario.actions).unwrap();
+        assert!(validate_scroll_expectations(&scenario)
+            .unwrap_err()
+            .contains("require a scroll_expectations contract"));
+    }
+
+    #[test]
+    fn bundled_trackpad_scenarios_parse_and_validate() {
+        for source in [
+            include_str!("../qa/trackpad_reversal_main.json"),
+            include_str!("../qa/trackpad_edge_and_folders.json"),
+            include_str!("../qa/trackpad_old_momentum_new_contact.json"),
+            include_str!("../qa/trackpad_native_sign_and_stay.json"),
+        ] {
+            let mut scenario: QaScenario = serde_json::from_str(source).unwrap();
+            expand_generated_apps(&mut scenario.fixture).unwrap();
+            scenario.actions.sort_by_key(|action| action.at_ms);
+            normalize_scroll_actions(&mut scenario.actions).unwrap();
+            validate_native_scroll_actions(&scenario.actions).unwrap();
+            validate_scroll_expectations(&scenario).unwrap();
+            assert!(scenario.scroll_expectations.is_some());
+            assert!(!scenario.fixture.apps.is_empty());
+            assert!(!scenario.fixture.items.is_empty());
+            assert!(scenario.actions.iter().any(|action| {
+                matches!(
+                    action.action,
+                    QaAction::ScrollSample { .. } | QaAction::NativeScrollSample { .. }
+                )
+            }));
+        }
     }
 }

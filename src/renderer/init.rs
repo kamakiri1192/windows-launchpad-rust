@@ -915,6 +915,11 @@ fn create_backdrop_capture(
             "desktop backdrop capture disabled for deterministic QA",
         ));
     }
+    if std::env::var_os("LAUNCHPAD_NO_BACKDROP_CAPTURE").is_some() {
+        return Box::new(FallbackCapture::new(
+            "desktop backdrop capture disabled by LAUNCHPAD_NO_BACKDROP_CAPTURE",
+        ));
+    }
 
     #[cfg(windows)]
     {

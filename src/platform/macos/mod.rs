@@ -3,3 +3,4 @@
 pub mod apps;
 pub mod input_passthrough;
 pub mod integration;
+pub mod scroll;
