@@ -288,7 +288,9 @@ impl TapContext {
             }
         };
         let run_loop = unsafe {
-            CFRetained::retain(std::ptr::NonNull::new_unchecked(run_loop_ptr.cast::<CFRunLoop>()))
+            CFRetained::retain(std::ptr::NonNull::new_unchecked(
+                run_loop_ptr.cast::<CFRunLoop>(),
+            ))
         };
         *self.registration.lock().unwrap() = Some(EventTapRegistration {
             port,
@@ -459,7 +461,8 @@ impl MacInputPassthrough {
                         PointerButton::Right
                     };
                     let appkit_point = NSEvent::mouseLocation();
-                    let target = target_below(launcher_window_number, appkit_to_cg_point(appkit_point));
+                    let target =
+                        target_below(launcher_window_number, appkit_to_cg_point(appkit_point));
                     crate::debug_log!(
                         "input-routing: macOS captured {button:?} down target={target:?} \
                          launcher_window={launcher_window_number} event_window={} point={:?}",
@@ -719,7 +722,8 @@ fn resolve_scroll_target(
     phase: i64,
     momentum: i64,
 ) -> Option<MacTarget> {
-    let phase_began = phase & (NSEventPhase::Began.bits() | NSEventPhase::MayBegin.bits()) as i64 != 0;
+    let phase_began =
+        phase & (NSEventPhase::Began.bits() | NSEventPhase::MayBegin.bits()) as i64 != 0;
     let unphased = phase == 0 && momentum == 0;
     let mut scroll_target = context.scroll_target.lock().unwrap();
     if phase_began || unphased || scroll_target.is_none() {
@@ -800,7 +804,10 @@ fn target_below(launcher_window_number: isize, point: CGPoint) -> Option<MacTarg
             }
             let mut rect = CGRect {
                 origin: CGPoint { x: 0.0, y: 0.0 },
-                size: CGSize { width: 0.0, height: 0.0 },
+                size: CGSize {
+                    width: 0.0,
+                    height: 0.0,
+                },
             };
             if !CGRectMakeWithDictionaryRepresentation(bounds_ptr, &mut rect) {
                 continue;
@@ -874,10 +881,7 @@ extern "C" {
     static kCGWindowLayer: *const c_void;
     static kCGWindowBounds: *const c_void;
     fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const c_void;
-    fn CGRectMakeWithDictionaryRepresentation(
-        dict: *const c_void,
-        rect: *mut CGRect,
-    ) -> bool;
+    fn CGRectMakeWithDictionaryRepresentation(dict: *const c_void, rect: *mut CGRect) -> bool;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
