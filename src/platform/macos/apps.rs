@@ -84,8 +84,7 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
     let info = Value::from_file(&info_path).ok()?;
     let dictionary = info.as_dictionary()?;
 
-    if dictionary_bool(dictionary, "LSBackgroundOnly") || dictionary_bool(dictionary, "LSUIElement")
-    {
+    if dictionary_bool(dictionary, "LSBackgroundOnly") {
         return None;
     }
 
@@ -545,6 +544,74 @@ mod tests {
         assert_eq!(entry.name, "Adobe Premiere Pro 2026");
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lsuielement_apps_are_discovered_like_siri() {
+        let root = temporary_directory("lsuielement-app");
+        let bundle = root.join("Siri.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+
+        let mut info = Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            Value::String("com.apple.siri.launcher".into()),
+        );
+        info.insert("CFBundleName".into(), Value::String("Siri".into()));
+        info.insert("CFBundleExecutable".into(), Value::String("Siri".into()));
+        info.insert("LSUIElement".into(), Value::Boolean(true));
+        Value::Dictionary(info)
+            .to_file_xml(bundle.join("Contents/Info.plist"))
+            .unwrap();
+
+        let entry = snapshot_entry(&bundle, &["en-US".to_owned()])
+            .expect("LSUIElement apps like Siri should be discovered");
+        assert_eq!(entry.name, "Siri");
+        assert_eq!(entry.app_id.as_str(), "mac:com.apple.siri.launcher");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lsbackgroundonly_apps_remain_excluded() {
+        let root = temporary_directory("lsbackground-app");
+        let bundle = root.join("Hidden Helper.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+
+        let mut info = Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".into(),
+            Value::String("com.example.helper".into()),
+        );
+        info.insert("CFBundleName".into(), Value::String("Hidden Helper".into()));
+        info.insert(
+            "CFBundleExecutable".into(),
+            Value::String("Hidden Helper".into()),
+        );
+        info.insert("LSBackgroundOnly".into(), Value::Boolean(true));
+        Value::Dictionary(info)
+            .to_file_xml(bundle.join("Contents/Info.plist"))
+            .unwrap();
+
+        assert!(snapshot_entry(&bundle, &["en-US".to_owned()]).is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn system_siri_is_discovered_by_snapshot_entry() {
+        let bundle = Path::new("/System/Applications/Siri.app");
+        if !bundle.is_dir() {
+            return;
+        }
+        let languages = preferred_languages();
+        let entry = snapshot_entry(bundle, &languages).expect("Siri should be discovered");
+        assert!(
+            entry.app_id.as_str() == "mac:com.apple.siri.launcher"
+                || entry.app_id.as_str() == "mac:com.apple.Siri",
+            "unexpected Siri app id: {}",
+            entry.app_id.as_str()
+        );
     }
 
     #[test]
