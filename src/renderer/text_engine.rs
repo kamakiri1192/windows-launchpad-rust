@@ -741,6 +741,114 @@ mod tests {
     }
 
     #[test]
+    fn grow_preserves_existing_glyph_pixel_positions_and_uvs_track_it() {
+        // Use a tiny atlas so a handful of glyphs forces a grow.
+        let mut renderer = TextRenderer::with_atlas_size(64, 64);
+        // Lay out enough distinct text to force growth.
+        let labels: Vec<Label> = (0..40)
+            .map(|i| Label {
+                text: format!("App number {i} with a long name"),
+                x: 0.0,
+                y: 0.0,
+                max_width: 280.0,
+                color: [1.0; 4],
+            })
+            .collect();
+        let _quads_a = renderer.layout_labels(&labels, 2.0);
+        let grew = renderer.take_atlas_grew();
+        let after_dims = renderer.atlas_dimensions();
+        assert!(grew, "the labels should have forced a grow");
+        assert!(
+            after_dims.0 > 64 && after_dims.1 > 64,
+            "atlas should have grown"
+        );
+
+        // Re-lay out the SAME labels again (simulates a relayout after grow).
+        // UVs must now be computed against the grown dimensions and reference
+        // valid, integer-pixel-aligned texels within the current atlas.
+        let quads_b = renderer.layout_labels(&labels, 2.0);
+        let (aw, _ah) = renderer.atlas_dimensions();
+        for q in &quads_b {
+            assert!(q.u0 >= 0.0 && q.u1 <= 1.0, "u out of range: {:?}", q);
+            assert!(q.v0 >= 0.0 && q.v1 <= 1.0, "v out of range: {:?}", q);
+            let px0 = (q.u0 * aw as f32).round() as i32;
+            let px1 = (q.u1 * aw as f32).round() as i32;
+            assert!(
+                px0 >= 0 && px1 <= aw as i32 && px1 > px0,
+                "px u: {px0}..{px1}"
+            );
+        }
+    }
+
+    /// After a grow, the retained Grid labels — when re-laid-out as
+    /// `tick_frame` does — must still resolve to non-empty atlas pixels.
+    /// A quad pointing at an empty texel would render the label invisibly
+    /// (the originally reported "text vanishes" symptom). Grow copies every
+    /// existing glyph to the same pixel position, so the re-laid-out quads
+    /// (with smaller normalized UVs) must land on the same ink.
+    #[test]
+    fn grow_keeps_retained_grid_uv_pointing_at_rasterized_pixels() {
+        let mut renderer = TextRenderer::with_atlas_size(128, 128);
+
+        // Phase 1: lay out grid labels (the retained lane).
+        let grid_labels: Vec<Label> = (0..20)
+            .map(|i| Label {
+                text: format!("Grid app {i} ァィゥェォ"),
+                x: 0.0,
+                y: 0.0,
+                max_width: 280.0,
+                color: [1.0; 4],
+            })
+            .collect();
+        let _grid_quads_initial = renderer.layout_labels(&grid_labels, 2.0);
+        let (iw, ih) = renderer.atlas_dimensions();
+
+        // Phase 2: rasterize MORE distinct glyphs (transient lanes: search
+        // query, settings, etc.) to force at least one grow.
+        let extra_labels: Vec<Label> = (0..60)
+            .map(|i| Label {
+                text: format!("Search result №{i} αβγδ ①②③④⑤"),
+                x: 0.0,
+                y: 0.0,
+                max_width: 280.0,
+                color: [1.0; 4],
+            })
+            .collect();
+        let _extra = renderer.layout_labels(&extra_labels, 2.0);
+        assert!(
+            renderer.take_atlas_grew(),
+            "the extra labels should have forced a grow"
+        );
+        let (gw, gh) = renderer.atlas_dimensions();
+        assert!(gw > iw || gh > ih, "atlas should have grown");
+
+        // Phase 3: simulate `tick_frame`'s post-grow relayout — re-lay-out the
+        // retained grid labels against the current (grown) dimensions.
+        let grid_quads_after = renderer.layout_labels(&grid_labels, 2.0);
+
+        // Each grid quad must map to at least one non-zero-alpha texel. A glyph
+        // is thin, so scan the whole UV rect rather than just its center.
+        for (i, q) in grid_quads_after.iter().enumerate() {
+            let x0 = (q.u0 * gw as f32) as u32;
+            let y0 = (q.v0 * gh as f32) as u32;
+            let x1 = ((q.u1 * gw as f32) as u32).min(gw);
+            let y1 = ((q.v1 * gh as f32) as u32).min(gh);
+            let found_alpha = (y0..y1).any(|yy| {
+                (x0..x1).any(|xx| {
+                    let idx = ((yy * gw + xx) * 4) as usize;
+                    renderer.atlas_rgba().get(idx + 3).copied().unwrap_or(0) > 0
+                })
+            });
+            assert!(
+                found_alpha,
+                "grid quad {i} at uv=({},{},{},{}) -> px({x0},{y0})-({x1},{y1}) \
+                 points only at empty texels — label would vanish after grow",
+                q.u0, q.v0, q.u1, q.v1
+            );
+        }
+    }
+
+    #[test]
     fn label_layout_cache_reuses_two_line_shaping_across_positions() {
         let mut renderer = TextRenderer::new();
         let first = renderer.layout_labels(&[label("Adobe Premiere Pro 2026", 20.0)], 2.0);
