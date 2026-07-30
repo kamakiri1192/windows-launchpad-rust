@@ -193,6 +193,20 @@ impl App {
         self.render_model.context_menu_tiles = model.result.render.context_menu_tiles.clone();
         self.render_model.context_menu_icons = model.result.render.context_menu_icons.clone();
 
+        // Keep the text atlas current so the renderer uploads any newly
+        // rasterized menu glyphs. Every other text adapter does this;
+        // omitting it left the menu's new glyphs missing from the GPU
+        // texture, so the menu text vanished (and, once the base atlas
+        // filled, every other lane's text too).
+        if let (Some(renderer), Some(text)) = (self.renderer.as_mut(), self.text.as_ref()) {
+            if text.atlas_dirty {
+                renderer.upload_atlas(text.atlas_rgba());
+            }
+        }
+        if let Some(text) = self.text.as_mut() {
+            text.atlas_dirty = false;
+        }
+
         self.context_menu_layout = Some(model);
     }
 
