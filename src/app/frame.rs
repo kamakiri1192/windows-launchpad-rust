@@ -62,6 +62,19 @@ impl App {
             .as_ref()
             .map(|s| s.is_animating())
             .unwrap_or(false);
+
+        // If the glyph atlas grew during the previous frame's label/layout
+        // work, the retained grid label quads still reference the old UV
+        // denominators. Rebuild them once now (and re-upload) so no stale
+        // quads reach the GPU this frame. Every other text lane is
+        // regenerated below with the current atlas size, so they are fine.
+        // (Growth triggered *this* frame by a transient adapter is caught by
+        // the second `take_atlas_grew` check after the adapters run.)
+        if let Some(text) = self.text.as_mut() {
+            if text.take_atlas_grew() {
+                self.relayout();
+            }
+        }
         let folder_scroller_animating = if let Some(scroller) = self.folder_scroller.as_mut() {
             scroller.tick(now);
             scroller.is_animating()
@@ -192,6 +205,25 @@ impl App {
         // Sync the OS IME with the search field (on while focused,
         // parked at the caret) so Japanese / other IME input works.
         self.update_ime_state();
+
+        // A transient text adapter (control/folder/settings/overlay) may have
+        // rasterized brand-new glyphs and forced the glyph atlas to grow *this*
+        // frame. Growth changes the UV denominators, so the retained Grid
+        // label lane — built earlier with the pre-grow denominators — would
+        // point at the wrong texels and render garbled this frame. The opening
+        // check at the top of `tick_frame` only catches growth from the
+        // *previous* frame; rebuild the retained Grid lane once more here so
+        // no stale quads reach the GPU this frame. (Transient lanes are
+        // regenerated every frame, so any pre-grow UVs they carry self-correct
+        // next frame — at worst a single imperceptible frame on a short-lived
+        // surface.)
+        if self
+            .text
+            .as_mut()
+            .is_some_and(|text| text.take_atlas_grew())
+        {
+            self.relayout();
+        }
 
         // Submit one complete renderer-neutral frame model. Renderer-side
         // dirty tracking updates only lanes whose model data changed.

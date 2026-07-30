@@ -233,7 +233,12 @@ impl Renderer {
         );
 
         // ---- Text pipeline + glyph atlas --------------------------------
-        let (aw, ah) = crate::renderer::text_engine::TextRenderer::atlas_dimensions();
+        // The glyph atlas texture starts at the engine's initial size and is
+        // reallocated by `upload_atlas` whenever the CPU-side atlas grows.
+        let (aw, ah) = (
+            crate::renderer::text_engine::ATLAS_INITIAL_SIZE,
+            crate::renderer::text_engine::ATLAS_INITIAL_SIZE,
+        );
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
             size: wgpu::Extent3d {
@@ -646,6 +651,7 @@ impl Renderer {
             control_pipeline,
             control_uniform_buffer,
             control_bind_group: control_bind_group.clone(),
+            control_bgl,
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
             backdrop_instance_buffer: InstanceBuffer::new("backdrop instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),

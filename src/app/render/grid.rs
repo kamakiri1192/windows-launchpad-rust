@@ -62,9 +62,16 @@ impl App {
             let dirty = t.atlas_dirty;
             if dirty {
                 if let Some(r) = self.renderer.as_mut() {
-                    r.upload_atlas(t.atlas_rgba());
+                    let (aw, ah) = t.atlas_dimensions();
+                    r.upload_atlas(t.atlas_rgba(), aw, ah);
                 }
             }
+            // If `layout_labels` grew the atlas, the Grid quads above were
+            // already built against the *grown* dimensions (raster_phase reads
+            // the final size), so the `atlas_grew` signal is redundant for the
+            // Grid lane. Clear it so the frame-top / mid-frame checks in
+            // `tick_frame` don't trigger a wasted second relayout.
+            let _ = t.take_atlas_grew();
             (grid_glyph_views(&quads), dirty)
         } else {
             (Vec::new(), false)

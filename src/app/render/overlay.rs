@@ -79,7 +79,8 @@ impl App {
         // colon glyphs on a fresh atlas).
         if let (Some(renderer), Some(text)) = (self.renderer.as_mut(), self.text.as_ref()) {
             if text.atlas_dirty {
-                renderer.upload_atlas(text.atlas_rgba());
+                let (aw, ah) = text.atlas_dimensions();
+                renderer.upload_atlas(text.atlas_rgba(), aw, ah);
             }
         }
         if let Some(text) = self.text.as_mut() {
