@@ -98,7 +98,7 @@ pub struct Renderer {
     atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
     /// Copy of the bind group layout (for texture/sampler + uniform).
-    #[allow(dead_code)]
+    /// Reused to rebuild the atlas bind groups when either atlas grows.
     text_bgl: wgpu::BindGroupLayout,
 
     // -- Icon rendering -------------------------------------------------
@@ -130,6 +130,9 @@ pub struct Renderer {
     control_pipeline: RenderPipeline,
     control_uniform_buffer: Buffer,
     control_bind_group: wgpu::BindGroup,
+    /// Control bind group layout, kept so the control bind groups can be
+    /// rebuilt when the glyph atlas grows (they sample the atlas).
+    control_bgl: wgpu::BindGroupLayout,
     control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     backdrop_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
