@@ -294,6 +294,18 @@ impl TextRenderer {
         self.layout_centered_line_weighted(spec, Weight::NORMAL)
     }
 
+    /// Same as [`layout_centered_line`] but also returns the laid-out line
+    /// width in physical px. Lets callers that need both the quads and the
+    /// measurement (e.g. the context menu, which centers the label inside a
+    /// row) do it in a single shaping pass instead of calling
+    /// [`measure_text`] first.
+    pub fn layout_centered_line_with_width(
+        &mut self,
+        spec: &CenteredLineSpec<'_>,
+    ) -> (Vec<GlyphQuad>, f32) {
+        self.layout_centered_line_weighted_with_width(spec, Weight::NORMAL)
+    }
+
     /// Weighted variant used by semantic UI text such as a folder title.
     pub fn layout_centered_line_weighted(
         &mut self,
@@ -301,6 +313,7 @@ impl TextRenderer {
         weight: Weight,
     ) -> Vec<GlyphQuad> {
         self.layout_centered_line_weighted_with_layers(spec, weight, &[])
+            .0
     }
 
     /// Centered semantic text with the same soft layered shadow used by app
@@ -312,6 +325,7 @@ impl TextRenderer {
         weight: Weight,
     ) -> Vec<GlyphQuad> {
         self.layout_centered_line_weighted_with_layers(spec, weight, LABEL_SHADOW_LAYERS)
+            .0
     }
 
     fn layout_centered_line_weighted_with_layers(
@@ -319,7 +333,7 @@ impl TextRenderer {
         spec: &CenteredLineSpec<'_>,
         weight: Weight,
         shadow_layers: &[(f32, f32, f32)],
-    ) -> Vec<GlyphQuad> {
+    ) -> (Vec<GlyphQuad>, f32) {
         let CenteredLineSpec {
             text,
             font_size,
@@ -347,11 +361,12 @@ impl TextRenderer {
         buffer.shape_until_scroll(&mut self.font_system, false);
 
         let mut placed = Vec::new();
+        let mut line_w = 0.0f32;
         let baseline_y = center.1 - line_height * 0.5 * scale_factor;
         // Single line only: take the first layout run.
         if let Some(run) = buffer.layout_runs().next() {
-            let run_w = run.line_w;
-            let centered_x = (center.0 / scale_factor - run_w * 0.5).max(0.0);
+            line_w = run.line_w * scale_factor;
+            let centered_x = (center.0 / scale_factor - run.line_w * 0.5).max(0.0);
             // Round the physical origin: `CacheKey` bins glyphs by subpixel
             // position, so an animated fractional origin would rasterize up
             // to 4 atlas entries per glyph. Snapping to whole physical px
@@ -372,7 +387,79 @@ impl TextRenderer {
                 });
             }
         }
-        self.raster_phase(placed, scale_factor, shadow_layers)
+        let quads = self.raster_phase(placed, scale_factor, shadow_layers);
+        (quads, line_w)
+    }
+
+    fn layout_centered_line_weighted_with_width(
+        &mut self,
+        spec: &CenteredLineSpec<'_>,
+        weight: Weight,
+    ) -> (Vec<GlyphQuad>, f32) {
+        self.layout_centered_line_weighted_with_layers(spec, weight, &[])
+    }
+
+    /// Lay out a single line anchored to a left edge, returning the glyph
+    /// quads and the line width in physical px in a single shaping pass.
+    ///
+    /// `left` is the on-screen left edge of the line (physical px), `center_y`
+    /// the vertical center. Unlike [`layout_centered_line`] this needs no prior
+    /// `measure_text` to position the text, so callers that left-align a label
+    /// inside a known row (e.g. the context menu) shape once instead of twice.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_left_anchored_line_with_width(
+        &mut self,
+        text: &str,
+        left: f32,
+        center_y: f32,
+        font_size: f32,
+        line_height: f32,
+        family: &str,
+        color: [f32; 4],
+        scale_factor: f32,
+    ) -> (Vec<GlyphQuad>, f32) {
+        let metrics = Metrics::new(font_size, line_height);
+        let attrs = Attrs::new()
+            .family(Family::Name(family))
+            .weight(Weight::NORMAL)
+            .color(Color::rgba(
+                (color[0] * 255.0).round() as u8,
+                (color[1] * 255.0).round() as u8,
+                (color[2] * 255.0).round() as u8,
+                (color[3] * 255.0).round() as u8,
+            ));
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(Some(f32::MAX / 4.0), Some(line_height * 2.0 / scale_factor));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut placed = Vec::new();
+        let mut line_w = 0.0f32;
+        let baseline_y = center_y - line_height * 0.5 * scale_factor;
+        if let Some(run) = buffer.layout_runs().next() {
+            line_w = run.line_w * scale_factor;
+            // `left` is the line's left edge in physical px. Round it like the
+            // centered path does so `CacheKey` bins glyphs at whole physical px
+            // (one atlas entry per glyph, no subpixel proliferation).
+            let line_origin = (
+                left.round(),
+                (baseline_y + run.line_y * scale_factor).round(),
+            );
+            for glyph in run.glyphs.iter() {
+                let physical = glyph.physical(line_origin, scale_factor);
+                let x = physical.x as f32;
+                let y = physical.y as f32;
+                placed.push(PlacedGlyph {
+                    physical,
+                    x,
+                    y,
+                    color,
+                });
+            }
+        }
+        let quads = self.raster_phase(placed, scale_factor, &[]);
+        (quads, line_w)
     }
 
     /// Measure a single line of text's laid-out width in physical px without

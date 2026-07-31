@@ -299,24 +299,22 @@ fn push_menu_text(
     color: [f32; 4],
     scale: f32,
 ) {
-    let width = t.measure_text(&text_engine::CenteredLineSpec {
-        text: value,
+    // Single shaping pass: the menu left-aligns each label inside its row, so
+    // the left-anchored path returns both the quads and the width without the
+    // separate `measure_text` the old centered approach needed. The horizontal
+    // origin (`left.round()`) matches what the old path produced after
+    // measure→center→recenter, so glyph subpixel bins are unchanged.
+    let (row_quads, _width) = t.layout_left_anchored_line_with_width(
+        value,
+        left,
+        center_y,
         font_size,
         line_height,
-        family: UI_FONT_FAMILY,
+        UI_FONT_FAMILY,
         color,
-        center: (0.0, 0.0),
-        scale_factor: scale,
-    });
-    quads.append(&mut t.layout_centered_line(&text_engine::CenteredLineSpec {
-        text: value,
-        font_size,
-        line_height,
-        family: UI_FONT_FAMILY,
-        color,
-        center: (left + width * 0.5, center_y),
-        scale_factor: scale,
-    }));
+        scale,
+    );
+    quads.extend(row_quads);
 }
 
 fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphView> {
