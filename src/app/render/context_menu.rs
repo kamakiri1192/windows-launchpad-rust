@@ -174,7 +174,9 @@ impl App {
 
         // Shape label text into glyph quads. We render only when the content
         // has meaningfully revealed to avoid wasted raster work mid-collapse.
-        let mut glyphs: Vec<GlyphQuad> = Vec::new();
+        // Pre-size for the menu's ~6 short CJK labels (a handful of glyphs each)
+        // so the loop doesn't trigger reallocations.
+        let mut glyphs: Vec<GlyphQuad> = Vec::with_capacity(labels.len() * 8);
         let opacity = self.context_menu.content_opacity();
         let content_scale = self.context_menu.content_scale().max(0.0);
         if opacity > 0.02 {
