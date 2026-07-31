@@ -182,6 +182,12 @@ impl ApplicationHandler<UserEvent> for App {
             .with_scale_factor(self.scale_factor)
             .centered(w as f32);
 
+        // B.3: font loading (load_system_fonts file I/O) is window-independent
+        // and FontSystem is Send, so kick it off on a background thread BEFORE
+        // the renderer's blocking init and join after. The renderer's
+        // `block_on` (adapter/device request, shader compile, pipelines) hides
+        // the font load that previously ran serially after it.
+        let font_load = text::spawn_font_system_load();
         let renderer = pollster::block_on(Renderer::new(
             window,
             &self.layout,
@@ -206,7 +212,15 @@ impl ApplicationHandler<UserEvent> for App {
         self.timer.mark(prefix::STARTUP, "renderer initialization");
         let bounds = self.layout.bounds(w as f32);
         let scroller = Scroller::new(bounds);
-        let text = text::TextRenderer::new();
+        // Join the background font load. If the worker already finished during
+        // renderer init this is effectively free; otherwise we wait for the
+        // remainder. The first frame stays font-complete (no flicker) because
+        // we only proceed once the FontSystem is in hand.
+        let font_system = font_load.join().unwrap_or_else(|_| {
+            eprintln!("startup: font-load worker panicked; building fonts inline");
+            text::platform_font_system_fallback()
+        });
+        let text = text::TextRenderer::with_font_system(font_system);
 
         self.renderer = Some(renderer);
         self.scroller = Some(scroller);

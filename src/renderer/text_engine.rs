@@ -194,13 +194,28 @@ const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
 
 impl TextRenderer {
     pub fn new() -> Self {
-        Self::with_atlas_size(ATLAS_INITIAL_SIZE, ATLAS_INITIAL_SIZE)
+        Self::with_font_system(platform_font_system())
+    }
+
+    /// Construct from a `FontSystem` that was built elsewhere — typically on a
+    /// background thread that ran in parallel with renderer init (see
+    /// [`spawn_font_system_load`]). Keeps the first frame font-complete so
+    /// there is no fallback-text flicker.
+    pub fn with_font_system(font_system: FontSystem) -> Self {
+        Self::with_atlas_size_and_font_system(ATLAS_INITIAL_SIZE, ATLAS_INITIAL_SIZE, font_system)
     }
 
     /// Construct with an explicit initial atlas size. Used by tests to force
     /// growth without rasterizing thousands of glyphs.
     fn with_atlas_size(atlas_w: u32, atlas_h: u32) -> Self {
-        let font_system = platform_font_system();
+        Self::with_atlas_size_and_font_system(atlas_w, atlas_h, platform_font_system())
+    }
+
+    fn with_atlas_size_and_font_system(
+        atlas_w: u32,
+        atlas_h: u32,
+        font_system: FontSystem,
+    ) -> Self {
         let swash = SwashCache::new();
         let atlas = vec![0u8; (atlas_w * atlas_h * 4) as usize];
         Self {
@@ -800,6 +815,30 @@ fn platform_font_system() -> FontSystem {
         "font load end (FontSystem built)",
     );
     system
+}
+
+/// Spawn a background thread that builds the platform `FontSystem` (the heavy
+/// `load_system_fonts` file I/O, ~tens of ms). Returns a handle the caller
+/// `join`s once the (main-thread-bound) renderer init has finished, so the
+/// font load runs in parallel with `Renderer::new`'s `block_on` instead of
+/// serially after it.
+///
+/// `FontSystem` is `Send` (verified at compile time), so it can cross the
+/// thread boundary. On panic inside the worker the handle still resolves; we
+/// fall back to a synchronous `platform_font_system()` on the calling thread
+/// so the app never loses its fonts.
+pub fn spawn_font_system_load() -> std::thread::JoinHandle<FontSystem> {
+    std::thread::Builder::new()
+        .name("font-load".to_owned())
+        .spawn(platform_font_system)
+        .expect("spawn font-load thread")
+}
+
+/// Synchronous fallback used only if the background [`spawn_font_system_load`]
+/// worker panics. Rebuilds the FontSystem on the calling (UI) thread so the
+/// app still has working fonts rather than aborting.
+pub fn platform_font_system_fallback() -> FontSystem {
+    platform_font_system()
 }
 
 #[cfg(target_os = "macos")]
