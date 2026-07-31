@@ -772,18 +772,34 @@ fn platform_font_system() -> FontSystem {
 
 #[cfg(target_os = "macos")]
 fn macos_font_system_for_locale(locale: &str) -> FontSystem {
+    // B.3 instrumentation: isolate the cost of font DB construction (file I/O
+    // over every installed font) from the rest of TextRenderer::new.
+    let timer = crate::startup_timer::get();
+    timer.mark(crate::startup_timer::prefix::STARTUP, "font load start");
     let mut db = cosmic_text::fontdb::Database::new();
     db.load_system_fonts();
     db.set_sans_serif_family(UI_FONT_FAMILY);
     db.set_serif_family("New York");
     db.set_monospace_family("Menlo");
+    timer.mark(
+        crate::startup_timer::prefix::STARTUP,
+        "font load end (FontSystem built)",
+    );
 
     FontSystem::new_with_locale_and_db(macos_fallback_locale(locale), db)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn platform_font_system() -> FontSystem {
-    FontSystem::new()
+    // B.3 instrumentation: FontSystem::new() itself performs load_system_fonts.
+    let timer = crate::startup_timer::get();
+    timer.mark(crate::startup_timer::prefix::STARTUP, "font load start");
+    let system = FontSystem::new();
+    timer.mark(
+        crate::startup_timer::prefix::STARTUP,
+        "font load end (FontSystem built)",
+    );
+    system
 }
 
 #[cfg(target_os = "macos")]
