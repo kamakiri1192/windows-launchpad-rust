@@ -33,6 +33,10 @@ impl App {
         }
         self.pending_press = None;
 
+        // Compute the stable key once here; the per-frame layout reads it back
+        // from `context_menu_target_key` instead of re-running `format!`.
+        self.context_menu_target_key = Some(target.stable_key());
+
         let scale = self.scale_factor.max(0.01);
         // Measure the longest label once at open time so the open-animation
         // target and the per-frame layout agree on the same panel width.
@@ -111,17 +115,16 @@ impl App {
     /// submit it to the Modal lanes. Called from the frame loop while the menu
     /// is active.
     pub(crate) fn render_context_menu(&mut self) {
-        let target = match self.context_menu.active_target.clone() {
-            Some(id) => id,
-            None => {
-                self.clear_context_menu_presentation();
-                return;
-            }
-        };
+        if self.context_menu.active_target.is_none() {
+            self.clear_context_menu_presentation();
+            return;
+        }
 
         let scale = self.scale_factor.max(0.01);
         let items = context_menu::ContextMenuItem::ALL;
-        let labels: Vec<&str> = items.iter().map(|i| i.label()).collect();
+        // `ALL_LABELS` is a compile-time constant matching `ALL` order, so we
+        // borrow a static slice instead of reallocating a `Vec` every frame.
+        let labels: &[&str] = context_menu::ContextMenuItem::ALL_LABELS.as_slice();
 
         // The fully-open panel size is fixed at open time and stays constant
         // through the animation; the live (animated) size is separate. We reuse
@@ -131,11 +134,13 @@ impl App {
             open_panel_size_logical(items.len(), self.context_menu_open_width_logical);
         let open_size = (open_lw * scale, open_lh * scale);
 
-        let target_key = target.stable_key();
+        // `stable_key` was computed once at open time; borrow it instead of
+        // re-running `format!` (and cloning the target) every frame.
+        let target_key = self.context_menu_target_key.as_deref().unwrap_or_default();
         let input = ContextMenuInput {
             viewport: self.viewport_phys(),
             scale_factor: scale,
-            target: target_key.as_str(),
+            target: target_key,
             pos: (self.context_menu.pos_x(), self.context_menu.pos_y()),
             size: (self.context_menu.width(), self.context_menu.height()),
             open_size,
@@ -145,7 +150,7 @@ impl App {
             content_blur: self.context_menu.content_blur(),
             activation: self.context_menu.activation(),
             items: &items,
-            labels: &labels,
+            labels,
         };
         let model = context_menu::build(&input);
 
@@ -254,6 +259,7 @@ impl App {
         self.render_model.context_menu_tiles = Some(Vec::new());
         self.render_model.context_menu_icons = Some(Vec::new());
         self.context_menu_layout = None;
+        self.context_menu_target_key = None;
     }
 
     /// Measure the widest menu label and return its width in logical px at 1×

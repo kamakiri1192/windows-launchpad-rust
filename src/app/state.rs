@@ -298,6 +298,10 @@ pub struct App {
     /// target and the laid-out rows agree on the same panel width. Mirrors the
     /// `cached_done_width` pattern but persists across frames.
     pub context_menu_open_width_logical: f32,
+    /// `stable_key()` of the current menu target, computed once at open time so
+    /// the per-frame layout path doesn't re-run `format!` every frame. Cleared
+    /// when the menu is dismissed.
+    pub context_menu_target_key: Option<String>,
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
@@ -454,6 +458,7 @@ impl App {
             context_menu: crate::features::context_menu::ContextMenuState::default(),
             context_menu_layout: None,
             context_menu_open_width_logical: crate::layout::context_menu::FALLBACK_MAX_LABEL_WIDTH,
+            context_menu_target_key: None,
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,

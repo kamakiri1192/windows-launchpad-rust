@@ -89,6 +89,20 @@ impl ContextMenuItem {
             Self::AppInfo => "アプリの概要",
         }
     }
+
+    /// Display labels for [`ALL`], in the same order. Precomputed at compile
+    /// time so callers (the context-menu renderer, which runs every frame)
+    /// can borrow a static slice instead of reallocating a `Vec` each frame.
+    ///
+    /// [`ALL`]: ContextMenuItem::ALL
+    pub const ALL_LABELS: [&'static str; 6] = [
+        Self::EditHome.label(),
+        Self::HideApp.label(),
+        Self::RevealInFinder.label(),
+        Self::IconLarger.label(),
+        Self::IconSmaller.label(),
+        Self::AppInfo.label(),
+    ];
 }
 
 /// Inputs resolved by the app shell from the live [`ContextMenuState`].
