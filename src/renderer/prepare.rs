@@ -13,8 +13,9 @@ use crate::ui_model::render_model::{
 };
 
 use super::controls::{
-    ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_GEAR,
-    KIND_MAGNIFIER, KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
+    ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_EYE_OFF,
+    KIND_FOLDER, KIND_GEAR, KIND_INFO, KIND_MAGNIFIER, KIND_MINUS, KIND_PENCIL, KIND_PLUS,
+    KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
 };
 use super::counters::Category;
 use super::icon_pipeline::IconInstance;
@@ -114,6 +115,12 @@ fn control_kind(kind: &ControlKind) -> f32 {
         ControlKind::SliderTrack => KIND_SLIDER_TRACK,
         ControlKind::SliderKnob => KIND_SLIDER_KNOB,
         ControlKind::ResetIcon => KIND_RESET_ICON,
+        ControlKind::Pencil => KIND_PENCIL,
+        ControlKind::EyeOff => KIND_EYE_OFF,
+        ControlKind::FolderIcon => KIND_FOLDER,
+        ControlKind::Plus => KIND_PLUS,
+        ControlKind::Minus => KIND_MINUS,
+        ControlKind::Info => KIND_INFO,
         // These are container/semantic views rather than foreground ink.
         ControlKind::SearchPill
         | ControlKind::PageIndicator
@@ -224,6 +231,24 @@ impl Renderer {
             });
         self.modal_clip_rect = modal_clip.map(|(rect, _)| rect);
         self.modal_clip_radius = modal_clip.map_or(0.0, |(_, radius)| radius);
+        // Context menu clip is computed independently so that, when both a
+        // folder panel (Modal) and the menu (ContextMenu) are open, each
+        // content pass scissored to its own glass surface rather than sharing
+        // one rect (which could clip menu content to the folder bounds).
+        let context_menu_clip = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| (surface.rect, surface.radius))
+            });
+        self.context_menu_clip_rect = context_menu_clip.map(|(rect, _)| rect);
+        self.context_menu_clip_radius = context_menu_clip.map_or(0.0, |(_, radius)| radius);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -270,6 +295,11 @@ impl Renderer {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
                         .set_modal_shapes(&self.device, &self.queue, &shapes);
+                }
+                GlassLayer::ContextMenu => {
+                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    self.liquid_glass
+                        .set_context_menu_shapes(&self.device, &self.queue, &shapes);
                 }
                 GlassLayer::Base => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
@@ -386,6 +416,45 @@ impl Renderer {
                 .modal_icons
                 .clone_from(&model.modal_icons);
         }
+        if model.context_menu_tiles != self.prepared_model.context_menu_tiles {
+            let views = model.context_menu_tiles.as_deref().unwrap_or_default();
+            let instances: Vec<_> = views
+                .iter()
+                .enumerate()
+                .map(|(index, view)| tile_instance(view, index))
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.context_menu_tile_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Tile,
+            );
+            self.prepared_model
+                .context_menu_tiles
+                .clone_from(&model.context_menu_tiles);
+        }
+        if model.context_menu_icons != self.prepared_model.context_menu_icons {
+            let instances: Vec<_> = model
+                .context_menu_icons
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(icon_instance)
+                .collect();
+            set_instances(
+                &self.device,
+                &self.queue,
+                &mut self.context_menu_icon_instance_buffer,
+                &instances,
+                &mut self.counters,
+                Category::Icon,
+            );
+            self.prepared_model
+                .context_menu_icons
+                .clone_from(&model.context_menu_icons);
+        }
 
         for batch in &model.ink {
             if self
@@ -441,6 +510,14 @@ impl Renderer {
                     &mut self.counters,
                     Category::Settings,
                 ),
+                InkLane::ContextMenu => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.context_menu_instance_buffer,
+                    &instances,
+                    &mut self.counters,
+                    Category::Settings,
+                ),
             }
             self.prepared_model
                 .set_ink_batch(batch.lane, batch.views.clone());
@@ -487,6 +564,14 @@ impl Renderer {
                     &self.device,
                     &self.queue,
                     &mut self.modal_text_instance_buffer,
+                    &quads,
+                    &mut self.counters,
+                    Category::SettingsText,
+                ),
+                GlyphLane::ContextMenu => set_instances(
+                    &self.device,
+                    &self.queue,
+                    &mut self.context_menu_text_instance_buffer,
                     &quads,
                     &mut self.counters,
                     Category::SettingsText,

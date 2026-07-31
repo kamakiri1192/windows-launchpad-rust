@@ -11,6 +11,11 @@ pub struct RenderModel {
     /// Fixed content composited after the generic modal glass lane.
     pub modal_tiles: Option<Vec<TileView>>,
     pub modal_icons: Option<Vec<IconView>>,
+    /// Fixed content for the context menu lane (background tiles + icons),
+    /// kept separate from `modal_tiles`/`modal_icons` so the menu and an open
+    /// folder panel can coexist without overwriting each other's content.
+    pub context_menu_tiles: Option<Vec<TileView>>,
+    pub context_menu_icons: Option<Vec<IconView>>,
     pub text: Vec<TextView>,
     pub controls: Vec<ControlView>,
     /// Procedural renderer-neutral ink primitives, split into draw-order lanes.
@@ -31,6 +36,8 @@ impl RenderModel {
             && self.icons.as_ref().is_none_or(Vec::is_empty)
             && self.modal_tiles.as_ref().is_none_or(Vec::is_empty)
             && self.modal_icons.as_ref().is_none_or(Vec::is_empty)
+            && self.context_menu_tiles.as_ref().is_none_or(Vec::is_empty)
+            && self.context_menu_icons.as_ref().is_none_or(Vec::is_empty)
             && self.text.is_empty()
             && self.controls.is_empty()
             && self.ink.is_empty()
@@ -108,6 +115,10 @@ pub enum GlassLayer {
     DragOverlay,
     Overlay,
     Modal,
+    /// Context menu glass. Isolated from `Modal` so the menu's glass never
+    /// smooth-unions with an open folder panel's glass — they stay visually
+    /// distinct even when overlapping. Composited above `Modal`.
+    ContextMenu,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,6 +194,18 @@ pub enum ControlKind {
     SliderKnob,
     /// Per-row reset arrow (↺). Drawn by kind 12.
     ResetIcon,
+    /// Pencil glyph (context menu: edit home). Drawn by kind 13.
+    Pencil,
+    /// Eye-with-slash glyph (context menu: hide app). Drawn by kind 14.
+    EyeOff,
+    /// Folder glyph (context menu: reveal in Finder/Explorer). Drawn by kind 15.
+    FolderIcon,
+    /// Plus glyph (context menu: larger icon). Drawn by kind 16.
+    Plus,
+    /// Minus glyph (context menu: smaller icon). Drawn by kind 17.
+    Minus,
+    /// Info glyph (context menu: app info). Drawn by kind 18.
+    Info,
 }
 
 /// Draw-order lane for procedural foreground ink.
@@ -194,6 +217,9 @@ pub enum InkLane {
     Settings,
     EditBadge,
     Modal,
+    /// Context menu procedural ink. Isolated from `Modal` so the menu's ink
+    /// (icons, row backgrounds) never collides with folder panel ink.
+    ContextMenu,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +256,9 @@ pub enum GlyphLane {
     BottomControl,
     Settings,
     Modal,
+    /// Context menu label text. Isolated from `Modal` so it never collides
+    /// with folder panel glyphs.
+    ContextMenu,
     /// FPS overlay text, drawn last so it sits above all modal content.
     Overlay,
 }

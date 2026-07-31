@@ -148,6 +148,9 @@ pub enum KeyAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PressAction {
     Folder,
+    /// Context menu open → swallow the press; the release decides dismiss vs
+    /// item selection.
+    ContextMenu,
     /// Settings overlay open → swallow the press; the release decides close vs
     /// inside-row action. Carries the press-time hit target.
     Settings(SettingsPressTarget),
@@ -168,6 +171,9 @@ pub enum PressAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseAction {
     Folder,
+    /// Context menu release: outside-release dismisses; inside-release selects
+    /// the hovered item (a mock action that just closes the menu).
+    ContextMenu,
     /// Settings overlay: outside-press + outside-release → dismiss (no
     /// passthrough). Inside-press + matching inside-release → run the row
     /// action.
@@ -734,6 +740,7 @@ impl App {
         let py = self.pointer_phys_y;
         match press_action {
             PressAction::Folder => self.handle_folder_pointer_press(px, py),
+            PressAction::ContextMenu => self.handle_context_menu_pointer_press(px, py),
             PressAction::Settings(target) => {
                 self.pressed_on_settings = Some(target);
             }
@@ -828,6 +835,7 @@ impl App {
         self.pressed_on_control = false;
         match release_action {
             ReleaseAction::Folder => self.handle_folder_pointer_release(px, py),
+            ReleaseAction::ContextMenu => self.handle_context_menu_pointer_release(px, py),
             ReleaseAction::Settings { pressed, released } => {
                 if pressed == SettingsPressTarget::Outside
                     && released == SettingsPressTarget::Outside
@@ -993,6 +1001,11 @@ impl App {
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening
                     | crate::features::folders::FolderPhase::Closing
+            )
+            || matches!(
+                self.context_menu.phase,
+                crate::features::context_menu::ContextMenuPhase::Opening
+                    | crate::features::context_menu::ContextMenuPhase::Closing
             )
         {
             self.execute_command(AppCommand::RequestRedraw);

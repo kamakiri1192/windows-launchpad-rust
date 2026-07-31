@@ -288,6 +288,21 @@ pub struct App {
     pub relayout_serial: u64,
     pub interaction_glass: Vec<crate::ui_model::render_model::GlassSurface>,
 
+    // ---- context menu feature ------------------------------------------
+    pub context_menu: crate::features::context_menu::ContextMenuState,
+    /// Hit map for the most recently rendered context menu, used to resolve
+    /// left-click releases into item selections.
+    pub context_menu_layout: Option<crate::layout::context_menu::ContextMenuModel>,
+    /// Measured width (logical px at 1× DPI) of the longest menu label, set once
+    /// at open time and read by the per-frame layout so the open-animation
+    /// target and the laid-out rows agree on the same panel width. Mirrors the
+    /// `cached_done_width` pattern but persists across frames.
+    pub context_menu_open_width_logical: f32,
+    /// `stable_key()` of the current menu target, computed once at open time so
+    /// the per-frame layout path doesn't re-run `format!` every frame. Cleared
+    /// when the menu is dismissed.
+    pub context_menu_target_key: Option<String>,
+
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
     pub control: crate::features::bottom_control::BottomControl,
@@ -440,6 +455,10 @@ impl App {
             folder_pointer_move_serial: 0,
             relayout_serial: 0,
             interaction_glass: Vec::new(),
+            context_menu: crate::features::context_menu::ContextMenuState::default(),
+            context_menu_layout: None,
+            context_menu_open_width_logical: crate::layout::context_menu::FALLBACK_MAX_LABEL_WIDTH,
+            context_menu_target_key: None,
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,
@@ -904,17 +923,21 @@ impl App {
     /// the wrong app. Returns an owned snapshot safe to use after the
     /// launcher dismisses.
     pub(crate) fn resolve_clicked_app(&self, x_phys: f32, y_phys: f32) -> Option<AppLaunchInfo> {
+        let app_id = self.app_id_at_point(x_phys, y_phys)?;
+        self.registry.launch_info(&app_id)
+    }
+
+    /// Resolve the stable [`AppId`] under the pointer, or `None` when the
+    /// pointer is not over an app tile. Used by right-click to open the
+    /// context menu for the targeted app without launching it.
+    pub(crate) fn app_id_at_point(&self, x_phys: f32, y_phys: f32) -> Option<AppId> {
         let (w, _h) = self.viewport_phys();
         let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
         let visible_ids = self.visible_app_ids();
         let app_index =
             self.layout
                 .hit_test_app(w as f32, x_phys, y_phys, scroll_x, visible_ids.len())?;
-        // Map display index → stable id → launch snapshot. Going through the id
-        // means even a concurrent mutation between pick and launch can't
-        // resolve to the wrong app.
-        let app_id = visible_ids.get(app_index)?;
-        self.registry.launch_info(app_id)
+        visible_ids.get(app_index).cloned()
     }
 }
 

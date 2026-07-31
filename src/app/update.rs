@@ -200,6 +200,88 @@ impl App {
             {
                 let action = self.classify_pointer_press(point.x, point.y);
                 self.handle_pointer_press(action);
+            } else if button == crate::input_routing::PointerButton::Right
+                && matches!(decision, RouterAction::LaunchpadOwns)
+            {
+                // In edit mode (home grid or an open folder) the context menu
+                // is suppressed everywhere — icons are being rearranged/deleted.
+                if self.editing {
+                    return;
+                }
+                // Right-click on a launcher-owned surface opens the context
+                // menu when it lands on an app tile. Left-button routing keeps
+                // its own classification path; the right button never flows
+                // through `classify_pointer_press`.
+                //
+                // When a folder is open, the hit resolves against the folder's
+                // children. `open_context_menu` closes the folder first so the
+                // Modal glass lane stays exclusive (one surface) and the Liquid
+                // Glass modal pass stays stable.
+                //
+                // The icon rect (physical on-screen px) is resolved alongside
+                // the app_id so the menu can attach to the icon edge (iOS-style)
+                // rather than to the raw click point.
+                let click_fallback =
+                    || crate::ui_model::geometry::Rect::new(point.x, point.y, 1.0, 1.0);
+                let (target, icon_rect) = if self.folders.is_active() {
+                    // Folder child: read the HitRegion rect directly (already in
+                    // physical on-screen px, panel-clipped to the visible part).
+                    // A child inside an open folder is an app, so wrap it as
+                    // LauncherItem::App for the menu target.
+                    let resolved = self
+                        .folder_layout
+                        .as_ref()
+                        .and_then(|layout| {
+                            layout
+                                .result
+                                .hits
+                                .hit_test(crate::ui_model::geometry::Point::new(point.x, point.y))
+                        })
+                        .and_then(|hit| match &hit.target {
+                            crate::ui_model::hit::HitTarget::FolderChild { child, .. } => Some((
+                                LauncherItem::App(crate::domain::app_id::AppId::from_normalized(
+                                    child,
+                                )),
+                                hit.rect,
+                            )),
+                            _ => None,
+                        });
+                    match resolved {
+                        Some((target, rect)) => (target, rect),
+                        None => return,
+                    }
+                } else {
+                    // Grid: hit-test in the SAME index space the renderer uses
+                    // (visible_launcher_items, which includes folder tiles), so
+                    // that a folder earlier in the grid does not shift the
+                    // resolved item / rect of later items. `hit_test_app` is
+                    // purely geometric; passing the launcher-items count keeps
+                    // its returned index aligned with visible_launcher_items.
+                    // Both apps and folders open a context menu here.
+                    let visible_items = self.visible_launcher_items();
+                    let (w, _h) = self.viewport_phys();
+                    let scroll_x = self.scroller.as_ref().map_or(0.0, |s| s.position);
+                    let index = match self.layout.hit_test_app(
+                        w as f32,
+                        point.x,
+                        point.y,
+                        scroll_x,
+                        visible_items.len(),
+                    ) {
+                        Some(i) => i,
+                        None => return,
+                    };
+                    match visible_items.get(index) {
+                        Some(item @ (LauncherItem::App(_) | LauncherItem::Folder(_))) => {
+                            let rect = self
+                                .launcher_item_rect(item)
+                                .map_or_else(click_fallback, |r| r);
+                            (item.clone(), rect)
+                        }
+                        _ => return,
+                    }
+                };
+                self.open_context_menu(target, icon_rect);
             }
             return;
         }

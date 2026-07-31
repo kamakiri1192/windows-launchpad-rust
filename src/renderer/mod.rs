@@ -75,6 +75,7 @@ pub struct Renderer {
     top_level_dragged_tile_instance: bool,
     modal_tile_instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
     modal_dragged_tile_instance: bool,
+    context_menu_tile_instance_buffer: InstanceBuffer<crate::renderer::tiles::TileInstance>,
     /// Per-frame uniform data (viewport + scroll).
     uniform_buffer: Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -106,6 +107,7 @@ pub struct Renderer {
     icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     modal_icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     modal_dragged_icon_instance: bool,
+    context_menu_icon_instance_buffer: InstanceBuffer<crate::renderer::icon_pipeline::IconInstance>,
     /// Number of trailing top-level icon instances belonging to the dragged
     /// visual unit. Apps use one; a closed folder uses all preview miniatures.
     dragged_icon_instance_count: u32,
@@ -121,6 +123,8 @@ pub struct Renderer {
     /// outside their panel while sliding.
     modal_clip_rect: Option<crate::ui_model::geometry::Rect>,
     modal_clip_radius: f32,
+    context_menu_clip_rect: Option<crate::ui_model::geometry::Rect>,
+    context_menu_clip_radius: f32,
 
     // -- Bottom control overlays --------------------------------------
     // The control's glass capsule is drawn by the Liquid Glass pass (it's a
@@ -159,6 +163,8 @@ pub struct Renderer {
     settings_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     modal_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     modal_text_instance_buffer: InstanceBuffer<GlyphQuad>,
+    context_menu_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
+    context_menu_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Last prepared neutral scene, updated lane-by-lane only when changed.
     prepared_model: crate::ui_model::render_model::RenderModel,
     /// Debug-only allocation/upload counters. Zero-sized in release builds.

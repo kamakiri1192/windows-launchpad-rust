@@ -17,6 +17,8 @@
 //! 12. focus tint backdrop
 //! 13. Liquid Glass settings/folder panel pass (modal)
 //! 14. modal content pass
+//! 15. Liquid Glass context-menu pass (isolated SDF field above modal)
+//! 16. context-menu content pass (tiles, ink, text)
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -470,6 +472,15 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        // Context-menu Liquid Glass surface, isolated from the modal lane so it
+        // never smooth-unions with an open folder panel.
+        let profile_scope = self
+            .gpu_profiler
+            .begin("context_menu_liquid_glass", &mut encoder);
+        self.liquid_glass
+            .render_context_menu_glass(&self.queue, &mut encoder, &view);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
         // Generic fixed modal content, plus settings-specific content, on top
         // of the modal glass.
         let profile_scope = self.gpu_profiler.begin("modal_content", &mut encoder);
@@ -653,6 +664,93 @@ impl Renderer {
                         pass.set_vertex_buffer(0, buf.slice(offset..));
                         pass.draw(0..6, 0..1);
                     }
+                }
+            }
+        }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // Context-menu content pass: tiles (opaque background), ink (icons),
+        // and text (labels). Drawn after modal content so the menu sits above
+        // any open folder panel. Uses the same modal_clip scissor so content
+        // stays within the menu's bounds.
+        let profile_scope = self
+            .gpu_profiler
+            .begin("context_menu_content", &mut encoder);
+        if self.context_menu_tile_instance_buffer.len() > 0
+            || self.context_menu_icon_instance_buffer.len() > 0
+            || self.context_menu_instance_buffer.len() > 0
+            || self.context_menu_text_instance_buffer.len() > 0
+        {
+            let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
+            let content_scissor = self
+                .context_menu_clip_rect
+                .map(|rect| {
+                    let x = rect.x.floor().max(0.0) as u32;
+                    let y = rect.y.floor().max(0.0) as u32;
+                    let max_x = rect.max_x().ceil().clamp(0.0, self.config.width as f32) as u32;
+                    let max_y = rect.max_y().ceil().clamp(0.0, self.config.height as f32) as u32;
+                    (
+                        x.min(self.config.width.saturating_sub(1)),
+                        y.min(self.config.height.saturating_sub(1)),
+                        max_x.saturating_sub(x).max(1),
+                        max_y.saturating_sub(y).max(1),
+                    )
+                })
+                .unwrap_or(full_scissor);
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("context menu content pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_scissor_rect(
+                    content_scissor.0,
+                    content_scissor.1,
+                    content_scissor.2,
+                    content_scissor.3,
+                );
+                // Tiles (opaque background).
+                if let Some(buf) = self.context_menu_tile_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.context_menu_tile_instance_buffer.len());
+                }
+                // Icons.
+                if let Some(buf) = self.context_menu_icon_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.icon_pipeline);
+                    pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.context_menu_icon_instance_buffer.len());
+                }
+                // Ink (vector icons, row backgrounds).
+                if let Some(buf) = self.context_menu_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.context_menu_instance_buffer.len());
+                }
+                // Text (labels).
+                if let Some(buf) = self.context_menu_text_instance_buffer.as_ref() {
+                    // Use control_text_pipeline (not text_pipeline): the grid
+                    // text shader applies scroll_x and page-frame clipping,
+                    // which would shift and clip menu labels. The control-text
+                    // shader renders at absolute screen positions.
+                    pass.set_pipeline(&self.control_text_pipeline);
+                    pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.context_menu_text_instance_buffer.len());
                 }
             }
         }

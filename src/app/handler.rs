@@ -40,7 +40,7 @@ use crate::startup_timer::prefix;
 
 use super::action::{
     folder_keyboard_action, keyboard_action, pointer_press_action, pointer_release_action,
-    AppAction, PressAction, ReleaseAction,
+    AppAction, KeyAction, PressAction, ReleaseAction,
 };
 use super::event::UserEvent;
 use super::state::{
@@ -243,7 +243,14 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
-                let key_action = if self.folders.is_active() && !self.settings_open {
+                let key_action = if self.context_menu.is_active() {
+                    // ESC dismisses the context menu; any other key is swallowed
+                    // while the menu is open.
+                    if key_code == Some(winit::keyboard::KeyCode::Escape) {
+                        self.close_context_menu();
+                    }
+                    KeyAction::None
+                } else if self.folders.is_active() && !self.settings_open {
                     folder_keyboard_action(
                         self.folders.rename.is_some(),
                         self.editing,
@@ -459,6 +466,13 @@ impl App {
                 crate::layout::bottom_control::BottomControlPointerIntent::None
             )
         };
+        // The context menu takes priority over the folder panel so that,
+        // while both are open, a click anywhere dismisses the menu without
+        // also triggering the folder panel (e.g. closing the folder via its
+        // dismiss backdrop).
+        if self.context_menu.is_active() {
+            return PressAction::ContextMenu;
+        }
         if self.folders.is_active() && self.drag_item.is_none() && !(self.editing && over_control) {
             return PressAction::Folder;
         }
@@ -474,6 +488,10 @@ impl App {
     /// shell flags and the press/release state. This feeds
     /// [`AppAction::PointerRelease`].
     pub(crate) fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
+        // The context menu takes priority over the folder panel on release too.
+        if self.context_menu.is_active() {
+            return ReleaseAction::ContextMenu;
+        }
         if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
             return ReleaseAction::Folder;
         }

@@ -40,6 +40,14 @@ impl UiId {
         Self::new(format!("folder-title:{}", key.as_ref()))
     }
 
+    pub fn context_menu_panel() -> Self {
+        Self::new("context-menu-panel")
+    }
+
+    pub fn context_menu_item(app: impl AsRef<str>, item: usize) -> Self {
+        Self::new(format!("context-menu-item:{}:{}", app.as_ref(), item))
+    }
+
     pub fn folder_child(folder: impl AsRef<str>, child: impl AsRef<str>) -> Self {
         Self::new(format!(
             "folder-child:{}:{}",

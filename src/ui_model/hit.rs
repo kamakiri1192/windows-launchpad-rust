@@ -31,6 +31,14 @@ pub enum HitTarget {
     FolderPageNext {
         key: String,
     },
+    /// The context menu panel background itself.
+    ContextMenuPanel,
+    /// One row of the context menu. `app` is the targeted app's stable id;
+    /// `item` identifies which placeholder action the row represents.
+    ContextMenuItem {
+        app: String,
+        item: usize,
+    },
     BottomControl,
     BottomControlClose,
     SearchField,
@@ -63,6 +71,17 @@ impl HitTarget {
 
     pub fn folder_title(key: impl Into<String>) -> Self {
         Self::FolderTitle { key: key.into() }
+    }
+
+    pub const fn context_menu_panel() -> Self {
+        Self::ContextMenuPanel
+    }
+
+    pub fn context_menu_item(app: impl Into<String>, item: usize) -> Self {
+        Self::ContextMenuItem {
+            app: app.into(),
+            item,
+        }
     }
 
     pub fn folder_child(folder: impl Into<String>, child: impl Into<String>, index: usize) -> Self {

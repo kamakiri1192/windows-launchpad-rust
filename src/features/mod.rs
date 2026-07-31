@@ -11,5 +11,6 @@
 //! `docs/DF_REARCHITECTURE_PLAN.md`.
 
 pub mod bottom_control;
+pub mod context_menu;
 pub mod edit_mode;
 pub mod folders;

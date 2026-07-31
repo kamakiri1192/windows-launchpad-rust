@@ -167,6 +167,7 @@ pub struct LiquidGlassRenderer {
     modal_badge_uniform_buffer: wgpu::Buffer,
     control_uniform_buffer: wgpu::Buffer,
     settings_panel_uniform_buffer: wgpu::Buffer,
+    context_menu_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     shape_count: u32,
     shape_capacity: usize,
@@ -203,6 +204,11 @@ pub struct LiquidGlassRenderer {
     settings_panel_shape_capacity: usize,
     settings_panel_shape_buffer: wgpu::Buffer,
     settings_panel_geometry_bind_group: wgpu::BindGroup,
+    context_menu_shapes: Vec<GlassShape>,
+    context_menu_shape_count: u32,
+    context_menu_shape_capacity: usize,
+    context_menu_shape_buffer: wgpu::Buffer,
+    context_menu_geometry_bind_group: wgpu::BindGroup,
     /// The base shapes (frame + tile halos). The bottom control renders later
     /// so all of its states share the same overlay order.
     base_shapes: Vec<GlassShape>,
@@ -248,6 +254,7 @@ pub struct LiquidGlassRenderer {
     modal_badge_final_bind_group: wgpu::BindGroup,
     control_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
+    context_menu_final_bind_group: wgpu::BindGroup,
     grid_overlay_geometry_bind_group: wgpu::BindGroup,
     drag_overlay_geometry_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
@@ -464,6 +471,8 @@ impl LiquidGlassRenderer {
             create_uniform_buffer(device, "liquid glass control uniforms", &uniforms);
         let settings_panel_uniform_buffer =
             create_uniform_buffer(device, "liquid glass settings panel uniforms", &uniforms);
+        let context_menu_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass context menu uniforms", &uniforms);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let active_base_shapes = shapes.clone();
@@ -499,6 +508,8 @@ impl LiquidGlassRenderer {
             create_shape_buffer_with_capacity(device, 2, "liquid glass control shape buffer");
         let settings_panel_shape_buffer =
             create_shape_buffer_with_capacity(device, 1, "liquid glass settings shape buffer");
+        let context_menu_shape_buffer =
+            create_shape_buffer_with_capacity(device, 1, "liquid glass context menu shape buffer");
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
@@ -608,6 +619,12 @@ impl LiquidGlassRenderer {
             &settings_panel_uniform_buffer,
             &settings_panel_shape_buffer,
         );
+        let context_menu_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &context_menu_uniform_buffer,
+            &context_menu_shape_buffer,
+        );
         let final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
@@ -666,6 +683,15 @@ impl LiquidGlassRenderer {
             device,
             &final_bind_group_layout,
             &settings_panel_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &overlay_geometry_view,
+            &blur_view,
+        );
+        let context_menu_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &context_menu_uniform_buffer,
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
@@ -846,6 +872,7 @@ impl LiquidGlassRenderer {
             modal_badge_uniform_buffer,
             control_uniform_buffer,
             settings_panel_uniform_buffer,
+            context_menu_uniform_buffer,
             shape_buffer,
             shape_count,
             shape_capacity,
@@ -880,6 +907,11 @@ impl LiquidGlassRenderer {
             settings_panel_shape_capacity: 1,
             settings_panel_shape_buffer,
             settings_panel_geometry_bind_group,
+            context_menu_shapes: Vec::new(),
+            context_menu_shape_count: 0,
+            context_menu_shape_capacity: 1,
+            context_menu_shape_buffer,
+            context_menu_geometry_bind_group,
             base_shapes: shapes,
             active_base_shapes,
             base_shape_scratch,
@@ -915,6 +947,7 @@ impl LiquidGlassRenderer {
             modal_badge_final_bind_group,
             control_final_bind_group,
             settings_panel_final_bind_group,
+            context_menu_final_bind_group,
             grid_overlay_geometry_bind_group,
             drag_overlay_geometry_bind_group,
             badge_geometry_bind_group,
@@ -1068,6 +1101,15 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.blur_view,
         );
+        self.context_menu_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.context_menu_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.blur_view,
+        );
     }
 
     fn bind_cpu_backdrop(&mut self, device: &wgpu::Device) {
@@ -1081,7 +1123,7 @@ impl LiquidGlassRenderer {
         if self.debug.show_backdrop_texture {
             return CaptureRegion::full(width, height);
         }
-        let groups: [&[GlassShape]; 7] = [
+        let groups: [&[GlassShape]; 8] = [
             &self.base_shapes,
             &self.grid_overlay_shapes,
             &self.drag_overlay_shapes,
@@ -1089,6 +1131,7 @@ impl LiquidGlassRenderer {
             &self.modal_badge_shapes,
             &self.control_shapes,
             &self.settings_panel_shapes,
+            &self.context_menu_shapes,
         ];
         capture_region_for_shapes(
             width,
@@ -1463,6 +1506,47 @@ impl LiquidGlassRenderer {
                 &self.settings_panel_shape_buffer,
                 0,
                 bytemuck::cast_slice(&self.settings_panel_shapes),
+            );
+        }
+    }
+
+    /// Replace the context-menu glass lane atomically. Isolated from
+    /// [`set_modal_shapes`] so the menu's glass never smooth-unions with an
+    /// open folder panel's glass.
+    pub fn set_context_menu_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
+        if self.context_menu_shapes.as_slice() == shapes {
+            return;
+        }
+        self.context_menu_shapes.clear();
+        self.context_menu_shapes.extend_from_slice(shapes);
+        self.context_menu_shape_count = self.context_menu_shapes.len() as u32;
+        if self.context_menu_shapes.len() > self.context_menu_shape_capacity {
+            self.context_menu_shape_capacity = next_shape_capacity(
+                self.context_menu_shape_capacity,
+                self.context_menu_shapes.len(),
+            );
+            self.context_menu_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.context_menu_shape_capacity,
+                "liquid glass context menu shape buffer",
+            );
+            self.context_menu_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.context_menu_uniform_buffer,
+                &self.context_menu_shape_buffer,
+            );
+        }
+        if !self.context_menu_shapes.is_empty() {
+            queue.write_buffer(
+                &self.context_menu_shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.context_menu_shapes),
             );
         }
     }

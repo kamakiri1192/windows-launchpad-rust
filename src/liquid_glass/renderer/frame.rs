@@ -735,4 +735,82 @@ impl LiquidGlassRenderer {
             pass.draw(0..3, 0..1);
         }
     }
+
+    /// Render the context-menu glass. Drawn after the modal/settings glass so
+    /// it composites above an open folder panel, but isolated in its own SDF
+    /// field so the two never smooth-union together.
+    pub fn render_context_menu_glass(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) {
+        if !self.params.enabled {
+            return;
+        }
+        if self.context_menu_shape_count == 0 {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            (width, height),
+            0.0,
+            self.context_menu_shape_count,
+            0.0,
+            0.0,
+            self.backdrop_mapping,
+        );
+        queue.write_buffer(
+            &self.context_menu_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass context menu geometry pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.overlay_geometry_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.geometry_pipeline);
+            pass.set_bind_group(0, &self.context_menu_geometry_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass context menu final pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.final_pipeline);
+            pass.set_bind_group(0, &self.context_menu_final_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
 }

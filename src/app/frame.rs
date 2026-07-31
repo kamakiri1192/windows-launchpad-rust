@@ -140,6 +140,19 @@ impl App {
             self.relayout();
         }
 
+        // Advance the context menu open/close animation. The menu shares the
+        // Modal glass lane with the folder/settings panels, so only one is
+        // ever active.
+        let context_menu_was_active = self.context_menu.is_active();
+        let context_menu_animating = self.context_menu.tick(anim_dt);
+        if context_menu_was_active && !self.context_menu.is_active() {
+            // Animation finished closing: clear the Modal-lane content.
+            self.clear_context_menu_presentation();
+        }
+        if context_menu_animating {
+            self.relayout();
+        }
+
         // Advance the per-tile position springs and re-push the
         // instance buffers if any are still sliding (reorder animation).
         let springs_animating = self.step_tile_springs(anim_dt);
@@ -180,6 +193,11 @@ impl App {
         // Upload the settings overlay panel (if open).
         self.render_settings_panel();
         self.render_folder_panel();
+        // Upload the context-menu panel (if active). It owns the Modal glass
+        // lane, so we render it only when the folder panel is not showing.
+        if self.context_menu.is_active() {
+            self.render_context_menu();
+        }
         // Upload the HUD FPS overlay (if enabled). Generated every frame so
         // the counter keeps updating while the surface is presenting.
         self.render_fps_overlay();
@@ -266,6 +284,7 @@ impl App {
             || edit_control_animating
             || settings_animating
             || folder_animating
+            || context_menu_animating
             || hover_changed
             || springs_animating
             || folder_child_springs_animating

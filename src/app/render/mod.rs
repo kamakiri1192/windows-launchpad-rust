@@ -10,6 +10,7 @@
 //! - [`overlay`]: HUD-style overlays (FPS counter).
 //! - [`helpers`]: shared utilities (color blend, SpringPos trait, animation).
 
+mod context_menu;
 mod controls;
 mod folders;
 mod grid;
