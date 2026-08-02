@@ -18,13 +18,11 @@ use std::thread;
 
 use crate::domain::app_id::AppId;
 use crate::icon_cache::{self, CachedIcon, IconCache};
+use crate::icons::adaptive_normalize;
 #[cfg(windows)]
 use crate::icons::extract::{self, ComScope};
-use crate::icons::adaptive_normalize;
 use crate::icons::normalize::DecodedIcon;
-use crate::icons::scale_model::{
-    default_model_dir, ScalePolicy, POLICY_REVISION_FILE_NAME,
-};
+use crate::icons::scale_model::{default_model_dir, ScalePolicy, POLICY_REVISION_FILE_NAME};
 use crate::startup_timer::{self, prefix};
 
 /// Why we're asking for an icon. Drives logging only.
@@ -115,9 +113,9 @@ fn ensure_policy_revision(cache: &IconCache, policy_dir: &Path, policy: &ScalePo
     // policy transition invalidates the baked 128×128 cache pixels.
     if stored_revision.is_some() || current_revision != 0 {
         match cache.clear_all() {
-            Ok(count) => eprintln!(
-                "icon-scale: policy revision changed; invalidated {count} cached icons"
-            ),
+            Ok(count) => {
+                eprintln!("icon-scale: policy revision changed; invalidated {count} cached icons")
+            }
             Err(error) => eprintln!("icon-scale: cache invalidation failed: {error}"),
         }
     }
