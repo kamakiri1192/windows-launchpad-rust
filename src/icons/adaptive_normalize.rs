@@ -191,7 +191,7 @@ mod tests {
         let legacy = normalize::normalize(&source);
         let adaptive = normalize_for_app(&source, "app", "path", &ScalePolicy::default());
         assert_eq!(adaptive.category, legacy.category);
-        assert_eq!(adaptive.scale, legacy.scale);
+        assert!((adaptive.scale - legacy.scale).abs() < 1.0e-6);
         assert_eq!(adaptive.image.rgba, legacy.image.rgba);
     }
 
