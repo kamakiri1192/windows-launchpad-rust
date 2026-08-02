@@ -212,7 +212,7 @@ mod tests {
         .unwrap();
         let rule = normalize::normalize(&source);
         let adaptive = normalize_for_app(&source, "app", "path", &policy);
-        assert_eq!(adaptive.scale, 0.90);
+        assert!((adaptive.scale - 0.90).abs() < 1.0e-6);
         assert!(opaque_extent(&adaptive.image).0 > opaque_extent(&rule.image).0);
     }
 }
