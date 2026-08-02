@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use image::RgbaImage;
 use serde::Serialize;
 
+#[cfg(windows)]
 use launchpad_windows::domain::app_id::AppId;
 use launchpad_windows::icons::features::{self, IconVisualFeatures, FEATURE_NAMES};
 use launchpad_windows::icons::normalize::{self, DecodedIcon};
@@ -191,11 +192,12 @@ fn discover_apps() -> Vec<DiscoveredApp> {
                 .file_stem()
                 .map(|value| value.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            apps.entry(app_id.as_str().to_owned()).or_insert(DiscoveredApp {
-                key: app_id.as_str().to_owned(),
-                name,
-                source_path: path,
-            });
+            apps.entry(app_id.as_str().to_owned())
+                .or_insert(DiscoveredApp {
+                    key: app_id.as_str().to_owned(),
+                    name,
+                    source_path: path,
+                });
         }
     }
     apps.into_values().collect()
@@ -215,8 +217,7 @@ fn discover_apps() -> Vec<DiscoveredApp> {
     ]);
 
     let mut apps = BTreeMap::<String, DiscoveredApp>::new();
-    let mut pending: VecDeque<(PathBuf, usize)> =
-        roots.into_iter().map(|root| (root, 0)).collect();
+    let mut pending: VecDeque<(PathBuf, usize)> = roots.into_iter().map(|root| (root, 0)).collect();
     while let Some((directory, depth)) = pending.pop_front() {
         let Ok(children) = std::fs::read_dir(directory) else {
             continue;
@@ -333,7 +334,7 @@ const confirmLabel=document.createElement("label");confirmLabel.className="confi
 function update(){const value=Number(slider.value);scale.textContent=value.toFixed(3);img.style.transform=`scale(${value/entry.rule_scale})`;card.classList.toggle("confirmed",checkbox.checked);state[entry.key]={manual_scale:value,confirmed:checkbox.checked};save()}
 slider.addEventListener("input",update);checkbox.addEventListener("change",update);card.append(title,meta,preview,controls,confirmLabel);update();return card}
 for(const entry of DATA)grid.append(makeCard(entry));
-function applyFilter(){const query=filter.value.trim().toLowerCase();for(const card of grid.children){const pending=onlyPending.checked&&!card.classList.contains("confirmed");card.classList.toggle("hidden",!card.dataset.name.includes(query)||pending)}}
+function applyFilter(){const query=filter.value.trim().toLowerCase();for(const card of grid.children){const hideConfirmed=onlyPending.checked&&card.classList.contains("confirmed");card.classList.toggle("hidden",!card.dataset.name.includes(query)||hideConfirmed)}}
 filter.addEventListener("input",applyFilter);onlyPending.addEventListener("change",applyFilter);
 document.getElementById("export").addEventListener("click",()=>{const entries=[];for(const [key,value] of Object.entries(state)){if(!value.confirmed)continue;const source=byKey.get(key);entries.push({key,name:source?.name||key,manual_scale:value.manual_scale})}const blob=new Blob([JSON.stringify({format_version:1,entries},null,2)],{type:"application/json"});const link=document.createElement("a");link.href=URL.createObjectURL(blob);link.download="labels.json";link.click();URL.revokeObjectURL(link.href)});
 const importFile=document.getElementById("importFile");document.getElementById("importButton").addEventListener("click",()=>importFile.click());importFile.addEventListener("change",async()=>{const file=importFile.files[0];if(!file)return;const payload=JSON.parse(await file.text());for(const label of payload.entries||[]){state[label.key]={manual_scale:Number(label.manual_scale),confirmed:true}}save();location.reload()});
