@@ -340,10 +340,10 @@ fn enclosed_background_count(mask: &[u8], width: usize, height: usize) -> usize 
 }
 
 fn neighbors4(x: usize, y: usize, width: usize, height: usize) -> impl Iterator<Item = usize> {
-    let left = (x > 0).then_some(y * width + x - 1);
-    let right = (x + 1 < width).then_some(y * width + x + 1);
-    let up = (y > 0).then_some((y - 1) * width + x);
-    let down = (y + 1 < height).then_some((y + 1) * width + x);
+    let left = (x > 0).then(|| y * width + x - 1);
+    let right = (x + 1 < width).then(|| y * width + x + 1);
+    let up = (y > 0).then(|| (y - 1) * width + x);
+    let down = (y + 1 < height).then(|| (y + 1) * width + x);
     [left, right, up, down].into_iter().flatten()
 }
 
