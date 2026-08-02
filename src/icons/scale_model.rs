@@ -248,8 +248,8 @@ impl ScalePolicy {
         let model_bytes = std::fs::read(&model_path).ok();
         let overrides_bytes = std::fs::read(&overrides_path).ok();
 
-        let model = model_bytes.as_deref().and_then(|bytes| {
-            match serde_json::from_slice::<IconScaleModel>(bytes)
+        let model = model_bytes.as_deref().and_then(
+            |bytes| match serde_json::from_slice::<IconScaleModel>(bytes)
                 .map_err(|error| error.to_string())
                 .and_then(|model| {
                     model.validate()?;
@@ -263,8 +263,8 @@ impl ScalePolicy {
                     );
                     None
                 }
-            }
-        });
+            },
+        );
 
         let overrides = overrides_bytes
             .as_deref()
@@ -494,7 +494,10 @@ pub fn train_model(
                 let right_sq = total_sq - left_sq;
                 let loss = group_squared_error(left_sum, left_sq, left_count)
                     + group_squared_error(right_sum, right_sq, right_count);
-                if best.as_ref().is_some_and(|(best_loss, _)| loss >= *best_loss) {
+                if best
+                    .as_ref()
+                    .is_some_and(|(best_loss, _)| loss >= *best_loss)
+                {
                     continue;
                 }
 
