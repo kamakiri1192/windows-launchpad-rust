@@ -6,7 +6,7 @@
 //!     --install
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -93,7 +93,11 @@ fn main() {
         .into_iter()
         .map(|label| (label.key.clone(), label))
         .collect();
-    let audit_keys: BTreeSet<&str> = audit.entries.iter().map(|entry| entry.key.as_str()).collect();
+    let audit_keys: BTreeSet<&str> = audit
+        .entries
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
     let ignored_labels: Vec<String> = labels_by_key
         .keys()
         .filter(|key| !audit_keys.contains(key.as_str()))
@@ -151,8 +155,7 @@ fn main() {
         let destination = args.install_dir.unwrap_or_else(default_model_dir);
         std::fs::create_dir_all(&destination).expect("create install directory");
         write_json(&destination.join(MODEL_FILE_NAME), &model).expect("install model");
-        write_json(&destination.join(OVERRIDES_FILE_NAME), &overrides)
-            .expect("install overrides");
+        write_json(&destination.join(OVERRIDES_FILE_NAME), &overrides).expect("install overrides");
         Some(destination)
     } else {
         None
@@ -172,8 +175,7 @@ fn main() {
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
     };
-    write_json(&args.out_dir.join("training-report.json"), &report)
-        .expect("write training report");
+    write_json(&args.out_dir.join("training-report.json"), &report).expect("write training report");
 
     eprintln!("icon-scale-train: complete");
     eprintln!("  labelled samples: {}", report.labelled_samples);
@@ -286,12 +288,12 @@ fn validate_inputs(audit: &AuditReport, labels: &LabelReport) -> Result<(), Stri
     Ok(())
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
     let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
-fn write_json(path: &PathBuf, value: &impl Serialize) -> Result<(), String> {
+fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     std::fs::write(path, bytes).map_err(|error| error.to_string())
 }
