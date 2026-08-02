@@ -16,12 +16,14 @@
 
 #![allow(dead_code)]
 
+pub mod adaptive_normalize;
 #[cfg(windows)]
 pub mod extract;
 pub mod features;
 #[cfg(windows)]
 pub mod loader;
 pub mod normalize;
+pub mod scale_model;
 pub mod sizing;
 
 #[allow(unused_imports)] // ML-ready feature surface for audit/training tools
