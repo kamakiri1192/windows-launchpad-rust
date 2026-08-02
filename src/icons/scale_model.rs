@@ -248,23 +248,24 @@ impl ScalePolicy {
         let model_bytes = std::fs::read(&model_path).ok();
         let overrides_bytes = std::fs::read(&overrides_path).ok();
 
-        let model = model_bytes.as_deref().and_then(
-            |bytes| match serde_json::from_slice::<IconScaleModel>(bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|model| {
-                    model.validate()?;
-                    Ok(model)
-                }) {
-                Ok(model) => Some(model),
-                Err(error) => {
-                    eprintln!(
-                        "icon-scale: ignoring invalid model {}: {error}",
-                        model_path.display()
-                    );
-                    None
-                }
-            },
-        );
+        let model =
+            model_bytes.as_deref().and_then(
+                |bytes| match serde_json::from_slice::<IconScaleModel>(bytes)
+                    .map_err(|error| error.to_string())
+                    .and_then(|model| {
+                        model.validate()?;
+                        Ok(model)
+                    }) {
+                    Ok(model) => Some(model),
+                    Err(error) => {
+                        eprintln!(
+                            "icon-scale: ignoring invalid model {}: {error}",
+                            model_path.display()
+                        );
+                        None
+                    }
+                },
+            );
 
         let overrides = overrides_bytes
             .as_deref()
