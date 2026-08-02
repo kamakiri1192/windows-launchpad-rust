@@ -15,6 +15,7 @@
 //! `#[allow(dead_code)]` so the extraction logic and its tests stay available.
 
 #![allow(dead_code)]
+#![allow(clippy::needless_return)] // cfg-specific path branches stay self-contained
 
 pub mod adaptive_normalize;
 #[cfg(windows)]
