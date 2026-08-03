@@ -159,6 +159,9 @@ pub enum QaAction {
     Move {
         target: QaTarget,
     },
+    /// Press and release the right button through the production input router
+    /// at the current pointer position.
+    RightClick,
     PointerDown,
     LongPress,
     PointerUp,
@@ -598,6 +601,8 @@ pub struct QaFrameRecord {
     pub elapsed_ms: u64,
     pub file: String,
     pub editing: bool,
+    pub context_menu_active: bool,
+    pub context_menu_phase: String,
     pub folder_open: bool,
     pub folder_page: usize,
     pub renaming: bool,
@@ -638,6 +643,8 @@ pub struct QaFrameRecord {
 
 struct QaFrameState {
     editing: bool,
+    context_menu_active: bool,
+    context_menu_phase: String,
     folder_open: bool,
     folder_page: usize,
     renaming: bool,
@@ -866,6 +873,8 @@ impl QaRunner {
             elapsed_ms,
             file: file.clone(),
             editing: state.editing,
+            context_menu_active: state.context_menu_active,
+            context_menu_phase: state.context_menu_phase,
             folder_open: state.folder_open,
             folder_page: state.folder_page,
             renaming: state.renaming,
@@ -1289,6 +1298,13 @@ impl App {
                     });
                 }
             }
+            QaAction::RightClick => {
+                self.handle_routed_pointer_button(crate::input_routing::PointerButton::Right, true);
+                self.handle_routed_pointer_button(
+                    crate::input_routing::PointerButton::Right,
+                    false,
+                );
+            }
             QaAction::PointerDown => {
                 let action = self.classify_pointer_press(self.pointer_phys_x, self.pointer_phys_y);
                 self.handle_action(AppAction::PointerPress(action));
@@ -1532,6 +1548,8 @@ impl App {
 
     pub(crate) fn qa_capture_path(&mut self, now: Instant) -> Option<PathBuf> {
         let editing = self.editing;
+        let context_menu_active = self.context_menu.is_active();
+        let context_menu_phase = format!("{:?}", self.context_menu.phase);
         let folder_open = self.folders.is_active();
         let folder_page = self.folders.page;
         let renaming = self.folders.rename.is_some();
@@ -1569,6 +1587,8 @@ impl App {
             now,
             QaFrameState {
                 editing,
+                context_menu_active,
+                context_menu_phase,
                 folder_open,
                 folder_page,
                 renaming,

@@ -1,0 +1,167 @@
+{
+  "name": "context-menu-input-recovery",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 7600,
+  "output_dir": "target/qa-sequences",
+  "scroll_expectations": {
+    "min_samples": 9,
+    "expected_terminal_contacts": 2,
+    "expected_horizontal_releases": 2,
+    "expected_target_decisions": 2,
+    "expected_spring_generations": 2,
+    "expected_releases": [
+      {
+        "gesture_id": 1,
+        "surface": "main",
+        "min_filtered_velocity": -50000.0,
+        "max_filtered_velocity": -25000.0,
+        "target_x": -1208.0,
+        "settled_position_x": -1208.0,
+        "max_settle_duration_ms": 1800
+      },
+      {
+        "gesture_id": 2,
+        "surface": "folder",
+        "min_filtered_velocity": -6000.0,
+        "max_filtered_velocity": -3000.0,
+        "target_x": -490.2357,
+        "target_tolerance": 0.5,
+        "settled_position_x": -490.2357,
+        "max_settle_duration_ms": 1800
+      }
+    ],
+    "min_zero_crossings": 1,
+    "required_surfaces": ["main", "folder"]
+  },
+  "fixture": {
+    "generated_apps": [
+      {
+        "prefix": "qa-context-main",
+        "name_prefix": "Context Main App",
+        "count": 36
+      },
+      {
+        "prefix": "qa-context-folder",
+        "name_prefix": "Context Folder Child",
+        "count": 18,
+        "top_level": false
+      }
+    ],
+    "folders": [
+      {
+        "id": "qa-context-folder-id",
+        "name": "Context Menu Folder",
+        "children": [
+          "qa-context-folder-000", "qa-context-folder-001",
+          "qa-context-folder-002", "qa-context-folder-003",
+          "qa-context-folder-004", "qa-context-folder-005",
+          "qa-context-folder-006", "qa-context-folder-007",
+          "qa-context-folder-008", "qa-context-folder-009",
+          "qa-context-folder-010", "qa-context-folder-011",
+          "qa-context-folder-012", "qa-context-folder-013",
+          "qa-context-folder-014", "qa-context-folder-015",
+          "qa-context-folder-016", "qa-context-folder-017"
+        ]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-context-folder-id" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 100, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 150, "type": "right_click" },
+    {
+      "at_ms": 500,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 500000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 516,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 516000,
+      "canonical_dx": -600.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 532,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 532000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    { "at_ms": 2400, "type": "open_folder", "id": "qa-context-folder-id" },
+    { "at_ms": 3400, "type": "move", "target": { "kind": "folder_child", "index": 0 } },
+    { "at_ms": 3450, "type": "right_click" },
+    {
+      "at_ms": 3800,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 3800000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 3816,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 3816000,
+      "canonical_dx": 12.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 3832,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 3832000,
+      "canonical_dx": -9.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 3848,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 3848000,
+      "canonical_dx": 6.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 3864,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 3864000,
+      "canonical_dx": -320.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 3880,
+      "type": "scroll_sample",
+      "gesture_id": 2,
+      "timestamp_us": 3880000,
+      "canonical_dx": 0.0,
+      "canonical_dy": 0.0,
+      "contact_phase": "ended"
+    },
+
+    { "at_ms": 6100, "type": "move", "target": { "kind": "folder_child", "index": 9 } },
+    { "at_ms": 6150, "type": "right_click" },
+    { "at_ms": 6500, "type": "move", "target": { "kind": "point", "x": 5.0, "y": 5.0 } },
+    { "at_ms": 6550, "type": "pointer_down" },
+    { "at_ms": 6600, "type": "pointer_up" }
+  ]
+}

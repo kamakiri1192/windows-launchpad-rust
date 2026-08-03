@@ -17,7 +17,9 @@ use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, C
 
 impl App {
     pub(crate) fn input_region_at(&self, x: f32, y: f32) -> crate::input_routing::InputRegion {
-        let modal_active = self.settings_panel_active() || self.folders.is_active();
+        let modal_active = self.settings_panel_active()
+            || self.folders.is_active()
+            || self.context_menu.is_active();
         let page_dragging = self
             .scroller
             .as_ref()
@@ -42,7 +44,9 @@ impl App {
 
     pub(crate) fn publish_input_routing_snapshot(&mut self) {
         self.input_routing_generation = self.input_routing_generation.wrapping_add(1).max(1);
-        let modal_active = self.settings_panel_active() || self.folders.is_active();
+        let modal_active = self.settings_panel_active()
+            || self.folders.is_active()
+            || self.context_menu.is_active();
         let page_dragging = self
             .scroller
             .as_ref()
@@ -507,6 +511,12 @@ impl App {
     pub(crate) fn handle_scroll_sample(&mut self, sample: crate::input_routing::ScrollSample) {
         use crate::features::folders::FolderPhase;
         use crate::input_routing::{FolderRoutePhase, ScrollRoute, ScrollRouteContext};
+
+        // Wheel/trackpad input dismisses the menu and continues to the pager.
+        // Routing the same sample ensures the first movement is not lost.
+        if self.context_menu.is_active() {
+            self.close_context_menu();
+        }
 
         let folder_phase = match self.folders.phase {
             FolderPhase::Closed => FolderRoutePhase::Closed,
