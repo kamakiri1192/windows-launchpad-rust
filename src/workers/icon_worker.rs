@@ -116,7 +116,12 @@ fn ensure_policy_revision(cache: &IconCache, policy_dir: &Path, policy: &ScalePo
             Ok(count) => {
                 eprintln!("icon-scale: policy revision changed; invalidated {count} cached icons")
             }
-            Err(error) => eprintln!("icon-scale: cache invalidation failed: {error}"),
+            Err(error) => {
+                // Do not advance the marker. The next launch must retry the
+                // invalidation instead of accepting stale, already-baked pixels.
+                eprintln!("icon-scale: cache invalidation failed: {error}");
+                return;
+            }
         }
     }
     if let Err(error) = std::fs::write(&marker_path, current_revision.to_string()) {
