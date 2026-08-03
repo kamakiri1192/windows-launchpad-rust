@@ -64,11 +64,9 @@ fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
     thread::sleep(config.initial_delay);
 
     let mut snapshot = scan_start_menu();
-    timer.mark_with(
-        prefix::APP_REFRESH,
-        "initial scan",
-        format!("({} apps)", snapshot.len()),
-    );
+    timer.mark_with(prefix::APP_REFRESH, "initial scan", || {
+        format!("({} apps)", snapshot.len())
+    });
     if tx.send(RefreshMessage::Initial(snapshot.clone())).is_err() {
         return;
     }
@@ -81,16 +79,14 @@ fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
             snapshot = new;
             continue;
         }
-        timer.mark_with(
-            prefix::APP_REFRESH,
-            "detected diff",
+        timer.mark_with(prefix::APP_REFRESH, "detected diff", || {
             format!(
                 "added={} updated={} removed={}",
                 diff.added.len(),
                 diff.updated.len(),
                 diff.removed.len()
-            ),
-        );
+            )
+        });
         if tx.send(RefreshMessage::Diff(diff)).is_err() {
             return;
         }

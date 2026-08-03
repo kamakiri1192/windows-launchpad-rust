@@ -141,16 +141,14 @@ fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 // Queue drained → close out the batch with a total mark.
                 if let Some(start) = batch_start {
-                    timer.mark_with(
-                        prefix::ICON_WORKER,
-                        "icon extraction total",
+                    timer.mark_with(prefix::ICON_WORKER, "icon extraction total", || {
                         format!(
                             "({} icons, extract={}ms, total={}ms)",
                             batch_count,
                             batch_extract_ms,
                             start.elapsed().as_millis()
-                        ),
-                    );
+                        )
+                    });
                 }
                 batch_start = None;
                 batch_extract_ms = 0;
@@ -181,28 +179,24 @@ fn process_one(
             req.link_path.display()
         )
     })?;
-    timer.mark_with(
-        prefix::ICON_WORKER,
-        "extracted icon",
+    timer.mark_with(prefix::ICON_WORKER, "extracted icon", || {
         format!(
             "app_id={} ({}ms)",
             req.app_id,
             extract_start.elapsed().as_millis()
-        ),
-    );
+        )
+    });
 
     // (2) Normalization: resize → TARGET×TARGET straight-alpha square.
     let normalize_start = std::time::Instant::now();
     let image = normalize(&raw);
-    timer.mark_with(
-        prefix::ICON_WORKER,
-        "normalized icon",
+    timer.mark_with(prefix::ICON_WORKER, "normalized icon", || {
         format!(
             "app_id={} ({}ms)",
             req.app_id,
             normalize_start.elapsed().as_millis()
-        ),
-    );
+        )
+    });
 
     // Best-effort cache write; a failure is logged but doesn't fail the
     // extraction itself (the UI still gets the icon for this session).
