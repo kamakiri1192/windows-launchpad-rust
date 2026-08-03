@@ -190,7 +190,10 @@ fn main() {
     eprintln!("  labelled samples: {}", report.labelled_samples);
     eprintln!("  decision stumps:  {}", report.stumps_produced);
     eprintln!("  training RMSE:     {:.6}", report.training_rmse_log_scale);
-    eprintln!("  validation RMSE:   {:.6}", report.validation_rmse_log_scale);
+    eprintln!(
+        "  validation RMSE:   {:.6}",
+        report.validation_rmse_log_scale
+    );
     eprintln!("  exact overrides:   {}", report.override_entries);
     eprintln!("  model:             {}", report.model_path);
     eprintln!("  overrides:         {}", report.overrides_path);
@@ -307,8 +310,7 @@ fn validate_inputs(audit: &AuditReport, labels: &LabelReport) -> Result<(), Stri
         if label.key.trim().is_empty() || !keys.insert(label.key.as_str()) {
             return Err(format!("duplicate or empty label key: {:?}", label.key));
         }
-        if !label.manual_scale.is_finite()
-            || !(MIN_SCALE..=MAX_SCALE).contains(&label.manual_scale)
+        if !label.manual_scale.is_finite() || !(MIN_SCALE..=MAX_SCALE).contains(&label.manual_scale)
         {
             return Err(format!(
                 "label {:?} has an invalid scale; expected {MIN_SCALE}..={MAX_SCALE}",
