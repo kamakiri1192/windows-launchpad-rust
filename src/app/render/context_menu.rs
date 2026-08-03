@@ -186,6 +186,11 @@ impl App {
         if opacity > 0.02 {
             let color = [0.95, 0.96, 0.98, opacity.clamp(0.0, 1.0)];
             if let Some(text) = self.text.as_mut() {
+                // cosmic-text includes the exact f32 font size in its cache
+                // key. The menu animates `content_scale` every frame, so pass
+                // a physical-pixel-quantized scale to keep repeated open/close
+                // animations from manufacturing unbounded glyph variants.
+                let text_scale = quantize_menu_text_scale(content_scale, scale);
                 for (row, label) in model.rows.iter().zip(labels.iter()) {
                     let left = row.label_rect.x;
                     let center_y = row.label_rect.y;
@@ -197,8 +202,8 @@ impl App {
                         label,
                         left,
                         center_y,
-                        MENU_FONT_SIZE * content_scale,
-                        MENU_LINE_HEIGHT * content_scale,
+                        MENU_FONT_SIZE * text_scale,
+                        MENU_LINE_HEIGHT * text_scale,
                         color,
                         scale,
                     );
@@ -293,6 +298,15 @@ impl App {
     }
 }
 
+/// Snap an animated scale to whole physical font pixels. This preserves the
+/// 1×→2× menu motion while restricting the atlas to a small, repeatable set
+/// of glyph cache keys at every DPI scale.
+fn quantize_menu_text_scale(content_scale: f32, dpi_scale: f32) -> f32 {
+    let dpi_scale = dpi_scale.max(0.01);
+    let physical_font_px = MENU_FONT_SIZE * content_scale.max(0.0) * dpi_scale;
+    physical_font_px.round() / (MENU_FONT_SIZE * dpi_scale)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_menu_text(
     t: &mut text_engine::TextRenderer,
@@ -342,4 +356,26 @@ fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphV
             clip: None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn animated_menu_scales_reuse_a_bounded_set_of_physical_font_sizes() {
+        let dpi_scale = 1.25;
+        let sampled: BTreeSet<_> = (0..=1_000)
+            .map(|step| 1.0 + step as f32 / 1_000.0)
+            .map(|scale| quantize_menu_text_scale(scale, dpi_scale))
+            .map(|scale| (MENU_FONT_SIZE * scale * dpi_scale).round() as u32)
+            .collect();
+
+        // The 1×→2× transition at 125% DPI spans only 18 whole-pixel font
+        // sizes. Replaying arbitrary frame timings cannot add more variants.
+        assert_eq!(sampled.len(), 18);
+        assert_eq!(sampled.first(), Some(&18));
+        assert_eq!(sampled.last(), Some(&35));
+    }
 }
