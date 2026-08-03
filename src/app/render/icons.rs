@@ -226,11 +226,10 @@ impl App {
         is_initial: bool,
     ) {
         if is_initial {
-            self.timer.mark_with(
-                prefix::STARTUP,
-                "app list enumeration",
-                format!("({} apps)", new_snapshot.len()),
-            );
+            self.timer
+                .mark_with(prefix::STARTUP, "app list enumeration", || {
+                    format!("({} apps)", new_snapshot.len())
+                });
         }
         self.snapshot = new_snapshot.clone();
 
@@ -322,11 +321,10 @@ impl App {
         }
 
         if cached_applied > 0 {
-            self.timer.mark_with(
-                prefix::ICON_CACHE,
-                "cached icon apply",
-                format!("({cached_applied} icons)"),
-            );
+            self.timer
+                .mark_with(prefix::ICON_CACHE, "cached icon apply", || {
+                    format!("({cached_applied} icons)")
+                });
         }
 
         // Integrate newly discovered apps into the user-owned launcher layout so
@@ -341,11 +339,10 @@ impl App {
         // Dispatch extraction requests to the worker (first page already
         // first, thanks to the display-order sort above).
         if !requests.is_empty() {
-            self.timer.mark_with(
-                prefix::ICON_WORKER,
-                "queue extraction",
-                format!("({} icons)", requests.len()),
-            );
+            self.timer
+                .mark_with(prefix::ICON_WORKER, "queue extraction", || {
+                    format!("({} icons)", requests.len())
+                });
             if let Some(handle) = self._worker.as_ref() {
                 for req in requests {
                     if handle.requests.send(req).is_err() {
@@ -394,16 +391,15 @@ impl App {
     /// Apply a refresh diff: add new apps, update changed ones (re-extracting
     /// icons whose cache key moved), and remove gone apps.
     pub(crate) fn apply_diff(&mut self, diff: AppDiff) {
-        self.timer.mark_with(
-            prefix::APP_REFRESH,
-            "app list refresh",
-            format!(
-                "(added={} updated={} removed={})",
-                diff.added.len(),
-                diff.updated.len(),
-                diff.removed.len()
-            ),
-        );
+        self.timer
+            .mark_with(prefix::APP_REFRESH, "app list refresh", || {
+                format!(
+                    "(added={} updated={} removed={})",
+                    diff.added.len(),
+                    diff.updated.len(),
+                    diff.removed.len()
+                )
+            });
 
         // Removals.
         for id in &diff.removed {
