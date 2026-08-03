@@ -116,11 +116,11 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "icon-scale-audit — generate icons, features, and calibration UI\n\n\
+                    "icon-scale-audit — アイコン、特徴量、校正画面を生成する\n\n\
                      Usage: cargo run --example icon_scale_audit -- [OPTIONS]\n\n\
                      Options:\n\
-                       --out-dir <dir>  Output directory (default: ./icon-scale-audit)\n\
-                       --help           Show this help"
+                       --out-dir <dir>  出力先（既定: ./icon-scale-audit）\n\
+                       --help           このヘルプを表示する"
                 );
                 std::process::exit(0);
             }
@@ -294,19 +294,19 @@ const CALIBRATOR_HTML: &str = r#"<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Icon Scale Calibrator</title>
+<title>アイコン視覚サイズ校正</title>
 <style>
 :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:light dark}
 body{margin:0;background:#17181b;color:#f5f5f7}header{position:sticky;top:0;z-index:10;padding:14px 18px;background:#202126ee;backdrop-filter:blur(18px);border-bottom:1px solid #ffffff1f}
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar input,.toolbar select,.toolbar button{font:inherit;padding:7px 10px;border-radius:8px;border:1px solid #ffffff25;background:#2b2d33;color:inherit}
-.reference{display:flex;align-items:center;gap:12px;margin-top:10px}.reference-box,.preview{width:148px;height:148px;display:grid;place-items:center;border-radius:28px;background:linear-gradient(145deg,#777,#333);overflow:hidden}.reference-box{width:74px;height:74px;border-radius:16px}.reference-box img{width:64px;height:64px}.preview img{width:128px;height:128px;transform-origin:center}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;padding:16px}.card{padding:14px;border:1px solid #ffffff1a;border-radius:18px;background:#24262b}.card.confirmed{border-color:#4bd37b}.title{height:42px;font-weight:650;overflow:hidden}.meta{font-size:12px;opacity:.65;margin-bottom:8px}.controls{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:10px}.controls input[type=range]{width:100%}.scale{font-variant-numeric:tabular-nums;min-width:52px;text-align:right}.confirm{display:flex;gap:7px;align-items:center;margin-top:8px}.hidden{display:none!important}button.primary{background:#3b72ff}#progress{font-variant-numeric:tabular-nums;font-weight:650}
+.reference{display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap}.reference-box,.preview{width:148px;height:148px;display:grid;place-items:center;border-radius:28px;background:linear-gradient(145deg,#777,#333);overflow:hidden}.reference-box img,.preview img{width:128px;height:128px;transform-origin:center}
+.help{max-width:620px;line-height:1.55;font-size:14px;opacity:.88}#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;padding:16px}.card{padding:14px;border:1px solid #ffffff1a;border-radius:18px;background:#24262b}.card.confirmed{border-color:#4bd37b}.title{height:42px;font-weight:650;overflow:hidden}.meta{font-size:12px;opacity:.65;margin-bottom:8px}.controls{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:10px}.controls input[type=range]{width:100%}.scale{font-variant-numeric:tabular-nums;min-width:52px;text-align:right}.confirm{display:flex;gap:7px;align-items:center;margin-top:8px}.hidden{display:none!important}button.primary{background:#3b72ff}#progress{font-variant-numeric:tabular-nums;font-weight:650}
 </style>
 </head>
 <body>
 <header>
 <div class="toolbar"><input id="filter" placeholder="アプリ名で絞り込み"><label><input id="onlyPending" type="checkbox">未確定のみ</label><span id="progress"></span><button id="export" class="primary">labels.jsonを書き出す</button><button id="importButton">読み込む</button><input id="importFile" type="file" accept="application/json" hidden></div>
-<div class="reference"><div class="reference-box"><img id="referenceImage"></div><label>比較基準 <select id="referenceSelect"></select></label><span>各アイコンが基準と同じ大きさに見えるよう調整し、確定してください。</span></div>
+<div class="reference"><div class="reference-box"><img id="referenceImage"></div><label>比較基準 <select id="referenceSelect"></select></label><div class="help">左の基準と各カードのアイコンは、同じ128×128pxの表示領域です。輪郭の端をそろえるのではなく、一覧で見たときの面積・線の太さ・存在感が同程度になるようスライダーを調整し、確定してください。</div></div>
 </header>
 <main id="grid"></main>
 <script>
