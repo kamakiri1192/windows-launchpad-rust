@@ -303,6 +303,20 @@ impl ContextMenuState {
         self.active_target.is_some()
     }
 
+    /// Whether the menu should currently own pointer presses/releases.
+    ///
+    /// The close animation remains visible for a short time, but it must not
+    /// keep intercepting the gesture that dismissed it. Letting input pass
+    /// through as soon as closing starts allows the same outside drag or
+    /// folder-backdrop click to continue normally.
+    pub fn accepts_pointer_input(&self) -> bool {
+        self.active_target.is_some()
+            && matches!(
+                self.phase,
+                ContextMenuPhase::Opening | ContextMenuPhase::Open
+            )
+    }
+
     pub fn is_open(&self) -> bool {
         self.phase == ContextMenuPhase::Open
     }
@@ -429,5 +443,22 @@ mod tests {
         state.close();
         assert_eq!(state.phase, ContextMenuPhase::Closed);
         assert!(!state.tick(1.0 / 60.0));
+    }
+
+    #[test]
+    fn closing_menu_stops_owning_pointer_input_immediately() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        assert!(state.accepts_pointer_input());
+
+        state.close();
+
+        assert!(state.is_active(), "close animation should remain visible");
+        assert!(!state.accepts_pointer_input());
     }
 }

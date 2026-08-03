@@ -67,8 +67,8 @@ impl App {
         self.request_redraw();
     }
 
-    /// Press while the menu is open. Outside the panel → dismiss; we let the
-    /// release handler finalize so a drag that returns inside still works.
+    /// Press while the menu is open. Outside the panel dismisses it and hands
+    /// the same gesture to the underlying page or folder.
     pub(crate) fn handle_context_menu_pointer_press(&mut self, x: f32, y: f32) {
         let inside = self
             .context_menu_layout
@@ -79,9 +79,13 @@ impl App {
             })
             .unwrap_or(false);
         if !inside {
-            // Mark intent; the release confirms dismiss. For simplicity we
-            // close immediately on outside press — the menu has no drag.
             self.close_context_menu();
+
+            // Closing is visual-only, so reclassifying now hands this same
+            // gesture to the page or folder below. Recursion stops after this
+            // one handoff because a closing menu no longer accepts input.
+            let action = self.classify_pointer_press(x, y);
+            self.handle_pointer_press(action);
         }
     }
 
