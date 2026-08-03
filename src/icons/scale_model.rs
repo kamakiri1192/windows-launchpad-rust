@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::features::{IconVisualFeatures, FEATURE_COUNT, FEATURE_NAMES};
 
-pub const MODEL_FORMAT_VERSION: u32 = 1;
+pub const MODEL_FORMAT_VERSION: u32 = 2;
 pub const OVERRIDES_FORMAT_VERSION: u32 = 1;
 pub const MODEL_FILE_NAME: &str = "icon-scale-model.json";
 pub const OVERRIDES_FILE_NAME: &str = "icon-scale-overrides.json";
@@ -22,6 +22,7 @@ pub const POLICY_REVISION_FILE_NAME: &str = "icon-scale-policy.revision";
 pub const MIN_SCALE: f32 = 0.55;
 pub const MAX_SCALE: f32 = 1.10;
 pub const MIN_TRAINING_SAMPLES: usize = 12;
+pub const MIN_MODEL_CONFIDENCE: f32 = 0.35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleSource {
@@ -55,6 +56,8 @@ pub struct IconScaleModel {
     pub stumps: Vec<DecisionStump>,
     pub training_samples: usize,
     pub training_rmse: f32,
+    /// Deterministic k-fold cross-validation error in log-scale space.
+    pub validation_rmse: f32,
     pub feature_min: Vec<f32>,
     pub feature_max: Vec<f32>,
     pub min_scale: f32,
@@ -85,6 +88,8 @@ impl IconScaleModel {
             || self.learning_rate == 0.0
             || !self.training_rmse.is_finite()
             || self.training_rmse < 0.0
+            || !self.validation_rmse.is_finite()
+            || self.validation_rmse < 0.0
         {
             return Err("model contains invalid scalar metadata".into());
         }
@@ -122,16 +127,7 @@ impl IconScaleModel {
         if values.iter().any(|value| !value.is_finite()) {
             return None;
         }
-        let mut prediction = self.base_log_correction;
-        for stump in &self.stumps {
-            let leaf = if values[stump.feature_index] <= stump.threshold {
-                stump.left_value
-            } else {
-                stump.right_value
-            };
-            prediction += self.learning_rate * leaf;
-        }
-        Some(prediction.clamp(-0.70, 0.70))
+        Some(self.predict_values(&values))
     }
 
     pub fn predict_scale(
@@ -142,17 +138,43 @@ impl IconScaleModel {
         if !rule_scale.is_finite() || rule_scale <= 0.0 {
             return None;
         }
+        self.validate().ok()?;
+
         let values = features.as_array();
+        if values.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
         let in_domain = self.in_domain_ratio(&values);
         if in_domain < 0.55 {
             return None;
         }
-        let correction = self.predict_log_correction(features)?;
-        let scale = (rule_scale * correction.exp()).clamp(self.min_scale, self.max_scale);
-        let sample_confidence = (self.training_samples as f32 / 80.0).clamp(0.25, 1.0);
-        let fit_confidence = (1.0 - self.training_rmse / 0.18).clamp(0.0, 1.0);
+
+        let sample_confidence = (self.training_samples as f32 / 48.0).clamp(0.35, 1.0);
+        let fit_confidence = (1.0 - self.validation_rmse / 0.18).clamp(0.0, 1.0);
         let confidence = (in_domain * sample_confidence * fit_confidence).clamp(0.0, 1.0);
+        if confidence < MIN_MODEL_CONFIDENCE {
+            return None;
+        }
+
+        // Weak models are allowed to make only a weak correction. This avoids a
+        // hard jump at the confidence threshold and keeps the existing rule as
+        // the stable anchor.
+        let correction = self.predict_values(&values) * confidence;
+        let scale = (rule_scale * correction.exp()).clamp(self.min_scale, self.max_scale);
         Some((scale, confidence))
+    }
+
+    fn predict_values(&self, values: &[f32; FEATURE_COUNT]) -> f32 {
+        let mut prediction = self.base_log_correction;
+        for stump in &self.stumps {
+            let leaf = if values[stump.feature_index] <= stump.threshold {
+                stump.left_value
+            } else {
+                stump.right_value
+            };
+            prediction += self.learning_rate * leaf;
+        }
+        prediction.clamp(-0.70, 0.70)
     }
 
     fn in_domain_ratio(&self, values: &[f32; FEATURE_COUNT]) -> f32 {
@@ -248,24 +270,23 @@ impl ScalePolicy {
         let model_bytes = std::fs::read(&model_path).ok();
         let overrides_bytes = std::fs::read(&overrides_path).ok();
 
-        let model =
-            model_bytes.as_deref().and_then(
-                |bytes| match serde_json::from_slice::<IconScaleModel>(bytes)
-                    .map_err(|error| error.to_string())
-                    .and_then(|model| {
-                        model.validate()?;
-                        Ok(model)
-                    }) {
-                    Ok(model) => Some(model),
-                    Err(error) => {
-                        eprintln!(
-                            "icon-scale: ignoring invalid model {}: {error}",
-                            model_path.display()
-                        );
-                        None
-                    }
-                },
-            );
+        let model = model_bytes.as_deref().and_then(|bytes| {
+            match serde_json::from_slice::<IconScaleModel>(bytes)
+                .map_err(|error| error.to_string())
+                .and_then(|model| {
+                    model.validate()?;
+                    Ok(model)
+                }) {
+                Ok(model) => Some(model),
+                Err(error) => {
+                    eprintln!(
+                        "icon-scale: ignoring invalid model {}: {error}",
+                        model_path.display()
+                    );
+                    None
+                }
+            }
+        });
 
         let overrides = overrides_bytes
             .as_deref()
@@ -422,6 +443,17 @@ pub fn train_model(
     samples: &[TrainingSample],
     config: TrainingConfig,
 ) -> Result<IconScaleModel, String> {
+    validate_training_input(samples, config)?;
+    let validation_rmse = cross_validation_rmse(samples, config)?;
+    let model = fit_model(samples, config, validation_rmse)?;
+    model.validate()?;
+    Ok(model)
+}
+
+fn validate_training_input(
+    samples: &[TrainingSample],
+    config: TrainingConfig,
+) -> Result<(), String> {
     if samples.len() < MIN_TRAINING_SAMPLES {
         return Err(format!(
             "{} labelled icons supplied; at least {MIN_TRAINING_SAMPLES} are required",
@@ -445,6 +477,58 @@ pub fn train_model(
         {
             return Err("training data contains invalid values".into());
         }
+    }
+    Ok(())
+}
+
+fn cross_validation_rmse(
+    samples: &[TrainingSample],
+    config: TrainingConfig,
+) -> Result<f32, String> {
+    let folds = if samples.len() >= 50 {
+        5
+    } else if samples.len() >= 24 {
+        4
+    } else {
+        3
+    };
+    let mut squared_errors = Vec::with_capacity(samples.len());
+
+    for fold in 0..folds {
+        let mut training = Vec::new();
+        let mut validation = Vec::new();
+        for (index, sample) in samples.iter().enumerate() {
+            if index % folds == fold {
+                validation.push(sample.clone());
+            } else {
+                training.push(sample.clone());
+            }
+        }
+        if validation.is_empty() || training.len() < config.min_samples_leaf * 2 {
+            continue;
+        }
+
+        let fold_model = fit_model(&training, config, 0.0)?;
+        for sample in validation {
+            let target = (sample.manual_scale / sample.rule_scale).ln();
+            let prediction = fold_model.predict_values(&sample.features);
+            squared_errors.push((target - prediction).powi(2));
+        }
+    }
+
+    if squared_errors.is_empty() {
+        return Err("could not construct cross-validation folds".into());
+    }
+    Ok((squared_errors.iter().sum::<f32>() / squared_errors.len() as f32).sqrt())
+}
+
+fn fit_model(
+    samples: &[TrainingSample],
+    config: TrainingConfig,
+    validation_rmse: f32,
+) -> Result<IconScaleModel, String> {
+    if samples.is_empty() {
+        return Err("cannot train an empty model".into());
     }
 
     let targets: Vec<f32> = samples
@@ -558,7 +642,7 @@ pub fn train_model(
         })
         .collect();
 
-    let model = IconScaleModel {
+    Ok(IconScaleModel {
         format_version: MODEL_FORMAT_VERSION,
         feature_names: FEATURE_NAMES.iter().map(|name| (*name).into()).collect(),
         base_log_correction: base,
@@ -566,13 +650,12 @@ pub fn train_model(
         stumps,
         training_samples: samples.len(),
         training_rmse,
+        validation_rmse,
         feature_min,
         feature_max,
         min_scale: MIN_SCALE,
         max_scale: MAX_SCALE,
-    };
-    model.validate()?;
-    Ok(model)
+    })
 }
 
 fn mean(values: &[f32]) -> f32 {
@@ -615,6 +698,14 @@ mod tests {
         }
     }
 
+    fn sample(value: f32, manual_scale: f32) -> TrainingSample {
+        TrainingSample {
+            features: feature(value).as_array(),
+            rule_scale: 0.74,
+            manual_scale,
+        }
+    }
+
     #[test]
     fn manual_override_wins_without_a_model() {
         let policy = ScalePolicy::from_parts(
@@ -636,15 +727,11 @@ mod tests {
 
     #[test]
     fn training_learns_opposite_corrections() {
-        let samples: Vec<TrainingSample> = (0..24)
+        let samples: Vec<TrainingSample> = (0..48)
             .map(|index| {
-                let value = index as f32 / 23.0;
+                let value = index as f32 / 47.0;
                 let manual_scale = if value < 0.5 { 0.68 } else { 0.82 };
-                TrainingSample {
-                    features: feature(value).as_array(),
-                    rule_scale: 0.74,
-                    manual_scale,
-                }
+                sample(value, manual_scale)
             })
             .collect();
         let model = train_model(&samples, TrainingConfig::default()).unwrap();
@@ -652,17 +739,24 @@ mod tests {
         let high = model.predict_scale(&feature(0.8), 0.74).unwrap().0;
         assert!(low < 0.74);
         assert!(high > 0.74);
-        assert!(high - low > 0.08);
+        assert!(high - low > 0.04);
+        assert!(model.validation_rmse.is_finite());
+    }
+
+    #[test]
+    fn unreliable_model_falls_back_to_the_rule() {
+        let samples: Vec<TrainingSample> = (0..24)
+            .map(|index| sample(index as f32 / 23.0, 0.78))
+            .collect();
+        let mut model = train_model(&samples, TrainingConfig::default()).unwrap();
+        model.validation_rmse = 0.50;
+        assert!(model.predict_scale(&feature(0.4), 0.74).is_none());
     }
 
     #[test]
     fn model_round_trips_through_json() {
-        let samples: Vec<TrainingSample> = (0..12)
-            .map(|index| TrainingSample {
-                features: feature(index as f32 / 11.0).as_array(),
-                rule_scale: 0.74,
-                manual_scale: 0.78,
-            })
+        let samples: Vec<TrainingSample> = (0..24)
+            .map(|index| sample(index as f32 / 23.0, 0.78))
             .collect();
         let model = train_model(&samples, TrainingConfig::default()).unwrap();
         let json = serde_json::to_vec(&model).unwrap();
