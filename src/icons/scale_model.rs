@@ -17,7 +17,7 @@ pub const MODEL_FORMAT_VERSION: u32 = 2;
 pub const OVERRIDES_FORMAT_VERSION: u32 = 1;
 pub const MODEL_FILE_NAME: &str = "icon-scale-model.json";
 pub const OVERRIDES_FILE_NAME: &str = "icon-scale-overrides.json";
-pub const POLICY_REVISION_FILE_NAME: &str = "icon-scale-policy.revision";
+pub const POLICY_REVISION_FILE_NAME: &str = "icon-scale-policy-v2.revision";
 
 pub const MIN_SCALE: f32 = 0.55;
 pub const MAX_SCALE: f32 = 1.10;
@@ -270,23 +270,24 @@ impl ScalePolicy {
         let model_bytes = std::fs::read(&model_path).ok();
         let overrides_bytes = std::fs::read(&overrides_path).ok();
 
-        let model = model_bytes.as_deref().and_then(|bytes| {
-            match serde_json::from_slice::<IconScaleModel>(bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|model| {
-                    model.validate()?;
-                    Ok(model)
-                }) {
-                Ok(model) => Some(model),
-                Err(error) => {
-                    eprintln!(
-                        "icon-scale: ignoring invalid model {}: {error}",
-                        model_path.display()
-                    );
-                    None
-                }
-            }
-        });
+        let model =
+            model_bytes.as_deref().and_then(
+                |bytes| match serde_json::from_slice::<IconScaleModel>(bytes)
+                    .map_err(|error| error.to_string())
+                    .and_then(|model| {
+                        model.validate()?;
+                        Ok(model)
+                    }) {
+                    Ok(model) => Some(model),
+                    Err(error) => {
+                        eprintln!(
+                            "icon-scale: ignoring invalid model {}: {error}",
+                            model_path.display()
+                        );
+                        None
+                    }
+                },
+            );
 
         let overrides = overrides_bytes
             .as_deref()
