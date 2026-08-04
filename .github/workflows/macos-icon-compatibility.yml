@@ -103,7 +103,8 @@ jobs:
             --root target/macos-captures \
             --baseline macos-14 \
             --report target/macos-captures/compatibility-report.md \
-            --preview target/macos-captures/compatibility-preview.png
+            --preview target/macos-captures/compatibility-preview.png \
+            --shape-preview target/macos-captures/compatibility-shape-preview.png
 
       - name: Add comparison to job summary
         run: cat target/macos-captures/compatibility-report.md >> "$GITHUB_STEP_SUMMARY"
@@ -116,6 +117,7 @@ jobs:
             target/macos-captures/compatibility-report.md
             target/macos-captures/compatibility-report.json
             target/macos-captures/compatibility-preview.png
+            target/macos-captures/compatibility-shape-preview.png
           if-no-files-found: error
           retention-days: 14
 
@@ -154,6 +156,23 @@ jobs:
               return `⚠️ 差分あり（取得 ${sourceDiff} / 正規化 ${normalizedDiff}）`;
             };
 
+            const formatBox = (box) => {
+              if (!box) return 'なし';
+              return `${box.width}×${box.height}@(${box.min_x},${box.min_y})`;
+            };
+
+            const shapeRow = (comparison) => {
+              const source = comparison.source.shape;
+              const normalized = comparison.normalized.shape;
+              const sourceText = source
+                ? `外縁 ${formatBox(source.baseline.bbox_alpha_ge_11)} → ${formatBox(source.candidate.bbox_alpha_ge_11)}<br>本体 ${formatBox(source.baseline.bbox_alpha_ge_128)} → ${formatBox(source.candidate.bbox_alpha_ge_128)}<br>輪郭差 ${source.mask_changed_pixels_alpha_ge_11}/${comparison.source.total_pixels}`
+                : '比較不可';
+              const normalizedText = normalized
+                ? `外縁 ${formatBox(normalized.baseline.bbox_alpha_ge_11)} → ${formatBox(normalized.candidate.bbox_alpha_ge_11)}<br>本体 ${formatBox(normalized.baseline.bbox_alpha_ge_128)} → ${formatBox(normalized.candidate.bbox_alpha_ge_128)}<br>輪郭差 ${normalized.mask_changed_pixels_alpha_ge_11}/${comparison.normalized.total_pixels}`
+                : '比較不可';
+              return `| ${comparison.app} | ${comparison.candidate_os} | ${sourceText} | ${normalizedText} |`;
+            };
+
             const rows = report.map((comparison) => [
               `| ${comparison.app} | ${comparison.candidate_os} | ${statusFor(comparison)} |`,
             ].join(''));
@@ -168,12 +187,21 @@ jobs:
               '| --- | --- | --- |',
               ...rows,
               '',
+              '### 外形比較（アルファ形状）',
+              '',
+              '`外縁` は alpha ≥ 11、`本体` は alpha ≥ 128 の外接矩形です。形式は `幅×高さ@(x,y)` で、`→` の左がmacOS 14、右が比較対象OSです。`輪郭差` は同じ閾値のアルファマスクで所属が変わったピクセル数です。',
+              '',
+              '| アプリ | 比較対象 | 取得直後 | 正規化後 |',
+              '| --- | --- | --- | --- |',
+              ...report.map(shapeRow),
+              '',
               '判定はPNGファイルではなく、展開後のRGBA画素を基準にしています。',
-              '差分は失敗ではなく、macOS側のアイコン表示変更を確認するための情報です。',
+              'RGBA差分と外形差分は失敗ではなく、macOS側のアイコン表示変更を確認するための情報です。',
               '',
               '### 結果ファイル',
               '',
               `- ${artifactLink('macos-icon-compatibility-report', '比較レポート（Markdown / JSON / コンタクトシート）')}`,
+              `- ${artifactLink('macos-icon-compatibility-report', '外形比較画像（Artifact内の compatibility-shape-preview.png）')}`,
               `- ${artifactLink('macos-icon-capture-macos-14', 'macOS 14の取得画像')}`,
               `- ${artifactLink('macos-icon-capture-macos-15', 'macOS 15の取得画像')}`,
               `- ${artifactLink('macos-icon-capture-macos-26', 'macOS 26の取得画像')}`,

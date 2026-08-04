@@ -18,6 +18,7 @@ struct Args {
     baseline: String,
     report: PathBuf,
     preview: PathBuf,
+    shape_preview: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +40,33 @@ struct ImageComparison {
     total_pixels: u64,
     mean_absolute_error: f64,
     max_absolute_error: u8,
+    shape: Option<ShapeComparison>,
+}
+
+#[derive(Debug, Serialize)]
+struct ShapeComparison {
+    baseline: AlphaGeometry,
+    candidate: AlphaGeometry,
+    mask_changed_pixels_alpha_gt_0: u64,
+    mask_changed_pixels_alpha_ge_11: u64,
+    mask_changed_pixels_alpha_ge_128: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct AlphaGeometry {
+    bbox_alpha_gt_0: Option<BoundingBox>,
+    bbox_alpha_ge_11: Option<BoundingBox>,
+    bbox_alpha_ge_128: Option<BoundingBox>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+struct BoundingBox {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+    width: u32,
+    height: u32,
 }
 
 fn main() {
@@ -108,6 +136,12 @@ fn run() -> Result<(), String> {
     std::fs::write(&json_path, json)
         .map_err(|error| format!("write {}: {error}", json_path.display()))?;
     write_preview(&args.root, &args.baseline, &comparisons, &args.preview)?;
+    write_shape_preview(
+        &args.root,
+        &args.baseline,
+        &comparisons,
+        &args.shape_preview,
+    )?;
     print!("{report}");
     Ok(())
 }
@@ -117,6 +151,7 @@ fn parse_args() -> Result<Args, String> {
     let mut baseline = "macos-14".to_owned();
     let mut report = PathBuf::from("target/macos-captures/compatibility-report.md");
     let mut preview = PathBuf::from("target/macos-captures/compatibility-preview.png");
+    let mut shape_preview = PathBuf::from("target/macos-captures/compatibility-shape-preview.png");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -143,9 +178,15 @@ fn parse_args() -> Result<Args, String> {
                         .ok_or_else(|| "--preview requires a file".to_owned())?,
                 );
             }
+            "--shape-preview" => {
+                shape_preview = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--shape-preview requires a file".to_owned())?,
+                );
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: macos_icon_compare [--root DIR] [--baseline NAME] [--report FILE] [--preview FILE]"
+                    "Usage: macos_icon_compare [--root DIR] [--baseline NAME] [--report FILE] [--preview FILE] [--shape-preview FILE]"
                 );
                 std::process::exit(0);
             }
@@ -157,6 +198,7 @@ fn parse_args() -> Result<Args, String> {
         baseline,
         report,
         preview,
+        shape_preview,
     })
 }
 
@@ -245,6 +287,7 @@ fn compare_images(
             total_pixels: 0,
             mean_absolute_error: 0.0,
             max_absolute_error: 0,
+            shape: None,
         });
     }
 
@@ -274,6 +317,7 @@ fn compare_images(
     } else {
         absolute_error as f64 / baseline_raw.len() as f64
     };
+    let shape = compare_shapes(baseline, candidate);
     Ok(ImageComparison {
         dimensions_equal: true,
         png_bytes_equal,
@@ -282,7 +326,62 @@ fn compare_images(
         total_pixels,
         mean_absolute_error,
         max_absolute_error,
+        shape: Some(shape),
     })
+}
+
+fn compare_shapes(baseline: &RgbaImage, candidate: &RgbaImage) -> ShapeComparison {
+    ShapeComparison {
+        baseline: alpha_geometry(baseline),
+        candidate: alpha_geometry(candidate),
+        mask_changed_pixels_alpha_gt_0: changed_alpha_mask_pixels(baseline, candidate, 1),
+        mask_changed_pixels_alpha_ge_11: changed_alpha_mask_pixels(baseline, candidate, 11),
+        mask_changed_pixels_alpha_ge_128: changed_alpha_mask_pixels(baseline, candidate, 128),
+    }
+}
+
+fn alpha_geometry(image: &RgbaImage) -> AlphaGeometry {
+    AlphaGeometry {
+        bbox_alpha_gt_0: alpha_bounding_box(image, 1),
+        bbox_alpha_ge_11: alpha_bounding_box(image, 11),
+        bbox_alpha_ge_128: alpha_bounding_box(image, 128),
+    }
+}
+
+fn alpha_bounding_box(image: &RgbaImage, threshold: u8) -> Option<BoundingBox> {
+    let (width, height) = image.dimensions();
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            if image.get_pixel(x, y)[3] >= threshold {
+                found = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    found.then(|| BoundingBox {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+        width: max_x - min_x + 1,
+        height: max_y - min_y + 1,
+    })
+}
+
+fn changed_alpha_mask_pixels(baseline: &RgbaImage, candidate: &RgbaImage, threshold: u8) -> u64 {
+    baseline
+        .pixels()
+        .zip(candidate.pixels())
+        .filter(|(left, right)| (left[3] >= threshold) != (right[3] >= threshold))
+        .count() as u64
 }
 
 fn render_report(baseline: &str, comparisons: &[AppComparison]) -> String {
@@ -310,7 +409,67 @@ fn render_report(baseline: &str, comparisons: &[AppComparison]) -> String {
             comparison.normalized.total_pixels,
         ));
     }
+    report.push_str("\n## Outer shape comparison\n\n");
+    report.push_str(
+        "`bbox` is shown as `width×height at (x,y)`. `alpha ≥ 11` is the visible outer shape used by the current crop, and `alpha ≥ 128` is the opaque core. Mask differences count pixels whose threshold membership changed.\n\n",
+    );
+    report.push_str(
+        "| App | Candidate OS | Source outer bbox (α≥11) | Source core bbox (α≥128) | Source mask diff (α≥11) | Normalized outer bbox (α≥11) | Normalized core bbox (α≥128) | Normalized mask diff (α≥11) |\n",
+    );
+    report.push_str("| --- | --- | --- | --- | ---: | --- | --- | ---: |\n");
+    for comparison in comparisons {
+        report.push_str(&format!(
+            "| `{}` | `{}` | {} | {} | {} | {} | {} | {} |\n",
+            comparison.app,
+            comparison.candidate_os,
+            shape_bbox_pair(&comparison.source, |geometry| &geometry.bbox_alpha_ge_11),
+            shape_bbox_pair(&comparison.source, |geometry| &geometry.bbox_alpha_ge_128),
+            shape_mask_diff(&comparison.source, |shape| shape
+                .mask_changed_pixels_alpha_ge_11),
+            shape_bbox_pair(&comparison.normalized, |geometry| &geometry
+                .bbox_alpha_ge_11,),
+            shape_bbox_pair(&comparison.normalized, |geometry| &geometry
+                .bbox_alpha_ge_128,),
+            shape_mask_diff(&comparison.normalized, |shape| shape
+                .mask_changed_pixels_alpha_ge_11,),
+        ));
+    }
     report
+}
+
+fn shape_bbox_pair<F>(comparison: &ImageComparison, pick: F) -> String
+where
+    F: Fn(&AlphaGeometry) -> &Option<BoundingBox>,
+{
+    let Some(shape) = &comparison.shape else {
+        return "unavailable".to_owned();
+    };
+    format!(
+        "{} → {}",
+        format_bbox(pick(&shape.baseline)),
+        format_bbox(pick(&shape.candidate)),
+    )
+}
+
+fn shape_mask_diff<F>(comparison: &ImageComparison, pick: F) -> String
+where
+    F: Fn(&ShapeComparison) -> u64,
+{
+    let Some(shape) = &comparison.shape else {
+        return "unavailable".to_owned();
+    };
+    format!("{}/{}", pick(shape), comparison.total_pixels)
+}
+
+fn format_bbox(bbox: &Option<BoundingBox>) -> String {
+    bbox.as_ref()
+        .map(|bbox| {
+            format!(
+                "{}×{} at ({},{})",
+                bbox.width, bbox.height, bbox.min_x, bbox.min_y
+            )
+        })
+        .unwrap_or_else(|| "none".to_owned())
 }
 
 /// Create a single image that makes captured pixels easy to inspect after
@@ -375,6 +534,126 @@ fn write_preview(
     canvas
         .save_with_format(output, ImageFormat::Png)
         .map_err(|error| format!("write preview {}: {error}", output.display()))
+}
+
+/// Create an alpha-only preview for the geometry comparison. Each row has six
+/// cells: baseline/candidate source masks, their overlay, then the same three
+/// views for normalized images. In the masks, light gray is alpha >= 128 and
+/// dark gray is the softer visible fringe alpha >= 11. In the overlay, blue
+/// is baseline-only, orange is candidate-only, and light gray is shared.
+fn write_shape_preview(
+    root: &Path,
+    baseline: &str,
+    comparisons: &[AppComparison],
+    output: &Path,
+) -> Result<(), String> {
+    const CELL: u32 = 256;
+    const GAP: u32 = 12;
+    const BORDER: u32 = 4;
+    const COLUMNS: usize = 6;
+    let rows = comparisons.len() as u32;
+    let width = GAP + COLUMNS as u32 * (CELL + GAP);
+    let height = GAP + rows * (CELL + GAP);
+    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
+
+    for (row, comparison) in comparisons.iter().enumerate() {
+        let baseline_app = root.join(baseline).join(&comparison.app);
+        let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
+        let source_baseline = load_png(&baseline_app.join("source.png"))?;
+        let source_candidate = load_png(&candidate_app.join("source.png"))?;
+        let normalized_baseline = load_png(&baseline_app.join("normalized.png"))?;
+        let normalized_candidate = load_png(&candidate_app.join("normalized.png"))?;
+        let cells = [
+            alpha_mask_preview(&source_baseline),
+            alpha_mask_preview(&source_candidate),
+            alpha_overlay_preview(&source_baseline, &source_candidate),
+            alpha_mask_preview(&normalized_baseline),
+            alpha_mask_preview(&normalized_candidate),
+            alpha_overlay_preview(&normalized_baseline, &normalized_candidate),
+        ];
+        for (column, image) in cells.iter().enumerate() {
+            let image = imageops::resize(
+                image,
+                CELL - BORDER * 2,
+                CELL - BORDER * 2,
+                imageops::FilterType::Nearest,
+            );
+            let x = GAP + column as u32 * (CELL + GAP);
+            let y = GAP + row as u32 * (CELL + GAP);
+            imageops::overlay(
+                &mut canvas,
+                &image,
+                i64::from(x + BORDER),
+                i64::from(y + BORDER),
+            );
+            let border_color = match column {
+                0 => [80, 150, 255, 255],
+                1 => [255, 160, 70, 255],
+                2 => [210, 210, 210, 255],
+                3 => [100, 210, 130, 255],
+                4 => [230, 100, 220, 255],
+                _ => [210, 210, 210, 255],
+            };
+            draw_border(&mut canvas, x, y, CELL, BORDER, border_color);
+        }
+    }
+    canvas
+        .save_with_format(output, ImageFormat::Png)
+        .map_err(|error| format!("write shape preview {}: {error}", output.display()))
+}
+
+fn load_png(path: &Path) -> Result<RgbaImage, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    image::load_from_memory(&bytes)
+        .map_err(|error| format!("decode {}: {error}", path.display()))
+        .map(|image| image.to_rgba8())
+}
+
+fn alpha_mask_preview(image: &RgbaImage) -> RgbaImage {
+    let mut preview = RgbaImage::new(image.width(), image.height());
+    for (source, target) in image.pixels().zip(preview.pixels_mut()) {
+        let alpha = source[3];
+        let value = if alpha >= 128 {
+            240
+        } else if alpha >= 11 {
+            120
+        } else {
+            32
+        };
+        *target = Rgba([value, value, value, 255]);
+    }
+    preview
+}
+
+fn alpha_overlay_preview(baseline: &RgbaImage, candidate: &RgbaImage) -> RgbaImage {
+    let width = baseline.width().min(candidate.width());
+    let height = baseline.height().min(candidate.height());
+    let mut preview = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
+    for y in 0..height {
+        for x in 0..width {
+            let baseline_inside = baseline.get_pixel(x, y)[3] >= 11;
+            let candidate_inside = candidate.get_pixel(x, y)[3] >= 11;
+            let color = match (baseline_inside, candidate_inside) {
+                (true, true) => [220, 220, 220, 255],
+                (true, false) => [80, 150, 255, 255],
+                (false, true) => [255, 160, 70, 255],
+                (false, false) => [32, 35, 41, 255],
+            };
+            preview.put_pixel(x, y, Rgba(color));
+        }
+    }
+    preview
+}
+
+fn draw_border(canvas: &mut RgbaImage, x: u32, y: u32, size: u32, border: u32, color: [u8; 4]) {
+    for offset in 0..size {
+        for thickness in 0..border {
+            canvas.put_pixel(x + offset, y + thickness, Rgba(color));
+            canvas.put_pixel(x + offset, y + size - 1 - thickness, Rgba(color));
+            canvas.put_pixel(x + thickness, y + offset, Rgba(color));
+            canvas.put_pixel(x + size - 1 - thickness, y + offset, Rgba(color));
+        }
+    }
 }
 
 fn yes_no(value: bool) -> &'static str {
