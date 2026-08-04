@@ -29,9 +29,6 @@ struct GlassUniforms {
     adaptive_darkness: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
-    // Uniform black tint for the entire glass surface. Unlike adaptive_darkness,
-    // this never samples or branches on the backdrop and never changes alpha.
-    glass_darkness: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -151,11 +148,6 @@ fn apply_adaptive_darkness(rgb: vec3<f32>, white_score: f32) -> vec3<f32> {
     return rgb * mix(1.0, 0.25, strength);
 }
 
-fn apply_glass_darkness(rgb: vec3<f32>) -> vec3<f32> {
-    let strength = clamp(u.glass_darkness, 0.0, 1.0);
-    return mix(rgb, vec3<f32>(0.0), strength);
-}
-
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;
@@ -213,7 +205,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         interior_rgb = glass_tint.rgb * glass_tint.a
             + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
-        interior_rgb = apply_glass_darkness(interior_rgb);
         interior_rgb = apply_adaptive_darkness(interior_rgb, adaptive_white_score);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
@@ -270,7 +261,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     final_rgb = apply_saturation(final_rgb, effective_saturation);
     // Darken the material base before adding edge light and specular response.
     // Highlights remain highlights instead of being crushed into dirty gray.
-    final_rgb = apply_glass_darkness(final_rgb);
     final_rgb = apply_adaptive_darkness(final_rgb, adaptive_white_score);
 
     if !has_flag(6u) {

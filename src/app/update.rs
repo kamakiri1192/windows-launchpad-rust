@@ -534,15 +534,6 @@ impl App {
             crate::domain::settings::LiquidGlassParamField::Saturation => {
                 sp::LiquidGlassParamId::Saturation
             }
-            crate::domain::settings::LiquidGlassParamField::GlassDarkness => {
-                sp::LiquidGlassParamId::GlassDarkness
-            }
-            crate::domain::settings::LiquidGlassParamField::ContextMenuGlassDarkness => {
-                sp::LiquidGlassParamId::ContextMenuGlassDarkness
-            }
-            crate::domain::settings::LiquidGlassParamField::SettingsPanelGlassDarkness => {
-                sp::LiquidGlassParamId::SettingsPanelGlassDarkness
-            }
             crate::domain::settings::LiquidGlassParamField::AdaptiveDarkness => {
                 sp::LiquidGlassParamId::AdaptiveDarkness
             }
@@ -1983,13 +1974,6 @@ fn apply_param_to_renderer(
         LiquidGlassParamField::Thickness => r.set_liquid_glass_thickness(value),
         LiquidGlassParamField::RefractiveIndex => r.set_liquid_glass_refractive_index(value),
         LiquidGlassParamField::Saturation => r.set_liquid_glass_saturation(value),
-        LiquidGlassParamField::GlassDarkness => r.set_liquid_glass_darkness(value),
-        LiquidGlassParamField::ContextMenuGlassDarkness => {
-            r.set_liquid_glass_context_menu_darkness(value)
-        }
-        LiquidGlassParamField::SettingsPanelGlassDarkness => {
-            r.set_liquid_glass_settings_panel_darkness(value)
-        }
         LiquidGlassParamField::AdaptiveDarkness => r.set_liquid_glass_adaptive_darkness(value),
         LiquidGlassParamField::ChromaticAberration => {
             r.set_liquid_glass_chromatic_aberration(value)

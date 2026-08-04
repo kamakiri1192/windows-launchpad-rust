@@ -667,7 +667,6 @@ impl App {
                         self.settings.liquid_glass.thickness = p.thickness;
                         self.settings.liquid_glass.refractive_index = p.refractive_index;
                         self.settings.liquid_glass.saturation = p.saturation;
-                        self.settings.liquid_glass.glass_darkness = p.glass_darkness;
                         self.settings.liquid_glass.chromatic_aberration = p.chromatic_aberration;
                         self.settings.liquid_glass.blur_radius = p.blur_radius;
                         self.persist_settings();

@@ -711,9 +711,6 @@ impl LiquidGlassRenderer {
         if self.settings_panel_completed_scene_enabled {
             uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
         }
-        if self.settings_panel_completed_scene_enabled {
-            uniforms.glass_darkness = self.settings_panel_glass_darkness;
-        }
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,
@@ -966,7 +963,6 @@ impl LiquidGlassRenderer {
                 .unwrap_or(self.params.blur_radius);
         }
         uniforms.backdrop_replacement = self.context_menu_backdrop_replacement;
-        uniforms.glass_darkness = self.context_menu_glass_darkness;
         queue.write_buffer(
             &self.context_menu_uniform_buffer,
             0,
