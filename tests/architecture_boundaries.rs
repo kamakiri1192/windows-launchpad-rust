@@ -175,7 +175,8 @@ fn edit_badge_frame_motion_is_gpu_driven() {
     let control_shader = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shader_control.wgsl"),
     )
-    .expect("control shader");
+    .expect("control shader")
+    .replace("\r\n", "\n");
     let glass_shader = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets/shaders/liquid_glass_geometry.wgsl"),
