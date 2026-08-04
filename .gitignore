@@ -35,3 +35,6 @@ Desktop.ini
 
 # Local macOS app bundle build output (scripts/build_macos_app.sh)
 /dist/
+
+# Local-only scratch / generated logs
+tmp/

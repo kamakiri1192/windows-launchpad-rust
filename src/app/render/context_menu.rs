@@ -583,15 +583,18 @@ mod tests {
     }
 
     #[test]
-    fn folder_menu_rows_omit_the_hide_app_row() {
+    fn folder_menu_rows_omit_hide_app_and_reveal_rows() {
         let (items, labels) = context_menu::menu_rows(true);
         assert_eq!(items, &context_menu::ContextMenuItem::FOLDER_ITEMS[..]);
         assert_eq!(
             labels,
             &context_menu::ContextMenuItem::FOLDER_ITEMS_LABELS[..]
         );
-        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 1);
+        // A folder has neither a hide action nor a file to reveal, so the
+        // folder menu omits both rows — two shorter than the app menu.
+        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 2);
         assert!(!items.contains(&context_menu::ContextMenuItem::HideApp));
+        assert!(!items.contains(&context_menu::ContextMenuItem::RevealInFinder));
     }
 
     #[test]
@@ -602,21 +605,24 @@ mod tests {
     }
 
     #[test]
-    fn folder_menu_row_indices_never_resolve_to_hide_app() {
+    fn folder_menu_row_indices_never_resolve_to_hide_app_or_reveal() {
         let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
             "folder-a",
         ));
         let (items, _labels) = context_menu::menu_rows(true);
-        // A folder menu has no hide-app row; every row resolves to
-        // close-only (or edit-home for row 0).
-        assert_eq!(
-            resolve_context_menu_selection(items, Some(1), Some(&target)),
-            ContextMenuSelection::CloseOnly
-        );
-        assert_eq!(
-            resolve_context_menu_selection(items, Some(0), Some(&target)),
-            ContextMenuSelection::EditHome
-        );
+        // A folder menu has neither a hide-app nor a reveal row; every row
+        // resolves to close-only (or edit-home for row 0). Walk every row.
+        for row in 0..items.len() {
+            let expected = if row == 0 {
+                ContextMenuSelection::EditHome
+            } else {
+                ContextMenuSelection::CloseOnly
+            };
+            assert_eq!(
+                resolve_context_menu_selection(items, Some(row), Some(&target)),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -642,20 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn reveal_row_with_folder_target_or_no_target_is_close_only() {
-        let folder = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
-            "folder-a",
-        ));
-        // A folder is a virtual launcher group with no file on disk to reveal,
-        // so the row still closes only.
-        assert_eq!(
-            resolve_context_menu_selection(
-                &context_menu::ContextMenuItem::FOLDER_ITEMS,
-                Some(1),
-                Some(&folder)
-            ),
-            ContextMenuSelection::CloseOnly
-        );
+    fn reveal_row_with_no_target_is_close_only() {
         assert_eq!(
             resolve_context_menu_selection(&context_menu::ContextMenuItem::ALL, Some(2), None),
             ContextMenuSelection::CloseOnly
