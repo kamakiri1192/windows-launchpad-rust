@@ -4,7 +4,11 @@
 
 single_geometry_target = """                targets: &[Some(wgpu::ColorTargetState {\n                    format: GEOMETRY_FORMAT,\n                    blend: None,\n                    write_mask: wgpu::ColorWrites::ALL,\n                })],"""
 dual_geometry_target = """                targets: &[\n                    Some(wgpu::ColorTargetState {\n                        format: GEOMETRY_FORMAT,\n                        blend: None,\n                        write_mask: wgpu::ColorWrites::ALL,\n                    }),\n                    Some(wgpu::ColorTargetState {\n                        format: TINT_FORMAT,\n                        blend: None,\n                        write_mask: wgpu::ColorWrites::ALL,\n                    }),\n                ],"""
-replace("src/liquid_glass/renderer.rs", single_geometry_target, dual_geometry_target, expected=2)
+replace("src/liquid_glass/renderer.rs", single_geometry_target, dual_geometry_target)
+
+badge_geometry_target = """                    targets: &[Some(wgpu::ColorTargetState {\n                        format: GEOMETRY_FORMAT,\n                        blend: None,\n                        write_mask: wgpu::ColorWrites::ALL,\n                    })],"""
+badge_dual_geometry_target = """                    targets: &[\n                        Some(wgpu::ColorTargetState {\n                            format: GEOMETRY_FORMAT,\n                            blend: None,\n                            write_mask: wgpu::ColorWrites::ALL,\n                        }),\n                        Some(wgpu::ColorTargetState {\n                            format: TINT_FORMAT,\n                            blend: None,\n                            write_mask: wgpu::ColorWrites::ALL,\n                        }),\n                    ],"""
+replace("src/liquid_glass/renderer.rs", badge_geometry_target, badge_dual_geometry_target)
 
 replace(
     "src/liquid_glass/renderer.rs",
