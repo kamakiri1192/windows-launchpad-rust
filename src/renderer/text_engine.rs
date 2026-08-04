@@ -139,6 +139,21 @@ pub struct CenteredLineSpec<'a> {
     pub scale_factor: f32,
 }
 
+/// Observable atlas counters for debug logs and deterministic visual QA.
+///
+/// `atlas_drops` counts only glyphs rejected because the atlas cannot grow
+/// further; whitespace and unsupported glyphs are intentionally not included.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextAtlasStats {
+    pub width: u32,
+    pub height: u32,
+    pub cached_glyphs: usize,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub grows: u64,
+    pub atlas_drops: u64,
+}
+
 pub struct TextRenderer {
     font_system: FontSystem,
     swash: SwashCache,
@@ -161,6 +176,12 @@ pub struct TextRenderer {
     /// Growth changes the UV denominators of every previously built glyph
     /// quad, so the app must rebuild all glyph lanes once.
     atlas_grew: bool,
+    /// Lifetime counters retained for diagnostics. They are deliberately
+    /// separate from `cache.len()` so QA can tell cache churn from a full atlas.
+    cache_hits: u64,
+    cache_misses: u64,
+    atlas_growths: u64,
+    atlas_drops: u64,
     /// Shaping is independent of a label's on-screen position. Folder paging
     /// changes only that position, so retain relative glyph layouts instead
     /// of asking cosmic-text to shape every visible name on every frame.
@@ -194,13 +215,28 @@ const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
 
 impl TextRenderer {
     pub fn new() -> Self {
-        Self::with_atlas_size(ATLAS_INITIAL_SIZE, ATLAS_INITIAL_SIZE)
+        Self::with_font_system(platform_font_system())
+    }
+
+    /// Construct from a `FontSystem` that was built elsewhere — typically on a
+    /// background thread that ran in parallel with renderer init (see
+    /// [`spawn_font_system_load`]). Keeps the first frame font-complete so
+    /// there is no fallback-text flicker.
+    pub fn with_font_system(font_system: FontSystem) -> Self {
+        Self::with_atlas_size_and_font_system(ATLAS_INITIAL_SIZE, ATLAS_INITIAL_SIZE, font_system)
     }
 
     /// Construct with an explicit initial atlas size. Used by tests to force
     /// growth without rasterizing thousands of glyphs.
     fn with_atlas_size(atlas_w: u32, atlas_h: u32) -> Self {
-        let font_system = platform_font_system();
+        Self::with_atlas_size_and_font_system(atlas_w, atlas_h, platform_font_system())
+    }
+
+    fn with_atlas_size_and_font_system(
+        atlas_w: u32,
+        atlas_h: u32,
+        font_system: FontSystem,
+    ) -> Self {
         let swash = SwashCache::new();
         let atlas = vec![0u8; (atlas_w * atlas_h * 4) as usize];
         Self {
@@ -215,6 +251,10 @@ impl TextRenderer {
             row_height: 0,
             atlas_dirty: true,
             atlas_grew: false,
+            cache_hits: 0,
+            cache_misses: 0,
+            atlas_growths: 0,
+            atlas_drops: 0,
             label_layout_cache: HashMap::new(),
         }
     }
@@ -225,6 +265,19 @@ impl TextRenderer {
 
     pub fn atlas_dimensions(&self) -> (u32, u32) {
         (self.atlas_w, self.atlas_h)
+    }
+
+    /// Snapshot atlas occupancy and cache activity without mutating it.
+    pub fn atlas_stats(&self) -> TextAtlasStats {
+        TextAtlasStats {
+            width: self.atlas_w,
+            height: self.atlas_h,
+            cached_glyphs: self.cache.len(),
+            cache_hits: self.cache_hits,
+            cache_misses: self.cache_misses,
+            grows: self.atlas_growths,
+            atlas_drops: self.atlas_drops,
+        }
     }
 
     /// Returns true (and clears the flag) if the atlas grew since the last
@@ -609,8 +662,10 @@ impl TextRenderer {
     /// Ensure a glyph is in the atlas (rasterize on miss). Returns its entry.
     fn ensure_glyph(&mut self, physical: &PhysicalGlyph) -> Option<AtlasEntry> {
         if let Some(&e) = self.cache.get(&physical.cache_key) {
+            self.cache_hits += 1;
             return Some(e);
         }
+        self.cache_misses += 1;
 
         // Rasterize and copy the bits we need out of the cache, so the
         // mutable borrow of `self.swash` ends before we touch `self.atlas`.
@@ -630,12 +685,29 @@ impl TextRenderer {
 
         // A glyph that cannot fit even at the maximum atlas size is dropped.
         if w + 2 * PAD > ATLAS_MAX_SIZE || h + 2 * PAD > ATLAS_MAX_SIZE {
+            self.atlas_drops += 1;
+            crate::debug_log!(
+                "text-atlas: drop oversized glyph {}x{} (limit={} cached={})",
+                w,
+                h,
+                ATLAS_MAX_SIZE,
+                self.cache.len()
+            );
             return None;
         }
         // Grow until the glyph fits within the atlas width (pathological
         // ultra-wide glyphs only; normal UI text never triggers this).
         while w + 2 * PAD > self.atlas_w {
             if !self.grow_atlas() {
+                self.atlas_drops += 1;
+                crate::debug_log!(
+                    "text-atlas: drop glyph {}x{} (atlas={}x{} cached={} at limit)",
+                    w,
+                    h,
+                    self.atlas_w,
+                    self.atlas_h,
+                    self.cache.len()
+                );
                 return None;
             }
         }
@@ -652,6 +724,15 @@ impl TextRenderer {
         while self.cursor_y + h + PAD > self.atlas_h {
             if !self.grow_atlas() {
                 // Already at the maximum size; drop the glyph.
+                self.atlas_drops += 1;
+                crate::debug_log!(
+                    "text-atlas: drop glyph {}x{} (atlas={}x{} cached={} at limit)",
+                    w,
+                    h,
+                    self.atlas_w,
+                    self.atlas_h,
+                    self.cache.len()
+                );
                 return None;
             }
         }
@@ -699,6 +780,15 @@ impl TextRenderer {
         self.atlas_h = new_h;
         self.atlas_dirty = true;
         self.atlas_grew = true;
+        self.atlas_growths += 1;
+        crate::debug_log!(
+            "text-atlas: grew {}x{} -> {}x{} (cached={})",
+            new_w / 2,
+            new_h / 2,
+            new_w,
+            new_h,
+            self.cache.len()
+        );
         true
     }
 
@@ -772,18 +862,58 @@ fn platform_font_system() -> FontSystem {
 
 #[cfg(target_os = "macos")]
 fn macos_font_system_for_locale(locale: &str) -> FontSystem {
+    // B.3 instrumentation: isolate the cost of font DB construction (file I/O
+    // over every installed font) from the rest of TextRenderer::new.
+    let timer = crate::startup_timer::get();
+    timer.mark(crate::startup_timer::prefix::STARTUP, "font load start");
     let mut db = cosmic_text::fontdb::Database::new();
     db.load_system_fonts();
     db.set_sans_serif_family(UI_FONT_FAMILY);
     db.set_serif_family("New York");
     db.set_monospace_family("Menlo");
+    timer.mark(
+        crate::startup_timer::prefix::STARTUP,
+        "font load end (FontSystem built)",
+    );
 
     FontSystem::new_with_locale_and_db(macos_fallback_locale(locale), db)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn platform_font_system() -> FontSystem {
-    FontSystem::new()
+    // B.3 instrumentation: FontSystem::new() itself performs load_system_fonts.
+    let timer = crate::startup_timer::get();
+    timer.mark(crate::startup_timer::prefix::STARTUP, "font load start");
+    let system = FontSystem::new();
+    timer.mark(
+        crate::startup_timer::prefix::STARTUP,
+        "font load end (FontSystem built)",
+    );
+    system
+}
+
+/// Spawn a background thread that builds the platform `FontSystem` (the heavy
+/// `load_system_fonts` file I/O, ~tens of ms). Returns a handle the caller
+/// `join`s once the (main-thread-bound) renderer init has finished, so the
+/// font load runs in parallel with `Renderer::new`'s `block_on` instead of
+/// serially after it.
+///
+/// `FontSystem` is `Send` (verified at compile time), so it can cross the
+/// thread boundary. On panic inside the worker the handle still resolves; we
+/// fall back to a synchronous `platform_font_system()` on the calling thread
+/// so the app never loses its fonts.
+pub fn spawn_font_system_load() -> std::thread::JoinHandle<FontSystem> {
+    std::thread::Builder::new()
+        .name("font-load".to_owned())
+        .spawn(platform_font_system)
+        .expect("spawn font-load thread")
+}
+
+/// Synchronous fallback used only if the background [`spawn_font_system_load`]
+/// worker panics. Rebuilds the FontSystem on the calling (UI) thread so the
+/// app still has working fonts rather than aborting.
+pub fn platform_font_system_fallback() -> FontSystem {
+    platform_font_system()
 }
 
 #[cfg(target_os = "macos")]

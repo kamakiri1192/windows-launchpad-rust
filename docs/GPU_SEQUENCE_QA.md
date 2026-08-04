@@ -59,6 +59,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 
 - `open_folder`: 安定 ID でフォルダを開く。
 - `move`: pointer をセマンティックな対象へ移動する。
+- `right_click`: 現在のpointer位置でproduction input routerを通して右クリックする。
 - `pointer_down` / `pointer_up`: production と同じ press/release classifier を通す。
 - `type_text` / `commit_rename`: フォルダ名入力を検証する。
 - `escape` / `exit_edit_mode`: 状態の優先順位を検証する。

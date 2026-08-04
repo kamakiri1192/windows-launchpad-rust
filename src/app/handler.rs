@@ -182,6 +182,12 @@ impl ApplicationHandler<UserEvent> for App {
             .with_scale_factor(self.scale_factor)
             .centered(w as f32);
 
+        // B.3: font loading (load_system_fonts file I/O) is window-independent
+        // and FontSystem is Send, so kick it off on a background thread BEFORE
+        // the renderer's blocking init and join after. The renderer's
+        // `block_on` (adapter/device request, shader compile, pipelines) hides
+        // the font load that previously ran serially after it.
+        let font_load = text::spawn_font_system_load();
         let renderer = pollster::block_on(Renderer::new(
             window,
             &self.layout,
@@ -206,7 +212,15 @@ impl ApplicationHandler<UserEvent> for App {
         self.timer.mark(prefix::STARTUP, "renderer initialization");
         let bounds = self.layout.bounds(w as f32);
         let scroller = Scroller::new(bounds);
-        let text = text::TextRenderer::new();
+        // Join the background font load. If the worker already finished during
+        // renderer init this is effectively free; otherwise we wait for the
+        // remainder. The first frame stays font-complete (no flicker) because
+        // we only proceed once the FontSystem is in hand.
+        let font_system = font_load.join().unwrap_or_else(|_| {
+            eprintln!("startup: font-load worker panicked; building fonts inline");
+            text::platform_font_system_fallback()
+        });
+        let text = text::TextRenderer::with_font_system(font_system);
 
         self.renderer = Some(renderer);
         self.scroller = Some(scroller);
@@ -466,11 +480,10 @@ impl App {
                 crate::layout::bottom_control::BottomControlPointerIntent::None
             )
         };
-        // The context menu takes priority over the folder panel so that,
-        // while both are open, a click anywhere dismisses the menu without
-        // also triggering the folder panel (e.g. closing the folder via its
-        // dismiss backdrop).
-        if self.context_menu.is_active() {
+        // The menu owns input only until dismissal begins. Its close animation
+        // may remain visible, but the dismissing gesture must be able to keep
+        // scrolling the page/folder or close the folder via its backdrop.
+        if self.context_menu.accepts_pointer_input() {
             return PressAction::ContextMenu;
         }
         if self.folders.is_active() && self.drag_item.is_none() && !(self.editing && over_control) {
@@ -488,8 +501,9 @@ impl App {
     /// shell flags and the press/release state. This feeds
     /// [`AppAction::PointerRelease`].
     pub(crate) fn classify_pointer_release(&self, px: f32, py: f32) -> ReleaseAction {
-        // The context menu takes priority over the folder panel on release too.
-        if self.context_menu.is_active() {
+        // A closing menu is visual-only and must not swallow the release for
+        // the gesture that dismissed it.
+        if self.context_menu.accepts_pointer_input() {
             return ReleaseAction::ContextMenu;
         }
         if self.folders.is_active() && self.drag_item.is_none() && !self.pressed_on_control {
