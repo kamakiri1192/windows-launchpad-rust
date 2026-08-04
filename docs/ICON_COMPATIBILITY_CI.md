@@ -105,6 +105,7 @@ icon-compatibility:windows
 
 - アプリごとのRGBA比較結果
 - アプリごとの外形比較結果
+- GitHub Actionsの実行番号・Run ID・検証対象コミットへのリンク
 - macOS 14 / 15 / 26の取得Artifactへのリンク
 - Markdown / JSONの比較レポートへのリンク
 - アプリ別カラー比較画像

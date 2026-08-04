@@ -193,6 +193,9 @@ jobs:
               'macOS 14を基準に、同じアプリをmacOS 15・26で取得して比較しました。',
               '再取得したい場合は、PRに `icon-compatibility:macos` ラベルを付けると、この比較CIを起動できます。',
               '',
+              `実行番号: [#${context.runNumber}](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})（Run ID: \`${context.runId}\`）`,
+              `検証対象コミット: [\`${context.sha}\`](${context.serverUrl}/${owner}/${repo}/commit/${context.sha})`,
+              '',
               '| アプリ | 比較対象 | 結果 |',
               '| --- | --- | --- |',
               ...rows,
@@ -217,8 +220,6 @@ jobs:
               `- ${artifactLink('macos-icon-capture-macos-26', 'macOS 26の取得画像')}`,
               '',
               '画像は各Artifactを開くと、`source.png`（取得直後）と`normalized.png`（正規化後）を確認できます。`compatibility-preview-<app>.png` はアプリ別カラー比較、`compatibility-shape-preview-<app>.png` はアプリ別外形比較です。どちらも「macOS 14 / macOS 15 / macOS 26」の3列で、画像内にアプリ名・OS名・行の意味を表示しています。',
-              '',
-              `[Workflow実行結果](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})`,
             ].join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
