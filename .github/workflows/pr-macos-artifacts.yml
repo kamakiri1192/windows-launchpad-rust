@@ -245,7 +245,7 @@ jobs:
           set -euo pipefail
           rm -rf target/qa-sequences target/qa-home target/qa-artifacts
           mkdir -p target/qa-sequences target/qa-home target/qa-artifacts
-          for scenario in folder_interactions folder_creation; do
+          for scenario in folder_interactions folder_creation context_menu_open context_menu_dismiss; do
             HOME="${{ github.workspace }}/target/qa-home/$scenario" \
             LAUNCHPAD_QA_SCENARIO="${{ github.workspace }}/qa/$scenario.json" \
               "target/$TARGET/release/$BIN_NAME" \
@@ -290,7 +290,7 @@ jobs:
 
           - Artifact: [$ARTIFACT_NAME]($ARTIFACT_URL)
           - Contents: deterministic GPU-captured PNG sequence, manifest, and logs
-          - Scenarios: folder interactions and folder creation at 1280x800 / 30 fps
+          - Scenarios: folder interactions, folder creation, context-menu opening, and context-menu dismissal at 1280x800 / 30 fps
           - Retention: 7 days
 
           This validates the application render path. ScreenCaptureKit permission,

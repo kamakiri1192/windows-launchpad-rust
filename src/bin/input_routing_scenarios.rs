@@ -18,7 +18,7 @@ mod windows_runner {
     use windows::Win32::Foundation::{HWND, LPARAM, POINT};
     use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, GetWindowRgn, HGDIOBJ};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_TYPE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        SendInput, INPUT, INPUT_TYPE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
         MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -365,6 +365,24 @@ mod windows_runner {
                     dy: 0,
                     mouseData: mouse_data,
                     dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS(flags),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn relative_mouse_move(dx: i32, dy: i32) -> INPUT {
+        INPUT {
+            r#type: INPUT_TYPE(0),
+            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: 0,
+                    dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS(
+                        MOUSEEVENTF_MOVE.0,
+                    ),
                     time: 0,
                     dwExtraInfo: 0,
                 },
@@ -795,6 +813,12 @@ mod windows_runner {
                     unsafe {
                         SetCursorPos(point_x + 30, point_y).map_err(|error| error.to_string())?;
                     }
+                    // SetCursorPos updates the pointer on hosted runners but
+                    // can occasionally fail to enqueue the corresponding
+                    // WM_MOUSEMOVE while the launchpad is busy rendering. A
+                    // one-pixel SendInput nudge forces the native input path
+                    // to observe the already-positioned cursor.
+                    send(&[relative_mouse_move(1, 0)])?;
                     let drag = wait_launcher_snapshot(&launcher_rx, |record| {
                         matches!(
                             record,
@@ -828,6 +852,7 @@ mod windows_runner {
                     unsafe {
                         SetCursorPos(point_x + 30, point_y).map_err(|error| error.to_string())?;
                     }
+                    send(&[relative_mouse_move(1, 0)])?;
                     wait_launcher_snapshot(&launcher_rx, |record| {
                         matches!(
                             record,

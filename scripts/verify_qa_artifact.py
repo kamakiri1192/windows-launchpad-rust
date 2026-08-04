@@ -34,7 +34,12 @@ def verify(root: Path, require_default_scenarios: bool = True) -> None:
         scenarios.add(verify_manifest(manifest_path))
 
     if require_default_scenarios:
-        expected = {"folder-interactions", "folder-creation"}
+        expected = {
+            "folder-interactions",
+            "folder-creation",
+            "context-menu-open",
+            "context-menu-dismiss",
+        }
         missing = expected - scenarios
         if missing:
             fail(f"missing required scenarios: {', '.join(sorted(missing))}")
@@ -68,7 +73,28 @@ def verify_manifest(manifest_path: Path) -> str:
     scenario = manifest.get("scenario")
     if not isinstance(scenario, str) or not scenario:
         fail(f"{manifest_path} has no scenario name")
-    required_states = {"folder open": any(frame.get("folder_open") for frame in frames)}
+    required_states: dict[str, bool] = {}
+    if scenario in {"folder-interactions", "folder-creation"}:
+        required_states["folder open"] = any(frame.get("folder_open") for frame in frames)
+    elif scenario in {"context-menu-open", "context-menu-dismiss"}:
+        assertions = manifest.get("context_menu_assertions")
+        required_states["context menu assertions passed"] = bool(
+            isinstance(assertions, dict) and assertions.get("passed") is True
+        )
+        required_states["context menu opening"] = any(
+            frame.get("context_menu_phase") == "Opening" for frame in frames
+        )
+        if scenario == "context-menu-open":
+            required_states["context menu open"] = any(
+                frame.get("context_menu_phase") == "Open" for frame in frames
+            )
+        else:
+            required_states["context menu closing"] = any(
+                frame.get("context_menu_phase") == "Closing" for frame in frames
+            )
+            required_states["context menu closed"] = any(
+                frame.get("context_menu_phase") == "Closed" for frame in frames
+            )
     if scenario == "folder-interactions":
         required_states["second folder page"] = any(
             frame.get("folder_page", 0) >= 1 for frame in frames
