@@ -5,7 +5,7 @@ use std::{
 };
 
 const LAUNCHPAD_UNIFORMS_SIZE: u64 = 48;
-const GLASS_UNIFORMS_SIZE: u64 = 112;
+const GLASS_UNIFORMS_SIZE: u64 = 128;
 const BLUR_UNIFORMS_SIZE: u64 = 16;
 const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;

@@ -26,6 +26,7 @@ struct GlassUniforms {
     pad2: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
+    glass_darkness: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -92,6 +93,11 @@ fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
     return mix(vec3<f32>(luma), rgb, saturation);
 }
 
+fn apply_glass_darkness(rgb: vec3<f32>) -> vec3<f32> {
+    let strength = clamp(u.glass_darkness, 0.0, 1.0);
+    return mix(rgb, vec3<f32>(0.0), strength);
+}
+
 fn sample_geometry_height(pixel: vec2<f32>) -> f32 {
     let p = vec2<i32>(clamp(pixel, vec2<f32>(0.0), u.viewport - vec2<f32>(1.0)));
     return textureLoad(geometry_texture, p, 0).b;
@@ -151,6 +157,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         interior_rgb = glass_tint.rgb * glass_tint.a
             + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
+        interior_rgb = apply_glass_darkness(interior_rgb);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
         // At replacement=1 the lane's filtered backdrop becomes the actual
@@ -204,6 +211,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // touch further only when active (never *reduces* it below standard).
     let effective_saturation = u.saturation + 0.12 * u.activation;
     final_rgb = apply_saturation(final_rgb, effective_saturation);
+    final_rgb = apply_glass_darkness(final_rgb);
 
     if !has_flag(6u) {
         let thickness_scale = clamp(40.0 / max(u.thickness, 1.0), 1.0, 4.0);

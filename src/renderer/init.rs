@@ -860,6 +860,18 @@ impl Renderer {
         self.liquid_glass.set_saturation(value);
     }
 
+    pub fn set_liquid_glass_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_glass_darkness(value);
+    }
+
+    pub fn set_liquid_glass_context_menu_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_context_menu_glass_darkness(value);
+    }
+
+    pub fn set_liquid_glass_settings_panel_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_settings_panel_glass_darkness(value);
+    }
+
     pub fn set_liquid_glass_chromatic_aberration(&mut self, value: f32) {
         self.liquid_glass.set_chromatic_aberration(value);
     }
@@ -872,12 +884,16 @@ impl Renderer {
         self.liquid_glass.reset_params_to_defaults();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_liquid_glass(
         &mut self,
         enabled: bool,
         thickness: f32,
         refractive_index: f32,
         saturation: f32,
+        glass_darkness: f32,
+        context_menu_glass_darkness: f32,
+        settings_panel_glass_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
     ) {
@@ -886,6 +902,9 @@ impl Renderer {
             thickness,
             refractive_index,
             saturation,
+            glass_darkness,
+            context_menu_glass_darkness,
+            settings_panel_glass_darkness,
             chromatic_aberration,
             blur_radius,
         );
