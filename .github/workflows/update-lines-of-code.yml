@@ -149,14 +149,90 @@ jobs:
           readme_path.write_text(updated)
           PY
 
-      - name: Commit updated statistics
-        run: |
-          if git diff --quiet -- README.md assets/lines-of-code.svg docs/CODE_STATS.md; then
-            exit 0
-          fi
+      - name: Create signed commit and update branch
+        uses: actions/github-script@v8
+        env:
+          COMMIT_MESSAGE: "chore: update Rust code statistics [skip ci]"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md assets/lines-of-code.svg docs/CODE_STATS.md
-          git commit -m "chore: update Rust code statistics [skip ci]"
-          git push
+            const paths = [
+              "README.md",
+              "assets/lines-of-code.svg",
+              "docs/CODE_STATS.md",
+            ];
+            const changedPaths = execFileSync(
+              "git",
+              ["diff", "--name-only", "--", ...paths],
+              { encoding: "utf8" },
+            )
+              .trim()
+              .split("\n")
+              .filter(Boolean);
+
+            if (changedPaths.length === 0) {
+              core.info("No code statistics changes to commit.");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const branch = context.ref.replace("refs/heads/", "");
+            const ref = await github.rest.git.getRef({
+              owner,
+              repo,
+              ref: `heads/${branch}`,
+            });
+            const parentSha = ref.data.object.sha;
+            const parentCommit = await github.rest.git.getCommit({
+              owner,
+              repo,
+              commit_sha: parentSha,
+            });
+
+            const tree = [];
+            for (const path of changedPaths) {
+              const blob = await github.rest.git.createBlob({
+                owner,
+                repo,
+                content: fs.readFileSync(path).toString("base64"),
+                encoding: "base64",
+              });
+              tree.push({
+                path,
+                mode: "100644",
+                type: "blob",
+                sha: blob.data.sha,
+              });
+            }
+
+            const newTree = await github.rest.git.createTree({
+              owner,
+              repo,
+              base_tree: parentCommit.data.commit.tree.sha,
+              tree,
+            });
+            const newCommit = await github.rest.git.createCommit({
+              owner,
+              repo,
+              message: process.env.COMMIT_MESSAGE,
+              tree: newTree.data.sha,
+              parents: [parentSha],
+            });
+
+            if (newCommit.data.verification?.verified !== true) {
+              throw new Error(
+                `GitHub did not verify the bot signature: ${newCommit.data.verification?.reason ?? "unknown reason"}`,
+              );
+            }
+
+            await github.rest.git.updateRef({
+              owner,
+              repo,
+              ref: `heads/${branch}`,
+              sha: newCommit.data.sha,
+              force: false,
+            });
+            core.info(`Created verified commit ${newCommit.data.sha}.`);
