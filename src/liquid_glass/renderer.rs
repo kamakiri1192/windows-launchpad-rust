@@ -13,6 +13,7 @@ use super::params::{DebugOptions, LiquidGlassParams};
 use crate::layout::grid::GridLayout;
 
 pub(super) const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub(super) const TINT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub(super) const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub(super) const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -197,6 +198,8 @@ pub struct LiquidGlassRenderer {
     control_shapes: Vec<GlassShape>,
     control_geometry_texture: wgpu::Texture,
     control_geometry_view: wgpu::TextureView,
+    control_tint_texture: wgpu::Texture,
+    control_tint_view: wgpu::TextureView,
     last_control_geometry_key: u64,
     control_geometry_rendered_key: u64,
     settings_panel_shapes: Vec<GlassShape>,
@@ -219,8 +222,12 @@ pub struct LiquidGlassRenderer {
     base_shape_scratch: Vec<GlassShape>,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
+    geometry_tint_texture: wgpu::Texture,
+    geometry_tint_view: wgpu::TextureView,
     overlay_geometry_texture: wgpu::Texture,
     overlay_geometry_view: wgpu::TextureView,
+    overlay_tint_texture: wgpu::Texture,
+    overlay_tint_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
     backdrop_mapping: BackdropMapping,
@@ -297,7 +304,7 @@ fn base_shape_may_affect_frame(
     frame: GlassShape,
     smooth_union_radius: f32,
 ) -> bool {
-    if !shape.is_scrolling() {
+    if !shape.is_scrolling() || shape.has_tint_override() {
         return true;
     }
     let bounds = shape.screen_bounds(scroll_x);
@@ -513,10 +520,16 @@ impl LiquidGlassRenderer {
         let badge_shape_count = 0;
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
+        let (geometry_tint_texture, geometry_tint_view) =
+            create_tint_texture(device, width, height, "liquid glass geometry tint texture");
         let (overlay_geometry_texture, overlay_geometry_view) =
             create_overlay_geometry_texture(device, width, height);
+        let (overlay_tint_texture, overlay_tint_view) =
+            create_tint_texture(device, width, height, "liquid glass overlay tint texture");
         let (control_geometry_texture, control_geometry_view) =
             create_geometry_texture(device, width, height);
+        let (control_tint_texture, control_tint_view) =
+            create_tint_texture(device, width, height, "liquid glass control tint texture");
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         // Final blur output is full-res: the final shader samples it without
         // any resolution-mismatch stretch.
@@ -568,6 +581,7 @@ impl LiquidGlassRenderer {
                     sampler_entry(2),
                     texture_entry(3, false),
                     texture_entry(4, true),
+                    texture_entry(5, true),
                 ],
             });
 
@@ -632,6 +646,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &geometry_view,
+            &geometry_tint_view,
             &blur_view,
         );
         let grid_overlay_final_bind_group = create_final_bind_group(
@@ -641,6 +656,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
+            &overlay_tint_view,
             &blur_view,
         );
         let drag_overlay_final_bind_group = create_final_bind_group(
@@ -650,6 +666,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
+            &overlay_tint_view,
             &blur_view,
         );
         let badge_final_bind_group = create_final_bind_group(
@@ -659,6 +676,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
+            &overlay_tint_view,
             &blur_view,
         );
         let modal_badge_final_bind_group = create_final_bind_group(
@@ -668,6 +686,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
+            &overlay_tint_view,
             &blur_view,
         );
         let control_final_bind_group = create_final_bind_group(
@@ -677,6 +696,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &control_geometry_view,
+            &control_tint_view,
             &blur_view,
         );
         let settings_panel_final_bind_group = create_final_bind_group(
@@ -686,6 +706,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
+            &overlay_tint_view,
             &blur_view,
         );
         let context_menu_final_bind_group = create_final_bind_group(
@@ -695,6 +716,7 @@ impl LiquidGlassRenderer {
             &backdrop_view,
             &sampler,
             &overlay_geometry_view,
+            &overlay_tint_view,
             &blur_view,
         );
         let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
@@ -751,11 +773,18 @@ impl LiquidGlassRenderer {
                 module: &geometry_shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: GEOMETRY_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: GEOMETRY_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: TINT_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
             }),
             primitive: fullscreen_primitive_state(),
             depth_stencil: None,
@@ -772,11 +801,18 @@ impl LiquidGlassRenderer {
                     module: &badge_geometry_shader,
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: GEOMETRY_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &[
+                        Some(wgpu::ColorTargetState {
+                            format: GEOMETRY_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                        Some(wgpu::ColorTargetState {
+                            format: TINT_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                    ],
                 }),
                 primitive: fullscreen_primitive_state(),
                 depth_stencil: None,
@@ -900,6 +936,8 @@ impl LiquidGlassRenderer {
             control_shapes: Vec::new(),
             control_geometry_texture,
             control_geometry_view,
+            control_tint_texture,
+            control_tint_view,
             last_control_geometry_key: 0,
             control_geometry_rendered_key: 0,
             settings_panel_shapes: Vec::new(),
@@ -917,8 +955,12 @@ impl LiquidGlassRenderer {
             base_shape_scratch,
             geometry_texture,
             geometry_view,
+            geometry_tint_texture,
+            geometry_tint_view,
             overlay_geometry_texture,
             overlay_geometry_view,
+            overlay_tint_texture,
+            overlay_tint_view,
             backdrop_texture,
             backdrop_view,
             backdrop_mapping,
@@ -969,10 +1011,16 @@ impl LiquidGlassRenderer {
         }
 
         let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);
+        let (geometry_tint_texture, geometry_tint_view) =
+            create_tint_texture(device, width, height, "liquid glass geometry tint texture");
         let (overlay_geometry_texture, overlay_geometry_view) =
             create_overlay_geometry_texture(device, width, height);
+        let (overlay_tint_texture, overlay_tint_view) =
+            create_tint_texture(device, width, height, "liquid glass overlay tint texture");
         let (control_geometry_texture, control_geometry_view) =
             create_geometry_texture(device, width, height);
+        let (control_tint_texture, control_tint_view) =
+            create_tint_texture(device, width, height, "liquid glass control tint texture");
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
@@ -985,10 +1033,16 @@ impl LiquidGlassRenderer {
 
         self.geometry_texture = geometry_texture;
         self.geometry_view = geometry_view;
+        self.geometry_tint_texture = geometry_tint_texture;
+        self.geometry_tint_view = geometry_tint_view;
         self.overlay_geometry_texture = overlay_geometry_texture;
         self.overlay_geometry_view = overlay_geometry_view;
+        self.overlay_tint_texture = overlay_tint_texture;
+        self.overlay_tint_view = overlay_tint_view;
         self.control_geometry_texture = control_geometry_texture;
         self.control_geometry_view = control_geometry_view;
+        self.control_tint_texture = control_tint_texture;
+        self.control_tint_view = control_tint_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
         self.backdrop_mapping = BackdropMapping::full(width, height);
@@ -1045,6 +1099,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.geometry_view,
+            &self.geometry_tint_view,
             &self.blur_view,
         );
         self.grid_overlay_final_bind_group = create_final_bind_group(
@@ -1054,6 +1109,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
         self.drag_overlay_final_bind_group = create_final_bind_group(
@@ -1063,6 +1119,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
         self.badge_final_bind_group = create_final_bind_group(
@@ -1072,6 +1129,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
         self.modal_badge_final_bind_group = create_final_bind_group(
@@ -1081,6 +1139,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
         self.control_final_bind_group = create_final_bind_group(
@@ -1090,6 +1149,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.control_geometry_view,
+            &self.control_tint_view,
             &self.blur_view,
         );
         self.settings_panel_final_bind_group = create_final_bind_group(
@@ -1099,6 +1159,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
         self.context_menu_final_bind_group = create_final_bind_group(
@@ -1108,6 +1169,7 @@ impl LiquidGlassRenderer {
             backdrop_view,
             &self.sampler,
             &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
     }
@@ -2059,11 +2121,18 @@ mod shape_capacity_tests {
         let just_outside = GlassShape::rounded_rect([850.0, 350.0], [100.0, 100.0], 30.0);
         let far_page = GlassShape::rounded_rect([1_200.0, 350.0], [100.0, 100.0], 30.0);
         let swallowed = GlassShape::rounded_rect([500.0, 350.0], [100.0, 100.0], 30.0);
+        let tinted_swallowed = swallowed.with_tint(Some([1.0, 0.5, 0.25, 0.75]));
         let fixed_control = GlassShape::control_rounded_rect([1_200.0, 700.0], [100.0, 40.0], 20.0);
 
         assert!(base_shape_may_affect_frame(just_outside, 0.0, frame, 26.0));
         assert!(!base_shape_may_affect_frame(far_page, 0.0, frame, 26.0));
         assert!(!base_shape_may_affect_frame(swallowed, 0.0, frame, 26.0));
+        assert!(base_shape_may_affect_frame(
+            tinted_swallowed,
+            0.0,
+            frame,
+            26.0
+        ));
         assert!(base_shape_may_affect_frame(fixed_control, 0.0, frame, 26.0));
     }
 

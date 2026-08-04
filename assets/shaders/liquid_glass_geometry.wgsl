@@ -45,6 +45,8 @@ struct GlassShape {
     _pad2_c: u32,
     // offset 64
     motion: vec4<f32>,
+    // offset 80; alpha < 0 uses the global glass tint
+    tint: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -143,8 +145,39 @@ fn resolved_local(shape: GlassShape, pixel: vec2<f32>) -> vec2<f32> {
     return local;
 }
 
-fn scene_sdf(pixel: vec2<f32>) -> f32 {
-    var d = 1.0e6;
+struct SceneSample {
+    distance: f32,
+    tint: vec4<f32>,
+};
+
+fn resolved_tint(shape: GlassShape) -> vec4<f32> {
+    if shape.tint.a < 0.0 {
+        return u.glass_color;
+    }
+    return clamp(shape.tint, vec4<f32>(0.0), vec4<f32>(1.0));
+}
+
+fn smooth_union_sample(a: SceneSample, b: SceneSample, k: f32) -> SceneSample {
+    if k <= 0.0 {
+        if a.distance <= b.distance {
+            return a;
+        }
+        return b;
+    }
+    let h = clamp(0.5 + 0.5 * (b.distance - a.distance) / k, 0.0, 1.0);
+    var result: SceneSample;
+    result.distance = mix(b.distance, a.distance, h) - k * h * (1.0 - h);
+    result.tint = mix(b.tint, a.tint, h);
+    return result;
+}
+
+fn scene_sample(pixel: vec2<f32>) -> SceneSample {
+    var result: SceneSample;
+    result.distance = 1.0e6;
+    result.tint = u.glass_color;
+    var inside_tint = u.glass_color;
+    var inside_distance = -1.0e6;
+    var inside_found = false;
     let count = min(u.shape_count, arrayLength(&shapes));
     for (var i = 0u; i < count; i = i + 1u) {
         let shape = shapes[i];
@@ -152,22 +185,35 @@ fn scene_sdf(pixel: vec2<f32>) -> f32 {
             continue;
         }
         // Per-shape clip: if clip_rect has positive width, only contribute
-        // SDF inside that rounded rectangle. Outside pixels see the shape's
-        // distance as "far away" (the loop skips it), so smooth_union ignores
-        // it — the glass alpha becomes 0 where the shape is clipped away.
+        // inside that rounded rectangle.
         if (shape.clip_rect.z > 0.0) {
             if (!point_in_rounded_rect(pixel, shape.clip_rect, shape.clip_radius)) {
                 continue;
             }
         }
-        // shape_type != 0 marks fixed shapes (the page frame = 1, the bottom
-        // control = 2) that ignore scroll; only type 0 (tile halos) scrolls.
         let local = resolved_local(shape, pixel);
         let half_size = shape.size * 0.5;
         let shape_d = sdf_rrect(local, half_size, shape.radius);
-        d = smooth_union(d, shape_d, u.blend);
+        let shape_tint = resolved_tint(shape);
+        var shape_sample: SceneSample;
+        shape_sample.distance = shape_d;
+        shape_sample.tint = shape_tint;
+        result = smooth_union_sample(result, shape_sample, u.blend);
+
+        // A nested surface can be geometrically swallowed by a larger smooth
+        // union (for example a tinted child inside a panel). Prefer the
+        // containing shape whose boundary is nearest to this pixel, while the
+        // smooth-union tint remains the fallback in the bridge between shapes.
+        if shape_d <= 0.0 && (!inside_found || shape_d >= inside_distance) {
+            inside_tint = shape_tint;
+            inside_distance = shape_d;
+            inside_found = true;
+        }
     }
-    return d;
+    if inside_found {
+        result.tint = inside_tint;
+    }
+    return result;
 }
 
 // Signed distance to the fixed page frame (the shape_type == 1 shape). Tiles'
@@ -221,10 +267,23 @@ fn encode_displacement(v: vec2<f32>) -> vec2<f32> {
     return clamp(v / max_d * 0.5 + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
 }
 
+struct FsOut {
+    @location(0) geometry: vec4<f32>,
+    @location(1) tint: vec4<f32>,
+};
+
+fn empty_output() -> FsOut {
+    var out: FsOut;
+    out.geometry = vec4<f32>(0.0);
+    out.tint = vec4<f32>(0.0);
+    return out;
+}
+
 @fragment
-fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
+fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> FsOut {
     let pixel = frag_coord.xy;
-    let sd = scene_sdf(pixel);
+    let scene = scene_sample(pixel);
+    let sd = scene.distance;
     let alpha = 1.0 - smoothstep(-2.0, 0.0, sd);
 
     // Clip the scrolling glass (frame + halos) to the fixed page frame so
@@ -238,7 +297,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let clipped_alpha = max(frame_clipped, control_alpha);
 
     if clipped_alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
-        return vec4<f32>(0.0);
+        return empty_output();
     }
 
     let dx = dpdx(sd);
@@ -259,5 +318,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let normalized_height = clamp(height / max(u.thickness, 1.0), 0.0, 1.0);
 
     let encoded = encode_displacement(displacement);
-    return vec4<f32>(encoded, normalized_height, clipped_alpha);
+    var out: FsOut;
+    out.geometry = vec4<f32>(encoded, normalized_height, clipped_alpha);
+    out.tint = scene.tint;
+    return out;
 }

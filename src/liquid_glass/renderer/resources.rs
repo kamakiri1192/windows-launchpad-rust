@@ -4,7 +4,9 @@ use std::num::NonZeroU64;
 
 use wgpu::util::DeviceExt;
 
-use super::{GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT};
+use super::{
+    GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT, TINT_FORMAT,
+};
 
 pub(super) fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Buffer {
     let fallback;
@@ -76,6 +78,22 @@ pub(super) fn create_overlay_geometry_texture(
         width,
         height,
         GEOMETRY_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+pub(super) fn create_tint_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    label: &'static str,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    create_texture(
+        device,
+        label,
+        width,
+        height,
+        TINT_FORMAT,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
     )
 }
@@ -252,6 +270,7 @@ pub(super) fn create_geometry_bind_group(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn create_final_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -259,6 +278,7 @@ pub(super) fn create_final_bind_group(
     backdrop_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     geometry_view: &wgpu::TextureView,
+    tint_view: &wgpu::TextureView,
     blur_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -284,6 +304,10 @@ pub(super) fn create_final_bind_group(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: wgpu::BindingResource::TextureView(blur_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(tint_view),
             },
         ],
     })
