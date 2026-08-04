@@ -183,14 +183,7 @@ impl App {
         // right-click menu, and hide relayouts the grid beneath the panel.
         self.close_context_menu();
         match selection {
-            ContextMenuSelection::EditHome => {
-                // Edit mode applies to the home grid. Close a viewing folder
-                // first so the folder overlay cannot sit above the ✕ badges.
-                if self.folders.is_active() {
-                    self.close_folder();
-                }
-                self.enter_edit_mode(None);
-            }
+            ContextMenuSelection::EditHome => self.enter_edit_mode(None),
             ContextMenuSelection::HideApp(id) => self.hide_app(&id),
             // Mock actions (and folder targets of HideApp): just close.
             ContextMenuSelection::CloseOnly => {}
