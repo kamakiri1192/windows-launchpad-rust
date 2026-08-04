@@ -150,7 +150,22 @@ impl App {
         // Modal glass lane with the folder/settings panels, so only one is
         // ever active.
         let context_menu_was_active = self.context_menu.is_active();
+        let context_menu_phase_before = self.context_menu.phase;
         let context_menu_animating = self.context_menu.tick(context_menu_anim_dt);
+        if self.context_menu.phase != context_menu_phase_before {
+            crate::debug_log!(
+                "context-menu: frame phase={:?}->{:?} dt={:.4} animating={} rect=({:.1},{:.1},{:.1},{:.1}) opacity={:.3}",
+                context_menu_phase_before,
+                self.context_menu.phase,
+                context_menu_anim_dt,
+                context_menu_animating,
+                self.context_menu.pos_x(),
+                self.context_menu.pos_y(),
+                self.context_menu.width(),
+                self.context_menu.height(),
+                self.context_menu.content_opacity(),
+            );
+        }
         if context_menu_was_active && !self.context_menu.is_active() {
             // Animation finished closing: clear the Modal-lane content.
             self.clear_context_menu_presentation();

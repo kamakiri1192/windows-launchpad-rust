@@ -245,7 +245,7 @@ jobs:
           set -euo pipefail
           rm -rf target/qa-sequences target/qa-home target/qa-artifacts
           mkdir -p target/qa-sequences target/qa-home target/qa-artifacts
-          for scenario in folder_interactions folder_creation context_menu_open context_menu_dismiss; do
+          for scenario in folder_interactions folder_creation context_menu_open context_menu_dismiss context_menu_trackpad_secondary_click; do
             HOME="${{ github.workspace }}/target/qa-home/$scenario" \
             LAUNCHPAD_QA_SCENARIO="${{ github.workspace }}/qa/$scenario.json" \
               "target/$TARGET/release/$BIN_NAME" \

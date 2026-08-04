@@ -11,6 +11,7 @@
     "expected_closing_count": 5,
     "expected_closed_count": 5,
     "min_closing_frames": 3,
+    "max_closing_frames": 8,
     "require_final_closed": true
   },
   "fixture": {
@@ -49,6 +50,8 @@
     { "at_ms": 10200, "type": "right_click" },
     { "at_ms": 10400, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
     { "at_ms": 10500, "type": "escape" },
+    { "at_ms": 10600, "type": "escape" },
+    { "at_ms": 10650, "type": "escape" },
 
     { "at_ms": 14000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
     { "at_ms": 14200, "type": "right_click" },

@@ -258,9 +258,14 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
                 let key_action = if self.context_menu.is_active() {
-                    // ESC dismisses the context menu; any other key is swallowed
-                    // while the menu is open.
-                    if key_code == Some(winit::keyboard::KeyCode::Escape) {
+                    // ESC dismisses the context menu while it owns input. Once
+                    // closing has started, swallow every key until the short
+                    // visual transition finishes. In particular, an OS key
+                    // repeat from the same Escape press must not hide the
+                    // launcher itself.
+                    if self.context_menu.accepts_pointer_input()
+                        && key_code == Some(winit::keyboard::KeyCode::Escape)
+                    {
                         KeyAction::CloseContextMenu
                     } else {
                         KeyAction::None

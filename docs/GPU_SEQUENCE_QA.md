@@ -111,13 +111,17 @@ GPU frameとmanifestで検証します。
 
 `qa/context_menu_open.json`は、fixtureのアプリへproduction input router経由で右クリックし、
 コンテキストメニューが初期エフェクトの`Opening`だけで止まらず、`Open`へ到達して一定時間
-維持されることを確認します。`qa/context_menu_dismiss.json`は、次のdismiss経路を1本の連番で
-確認します。
+維持されることを確認します。
+`qa/context_menu_trackpad_secondary_click.json`は、macOSのトラックパッド副クリックに付随する
+delta 0の`Began`/`Cancelled` scroll lifecycleを右クリック直後に注入し、それらがメニューを
+閉じず`Open`まで到達することを確認します。`qa/context_menu_dismiss.json`は、次のdismiss経路を
+1本の連番で確認します。
 
 - `Opening`中の外側クリック
 - `Open`後の外側クリック
 - `Open`後のメニュー行クリック
 - `Opening`中のEscape
+- `Closing`中に連続するEscape（closeタイマーを再始動しない）
 - `Open`後に別アプリをクリックしても、別アプリを起動せずメニューだけ閉じる
 - 各ケースの再オープンと`Closing`→`Closed`完了
 

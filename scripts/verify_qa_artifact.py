@@ -39,6 +39,7 @@ def verify(root: Path, require_default_scenarios: bool = True) -> None:
             "folder-creation",
             "context-menu-open",
             "context-menu-dismiss",
+            "context-menu-trackpad-secondary-click",
         }
         missing = expected - scenarios
         if missing:
@@ -76,7 +77,11 @@ def verify_manifest(manifest_path: Path) -> str:
     required_states: dict[str, bool] = {}
     if scenario in {"folder-interactions", "folder-creation"}:
         required_states["folder open"] = any(frame.get("folder_open") for frame in frames)
-    elif scenario in {"context-menu-open", "context-menu-dismiss"}:
+    elif scenario in {
+        "context-menu-open",
+        "context-menu-dismiss",
+        "context-menu-trackpad-secondary-click",
+    }:
         assertions = manifest.get("context_menu_assertions")
         required_states["context menu assertions passed"] = bool(
             isinstance(assertions, dict) and assertions.get("passed") is True
@@ -84,11 +89,14 @@ def verify_manifest(manifest_path: Path) -> str:
         required_states["context menu opening"] = any(
             frame.get("context_menu_phase") == "Opening" for frame in frames
         )
-        if scenario == "context-menu-open":
+        if scenario in {
+            "context-menu-open",
+            "context-menu-trackpad-secondary-click",
+        }:
             required_states["context menu open"] = any(
                 frame.get("context_menu_phase") == "Open" for frame in frames
             )
-        else:
+        if scenario != "context-menu-open":
             required_states["context menu closing"] = any(
                 frame.get("context_menu_phase") == "Closing" for frame in frames
             )

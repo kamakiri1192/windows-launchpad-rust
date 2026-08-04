@@ -100,6 +100,11 @@ pub struct QaContextMenuExpectations {
     pub expected_closed_count: u32,
     #[serde(default = "default_min_context_menu_closing_frames")]
     pub min_closing_frames: u32,
+    /// Maximum frames allowed for any single Closing streak. This catches a
+    /// visually absent menu whose lifecycle is kept alive by a slow spring or
+    /// by repeated dismiss events restarting its elapsed timers.
+    #[serde(default)]
+    pub max_closing_frames: Option<u32>,
     #[serde(default)]
     pub require_final_closed: bool,
 }
@@ -644,6 +649,11 @@ fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), Strin
             "context_menu_expectations min_closing_frames must be greater than zero".to_owned(),
         );
     }
+    if expected.max_closing_frames == Some(0) {
+        return Err(
+            "context_menu_expectations max_closing_frames must be greater than zero".to_owned(),
+        );
+    }
     if expected.require_final_closed && expected.expected_closed_count == 0 {
         return Err(
             "context_menu_expectations require_final_closed needs expected_closed_count".to_owned(),
@@ -823,6 +833,7 @@ struct QaContextMenuAssertions {
     open_frame_count: u32,
     closing_count: u32,
     closing_frame_count: u32,
+    max_closing_streak_frames: u32,
     closed_entry_count: u32,
     final_phase: String,
 }
@@ -1350,6 +1361,7 @@ fn evaluate_context_menu_phases<'a>(
 ) -> QaContextMenuAssertions {
     let mut result = QaContextMenuAssertions::default();
     let mut previous_phase = "Closed";
+    let mut closing_streak_frames = 0_u32;
     for phase in phases {
         if phase == "Opening" && previous_phase != "Opening" {
             result.opening_count += 1;
@@ -1362,9 +1374,14 @@ fn evaluate_context_menu_phases<'a>(
         }
         if phase == "Closing" {
             result.closing_frame_count += 1;
+            closing_streak_frames += 1;
+            result.max_closing_streak_frames =
+                result.max_closing_streak_frames.max(closing_streak_frames);
             if previous_phase != "Closing" {
                 result.closing_count += 1;
             }
+        } else {
+            closing_streak_frames = 0;
         }
         if phase == "Closed" && previous_phase != "Closed" {
             result.closed_entry_count += 1;
@@ -1385,6 +1402,9 @@ fn evaluate_context_menu_phases<'a>(
             >= expected
                 .expected_closing_count
                 .saturating_mul(expected.min_closing_frames)
+        && expected
+            .max_closing_frames
+            .is_none_or(|max_frames| result.max_closing_streak_frames <= max_frames)
         && (!expected.require_final_closed || result.final_phase == "Closed");
     result
 }
@@ -2271,6 +2291,7 @@ mod tests {
             expected_closing_count: 0,
             expected_closed_count: 0,
             min_closing_frames: 3,
+            max_closing_frames: None,
             require_final_closed: false,
         };
         let result = evaluate_context_menu_phases(
@@ -2292,6 +2313,7 @@ mod tests {
             expected_closing_count: 0,
             expected_closed_count: 0,
             min_closing_frames: 3,
+            max_closing_frames: None,
             require_final_closed: false,
         };
         let result = evaluate_context_menu_phases(
@@ -2312,6 +2334,7 @@ mod tests {
             expected_closing_count: 4,
             expected_closed_count: 4,
             min_closing_frames: 1,
+            max_closing_frames: None,
             require_final_closed: true,
         };
         let result = evaluate_context_menu_phases(
@@ -2328,6 +2351,30 @@ mod tests {
         assert_eq!(result.closing_count, 4);
         assert_eq!(result.closed_entry_count, 4);
         assert_eq!(result.final_phase, "Closed");
+    }
+
+    #[test]
+    fn context_menu_contract_rejects_an_invisible_closing_tail() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 1,
+            min_open_frames: 3,
+            expected_opening_count: Some(1),
+            expected_closing_count: 1,
+            expected_closed_count: 1,
+            min_closing_frames: 1,
+            max_closing_frames: Some(2),
+            require_final_closed: true,
+        };
+        let result = evaluate_context_menu_phases(
+            [
+                "Closed", "Opening", "Open", "Open", "Open", "Closing", "Closing", "Closing",
+                "Closed",
+            ],
+            &expected,
+        );
+
+        assert!(!result.passed);
+        assert_eq!(result.max_closing_streak_frames, 3);
     }
 
     #[test]
@@ -2365,6 +2412,27 @@ mod tests {
                 .filter(|action| matches!(action.action, QaAction::RightClick))
                 .count(),
             5
+        );
+    }
+
+    #[test]
+    fn trackpad_secondary_click_scenario_ignores_zero_delta_scroll_lifecycle() {
+        let scenario: QaScenario = serde_json::from_str(include_str!(
+            "../qa/context_menu_trackpad_secondary_click.json"
+        ))
+        .unwrap();
+        validate_scroll_expectations(&scenario).unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        let expected = scenario.context_menu_expectations.unwrap();
+        assert_eq!(expected.expected_open_count, 1);
+        assert_eq!(expected.expected_closed_count, 1);
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::ScrollSample { .. }))
+                .count(),
+            2
         );
     }
 

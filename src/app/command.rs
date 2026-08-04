@@ -109,7 +109,12 @@ impl App {
             debug_log!("hide: already hidden, no-op");
             return;
         }
-        debug_log!("hide: hiding window");
+        debug_log!(
+            "hide: hiding window context_menu_phase={:?} active={} router={:?}",
+            self.context_menu.phase,
+            self.context_menu.is_active(),
+            self.input_router.state(),
+        );
         self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::HideWindow);
         if let Some(r) = self.renderer.as_mut() {
             r.set_backdrop_capture_active(false);

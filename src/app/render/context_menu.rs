@@ -28,6 +28,12 @@ impl App {
     /// uses its own `ContextMenu` glass lane, isolated from the folder/settings
     /// `Modal` lane.
     pub(crate) fn open_context_menu(&mut self, target: LauncherItem, icon_rect: Rect) {
+        let target_key = target.stable_key();
+        crate::debug_log!(
+            "context-menu: open requested target={target_key} previous_phase={:?} active={}",
+            self.context_menu.phase,
+            self.context_menu.is_active(),
+        );
         if self.control.wants_keyboard() {
             self.control.press_close();
         }
@@ -35,7 +41,7 @@ impl App {
 
         // Compute the stable key once here; the per-frame layout reads it back
         // from `context_menu_target_key` instead of re-running `format!`.
-        self.context_menu_target_key = Some(target.stable_key());
+        self.context_menu_target_key = Some(target_key.clone());
 
         let scale = self.scale_factor.max(0.01);
         // Measure the longest label once at open time so the open-animation
@@ -54,6 +60,15 @@ impl App {
             height: size_phys.1,
         };
         self.context_menu.open(target, seed.0, seed.1, menu_target);
+        crate::debug_log!(
+            "context-menu: phase=Opening target={target_key} seed=({:.1},{:.1}) panel=({:.1},{:.1},{:.1},{:.1})",
+            seed.0,
+            seed.1,
+            menu_target.x,
+            menu_target.y,
+            menu_target.width,
+            menu_target.height,
+        );
         self.request_redraw();
     }
 
@@ -63,6 +78,11 @@ impl App {
         if !self.context_menu.is_active() {
             return;
         }
+        crate::debug_log!(
+            "context-menu: close requested phase={:?} target={:?}",
+            self.context_menu.phase,
+            self.context_menu_target_key,
+        );
         self.context_menu.close();
         self.request_redraw();
     }
@@ -214,7 +234,7 @@ impl App {
         let mut glyphs: Vec<GlyphQuad> = Vec::with_capacity(labels.len() * 8);
         let opacity = self.context_menu.content_opacity();
         let content_scale = self.context_menu.content_scale().max(0.0);
-        if opacity > 0.02 {
+        if opacity > crate::features::context_menu::CONTENT_VISIBILITY_THRESHOLD {
             let color = [0.95, 0.96, 0.98, opacity.clamp(0.0, 1.0)];
             if let Some(text) = self.text.as_mut() {
                 // cosmic-text includes the exact f32 font size in its cache
@@ -251,7 +271,7 @@ impl App {
         // collapsed seed (40×40, radius 130 = full disc) lingers until the slow
         // close position spring settles. We still keep the layout so hit/dismiss
         // logic stays valid during the close tail.
-        if opacity > 0.02 {
+        if opacity > crate::features::context_menu::CONTENT_VISIBILITY_THRESHOLD {
             self.render_model
                 .set_glass_batch(GlassLayer::ContextMenu, modal);
             self.render_model.set_ink_batch(InkLane::ContextMenu, ink);

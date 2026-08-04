@@ -29,8 +29,8 @@ use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateDIBSection, DeleteObject, ScreenToClient, BITMAPINFO, BITMAPINFOHEADER,
-    DIB_RGB_COLORS, HBITMAP,
+    CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+    HBITMAP,
 };
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -55,27 +55,6 @@ use crate::{app_icon, UserEvent};
 
 #[path = "windows/input_passthrough.rs"]
 pub mod input_passthrough;
-
-/// Read the current cursor position in the launcher's physical client space.
-///
-/// `winit::event::WindowEvent::MouseInput` contains the button and state, but
-/// no position. Normally the preceding `WM_MOUSEMOVE` keeps the app's cached
-/// cursor position current. That is not guaranteed after a hidden window is
-/// summoned while the pointer is already over it, so button handling must be
-/// able to refresh the position directly from Win32.
-pub fn cursor_position_in_window(hwnd_value: u64) -> Option<crate::input_routing::PhysicalPoint> {
-    if hwnd_value == 0 {
-        return None;
-    }
-    let hwnd = HWND(hwnd_value as *mut c_void);
-    let mut point = POINT::default();
-    unsafe {
-        GetCursorPos(&mut point).ok()?;
-        ScreenToClient(hwnd, &mut point).as_bool().then_some(
-            crate::input_routing::PhysicalPoint::new(point.x as f32, point.y as f32),
-        )
-    }
-}
 
 /// App-private window message used by the shell to deliver tray notifications.
 /// Anything in the `WM_APP`..`WM_APP+0x7FFF` range is safe for this.
