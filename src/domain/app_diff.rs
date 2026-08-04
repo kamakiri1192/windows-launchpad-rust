@@ -38,6 +38,15 @@ pub struct SnapshotEntry {
     /// when the platform could not read one. Not icon-relevant, so it never
     /// invalidates the icon cache.
     pub version: String,
+    /// Publisher / copyright string for the ChatGPT-help prompt (macOS
+    /// `NSHumanReadableCopyright` → `CFBundleGetInfoString` fallback / Windows
+    /// `CompanyName` → `LegalCopyright` fallback), or `""` when unavailable.
+    /// Disambiguates same-named apps (e.g. Cinema 4D's "Commandline").
+    pub publisher: String,
+    /// Stable vendor identifier for the ChatGPT-help prompt (macOS bundle id
+    /// like `net.maxon.commandline` / Windows `ProductName`), or `""` when
+    /// unavailable. Further disambiguates same-named apps.
+    pub identifier: String,
 }
 
 impl SnapshotEntry {
@@ -118,6 +127,8 @@ mod tests {
             icon_location: String::new(),
             icon_index: 0,
             version: String::new(),
+            publisher: String::new(),
+            identifier: String::new(),
         }
     }
 

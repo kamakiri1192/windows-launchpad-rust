@@ -397,48 +397,82 @@ fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
 /// pitfalls → integrations) and pinned to the app's name + version + platform
 /// so the answer is specific rather than generic.
 pub(crate) fn build_chatgpt_prompt(info: &AppLaunchInfo) -> String {
-    let platform = if cfg!(target_os = "macos") {
+    let platform = platform_label();
+    // OS locale as a BCP-47 tag (e.g. "ja-JP", "en-US"). Falls back to "en-US"
+    // when the platform does not report one.
+    let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
+
+    // Optional app-identity lines. Both publisher and identifier are collected
+    // to disambiguate same-named apps (e.g. Cinema 4D ships a "Commandline"
+    // app whose bundle id `net.maxon.commandline` and publisher "MAXON Computer
+    // GmbH" make it unambiguous). Omit any line whose value is empty.
+    let mut identity = String::new();
+    if let Some(line) = optional_field("Publisher", info.publisher.trim()) {
+        identity.push_str(&line);
+    }
+    if let Some(line) = optional_field("Identifier", info.identifier.trim()) {
+        identity.push_str(&line);
+    }
+
+    // Version block is omitted entirely when no version was read, so ChatGPT
+    // is not misled by a "(unknown)" placeholder.
+    let version_block = if info.version.trim().is_empty() {
+        String::new()
+    } else {
+        format!("## APP VERSION\n{}\n", info.version.trim())
+    };
+
+    format!(
+        "How to use \"{name}\"\
+        \n\n\
+## TASK\
+        \nYou are an expert on desktop apps. Explain \"{name}\"{version_phrase} on \
+{platform} for a user who wants to master it. Answer in clear sections:\
+        \n\n1. Overview — what it is for and who it is for.\
+        \n2. What you can do — key features with concrete example workflows.\
+        \n3. Tips & best practices — shortcuts, hidden/gesture features, and power-user tricks.\
+        \n4. Common pitfalls — frequent mistakes and how to avoid or fix them.\
+        \n5. Integration with other apps — how to combine it with other {platform} apps and OS features to speed up work.\
+        \n\n## FORMAT\
+        \nMarkdown headings with concise bullets. Be specific to {name}, not generic.\
+        \n\n## LANGUAGE\
+        \n{locale}\
+        \n\n## PLATFORM\
+        \n{platform}\
+        \n\n## APP NAME\
+        \n{name}\
+        \n\n{identity}{version_block}",
+        name = info.name,
+        version_phrase = if info.version.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" (v{})", info.version.trim())
+        },
+        version_block = version_block,
+        identity = identity,
+        locale = locale,
+        platform = platform,
+    )
+}
+
+/// Map the compile-time target into a human-friendly platform label.
+fn platform_label() -> &'static str {
+    if cfg!(target_os = "macos") {
         "macOS"
     } else if cfg!(windows) {
         "Windows"
     } else {
         "this platform"
-    };
-    let version = if info.version.trim().is_empty() {
-        "(unknown)"
+    }
+}
+
+/// Format a `## KEY\nvalue\n` block, or return `None` when `value` is empty.
+fn optional_field(key: &str, value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
     } else {
-        info.version.trim()
-    };
-    format!(
-        "\
-## TASK
-You are an expert on desktop apps. Explain \"{name}\" (v{version}, {platform}) \
-for a user who wants to master it. Answer in clear sections:
-
-1. 概要 — what it's for and who it's for.
-2. できること — key features with concrete example workflows.
-3. チップス & ベストプラクティス — shortcuts, hidden/gesture features, power-user tricks.
-4. よくある落とし穴 — common mistakes and how to avoid/fix them.
-5. 他のアプリとの連携 — how to combine it with other {platform} apps and OS features to speed up work.
-
-## FORMAT
-Markdown headings + concise bullets. Be specific to {name}, not generic.
-
-## LANGUAGE
-日本語で回答してください。
-
-## PLATFORM
-{platform}
-
-## APP NAME
-{name}
-
-## APP VERSION
-{version}",
-        name = info.name,
-        version = version,
-        platform = platform,
-    )
+        Some(format!("## {key}\n{value}\n"))
+    }
 }
 
 /// Build the full `https://chatgpt.com/?q=<encoded>` URL for the help action.
@@ -460,6 +494,8 @@ mod tests {
             link_path: std::path::PathBuf::from("x.lnk"),
             resolved_target: std::path::PathBuf::from("x.exe"),
             version: "1.0".to_string(),
+            publisher: String::new(),
+            identifier: String::new(),
         }
     }
 
@@ -629,9 +665,9 @@ mod tests {
         assert_eq!(cmds[7], EditModeCommand::RequestRedraw);
     }
 
-    /// The ChatGPT-help prompt interpolates the app name and version and keeps
-    /// the structured section template intact. This pins the template shape so
-    /// a future edit cannot silently drop a section or mis-fill a field.
+    /// The prompt opens with a plain-English "How to use" header (so the
+    /// browser tab / ChatGPT conversation title is meaningful) and keeps the
+    /// structured section template intact.
     #[test]
     fn chatgpt_prompt_embeds_name_version_and_sections() {
         let info = AppLaunchInfo {
@@ -639,8 +675,15 @@ mod tests {
             link_path: std::path::PathBuf::from("/Applications/DaisyDisk.app"),
             resolved_target: std::path::PathBuf::new(),
             version: "4.21".to_string(),
+            publisher: String::new(),
+            identifier: String::new(),
         };
         let prompt = build_chatgpt_prompt(&info);
+        // Opens with the human-readable title.
+        assert!(
+            prompt.starts_with("How to use \"DaisyDisk\""),
+            "prompt should start with the title:\n{prompt}"
+        );
         // Every section heading is present.
         for heading in [
             "## TASK",
@@ -649,37 +692,62 @@ mod tests {
             "## PLATFORM",
             "## APP NAME",
             "## APP VERSION",
-            "1. 概要",
-            "2. できること",
-            "3. チップス",
-            "4. よくある落とし穴",
-            "5. 他のアプリとの連携",
+            "1. Overview",
+            "2. What you can do",
+            "3. Tips",
+            "4. Common pitfalls",
+            "5. Integration with other apps",
         ] {
             assert!(
                 prompt.contains(heading),
                 "prompt missing section heading {heading:?}:\n{prompt}"
             );
         }
-        // App name and version are interpolated (not the placeholder).
+        // App name and version are interpolated.
         assert!(prompt.contains("\"DaisyDisk\""));
-        assert!(prompt.contains("v4.21"));
-        // Japanese answer requested.
-        assert!(prompt.contains("日本語で回答してください"));
+        assert!(prompt.contains("(v4.21)"));
+        assert!(prompt.contains("## APP VERSION\n4.21"));
+        // The prompt is fully English (no Japanese-only headings left).
+        assert!(!prompt.contains("概要"));
+        assert!(!prompt.contains("チップス"));
     }
 
-    /// An unknown version falls back to "(unknown)" in the prompt rather than
-    /// leaving the APP VERSION section blank or emitting a placeholder token.
+    /// An unknown version omits the whole version block and the inline
+    /// "(v...)" phrase, so ChatGPT is not fed a placeholder.
     #[test]
-    fn chatgpt_prompt_falls_back_to_unknown_version() {
+    fn chatgpt_prompt_omits_version_block_when_unknown() {
         let info = AppLaunchInfo {
             name: "MysteryApp".to_string(),
             link_path: std::path::PathBuf::new(),
             resolved_target: std::path::PathBuf::new(),
             version: String::new(),
+            publisher: String::new(),
+            identifier: String::new(),
         };
         let prompt = build_chatgpt_prompt(&info);
-        assert!(prompt.contains("v(unknown)"));
-        assert!(prompt.contains("## APP VERSION\n(unknown)"));
+        assert!(!prompt.contains("## APP VERSION"));
+        assert!(!prompt.contains("(v"));
+        assert!(!prompt.contains("unknown"));
+    }
+
+    /// Publisher and identifier lines appear only when populated, so a
+    /// same-named app (Cinema 4D's "Commandline") is disambiguated for ChatGPT.
+    #[test]
+    fn chatgpt_prompt_includes_publisher_and_identifier_when_present() {
+        let info = AppLaunchInfo {
+            name: "Commandline".to_string(),
+            link_path: std::path::PathBuf::new(),
+            resolved_target: std::path::PathBuf::new(),
+            version: "2025.3".to_string(),
+            publisher: "© 1989-2025 MAXON Computer GmbH".to_string(),
+            identifier: "net.maxon.commandline".to_string(),
+        };
+        let prompt = build_chatgpt_prompt(&info);
+        assert!(prompt.contains("## Publisher"));
+        assert!(prompt.contains("MAXON Computer GmbH"));
+        assert!(prompt.contains("## Identifier"));
+        assert!(prompt.contains("net.maxon.commandline"));
+        assert!(prompt.contains("\"Commandline\""));
     }
 
     /// The help URL percent-encodes the prompt into the `q` query parameter,
@@ -691,6 +759,8 @@ mod tests {
             link_path: std::path::PathBuf::new(),
             resolved_target: std::path::PathBuf::new(),
             version: "4.21".to_string(),
+            publisher: String::new(),
+            identifier: String::new(),
         };
         let url = chatgpt_help_url(&info);
         assert!(url.starts_with("https://chatgpt.com/?q="));

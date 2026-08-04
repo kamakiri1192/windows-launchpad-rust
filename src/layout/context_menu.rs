@@ -22,7 +22,7 @@ const ROW_HEIGHT: f32 = 40.0;
 const ROW_INNER_MARGIN_X: f32 = 10.0;
 const CONTENT_PAD_X: f32 = 30.0;
 const CONTENT_PAD_Y: f32 = 20.0;
-const ICON_SIZE: f32 = 20.0;
+const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 17.0;
 /// Content-driven panel width is clamped to these bounds (logical px at 1× DPI)
 /// so very short or very long localized labels still render comfortably. The

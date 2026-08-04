@@ -829,11 +829,25 @@ fn create_app_icon() -> HICON {
     }
 }
 
-/// Read an `.exe`'s version resource and return its `ProductVersion` (falling
-/// back to `FileVersion`). Returns `""` when the file has no version resource
-/// (e.g. some UWP/Store apps) or the read fails for any reason — the ChatGPT
-/// prompt then falls back to "(unknown)".
-pub fn exe_version(path: &std::path::Path) -> String {
+/// Metadata extracted from an `.exe`'s version resource for the ChatGPT-help
+/// prompt. Every field falls back to `""` when the file has no version resource
+/// (e.g. some UWP/Store apps) or the read fails for any reason.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExeMetadata {
+    /// `ProductVersion`, falling back to `FileVersion`.
+    pub version: String,
+    /// `CompanyName`, falling back to `LegalCopyright`. Disambiguates same-named
+    /// apps in the ChatGPT prompt.
+    pub publisher: String,
+    /// `ProductName`, the registered product name (distinct from the Start Menu
+    /// shortcut's display name). Used as the `identifier` in the prompt.
+    pub product_name: String,
+}
+
+/// Read an `.exe`'s version resource and return its version, publisher, and
+/// product name. Returns an all-empty [`ExeMetadata`] when the file has no
+/// version resource or the read fails for any reason.
+pub fn exe_metadata(path: &std::path::Path) -> ExeMetadata {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{
         GetFileVersionInfoExW, GetFileVersionInfoSizeW, VerQueryValueW, FILE_VER_GET_NEUTRAL_FLAG,
@@ -845,7 +859,7 @@ pub fn exe_version(path: &std::path::Path) -> String {
     // failure (no version resource / missing file).
     let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(path_w.as_ptr()), None) };
     if size == 0 {
-        return String::new();
+        return ExeMetadata::default();
     }
     let mut buffer = vec![0u8; size as usize];
     // SAFETY: GetFileVersionInfoExW fills a caller-owned buffer of `size`
@@ -860,16 +874,16 @@ pub fn exe_version(path: &std::path::Path) -> String {
         )
     };
     if !ok.as_bool() {
-        return String::new();
+        return ExeMetadata::default();
     }
 
     // Ask for the root VS_VERSION_INFO, then walk its Var-Translation table to
     // find a language/codepage that actually exists in the file, and finally
-    // read the localized ProductVersion (falling back to FileVersion).
+    // read the localized fields (each with its own fallback chain).
     let mut root_ptr: *mut c_void = std::ptr::null_mut();
     let mut root_len: u32 = 0;
     // SAFETY: VerQueryValueW returns a pointer *into* the version-info buffer
-    // (no allocation); we keep `buffer` alive across all three calls below.
+    // (no allocation); we keep `buffer` alive across all reads below.
     let have_root = unsafe {
         VerQueryValueW(
             buffer.as_ptr() as *const c_void,
@@ -880,20 +894,58 @@ pub fn exe_version(path: &std::path::Path) -> String {
         .as_bool()
     };
     if !have_root || root_ptr.is_null() {
-        return String::new();
+        return ExeMetadata::default();
     }
     let translations = read_translations(root_ptr, root_len);
-    for lang_cp in translations.iter().chain([0x040904B0u32, 0x040904E4u32]) {
+    let lang_cps: Vec<u32> = translations
+        .iter()
+        .copied()
+        .chain([0x040904B0u32, 0x040904E4u32])
+        .collect();
+
+    let mut version = String::new();
+    for &lang_cp in &lang_cps {
         if let Some(v) = read_string(&buffer, lang_cp, "ProductVersion") {
-            return v;
+            version = v;
+            break;
         }
     }
-    for lang_cp in translations.iter().chain([0x040904B0u32, 0x040904E4u32]) {
-        if let Some(v) = read_string(&buffer, lang_cp, "FileVersion") {
-            return v;
+    if version.is_empty() {
+        for &lang_cp in &lang_cps {
+            if let Some(v) = read_string(&buffer, lang_cp, "FileVersion") {
+                version = v;
+                break;
+            }
         }
     }
-    String::new()
+    let mut publisher = String::new();
+    for &lang_cp in &lang_cps {
+        if let Some(v) = read_string(&buffer, lang_cp, "CompanyName") {
+            publisher = v;
+            break;
+        }
+    }
+    if publisher.is_empty() {
+        for &lang_cp in &lang_cps {
+            if let Some(v) = read_string(&buffer, lang_cp, "LegalCopyright") {
+                publisher = v;
+                break;
+            }
+        }
+    }
+    let mut product_name = String::new();
+    for &lang_cp in &lang_cps {
+        if let Some(v) = read_string(&buffer, lang_cp, "ProductName") {
+            product_name = v;
+            break;
+        }
+    }
+
+    ExeMetadata {
+        version,
+        publisher,
+        product_name,
+    }
 }
 
 /// Read the `VarFileInfo\Translation` array from a VS_VERSION_INFO root block.
@@ -958,11 +1010,18 @@ mod exe_version_tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// A missing file yields an empty version string (no panic).
+    /// A missing file yields an all-empty metadata struct (no panic).
     #[test]
     fn missing_file_returns_empty() {
         let path = PathBuf::from("Z:\\does\\not\\exist.exe");
-        assert_eq!(exe_version(&path), "");
+        assert_eq!(
+            exe_metadata(&path),
+            ExeMetadata {
+                version: String::new(),
+                publisher: String::new(),
+                product_name: String::new(),
+            }
+        );
     }
 
     /// The path formatter packs LANGID + codepage as `XXYY0000` (uppercase hex).

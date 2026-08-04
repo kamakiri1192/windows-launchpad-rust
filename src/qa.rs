@@ -1459,6 +1459,8 @@ impl App {
                 icon_state: IconState::Loaded,
                 uv: Some(uv),
                 version: String::new(),
+                publisher: String::new(),
+                identifier: String::new(),
             });
         }
         let mut launcher = LauncherState::new();
