@@ -2,6 +2,7 @@ name: macOS Icon Compatibility
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - Cargo.toml
       - Cargo.lock
@@ -29,6 +30,10 @@ env:
 jobs:
   capture:
     name: Capture icons (${{ matrix.os }})
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'macos:icon-compatibility'
     strategy:
       fail-fast: false
       matrix:
@@ -66,6 +71,10 @@ jobs:
 
   compare:
     name: Compare macOS captures
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'macos:icon-compatibility'
     needs: capture
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -182,6 +191,7 @@ jobs:
               '## macOSアイコン互換性検証',
               '',
               'macOS 14を基準に、同じアプリをmacOS 15・26で取得して比較しました。',
+              '再取得したい場合は、PRに `macos:icon-compatibility` ラベルを付けると、この比較CIを起動できます。',
               '',
               '| アプリ | 比較対象 | 結果 |',
               '| --- | --- | --- |',
