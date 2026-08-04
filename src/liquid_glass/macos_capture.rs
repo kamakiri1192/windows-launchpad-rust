@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use screencapturekit::cg::CGRect;
 use screencapturekit::cm::{CMTime, CVPixelBuffer};
+use screencapturekit::dispatch_queue::{DispatchQoS, DispatchQueue};
 use screencapturekit::prelude::*;
 use winit::platform::macos::MonitorHandleExtMacOS;
 
@@ -18,6 +19,9 @@ use super::capture::{
 };
 
 const CAPTURE_SCALE_ENV: &str = "LAUNCHPAD_MACOS_CAPTURE_SCALE";
+// ScreenCaptureKit's documented minimum queue depth is three frames. Keep
+// that minimum for stream stability and reduce delivery latency with a
+// dedicated high-priority callback queue instead of buffering fewer frames.
 const CAPTURE_QUEUE_DEPTH: u32 = 3;
 const DEFAULT_REFRESH_MILLIHERTZ: u32 = 60_000;
 const REGION_ALIGNMENT: u32 = 32;
@@ -268,8 +272,16 @@ fn capture_worker(
     let callback_shared = Arc::clone(&shared);
     let callback_proxy = event_proxy.clone();
     let callback_stats_ref = Arc::clone(&callback_stats);
+    // The callback only swaps the newest frame into the shared slot, but it is
+    // on the critical path for visual latency. The default SCStream callback
+    // queue can be scheduled behind other capture work, which is especially
+    // visible when the sharp (blur-free) backdrop exposes a stale frame.
+    let callback_queue = DispatchQueue::new(
+        "com.kamakiri.launchpad.macos-capture",
+        DispatchQoS::UserInteractive,
+    );
     let mut stream = SCStream::new(&filter, &configuration);
-    let handler_id = stream.add_output_handler(
+    let handler_id = stream.add_output_handler_with_queue(
         move |sample: CMSampleBuffer, output_type: SCStreamOutputType| {
             if output_type != SCStreamOutputType::Screen
                 || sample
@@ -317,6 +329,7 @@ fn capture_worker(
             }
         },
         SCStreamOutputType::Screen,
+        Some(&callback_queue),
     );
     let Some(handler_id) = handler_id else {
         set_failure(
