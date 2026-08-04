@@ -21,6 +21,31 @@ jobs:
           ref: agent/fix-glass-surface-tint
           fetch-depth: 0
 
+      - name: Force continuous hidden-window QA ticks
+        shell: pwsh
+        run: |
+          $path = '.\src\app\handler.rs'
+          $content = Get-Content $path -Raw
+          $old = @'
+          if let Some(deadline) = self.qa_next_deadline() {
+              event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
+          } else {
+'@
+          $new = @'
+          if self.qa_enabled() {
+              // Temporary visual-QA override: Windows can coalesce WaitUntil
+              // wakeups for a hidden window, so poll for this short scenario.
+              event_loop.set_control_flow(ControlFlow::Poll);
+          } else if let Some(deadline) = self.qa_next_deadline() {
+              event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
+          } else {
+'@
+          if (-not $content.Contains($old)) {
+            throw 'QA control-flow anchor was not found'
+          }
+          $content = $content.Replace($old, $new)
+          Set-Content $path $content -NoNewline
+
       - name: Build debug launcher
         shell: pwsh
         run: cargo build --locked
@@ -87,6 +112,7 @@ jobs:
       - name: Commit verified screenshot and remove temporary workflow
         shell: pwsh
         run: |
+          git restore src/app/handler.rs
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/qa/context-menu-tint.png
