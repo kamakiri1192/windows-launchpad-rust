@@ -5,15 +5,17 @@ Liquid Glass と異なる背景ブラー強度を安全に描画する。
 
 ## 結論
 
-context menu は、通常面と同じデスクトップキャプチャを入力に使うが、
-専用の Dual-Kawase blur chain と専用の full-resolution 出力を持つ。
+context menu は、メニュー直前まで描画した透明swapchainを退避し、それを
+デスクトップキャプチャへpremultiplied-alpha合成した完成シーンを入力に使う。
+その完成シーンに専用の Dual-Kawase blur chain と専用のfull-resolution
+出力を持たせる。
 最終シェーダーは pyramid の途中 level を直接表示せず、各 lane で最後まで
 upsample された完成出力だけをサンプルする。
 
 また、Windows の透明ウィンドウでは半透明の blurred RGB を出すだけでは、
 DirectComposition/DWM が実デスクトップを再び背後から混ぜる。context menu
-は開いている間、形状内の alpha を coverage まで上げ、キャプチャ済みの
-blurred desktop で実デスクトップを置き換える。
+は開いている間、形状内のalphaをcoverageまで上げ、デスクトップ、Launchpad
+アイコン、folder panelを含むblurred sceneで下層を置き換える。
 
 ## 修正前の問題
 
@@ -49,23 +51,26 @@ shader 内の sharp sample を除いても、下地または実デスクトッ�
 ## 現在の描画フロー
 
 ```text
-Windows.Graphics.Capture / platform capture
-                    |
-                    +--> global down/up chain
-                    |       -> global full-resolution blur
-                    |
-                    +--> context-menu down/up chain
-                            -> context-menu full-resolution blur
+desktop capture -----------------> global down/up chain
+                                      -> global full-resolution blur
 
-global Glass final pass  ------ samples global completed blur
-context menu final pass  ------ samples context completed blur
-                                    + backdrop replacement alpha
+pre-menu transparent swapchain --+
+                                  +-> flatten over desktop capture
+desktop capture -----------------+      -> opaque completed scene
+                                             |
+                                             +-> context down/up chain
+                                                   -> context full-resolution blur
+
+global Glass final pass -------- samples global completed blur
+context menu final pass -------- samples blurred completed scene
+                                   + backdrop replacement alpha
 ```
 
-キャプチャは共有する。context menu が表示されている間だけ、同じ workspace
-を使って専用 chain を順番に実行する。global の完成出力を書き終えてから
-context chain が workspace を再利用するため、二つの final 出力は互いに
-上書きされない。
+デスクトップキャプチャは共有する。context menuが表示されている間だけ、
+メニューより前の描画をsubmitしてswapchainを退避する。退避したpremultiplied
+RGBAをデスクトップへflattenした後、同じpyramid workspaceでcontext chainを
+実行する。globalとcontextのfull-resolution出力は別textureなので、workspaceを
+順番に再利用しても互いに上書きされない。
 
 ## blur radius の扱い
 
@@ -84,8 +89,8 @@ kernel scale を補正する。capture region の padding も最大要求 radius
 
 ## backdrop replacement
 
-`GlassSurface.backdrop_replacement` は、通常の半透明 Glass と、captured
-backdrop を実デスクトップの代わりに表示する material を区別する。
+`GlassSurface.backdrop_replacement` は、通常の半透明Glassと、完成済みの
+pre-menu sceneを下層の代わりに表示するmaterialを区別する。
 
 - `0`: 従来の半透明 Liquid Glass
 - `1`: shape coverage を出力 alpha として使い、DWMのsharp desktopを遮る
@@ -97,23 +102,25 @@ alpha 1、角ではSDFのcoverage、閉じる途中ではrevealと一緒に透�
 
 ## 入力ソースの範囲
 
-今回の context menu blur の入力は、既存Liquid Glassと同じデスクトップ
-キャプチャである。メニュー直下の実デスクトップはblurred captureで置換される。
+context menu blurの入力には、メニューより前に描画されたすべてのlauncher
+layerを含める。対象はpage glass、トップレベルのアプリアイコンと文字、control、
+focus veil、folder/settings panel、その内部contentとbadgeである。context menu
+自身のglass、項目アイコン、ラベルは入力に含めず、blur後に描画する。
 
-完成済みのlauncher scene（アプリアイコン、folder panelなど）全体をnative
-backdropのようにぼかす場合は、context menuより前のsceneを別textureへ
-flattenし、そのtextureを入力にする追加設計が必要になる。render targetを
-同じpassで読み書きすることはできないため、この拡張はdesktop blurとは分ける。
+透明swapchainだけではDWMが背後に置くデスクトップRGBを保持していないため、
+そのままblurすると半透明部分が暗くなる。そこでswapchainを一度copyし、capture
+regionと同じ解像度でデスクトップキャプチャへsource-over合成してalpha 1の
+入力を作る。render targetを同じpassで読み書きせず、copy、flatten、blur、
+context finalを別usage scopeとして順番にsubmitする。
 
 ## 更新条件とコスト
 
-- backdrop capture は一回だけでglobal/contextの両方が共有する
-- global blur と context blur は別々のdirty flagを持つ
-- capture更新時は表示中の両出力を更新する
-- context menu radiusのアニメーション中はcontext出力だけを再生成する
+- backdrop captureは一回だけでglobal/contextの両方が共有する
+- global blurはcapture/parameterが変わるまで再利用する
+- context blurは下層のアイコンやmodal animationを追うため、menu表示中は毎frame生成する
 - context menu非表示時はcontext chainを実行しない
-- context用に追加する常駐full-resolution textureは一枚
-- pyramid workspaceは既存のL1/L2/L3を共有する
+- context用にpre-menu scene copy、capture-sized flattened source、完成blurを各一枚持つ
+- pyramid workspaceは既存のL1/L2/L3をglobal/contextで順番に共有する
 
 ## テストと視覚QA
 
@@ -124,16 +131,18 @@ flattenし、そのtextureを入力にする追加設計が必要になる。ren
 - 16/24/32pxでkernel scaleが1.0/1.5/2.0になること
 - context menuのblur radiusとbackdrop replacementがmodelへ入ること
 - blur textureの定数色energyが維持されること
+- scene flatten shaderとbind group layoutがwgpu validationを通ること
 
 Windows実機では、細かい文字やデスクトップアイコンの上でmenuを開き、次を
 確認する。
 
 1. menu中央でデスクトップの輪郭が明確にぼける
-2. menu外はsharpなまま変わらない
-3. 開閉中にblur強度とreplacement alphaが連続して変化する
-4. 角にblack/transparent fringeが出ない
-5. DPI変更、resize、GPU/CPU capture fallback後も位置が一致する
-6. `disable_blur`時はsharp captureへ戻るが、menu shapeの合成は破綻しない
+2. menu直下のアプリアイコン、文字、folder childが消えずにぼけて残る
+3. menu外はsharpなまま変わらない
+4. 開閉中にblur強度とreplacement alphaが連続して変化する
+5. 角にblack/transparent fringeが出ない
+6. DPI変更、resize、GPU/CPU capture fallback後も位置が一致する
+7. `disable_blur`時はsharpな完成シーンへ戻り、下層iconが消えない
 
 スクリーンショットを有効にする場合は `docs/EDIT_MODE_VISUAL_QA.md` の手順を
 使う。通常起動ではself-captureを防ぐためwindow capture exclusionを維持する。
