@@ -90,6 +90,13 @@ jobs:
               + '                    .resolve_qa_context_menu_target(&target)\n'
               + '                    .unwrap_or_else(|| panic!("QA context-menu target did not resolve: {target:?}"));\n'
               + '                self.open_context_menu(item, rect);\n'
+              + '                // Semantic visual QA captures the settled endpoint rather than\n'
+              + '                // depending on the cadence of a hidden native window.\n'
+              + '                for _ in 0..600 {\n'
+              + '                    if !self.context_menu.tick(1.0 / 60.0) {\n'
+              + '                        break;\n'
+              + '                    }\n'
+              + '                }\n'
               + '            }\n',
               1,
           )
