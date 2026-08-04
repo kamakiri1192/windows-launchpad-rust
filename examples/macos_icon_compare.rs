@@ -520,7 +520,7 @@ fn write_preview_sheet(
     draw_app_title(&mut canvas, GAP, GAP + 4, ROW_LABEL_WIDTH, app);
 
     for row in 0..rows {
-        let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
+        let row_y = GAP + row * (ROW_HEIGHT + GAP);
         let row_label = if row == 0 { "SOURCE" } else { "NORMALIZED" };
         draw_text_centered(
             &mut canvas,
@@ -603,10 +603,10 @@ fn app_preview_path(base: &Path, app: &str) -> PathBuf {
 
 /// Create an alpha-only preview for the geometry comparison. Each app gets a
 /// three-column sheet (macOS 14, macOS 15, macOS 26) with source/normalized
-/// masks and candidate-vs-baseline overlays. In the masks, light gray is alpha
-/// >= 128 and dark gray is the softer visible fringe alpha >= 11. In the
-/// overlay, blue is baseline-only, orange is candidate-only, and light gray
-/// is shared.
+/// masks and candidate-vs-baseline overlays. In the masks, light gray means
+/// alpha at least 128 and dark gray means the softer visible fringe at alpha
+/// at least 11. In the overlay, blue is baseline-only, orange is
+/// candidate-only, and light gray is shared.
 fn write_shape_preview(
     root: &Path,
     baseline: &str,
@@ -653,7 +653,7 @@ fn write_shape_preview_sheet(
     draw_app_title(&mut canvas, GAP, GAP + 4, ROW_LABEL_WIDTH, app);
 
     for row in 0..rows {
-        let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
+        let row_y = GAP + row * (ROW_HEIGHT + GAP);
         let row_label = match row {
             0 => "SOURCE MASK",
             1 => "SOURCE DIFF",
