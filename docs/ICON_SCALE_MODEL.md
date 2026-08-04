@@ -88,7 +88,9 @@ open ./icon-scale-audit/calibrate.html
 Start-Process .\icon-scale-audit\calibrate.html
 ```
 
-校正画面の基準アイコンと各カードのアイコンは、どちらも同じ128×128pxの表示領域です。
+校正画面の基準アイコンと各カードは、ランチャーと同じ84×84論理pxのタイルと、タイルより18px大きいガラスハローで表示します。アプリ内部の正規化画像は128×128pxですが、実際の描画ではタイルの物理サイズへサンプリングされます。
+
+RetinaやWindowsの高DPI環境では、アプリの84×DPI物理pxに対して、ブラウザの84 CSS pxがdevicePixelRatioに応じて物理pxへ描画されます。校正時に84pxへDPI倍率を手動で掛けないでください。ブラウザの表示倍率は100%にしてください。
 
 ### 比較基準の選び方
 

@@ -19,6 +19,7 @@ use launchpad_windows::domain::app_id::AppId;
 use launchpad_windows::icons::features::{self, IconVisualFeatures, FEATURE_NAMES};
 use launchpad_windows::icons::normalize::{self, DecodedIcon};
 use launchpad_windows::icons::sizing;
+use launchpad_windows::layout::grid::app_color;
 
 #[derive(Debug, Serialize)]
 struct AuditReport {
@@ -35,6 +36,10 @@ struct AuditEntry {
     icon_path: String,
     category: String,
     rule_scale: f32,
+    /// The same stable accent color the launcher uses for this display index.
+    /// The calibrator uses it behind the icon so transparent corners have the
+    /// same visual context as the live tile.
+    tile_color: [f32; 3],
     features: IconVisualFeatures,
     feature_vector: Vec<f32>,
 }
@@ -81,6 +86,9 @@ fn main() {
         }
     }
     entries.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    for (index, entry) in entries.iter_mut().enumerate() {
+        entry.tile_color = app_color(index).into();
+    }
 
     let report = AuditReport {
         format_version: 1,
@@ -151,6 +159,7 @@ fn process_app(app: &DiscoveredApp, output_index: usize, out_dir: &Path) -> Opti
         icon_path: relative_icon_path,
         category: metrics.category.as_str().to_owned(),
         rule_scale: metrics.scale as f32,
+        tile_color: [0.0; 3],
         feature_vector: visual_features.as_array().to_vec(),
         features: visual_features,
     })
@@ -299,14 +308,14 @@ const CALIBRATOR_HTML: &str = r#"<!doctype html>
 :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:light dark}
 body{margin:0;background:#17181b;color:#f5f5f7}header{position:sticky;top:0;z-index:10;padding:14px 18px;background:#202126ee;backdrop-filter:blur(18px);border-bottom:1px solid #ffffff1f}
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar input,.toolbar select,.toolbar button{font:inherit;padding:7px 10px;border-radius:8px;border:1px solid #ffffff25;background:#2b2d33;color:inherit}
-.reference{display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap}.reference-box,.preview{width:148px;height:148px;display:grid;place-items:center;border-radius:28px;background:linear-gradient(145deg,#777,#333);overflow:hidden}.reference-box img,.preview img{width:128px;height:128px;transform-origin:center}
+.reference{display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap}.reference-box,.preview{width:102px;height:102px;display:grid;place-items:center;border-radius:28px;background:linear-gradient(145deg,#ffffff22,#ffffff08);box-shadow:inset 0 0 0 1px #ffffff1c,0 0 14px #ffffff0d;overflow:hidden}.tile{width:84px;height:84px;display:grid;place-items:center;border-radius:19px;overflow:hidden}.tile img{width:84px;height:84px;transform-origin:center;image-rendering:auto}
 .help{max-width:620px;line-height:1.55;font-size:14px;opacity:.88}#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;padding:16px}.card{padding:14px;border:1px solid #ffffff1a;border-radius:18px;background:#24262b}.card.confirmed{border-color:#4bd37b}.title{height:42px;font-weight:650;overflow:hidden}.meta{font-size:12px;opacity:.65;margin-bottom:8px}.controls{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:10px}.controls input[type=range]{width:100%}.scale{font-variant-numeric:tabular-nums;min-width:52px;text-align:right}.confirm{display:flex;gap:7px;align-items:center;margin-top:8px}.hidden{display:none!important}button.primary{background:#3b72ff}#progress{font-variant-numeric:tabular-nums;font-weight:650}
 </style>
 </head>
 <body>
 <header>
 <div class="toolbar"><input id="filter" placeholder="アプリ名で絞り込み"><label><input id="onlyPending" type="checkbox">未確定のみ</label><span id="progress"></span><button id="export" class="primary">labels.jsonを書き出す</button><button id="importButton">読み込む</button><input id="importFile" type="file" accept="application/json" hidden></div>
-<div class="reference"><div class="reference-box"><img id="referenceImage"></div><label>比較基準 <select id="referenceSelect"></select></label><div class="help">左の基準と各カードのアイコンは、同じ128×128pxの表示領域です。輪郭の端をそろえるのではなく、一覧で見たときの面積・線の太さ・存在感が同程度になるようスライダーを調整し、確定してください。</div></div>
+<div class="reference"><div class="reference-box"><div id="referenceTile" class="tile"><img id="referenceImage"></div></div><label>比較基準 <select id="referenceSelect"></select></label><div class="help">基準と各カードは、ランチャーと同じ84×84論理pxのタイルと18pxのハローで表示します。Retina/DPIではブラウザのdevicePixelRatioが物理pxへ反映されます。輪郭の端ではなく、面積・線の太さ・存在感が一覧で同程度になるよう調整してください。</div></div>
 </header>
 <main id="grid"></main>
 <script>
@@ -321,17 +330,20 @@ const onlyPending=document.getElementById("onlyPending");
 const progress=document.getElementById("progress");
 const referenceSelect=document.getElementById("referenceSelect");
 const referenceImage=document.getElementById("referenceImage");
+const referenceTile=document.getElementById("referenceTile");
 function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state));updateProgress()}
 function updateProgress(){const confirmed=Object.values(state).filter(value=>value.confirmed).length;progress.textContent=`${confirmed} / ${DATA.length} 確定`}
-function setReference(){const entry=byKey.get(referenceSelect.value)||DATA[0];if(entry)referenceImage.src=entry.icon_path;localStorage.setItem(STORAGE_KEY+":reference",entry?.key||"")}
+function channel(value,multiplier){return Math.round(Math.max(0,Math.min(1,value*multiplier))*255)}
+function setTileBackground(tile,entry){const color=Array.isArray(entry.tile_color)?entry.tile_color:[0.5,0.5,0.5];const top=color.map(value=>channel(value,1.08)).join(",");const bottom=color.map(value=>channel(value,0.86)).join(",");tile.style.background=`linear-gradient(180deg,rgb(${top}),rgb(${bottom}))`}
+function setReference(){const entry=byKey.get(referenceSelect.value)||DATA[0];if(entry){referenceImage.src=entry.icon_path;setTileBackground(referenceTile,entry)}localStorage.setItem(STORAGE_KEY+":reference",entry?.key||"")}
 for(const entry of DATA){const option=document.createElement("option");option.value=entry.key;option.textContent=entry.name;referenceSelect.append(option)}
 referenceSelect.value=localStorage.getItem(STORAGE_KEY+":reference")||DATA.find(entry=>entry.category==="fullbleed")?.key||DATA[0]?.key||"";referenceSelect.addEventListener("change",setReference);setReference();
 function makeCard(entry){const saved=state[entry.key]||{};const card=document.createElement("section");card.className="card";card.dataset.name=entry.name.toLowerCase();
 const title=document.createElement("div");title.className="title";title.textContent=entry.name;const meta=document.createElement("div");meta.className="meta";meta.textContent=`${entry.category} / rule ${entry.rule_scale.toFixed(3)}`;
-const preview=document.createElement("div");preview.className="preview";const img=document.createElement("img");img.src=entry.icon_path;preview.append(img);
+const preview=document.createElement("div");preview.className="preview";const tile=document.createElement("div");tile.className="tile";const img=document.createElement("img");img.src=entry.icon_path;tile.append(img);preview.append(tile);
 const controls=document.createElement("div");controls.className="controls";const slider=document.createElement("input");slider.type="range";slider.min="0.55";slider.max="1.10";slider.step="0.005";slider.value=String(saved.manual_scale??entry.rule_scale);const scale=document.createElement("span");scale.className="scale";controls.append(slider,scale);
 const confirmLabel=document.createElement("label");confirmLabel.className="confirm";const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.checked=!!saved.confirmed;confirmLabel.append(checkbox,document.createTextNode("この倍率で確定"));
-function update(){const value=Number(slider.value);scale.textContent=value.toFixed(3);img.style.transform=`scale(${value/entry.rule_scale})`;card.classList.toggle("confirmed",checkbox.checked);state[entry.key]={manual_scale:value,confirmed:checkbox.checked};save()}
+function update(){const value=Number(slider.value);scale.textContent=value.toFixed(3);setTileBackground(tile,entry);img.style.transform=`scale(${value/entry.rule_scale})`;card.classList.toggle("confirmed",checkbox.checked);state[entry.key]={manual_scale:value,confirmed:checkbox.checked};save()}
 slider.addEventListener("input",update);checkbox.addEventListener("change",update);card.append(title,meta,preview,controls,confirmLabel);update();return card}
 for(const entry of DATA)grid.append(makeCard(entry));
 function applyFilter(){const query=filter.value.trim().toLowerCase();for(const card of grid.children){const hideConfirmed=onlyPending.checked&&card.classList.contains("confirmed");card.classList.toggle("hidden",!card.dataset.name.includes(query)||hideConfirmed)}}
