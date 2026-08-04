@@ -1,0 +1,80 @@
+from pathlib import Path
+
+
+def replace(path: str, old: str, new: str, expected: int = 1) -> None:
+    file = Path(path)
+    text = file.read_text()
+    actual = text.count(old)
+    if actual != expected:
+        raise RuntimeError(f"{path}: expected {expected} occurrences, found {actual}: {old[:80]!r}")
+    file.write_text(text.replace(old, new))
+
+
+def replace_at_least(path: str, old: str, new: str, minimum: int = 1) -> None:
+    file = Path(path)
+    text = file.read_text()
+    actual = text.count(old)
+    if actual < minimum:
+        raise RuntimeError(f"{path}: expected at least {minimum} occurrences, found {actual}: {old[:80]!r}")
+    file.write_text(text.replace(old, new))
+
+
+# ---------------------------------------------------------------------------
+# Rust-side shape packing and renderer-neutral model conversion.
+# ---------------------------------------------------------------------------
+replace(
+    "src/liquid_glass/geometry.rs",
+    """///  64  motion       [f32; 4]  (16)\n/// Total: 80 bytes""",
+    """///  64  motion       [f32; 4]  (16)\n///  80  tint         [f32; 4]  (16) → alpha < 0 uses the global glass tint\n/// Total: 96 bytes""",
+)
+replace(
+    "src/liquid_glass/geometry.rs",
+    """    /// Optional GPU animation payload: `(pivot_x, pivot_y, phase, flags)`.\n    pub motion: [f32; 4],\n}""",
+    """    /// Optional GPU animation payload: `(pivot_x, pivot_y, phase, flags)`.\n    pub motion: [f32; 4],\n    /// Optional per-shape tint. A negative alpha is the sentinel for using\n    /// the global `LiquidGlassParams::glass_color` value.\n    pub tint: [f32; 4],\n}""",
+)
+replace(
+    "src/liquid_glass/geometry.rs",
+    """            _pad2: [0; 3],\n            motion: [0.0; 4],\n        }""",
+    """            _pad2: [0; 3],\n            motion: [0.0; 4],\n            tint: [0.0, 0.0, 0.0, -1.0],\n        }""",
+)
+replace(
+    "src/liquid_glass/geometry.rs",
+    """    /// Set the per-shape glass activation level.\n    pub fn with_activation(mut self, activation: f32) -> Self {\n        self.activation = activation;\n        self\n    }\n\n    /// Set the per-shape clip region.""",
+    """    /// Set the per-shape glass activation level.\n    pub fn with_activation(mut self, activation: f32) -> Self {\n        self.activation = activation;\n        self\n    }\n\n    /// Set an optional per-shape tint. `None` keeps the global glass tint.\n    pub fn with_tint(mut self, tint: Option<[f32; 4]>) -> Self {\n        self.tint = tint.unwrap_or([0.0, 0.0, 0.0, -1.0]);\n        self\n    }\n\n    /// Set the per-shape clip region.""",
+)
+replace(
+    "src/liquid_glass/geometry.rs",
+    """    pub(crate) fn is_clip_only(self) -> bool {\n        self.shape_type == SHAPE_CLIP_ONLY\n    }\n\n    pub(crate) fn is_scrolling(self) -> bool {""",
+    """    pub(crate) fn is_clip_only(self) -> bool {\n        self.shape_type == SHAPE_CLIP_ONLY\n    }\n\n    pub(crate) fn has_tint_override(self) -> bool {\n        self.tint[3] >= 0.0\n    }\n\n    pub(crate) fn is_scrolling(self) -> bool {""",
+)
+replace(
+    "src/liquid_glass/geometry.rs",
+    "assert_eq!(std::mem::size_of::<GlassShape>(), 80);",
+    "assert_eq!(std::mem::size_of::<GlassShape>(), 96);",
+)
+replace(
+    "src/liquid_glass/geometry.rs",
+    """    #[test]\n    fn animated_control_retains_center_and_phase_without_scrolling_kind() {""",
+    """    #[test]\n    fn tint_override_uses_negative_alpha_as_global_sentinel() {\n        let default = GlassShape::rounded_rect([0.0, 0.0], [20.0, 20.0], 4.0);\n        assert_eq!(default.tint, [0.0, 0.0, 0.0, -1.0]);\n        assert!(!default.has_tint_override());\n\n        let tinted = default.with_tint(Some([1.0, 0.5, 0.25, 0.75]));\n        assert_eq!(tinted.tint, [1.0, 0.5, 0.25, 0.75]);\n        assert!(tinted.has_tint_override());\n    }\n\n    #[test]\n    fn animated_control_retains_center_and_phase_without_scrolling_kind() {""",
+)
+
+replace(
+    "src/renderer/prepare.rs",
+    """    shape = shape.with_activation(surface.activation);""",
+    """    shape = shape\n        .with_activation(surface.activation)\n        .with_tint(surface.tint.map(|tint| [tint.r, tint.g, tint.b, tint.a]));""",
+)
+replace(
+    "src/renderer/prepare.rs",
+    """    } else {\n        shape_for_geometry_only(surface)\n    };\n    // Propagate the optional clip region""",
+    """    } else {\n        shape_for_geometry_only(surface)\n    };\n    shape = shape\n        .with_activation(surface.activation)\n        .with_tint(surface.tint.map(|tint| [tint.r, tint.g, tint.b, tint.a]));\n    // Propagate the optional clip region""",
+)
+replace(
+    "src/renderer/prepare.rs",
+    """    };\n    shape.with_activation(surface.activation)\n}""",
+    """    };\n    shape\n        .with_activation(surface.activation)\n        .with_tint(surface.tint.map(|tint| [tint.r, tint.g, tint.b, tint.a]))\n}""",
+)
+replace(
+    "src/renderer/prepare.rs",
+    """    #[test]\n    fn dragged_folder_control_glass_keeps_the_tile_wiggle_phase() {""",
+    """    #[test]\n    fn shape_mapping_preserves_tint_override() {\n        let mut source = surface(\"tinted\", 10, 100.0);\n        source.tint = Some(Color::rgba(1.0, 0.5, 0.25, 0.75));\n\n        let shape = shape_for(&source);\n        assert_eq!(shape.tint, [1.0, 0.5, 0.25, 0.75]);\n    }\n\n    #[test]\n    fn dragged_folder_control_glass_keeps_the_tile_wiggle_phase() {""",
+)
