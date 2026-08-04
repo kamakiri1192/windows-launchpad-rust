@@ -3,20 +3,20 @@ from pathlib import Path
 
 def replace(path: str, old: str, new: str, expected: int = 1) -> None:
     file = Path(path)
-    text = file.read_text()
+    text = file.read_text(encoding="utf-8")
     actual = text.count(old)
     if actual != expected:
         raise RuntimeError(f"{path}: expected {expected} occurrences, found {actual}: {old[:80]!r}")
-    file.write_text(text.replace(old, new))
+    file.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
 
 
 def replace_at_least(path: str, old: str, new: str, minimum: int = 1) -> None:
     file = Path(path)
-    text = file.read_text()
+    text = file.read_text(encoding="utf-8")
     actual = text.count(old)
     if actual < minimum:
         raise RuntimeError(f"{path}: expected at least {minimum} occurrences, found {actual}: {old[:80]!r}")
-    file.write_text(text.replace(old, new))
+    file.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
 
 
 # ---------------------------------------------------------------------------
