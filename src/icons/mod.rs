@@ -15,14 +15,22 @@
 //! `#[allow(dead_code)]` so the extraction logic and its tests stay available.
 
 #![allow(dead_code)]
+#![allow(clippy::needless_return)] // cfg-specific path branches stay self-contained
 
+pub mod adaptive_normalize;
 #[cfg(windows)]
 pub mod extract;
+pub mod features;
 #[cfg(windows)]
 pub mod loader;
 pub mod normalize;
+pub mod scale_model;
 pub mod sizing;
 
+#[allow(unused_imports)] // ML-ready feature surface for audit/training tools
+pub use features::{
+    extract as extract_visual_features, IconVisualFeatures, FEATURE_COUNT, FEATURE_NAMES,
+};
 #[allow(unused_imports)] // legacy pipeline surface; kept for reference/tests
 #[cfg(windows)]
 pub use loader::{load_all_icons, LoadedIcons};
