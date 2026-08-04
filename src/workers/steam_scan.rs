@@ -73,6 +73,7 @@ fn scan_steam_apps_at(steam_root: &Path) -> Vec<SnapshotEntry> {
                 target_mtime: icon_mtime,
                 icon_location: icon_path.to_string_lossy().into_owned(),
                 icon_index: 0,
+                version: String::new(),
             });
         }
     }

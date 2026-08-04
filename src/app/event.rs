@@ -97,6 +97,11 @@ pub enum AppCommand {
     /// file. The launcher is hidden first, mirroring the launch ordering so
     /// the file manager arrives on top.
     RevealApp(AppLaunchInfo),
+    /// Open ChatGPT with a prompt asking how to use `info`'s app. The launcher
+    /// is *not* hidden: the browser opens in the background and the user can
+    /// dismiss the menu / keep working. Carries the app name + version so the
+    /// prompt is specific.
+    AskChatGpt(AppLaunchInfo),
     /// Persist the current settings blob.
     PersistSettings,
     /// Persist the current display order (`registry.order()`).
@@ -151,6 +156,7 @@ mod tests {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
             resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
         });
         assert!(matches!(hide, AppCommand::HideWindow));
         assert!(matches!(launch, AppCommand::LaunchApp(_)));
@@ -167,6 +173,7 @@ mod tests {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
             resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
         };
         let reveal = AppCommand::RevealApp(info.clone());
         assert!(matches!(reveal, AppCommand::RevealApp(_)));

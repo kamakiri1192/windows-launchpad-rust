@@ -33,6 +33,11 @@ pub struct SnapshotEntry {
     pub icon_location: String,
     /// Shell-reported icon index inside `icon_location`.
     pub icon_index: i32,
+    /// App version string for the ChatGPT-help prompt (macOS
+    /// `CFBundleShortVersionString` / Windows exe version resource), or `""`
+    /// when the platform could not read one. Not icon-relevant, so it never
+    /// invalidates the icon cache.
+    pub version: String,
 }
 
 impl SnapshotEntry {
@@ -112,6 +117,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            version: String::new(),
         }
     }
 

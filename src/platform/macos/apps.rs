@@ -115,6 +115,9 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
     });
     let target_path = executable.as_deref().unwrap_or(bundle_path);
     let icon_path = resolve_icon_path(&metadata_bundle, dictionary);
+    let version = dictionary_string(dictionary, "CFBundleShortVersionString")
+        .map(str::to_owned)
+        .unwrap_or_default();
 
     Some(SnapshotEntry {
         app_id,
@@ -128,6 +131,7 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
         icon_index: 0,
+        version,
     })
 }
 

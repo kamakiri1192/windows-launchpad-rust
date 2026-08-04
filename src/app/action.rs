@@ -1570,6 +1570,7 @@ mod tests {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
             resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
         });
         assert!(matches!(hide, AppCommand::HideWindow));
         assert!(matches!(launch, AppCommand::LaunchApp(_)));

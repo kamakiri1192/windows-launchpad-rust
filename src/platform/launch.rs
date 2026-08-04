@@ -2,6 +2,54 @@
 
 use std::path::Path;
 
+/// Open `url` in the user's default browser. macOS uses `/usr/bin/open`,
+/// Windows shells to the default http handler via `ShellExecuteW("open", ...)`.
+/// Both return as soon as the browser process spawns, so the result only
+/// reflects whether the browser was *started*, not whether the page loaded.
+#[cfg(target_os = "macos")]
+pub fn open_url(url: &str) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open url failed: {error}"))
+}
+
+#[cfg(windows)]
+pub fn open_url(url: &str) -> Result<(), String> {
+    // ShellExecuteW("open", <url>) routes to the registered http(s) handler,
+    // which is the user's default browser. `shell_execute` takes a path-like
+    // string; URLs work identically.
+    let wide = wide_null(url);
+    let operation = wide_null("open");
+    // SAFETY: all PCWSTR arguments point to NUL-terminated UTF-16 buffers that
+    // live for the duration of the call. ShellExecuteW returns synchronously.
+    let result = unsafe {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as usize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW failed with code {code}"))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn open_url(_url: &str) -> Result<(), String> {
+    Err("opening a URL is unsupported on this platform".to_string())
+}
+
 #[cfg(windows)]
 pub fn open_shortcut(path: &Path) -> Result<(), String> {
     match shell_execute(path) {

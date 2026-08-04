@@ -265,6 +265,17 @@ impl App {
                     }
                 }
             }
+            AppCommand::AskChatGpt(info) => {
+                let name = info.name.clone();
+                let url = chatgpt_help_url(&info);
+                // Unlike launch/reveal, do NOT hide the launcher: the browser
+                // opens in the background and the user may want to keep the
+                // menu / grid visible while reading the answer.
+                match crate::platform::launch::open_url(&url) {
+                    Ok(()) => eprintln!("chatgpt help: opened for {}", name),
+                    Err(err) => eprintln!("failed to open ChatGPT help for {}: {}", name, err),
+                }
+            }
             AppCommand::PersistSettings => self.persist_settings(),
             AppCommand::PersistUserOrder => self.persist_user_order(),
             AppCommand::PersistHidden => self.persist_hidden(),
@@ -377,6 +388,65 @@ fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     }
 }
 
+/// Build the structured prompt sent to ChatGPT for the "how to use this app"
+/// context-menu action. Kept as a pure function (no I/O, no encoding) so it is
+/// straightforward to unit-test the template and field interpolation. The
+/// version falls back to "(unknown)" when the platform could not read one.
+///
+/// The prompt is intentionally sectioned (overview → features → tips →
+/// pitfalls → integrations) and pinned to the app's name + version + platform
+/// so the answer is specific rather than generic.
+pub(crate) fn build_chatgpt_prompt(info: &AppLaunchInfo) -> String {
+    let platform = if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(windows) {
+        "Windows"
+    } else {
+        "this platform"
+    };
+    let version = if info.version.trim().is_empty() {
+        "(unknown)"
+    } else {
+        info.version.trim()
+    };
+    format!(
+        "\
+## TASK
+You are an expert on desktop apps. Explain \"{name}\" (v{version}, {platform}) \
+for a user who wants to master it. Answer in clear sections:
+
+1. 概要 — what it's for and who it's for.
+2. できること — key features with concrete example workflows.
+3. チップス & ベストプラクティス — shortcuts, hidden/gesture features, power-user tricks.
+4. よくある落とし穴 — common mistakes and how to avoid/fix them.
+5. 他のアプリとの連携 — how to combine it with other {platform} apps and OS features to speed up work.
+
+## FORMAT
+Markdown headings + concise bullets. Be specific to {name}, not generic.
+
+## LANGUAGE
+日本語で回答してください。
+
+## PLATFORM
+{platform}
+
+## APP NAME
+{name}
+
+## APP VERSION
+{version}",
+        name = info.name,
+        version = version,
+        platform = platform,
+    )
+}
+
+/// Build the full `https://chatgpt.com/?q=<encoded>` URL for the help action.
+pub(crate) fn chatgpt_help_url(info: &AppLaunchInfo) -> String {
+    let prompt = build_chatgpt_prompt(info);
+    format!("https://chatgpt.com/?q={}", urlencoding::encode(&prompt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +459,7 @@ mod tests {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
             resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
         }
     }
 
@@ -556,5 +627,79 @@ mod tests {
         assert_eq!(cmds[5], EditModeCommand::ClearPendingPress);
         assert_eq!(cmds[6], EditModeCommand::Relayout);
         assert_eq!(cmds[7], EditModeCommand::RequestRedraw);
+    }
+
+    /// The ChatGPT-help prompt interpolates the app name and version and keeps
+    /// the structured section template intact. This pins the template shape so
+    /// a future edit cannot silently drop a section or mis-fill a field.
+    #[test]
+    fn chatgpt_prompt_embeds_name_version_and_sections() {
+        let info = AppLaunchInfo {
+            name: "DaisyDisk".to_string(),
+            link_path: std::path::PathBuf::from("/Applications/DaisyDisk.app"),
+            resolved_target: std::path::PathBuf::new(),
+            version: "4.21".to_string(),
+        };
+        let prompt = build_chatgpt_prompt(&info);
+        // Every section heading is present.
+        for heading in [
+            "## TASK",
+            "## FORMAT",
+            "## LANGUAGE",
+            "## PLATFORM",
+            "## APP NAME",
+            "## APP VERSION",
+            "1. 概要",
+            "2. できること",
+            "3. チップス",
+            "4. よくある落とし穴",
+            "5. 他のアプリとの連携",
+        ] {
+            assert!(
+                prompt.contains(heading),
+                "prompt missing section heading {heading:?}:\n{prompt}"
+            );
+        }
+        // App name and version are interpolated (not the placeholder).
+        assert!(prompt.contains("\"DaisyDisk\""));
+        assert!(prompt.contains("v4.21"));
+        // Japanese answer requested.
+        assert!(prompt.contains("日本語で回答してください"));
+    }
+
+    /// An unknown version falls back to "(unknown)" in the prompt rather than
+    /// leaving the APP VERSION section blank or emitting a placeholder token.
+    #[test]
+    fn chatgpt_prompt_falls_back_to_unknown_version() {
+        let info = AppLaunchInfo {
+            name: "MysteryApp".to_string(),
+            link_path: std::path::PathBuf::new(),
+            resolved_target: std::path::PathBuf::new(),
+            version: String::new(),
+        };
+        let prompt = build_chatgpt_prompt(&info);
+        assert!(prompt.contains("v(unknown)"));
+        assert!(prompt.contains("## APP VERSION\n(unknown)"));
+    }
+
+    /// The help URL percent-encodes the prompt into the `q` query parameter,
+    /// so spaces and the section markers survive the trip to the browser.
+    #[test]
+    fn chatgpt_help_url_percent_encodes_the_prompt() {
+        let info = AppLaunchInfo {
+            name: "DaisyDisk".to_string(),
+            link_path: std::path::PathBuf::new(),
+            resolved_target: std::path::PathBuf::new(),
+            version: "4.21".to_string(),
+        };
+        let url = chatgpt_help_url(&info);
+        assert!(url.starts_with("https://chatgpt.com/?q="));
+        // Spaces are encoded as %20, not left raw.
+        assert!(!url.contains(' '), "URL must not contain raw spaces: {url}");
+        // The decoded query round-trips back to the structured prompt.
+        let encoded = &url["https://chatgpt.com/?q=".len()..];
+        let decoded = urlencoding::decode(encoded).expect("valid percent-encoding");
+        assert!(decoded.contains("## TASK"));
+        assert!(decoded.contains("\"DaisyDisk\""));
     }
 }

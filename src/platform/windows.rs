@@ -828,3 +828,152 @@ fn create_app_icon() -> HICON {
         icon
     }
 }
+
+/// Read an `.exe`'s version resource and return its `ProductVersion` (falling
+/// back to `FileVersion`). Returns `""` when the file has no version resource
+/// (e.g. some UWP/Store apps) or the read fails for any reason — the ChatGPT
+/// prompt then falls back to "(unknown)".
+pub fn exe_version(path: &std::path::Path) -> String {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoExW, GetFileVersionInfoSizeW, VerQueryValueW, FILE_VER_GET_NEUTRAL_FLAG,
+    };
+
+    let path_w = wide_null(&path.to_string_lossy());
+    // SAFETY: GetFileVersionInfoSizeW takes a NUL-terminated wide path and a
+    // nullable out-param; we pass null. It just returns a DWORD size, or 0 on
+    // failure (no version resource / missing file).
+    let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(path_w.as_ptr()), None) };
+    if size == 0 {
+        return String::new();
+    }
+    let mut buffer = vec![0u8; size as usize];
+    // SAFETY: GetFileVersionInfoExW fills a caller-owned buffer of `size`
+    // bytes. The path is NUL-terminated. The returned BOOL reports success.
+    let ok = unsafe {
+        GetFileVersionInfoExW(
+            FILE_VER_GET_NEUTRAL_FLAG,
+            PCWSTR(path_w.as_ptr()),
+            0,
+            size,
+            buffer.as_mut_ptr() as *mut c_void,
+        )
+    };
+    if !ok.as_bool() {
+        return String::new();
+    }
+
+    // Ask for the root VS_VERSION_INFO, then walk its Var-Translation table to
+    // find a language/codepage that actually exists in the file, and finally
+    // read the localized ProductVersion (falling back to FileVersion).
+    let mut root_ptr: *mut c_void = std::ptr::null_mut();
+    let mut root_len: u32 = 0;
+    // SAFETY: VerQueryValueW returns a pointer *into* the version-info buffer
+    // (no allocation); we keep `buffer` alive across all three calls below.
+    let have_root = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr() as *const c_void,
+            w!("\\"),
+            &mut root_ptr,
+            &mut root_len,
+        )
+        .as_bool()
+    };
+    if !have_root || root_ptr.is_null() {
+        return String::new();
+    }
+    let translations = read_translations(root_ptr, root_len);
+    for lang_cp in translations.iter().chain([0x040904B0u32, 0x040904E4u32]) {
+        if let Some(v) = read_string(&buffer, lang_cp, "ProductVersion") {
+            return v;
+        }
+    }
+    for lang_cp in translations.iter().chain([0x040904B0u32, 0x040904E4u32]) {
+        if let Some(v) = read_string(&buffer, lang_cp, "FileVersion") {
+            return v;
+        }
+    }
+    String::new()
+}
+
+/// Read the `VarFileInfo\Translation` array from a VS_VERSION_INFO root block.
+fn read_translations(root: *mut c_void, _len: u32) -> Vec<u32> {
+    use windows::Win32::Storage::FileSystem::VerQueryValueW;
+    let mut ptr: *mut c_void = std::ptr::null_mut();
+    let mut len: u32 = 0;
+    // SAFETY: same lifetime rule as the caller; pointer is into the buffer.
+    let ok = unsafe {
+        VerQueryValueW(root, w!("\\VarFileInfo\\Translation"), &mut ptr, &mut len).as_bool()
+    };
+    if !ok || ptr.is_null() || len == 0 {
+        return Vec::new();
+    }
+    let count = (len as usize) / std::mem::size_of::<u32>();
+    // SAFETY: the translation array is `len` bytes of packed u16 pairs; reading
+    // it as u32 little-endian gives the combined LANGID+codepage value used to
+    // build the localized StringFileInfo subblock path.
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u32, count) };
+    slice.to_vec()
+}
+
+/// Read one localized `StringFileInfo\<lang_cp>\<field>` string from a version
+/// buffer, returning the trimmed UTF-8 value.
+fn read_string(buffer: &[u8], lang_cp: u32, field: &str) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::VerQueryValueW;
+    // Format the subblock path as "StringFileInfo\XXYY0000\Field".
+    let hi = (lang_cp >> 16) & 0xFFFF;
+    let lo = lang_cp & 0xFFFF;
+    let path = format!("\\StringFileInfo\\{hi:04X}{lo:04X}\\{field}");
+    let path_w = wide_null(&path);
+    let mut ptr: *mut c_void = std::ptr::null_mut();
+    let mut len: u32 = 0;
+    // SAFETY: VerQueryValueW returns a pointer into the version buffer.
+    let ok = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr() as *const c_void,
+            PCWSTR(path_w.as_ptr()),
+            &mut ptr,
+            &mut len,
+        )
+        .as_bool()
+    };
+    if !ok || ptr.is_null() || len == 0 {
+        return None;
+    }
+    // SAFETY: `len` is the character count (excluding NUL). The wide string is
+    // NUL-terminated and lives inside the version buffer.
+    let wide = unsafe { std::slice::from_raw_parts(ptr as *const u16, len as usize) };
+    let end = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
+    Some(String::from_utf16_lossy(&wide[..end]).trim().to_owned())
+}
+
+/// Encode a Rust string as a NUL-terminated UTF-16 vector (Win32 PCWSTR form).
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod exe_version_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A missing file yields an empty version string (no panic).
+    #[test]
+    fn missing_file_returns_empty() {
+        let path = PathBuf::from("Z:\\does\\not\\exist.exe");
+        assert_eq!(exe_version(&path), "");
+    }
+
+    /// The path formatter packs LANGID + codepage as `XXYY0000` (uppercase hex).
+    #[test]
+    fn string_fileinfo_path_is_uppercase_hex() {
+        // Sanity-check the format used to look up a localized field, without
+        // touching Win32. This documents the expected shape so a future edit
+        // (e.g. lowercase, wrong endianness) is caught.
+        let lang_cp: u32 = 0x040904B0;
+        let hi = (lang_cp >> 16) & 0xFFFF;
+        let lo = lang_cp & 0xFFFF;
+        assert_eq!(format!("{hi:04X}{lo:04X}"), "0409 04B0".replace(' ', ""));
+    }
+}

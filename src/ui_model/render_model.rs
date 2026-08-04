@@ -209,6 +209,9 @@ pub enum ControlKind {
     EyeOff,
     /// Folder glyph (context menu: reveal in Finder/Explorer). Drawn by kind 15.
     FolderIcon,
+    /// ChatGPT logo (context menu: ChatGPT help). Drawn by kind 19 from a
+    /// dedicated rasterized SVG texture (not a procedural SDF).
+    ChatGptLogo,
     /// Plus glyph (context menu: larger icon). Drawn by kind 16.
     Plus,
     /// Minus glyph (context menu: smaller icon). Drawn by kind 17.

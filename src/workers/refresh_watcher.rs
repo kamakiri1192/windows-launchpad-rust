@@ -110,6 +110,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            version: String::new(),
         }
     }
 

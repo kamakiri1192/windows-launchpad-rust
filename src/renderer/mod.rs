@@ -137,6 +137,9 @@ pub struct Renderer {
     /// Control bind group layout, kept so the control bind groups can be
     /// rebuilt when the glyph atlas grows (they sample the atlas).
     control_bgl: wgpu::BindGroupLayout,
+    /// Dedicated ChatGPT-logo texture (binding 3 of the control bind group).
+    /// Kept on the struct so it outlives the bind group that references it.
+    chatgpt_logo_texture: wgpu::Texture,
     control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     backdrop_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
