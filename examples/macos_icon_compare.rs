@@ -472,9 +472,8 @@ fn format_bbox(bbox: &Option<BoundingBox>) -> String {
         .unwrap_or_else(|| "none".to_owned())
 }
 
-/// Create one labeled color contact sheet per app. Keeping one app per image
-/// makes the source/normalized and OS comparisons readable without mixing
-/// unrelated rows.
+/// Create one labeled color contact sheet per app. Each sheet uses the same
+/// three OS columns, with source and normalized images as the two rows.
 fn write_preview(
     root: &Path,
     baseline: &str,
@@ -501,54 +500,54 @@ fn write_preview_sheet(
     const ROW_LABEL_WIDTH: u32 = 180;
     const GAP: u32 = 12;
     const BORDER: u32 = 4;
-    let columns = 4u32;
     let app_comparisons = comparisons
         .iter()
         .filter(|comparison| comparison.app == app)
         .collect::<Vec<_>>();
-    let rows = app_comparisons.len() as u32;
+    let mut versions = vec![baseline.to_owned()];
+    versions.extend(
+        app_comparisons
+            .iter()
+            .map(|comparison| comparison.candidate.clone()),
+    );
+    versions.dedup();
+    let columns = versions.len() as u32;
+    let rows = 2u32;
     let image_start_x = GAP + ROW_LABEL_WIDTH + GAP;
     let width = image_start_x + columns * (CELL + GAP);
     let height = GAP + rows * (ROW_HEIGHT + GAP);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
+    draw_app_title(&mut canvas, GAP, GAP + 4, ROW_LABEL_WIDTH, app);
 
-    for (row, comparison) in app_comparisons.iter().enumerate() {
+    for row in 0..rows {
         let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
-        let baseline_label = os_label(baseline);
-        let candidate_label = os_label(&comparison.candidate);
-        draw_row_label(
+        let row_label = if row == 0 { "SOURCE" } else { "NORMALIZED" };
+        draw_text_centered(
             &mut canvas,
             GAP,
-            row_y,
+            row_y + LABEL_HEIGHT + (CELL - 15) / 2,
             ROW_LABEL_WIDTH,
-            &comparison.app,
-            &candidate_label,
+            row_label,
+            3,
+            Rgba([230, 230, 235, 255]),
         );
-        let headers = [
-            format!("{baseline_label} SOURCE"),
-            format!("{candidate_label} SOURCE"),
-            format!("{baseline_label} NORMALIZED"),
-            format!("{candidate_label} NORMALIZED"),
-        ];
-        let baseline_app = root.join(baseline).join(&comparison.app);
-        let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
-        let images = [
-            (baseline_app.join("source.png"), [80, 150, 255, 255]),
-            (candidate_app.join("source.png"), [255, 160, 70, 255]),
-            (baseline_app.join("normalized.png"), [100, 210, 130, 255]),
-            (candidate_app.join("normalized.png"), [230, 100, 220, 255]),
-        ];
-        for (column, (path, border_color)) in images.into_iter().enumerate() {
+        for (column, version) in versions.iter().enumerate() {
             let x = image_start_x + column as u32 * (CELL + GAP);
             draw_text_centered(
                 &mut canvas,
                 x,
-                row_y + 4,
+                GAP + 4,
                 CELL,
-                &headers[column],
+                &os_label(version),
                 2,
                 Rgba([220, 220, 225, 255]),
             );
+            let filename = if row == 0 {
+                "source.png"
+            } else {
+                "normalized.png"
+            };
+            let path = root.join(version).join(app).join(filename);
             let bytes = std::fs::read(&path)
                 .map_err(|error| format!("read preview image {}: {error}", path.display()))?;
             let image = image::load_from_memory(&bytes)
@@ -568,14 +567,14 @@ fn write_preview_sheet(
                 i64::from(x + BORDER),
                 i64::from(y + BORDER),
             );
-            for offset in 0..CELL {
-                for border in 0..BORDER {
-                    canvas.put_pixel(x + offset, y + border, Rgba(border_color));
-                    canvas.put_pixel(x + offset, y + CELL - 1 - border, Rgba(border_color));
-                    canvas.put_pixel(x + border, y + offset, Rgba(border_color));
-                    canvas.put_pixel(x + CELL - 1 - border, y + offset, Rgba(border_color));
-                }
-            }
+            draw_border(
+                &mut canvas,
+                x,
+                y,
+                CELL,
+                BORDER,
+                version_border_color(version),
+            );
         }
     }
     canvas
@@ -602,9 +601,9 @@ fn app_preview_path(base: &Path, app: &str) -> PathBuf {
     parent.join(format!("{stem}-{app}.png"))
 }
 
-/// Create an alpha-only preview for the geometry comparison. Each row has six
-/// labeled cells: baseline/candidate source masks, their overlay, then the
-/// same three views for normalized images. In the masks, light gray is alpha
+/// Create an alpha-only preview for the geometry comparison. Each app gets a
+/// three-column sheet (macOS 14, macOS 15, macOS 26) with source/normalized
+/// masks and candidate-vs-baseline overlays. In the masks, light gray is alpha
 /// >= 128 and dark gray is the softer visible fringe alpha >= 11. In the
 /// overlay, blue is baseline-only, orange is candidate-only, and light gray
 /// is shared.
@@ -634,65 +633,78 @@ fn write_shape_preview_sheet(
     const ROW_LABEL_WIDTH: u32 = 180;
     const GAP: u32 = 12;
     const BORDER: u32 = 4;
-    const COLUMNS: usize = 6;
     let app_comparisons = comparisons
         .iter()
         .filter(|comparison| comparison.app == app)
         .collect::<Vec<_>>();
-    let rows = app_comparisons.len() as u32;
+    let mut versions = vec![baseline.to_owned()];
+    versions.extend(
+        app_comparisons
+            .iter()
+            .map(|comparison| comparison.candidate.clone()),
+    );
+    versions.dedup();
+    let columns = versions.len() as u32;
+    let rows = 4u32;
     let image_start_x = GAP + ROW_LABEL_WIDTH + GAP;
-    let width = image_start_x + COLUMNS as u32 * (CELL + GAP);
+    let width = image_start_x + columns * (CELL + GAP);
     let height = GAP + rows * (ROW_HEIGHT + GAP);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
+    draw_app_title(&mut canvas, GAP, GAP + 4, ROW_LABEL_WIDTH, app);
 
-    for (row, comparison) in app_comparisons.iter().enumerate() {
+    for row in 0..rows {
         let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
-        let baseline_label = os_label(baseline);
-        let candidate_label = os_label(&comparison.candidate);
-        draw_row_label(
+        let row_label = match row {
+            0 => "SOURCE MASK",
+            1 => "SOURCE DIFF",
+            2 => "NORMALIZED MASK",
+            _ => "NORMALIZED DIFF",
+        };
+        draw_text_centered(
             &mut canvas,
             GAP,
-            row_y,
+            row_y + LABEL_HEIGHT + (CELL - 15) / 2,
             ROW_LABEL_WIDTH,
-            &comparison.app,
-            &candidate_label,
+            row_label,
+            2,
+            Rgba([230, 230, 235, 255]),
         );
-
-        let baseline_app = root.join(baseline).join(&comparison.app);
-        let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
-        let source_baseline = load_png(&baseline_app.join("source.png"))?;
-        let source_candidate = load_png(&candidate_app.join("source.png"))?;
-        let normalized_baseline = load_png(&baseline_app.join("normalized.png"))?;
-        let normalized_candidate = load_png(&candidate_app.join("normalized.png"))?;
-        let cells = [
-            alpha_mask_preview(&source_baseline),
-            alpha_mask_preview(&source_candidate),
-            alpha_overlay_preview(&source_baseline, &source_candidate),
-            alpha_mask_preview(&normalized_baseline),
-            alpha_mask_preview(&normalized_candidate),
-            alpha_overlay_preview(&normalized_baseline, &normalized_candidate),
-        ];
-        let headers = [
-            format!("{baseline_label} SOURCE"),
-            format!("{candidate_label} SOURCE"),
-            "SOURCE SHAPE DIFF".to_owned(),
-            format!("{baseline_label} NORMALIZED"),
-            format!("{candidate_label} NORMALIZED"),
-            "NORMALIZED SHAPE DIFF".to_owned(),
-        ];
-        for (column, image) in cells.iter().enumerate() {
+        let normalized = row >= 2;
+        let filename = if normalized {
+            "normalized.png"
+        } else {
+            "source.png"
+        };
+        let baseline_image = load_png(&root.join(baseline).join(app).join(filename))?;
+        for (column, version) in versions.iter().enumerate() {
             let x = image_start_x + column as u32 * (CELL + GAP);
+            let header = if row % 2 == 1 && version != baseline {
+                format!("{}/14", os_label(version))
+            } else {
+                os_label(version)
+            };
             draw_text_centered(
                 &mut canvas,
                 x,
                 row_y + 4,
                 CELL,
-                &headers[column],
+                &header,
                 2,
                 Rgba([220, 220, 225, 255]),
             );
+            let image = if row % 2 == 0 || version == baseline {
+                if version == baseline {
+                    alpha_mask_preview(&baseline_image)
+                } else {
+                    let candidate_image = load_png(&root.join(version).join(app).join(filename))?;
+                    alpha_mask_preview(&candidate_image)
+                }
+            } else {
+                let candidate_image = load_png(&root.join(version).join(app).join(filename))?;
+                alpha_overlay_preview(&baseline_image, &candidate_image)
+            };
             let image = imageops::resize(
-                image,
+                &image,
                 CELL - BORDER * 2,
                 CELL - BORDER * 2,
                 imageops::FilterType::Nearest,
@@ -704,15 +716,14 @@ fn write_shape_preview_sheet(
                 i64::from(x + BORDER),
                 i64::from(y + BORDER),
             );
-            let border_color = match column {
-                0 => [80, 150, 255, 255],
-                1 => [255, 160, 70, 255],
-                2 => [210, 210, 210, 255],
-                3 => [100, 210, 130, 255],
-                4 => [230, 100, 220, 255],
-                _ => [210, 210, 210, 255],
-            };
-            draw_border(&mut canvas, x, y, CELL, BORDER, border_color);
+            draw_border(
+                &mut canvas,
+                x,
+                y,
+                CELL,
+                BORDER,
+                version_border_color(version),
+            );
         }
     }
     canvas
@@ -720,16 +731,7 @@ fn write_shape_preview_sheet(
         .map_err(|error| format!("write shape preview {}: {error}", output.display()))
 }
 
-fn draw_row_label(
-    canvas: &mut RgbaImage,
-    x: u32,
-    row_y: u32,
-    width: u32,
-    app: &str,
-    candidate_label: &str,
-) {
-    const LABEL_HEIGHT: u32 = 32;
-    const CELL: u32 = 256;
+fn draw_app_title(canvas: &mut RgbaImage, x: u32, y: u32, width: u32, app: &str) {
     let app_line_1 = if app == "activity-monitor" {
         "ACTIVITY"
     } else {
@@ -740,11 +742,10 @@ fn draw_row_label(
     } else {
         "STORE"
     };
-    let row_label_y = row_y + LABEL_HEIGHT + (CELL - 3 * 15 - 2 * 6) / 2;
     draw_text_centered(
         canvas,
         x,
-        row_label_y,
+        y,
         width,
         app_line_1,
         3,
@@ -753,21 +754,21 @@ fn draw_row_label(
     draw_text_centered(
         canvas,
         x,
-        row_label_y + 21,
+        y + 21,
         width,
         app_line_2,
         3,
         Rgba([230, 230, 235, 255]),
     );
-    draw_text_centered(
-        canvas,
-        x,
-        row_label_y + 42,
-        width,
-        candidate_label,
-        3,
-        Rgba([170, 175, 185, 255]),
-    );
+}
+
+fn version_border_color(version: &str) -> [u8; 4] {
+    match version {
+        "macos-14" => [80, 150, 255, 255],
+        "macos-15" => [255, 160, 70, 255],
+        "macos-26" => [230, 100, 220, 255],
+        _ => [160, 160, 170, 255],
+    }
 }
 
 fn os_label(name: &str) -> String {
