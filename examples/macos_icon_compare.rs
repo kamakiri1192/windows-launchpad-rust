@@ -508,10 +508,10 @@ fn write_preview(
             &candidate_label,
         );
         let headers = [
-            format!("{baseline_label} SRC"),
-            format!("{candidate_label} SRC"),
-            format!("{baseline_label} NORM"),
-            format!("{candidate_label} NORM"),
+            format!("{baseline_label} SOURCE"),
+            format!("{candidate_label} SOURCE"),
+            format!("{baseline_label} NORMALIZED"),
+            format!("{candidate_label} NORMALIZED"),
         ];
         let baseline_app = root.join(baseline).join(&comparison.app);
         let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
@@ -619,12 +619,12 @@ fn write_shape_preview(
             alpha_overlay_preview(&normalized_baseline, &normalized_candidate),
         ];
         let headers = [
-            format!("{baseline_label} SRC"),
-            format!("{candidate_label} SRC"),
-            "SRC SHAPE DIFF".to_owned(),
-            format!("{baseline_label} NORM"),
-            format!("{candidate_label} NORM"),
-            "NORM SHAPE DIFF".to_owned(),
+            format!("{baseline_label} SOURCE"),
+            format!("{candidate_label} SOURCE"),
+            "SOURCE SHAPE DIFF".to_owned(),
+            format!("{baseline_label} NORMALIZED"),
+            format!("{candidate_label} NORMALIZED"),
+            "NORMALIZED SHAPE DIFF".to_owned(),
         ];
         for (column, image) in cells.iter().enumerate() {
             let x = image_start_x + column as u32 * (CELL + GAP);
