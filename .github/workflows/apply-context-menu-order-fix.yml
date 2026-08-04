@@ -26,38 +26,32 @@ jobs:
           path = Path('src/renderer/frame.rs')
           text = path.read_text(encoding='utf-8')
 
-          old = '''        // Context-menu Liquid Glass surface, isolated from the modal lane so it
-          // never smooth-unions with an open folder panel.
-          let profile_scope = self
-              .gpu_profiler
-              .begin("context_menu_liquid_glass", &mut encoder);
-          self.liquid_glass
-              .render_context_menu_glass(&self.queue, &mut encoder, &view);
-          self.gpu_profiler.end(&mut encoder, profile_scope);
+          start_marker = '        // Context-menu Liquid Glass surface'
+          end_marker = '        // Generic fixed modal content'
+          insert_marker = '        // Context-menu content pass: tiles (opaque background), ink (icons),'
 
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('expected context-menu glass block exactly once')
-          text = text.replace(old, '', 1)
+          start = text.find(start_marker)
+          end = text.find(end_marker, start + 1)
+          if start < 0 or end < 0:
+              raise SystemExit('could not locate current context-menu glass block')
+          text = text[:start] + text[end:]
 
-          marker = '''        // Context-menu content pass: tiles (opaque background), ink (icons),
-          // and text (labels). Drawn after modal content so the menu sits above
-          '''
-          if text.count(marker) != 1:
-              raise SystemExit('expected context-menu content marker exactly once')
+          insert_at = text.find(insert_marker)
+          if insert_at < 0:
+              raise SystemExit('could not locate context-menu content pass')
 
-          moved = '''        // Context-menu glass must sample the complete modal scene. Folder child
-          // icons are modal content; rendering this pass before them lets those
-          // icons overwrite the tint and appear to punch through the menu.
-          let profile_scope = self
-              .gpu_profiler
-              .begin("context_menu_liquid_glass", &mut encoder);
-          self.liquid_glass
-              .render_context_menu_glass(&self.queue, &mut encoder, &view);
-          self.gpu_profiler.end(&mut encoder, profile_scope);
-
-          '''
-          path.write_text(text.replace(marker, moved + marker, 1), encoding='utf-8')
+          moved = (
+              '        // Context-menu glass must sample the complete modal scene. Folder child\n'
+              '        // icons are modal content; rendering this pass before them lets those\n'
+              '        // icons overwrite the tint and appear to punch through the menu.\n'
+              '        let profile_scope = self\n'
+              '            .gpu_profiler\n'
+              '            .begin("context_menu_liquid_glass", &mut encoder);\n'
+              '        self.liquid_glass\n'
+              '            .render_context_menu_glass(&self.queue, &mut encoder, &view);\n'
+              '        self.gpu_profiler.end(&mut encoder, profile_scope);\n\n'
+          )
+          path.write_text(text[:insert_at] + moved + text[insert_at:], encoding='utf-8')
 
       - name: Verify formatting
         run: cargo fmt --all -- --check
