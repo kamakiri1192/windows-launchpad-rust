@@ -94,8 +94,9 @@ impl Renderer {
             ],
         });
         // Control overlay passes share one bind group (control uniforms +
-        // atlas + sampler); the shape pipeline binds only [0] but the text
-        // pipeline samples the atlas.
+        // atlas + sampler + the dedicated ChatGPT-logo texture + sampler).
+        // The shape pipeline binds only [0] but the text pipeline samples the
+        // atlas; kind 19 of the shape pipeline samples the logo texture.
         let control_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("control bg"),
             layout: &self.control_bgl,
@@ -111,6 +112,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.chatgpt_logo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.chatgpt_logo_sampler),
                 },
             ],
         });

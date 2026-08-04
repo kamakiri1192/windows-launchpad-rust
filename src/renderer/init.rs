@@ -688,6 +688,8 @@ impl Renderer {
             control_bind_group: control_bind_group.clone(),
             control_bgl,
             chatgpt_logo_texture: chatgpt_texture,
+            chatgpt_logo_view: chatgpt_view,
+            chatgpt_logo_sampler: chatgpt_sampler,
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
             backdrop_instance_buffer: InstanceBuffer::new("backdrop instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
