@@ -182,6 +182,12 @@ fn edit_badge_frame_motion_is_gpu_driven() {
     )
     .expect("glass shader");
     assert!(control_shader.contains("u.viewport_scroll.w + kind.w"));
+    assert!(control_shader
+        .contains("if (kind.x > 3.5 && kind.x < 4.5)\n        || (kind.x > 8.5 && kind.x < 9.5)"));
+    assert!(
+        !control_shader.contains("if (kind.x > 3.5 && kind.x < 4.5) || kind.x > 8.5"),
+        "context-menu icon kinds must not enter edit-badge motion"
+    );
     assert!(glass_shader.contains("u.time + shape.motion.z"));
 }
 

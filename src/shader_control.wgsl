@@ -90,7 +90,12 @@ fn vs_main(
     // Both badge kinds share the tile's GPU wiggle. Only the top-level badge
     // (kind 4) receives main-page scroll; modal folder badges (kind 9) already
     // carry their folder-page position in screen coordinates.
-    if (kind.x > 3.5 && kind.x < 4.5) || kind.x > 8.5 {
+    // Only the two edit-badge kinds carry animation data in `kind.yzw`.
+    // Context-menu icons use kinds 13–18 and leave those fields at zero; if
+    // they enter this branch they rotate around the screen origin using the
+    // shared frame clock, making their position drift away from the label.
+    if (kind.x > 3.5 && kind.x < 4.5)
+        || (kind.x > 8.5 && kind.x < 9.5) {
         let t = u.viewport_scroll.w + kind.w;
         let rot = sin(t * 8.0) * 0.06;
         let dy = abs(sin(t * 8.0)) * 2.0;
