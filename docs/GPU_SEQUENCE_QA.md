@@ -119,6 +119,9 @@ delta 0の`Began`/`Cancelled` scroll lifecycleを右クリック直後に注入�
 閉じず`Open`まで到達することを確認します。`qa/context_menu_dismiss.json`は、次のdismiss経路を
 1本の連番で確認します。
 
+`qa/context_menu_repeated_targets_stable.json`は、トップレベルの別アプリ10件とフォルダ内アプリ10件を
+長時間表示付きで順に右クリックし、再オープンを20回繰り返してアイコン位置の時間依存ずれを確認します。
+
 - `Opening`中の外側クリック
 - `Open`後の外側クリック
 - `Open`後のメニュー行クリック

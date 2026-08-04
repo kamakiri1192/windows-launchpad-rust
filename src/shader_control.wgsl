@@ -156,16 +156,16 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         // slider knob: a filled disk of radius `size`.
         return size * 1.6;
     }
-    if kind > 11.5 {
+    if kind > 12.5 {
+        // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
+        return size * 1.2;
+    }
+    if kind > 11.5 && kind < 12.5 {
         // reset arrow: roughly a disk of radius `size`.
         return size * 1.6;
     }
     if kind > 6.5 {
         return size * 1.8;
-    }
-    // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
-    if kind > 12.5 {
-        return size * 1.2;
     }
     // dot / caret / close: a square of side ~2*size fits the shape.
     return size * 1.6;
