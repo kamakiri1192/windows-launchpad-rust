@@ -850,7 +850,7 @@ pub struct ExeMetadata {
 pub fn exe_metadata(path: &std::path::Path) -> ExeMetadata {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{
-        GetFileVersionInfoExW, GetFileVersionInfoSizeW, VerQueryValueW, FILE_VER_GET_NEUTRAL_FLAG,
+        GetFileVersionInfoExW, GetFileVersionInfoSizeW, VerQueryValueW, FILE_VER_GET_NEUTRAL,
     };
 
     let path_w = wide_null(&path.to_string_lossy());
@@ -863,17 +863,18 @@ pub fn exe_metadata(path: &std::path::Path) -> ExeMetadata {
     }
     let mut buffer = vec![0u8; size as usize];
     // SAFETY: GetFileVersionInfoExW fills a caller-owned buffer of `size`
-    // bytes. The path is NUL-terminated. The returned BOOL reports success.
+    // bytes. The path is NUL-terminated. In windows-rs 0.62 it returns
+    // Result<()> (the underlying BOOL is converted via .ok()).
     let ok = unsafe {
         GetFileVersionInfoExW(
-            FILE_VER_GET_NEUTRAL_FLAG,
+            FILE_VER_GET_NEUTRAL,
             PCWSTR(path_w.as_ptr()),
-            0,
+            None,
             size,
             buffer.as_mut_ptr() as *mut c_void,
         )
     };
-    if !ok.as_bool() {
+    if ok.is_err() {
         return ExeMetadata::default();
     }
 
