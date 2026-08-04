@@ -194,6 +194,14 @@ impl App {
                     self.execute_command(AppCommand::RevealApp(info));
                 }
             }
+            ContextMenuSelection::ChatGptHelp(id) => {
+                // Look up the same launch info (name + version) the reveal path
+                // uses, then ask ChatGPT how to use the app. The launcher is
+                // not hidden (see AppCommand::AskChatGpt).
+                if let Some(info) = self.registry.launch_info(&id) {
+                    self.execute_command(AppCommand::AskChatGpt(info));
+                }
+            }
             // Mock actions (and folder targets of hide/reveal): just close.
             ContextMenuSelection::CloseOnly => {}
         }
@@ -470,6 +478,9 @@ enum ContextMenuSelection {
     /// Finderで開く / エクスプローラーで開く: reveal the target app in the OS
     /// file manager, mirroring the launch path (via `AppCommand::RevealApp`).
     RevealApp(AppId),
+    /// ChatGPTで使い方を調べる: open ChatGPT with a how-to-use prompt built
+    /// from the target app's name + version (via `AppCommand::AskChatGpt`).
+    ChatGptHelp(AppId),
     /// Mock action (or a folder target of hide/reveal, which have no file on
     /// disk to act on): just close the menu.
     CloseOnly,
@@ -496,6 +507,10 @@ fn resolve_context_menu_selection(
         },
         Some(context_menu::ContextMenuItem::RevealInFinder) => match target {
             Some(LauncherItem::App(id)) => ContextMenuSelection::RevealApp(id.clone()),
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        Some(context_menu::ContextMenuItem::ChatGptHelp) => match target {
+            Some(LauncherItem::App(id)) => ContextMenuSelection::ChatGptHelp(id.clone()),
             _ => ContextMenuSelection::CloseOnly,
         },
         _ => ContextMenuSelection::CloseOnly,
@@ -583,34 +598,36 @@ mod tests {
     }
 
     #[test]
-    fn folder_menu_rows_omit_hide_app_and_reveal_rows() {
+    fn folder_menu_rows_omit_hide_app_reveal_and_chatgpt_rows() {
         let (items, labels) = context_menu::menu_rows(true);
         assert_eq!(items, &context_menu::ContextMenuItem::FOLDER_ITEMS[..]);
         assert_eq!(
             labels,
             &context_menu::ContextMenuItem::FOLDER_ITEMS_LABELS[..]
         );
-        // A folder has neither a hide action nor a file to reveal, so the
-        // folder menu omits both rows — two shorter than the app menu.
-        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 2);
+        // A folder has no hide action, no file to reveal, and no app metadata
+        // for a ChatGPT lookup, so the folder menu omits all three rows —
+        // three shorter than the app menu.
+        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 3);
         assert!(!items.contains(&context_menu::ContextMenuItem::HideApp));
         assert!(!items.contains(&context_menu::ContextMenuItem::RevealInFinder));
+        assert!(!items.contains(&context_menu::ContextMenuItem::ChatGptHelp));
     }
 
     #[test]
-    fn app_menu_rows_show_all_six_items() {
+    fn app_menu_rows_show_all_seven_items() {
         let (items, labels) = context_menu::menu_rows(false);
         assert_eq!(items, &context_menu::ContextMenuItem::ALL[..]);
         assert_eq!(labels, &context_menu::ContextMenuItem::ALL_LABELS[..]);
     }
 
     #[test]
-    fn folder_menu_row_indices_never_resolve_to_hide_app_or_reveal() {
+    fn folder_menu_row_indices_never_resolve_to_hide_reveal_or_chatgpt() {
         let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
             "folder-a",
         ));
         let (items, _labels) = context_menu::menu_rows(true);
-        // A folder menu has neither a hide-app nor a reveal row; every row
+        // A folder menu has no hide-app, reveal, or ChatGPT-help row; every row
         // resolves to close-only (or edit-home for row 0). Walk every row.
         for row in 0..items.len() {
             let expected = if row == 0 {
@@ -656,6 +673,28 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_row_resolves_to_chatgpt_for_an_app_target() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        // ChatGptHelp is row 3 in the app menu (EditHome, HideApp, RevealInFinder, …).
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(3),
+                Some(&target)
+            ),
+            ContextMenuSelection::ChatGptHelp(AppId::from_normalized("calc"))
+        );
+    }
+
+    #[test]
+    fn chatgpt_row_with_no_target_is_close_only() {
+        assert_eq!(
+            resolve_context_menu_selection(&context_menu::ContextMenuItem::ALL, Some(3), None),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
     fn outside_release_and_mock_rows_are_close_only() {
         let target = LauncherItem::app(AppId::from_normalized("calc"));
         // Outside the panel: no row hit.
@@ -667,8 +706,9 @@ mod tests {
             ),
             ContextMenuSelection::CloseOnly
         );
-        // The remaining mock rows (IconLarger, IconSmaller, AppInfo).
-        for row in 3..context_menu::ContextMenuItem::ALL.len() {
+        // The remaining mock rows (IconLarger, IconSmaller, AppInfo) start at
+        // row 4 now that ChatGptHelp occupies row 3.
+        for row in 4..context_menu::ContextMenuItem::ALL.len() {
             assert_eq!(
                 resolve_context_menu_selection(
                     &context_menu::ContextMenuItem::ALL,

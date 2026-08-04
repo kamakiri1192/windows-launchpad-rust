@@ -67,6 +67,17 @@ pub struct AppRecord {
     pub slot: u32,
     pub icon_state: IconState,
     pub uv: Option<UvRect>,
+    /// App version string for the ChatGPT-help prompt (macOS
+    /// `CFBundleShortVersionString` / Windows exe version resource), or `""`
+    /// when the platform could not read one.
+    pub version: String,
+    /// Publisher / copyright string for the ChatGPT-help prompt (macOS
+    /// `NSHumanReadableCopyright` → `CFBundleGetInfoString` / Windows
+    /// `CompanyName` → `LegalCopyright`), or `""` when unavailable.
+    pub publisher: String,
+    /// Stable vendor identifier for the ChatGPT-help prompt (macOS bundle id /
+    /// Windows `ProductName`), or `""` when unavailable.
+    pub identifier: String,
 }
 
 /// Snapshot of one app for click-to-launch (and reveal-in-file-manager). Owns
@@ -80,6 +91,12 @@ pub struct AppLaunchInfo {
     /// the executable inside a `.app` bundle), or empty when the shortcut has
     /// no resolvable target.
     pub resolved_target: PathBuf,
+    /// App version string for the ChatGPT-help prompt, or `""` when unknown.
+    pub version: String,
+    /// Publisher / copyright string for the ChatGPT-help prompt, or `""`.
+    pub publisher: String,
+    /// Stable vendor identifier for the ChatGPT-help prompt, or `""`.
+    pub identifier: String,
 }
 
 impl From<&AppRecord> for AppLaunchInfo {
@@ -88,6 +105,9 @@ impl From<&AppRecord> for AppLaunchInfo {
             name: r.name.clone(),
             link_path: r.link_path.clone(),
             resolved_target: r.resolved_target.clone(),
+            version: r.version.clone(),
+            publisher: r.publisher.clone(),
+            identifier: r.identifier.clone(),
         }
     }
 }
@@ -252,6 +272,9 @@ mod tests {
             slot: 0,
             icon_state: IconState::Missing,
             uv: None,
+            version: String::new(),
+            publisher: String::new(),
+            identifier: String::new(),
         }
     }
 

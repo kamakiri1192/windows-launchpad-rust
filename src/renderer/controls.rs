@@ -81,6 +81,9 @@ pub const KIND_PLUS: f32 = 16.0;
 pub const KIND_MINUS: f32 = 17.0;
 /// Info glyph used by the context menu (app info).
 pub const KIND_INFO: f32 = 18.0;
+/// ChatGPT logo glyph used by the context menu (ChatGPT help). Drawn by
+/// sampling the dedicated SVG texture (kind 19), not a procedural SDF.
+pub const KIND_CHATGPT_LOGO: f32 = 19.0;
 
 /// Uniform for the bottom-control overlay + text shaders. The bottom control
 /// uses only the viewport; edit badges also use scroll and the page frame clip.

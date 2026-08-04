@@ -22,7 +22,7 @@ const ROW_HEIGHT: f32 = 40.0;
 const ROW_INNER_MARGIN_X: f32 = 10.0;
 const CONTENT_PAD_X: f32 = 30.0;
 const CONTENT_PAD_Y: f32 = 20.0;
-const ICON_SIZE: f32 = 20.0;
+const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 17.0;
 /// Content-driven panel width is clamped to these bounds (logical px at 1× DPI)
 /// so very short or very long localized labels still render comfortably. The
@@ -32,11 +32,16 @@ const MIN_MENU_WIDTH: f32 = 200.0;
 const MAX_MENU_WIDTH: f32 = 320.0;
 /// Conservative fallback for the longest label width (logical px) when the text
 /// engine is unavailable at open time. Roughly the width of the longest current
-/// label ("エクスプローラーで開く") at 14 px.
-pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
+/// label ("ChatGPTで使い方を調べる") at 14 px.
+pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 200.0;
 /// Number of rows currently emitted by the context menu. Kept public so the
 /// feature animation and renderer-neutral input model share one array size.
-pub const CONTEXT_MENU_ITEM_COUNT: usize = 6;
+pub const CONTEXT_MENU_ITEM_COUNT: usize = 7;
+/// Number of rows omitted when the menu targets a folder. A folder cannot be
+/// hidden (no hide-app row), has no file to reveal (no reveal row), and has no
+/// app metadata for a ChatGPT lookup (no chatgpt-help row), so three rows are
+/// omitted from the app menu.
+pub const FOLDER_OMITTED_ITEM_COUNT: usize = 3;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
@@ -73,6 +78,8 @@ pub enum ContextMenuItem {
     HideApp,
     /// Finderで開く / Reveal in Explorer
     RevealInFinder,
+    /// ChatGPTで使い方を調べる
+    ChatGptHelp,
     /// アイコンを大きくする
     IconLarger,
     /// アイコンを小さくする
@@ -87,20 +94,23 @@ impl ContextMenuItem {
         Self::EditHome,
         Self::HideApp,
         Self::RevealInFinder,
+        Self::ChatGptHelp,
         Self::IconLarger,
         Self::IconSmaller,
         Self::AppInfo,
     ];
 
     /// Number of rows shown when the menu targets a folder. A folder has no
-    /// hide action (it cannot be hidden) and no reveal action (it is a virtual
-    /// launcher group with no file on disk to open), so both rows are omitted —
-    /// the folder menu is two rows shorter than the app menu.
-    pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - 2;
+    /// hide action (it cannot be hidden), no file to reveal (it is a virtual
+    /// launcher group with no file on disk to open), and no app metadata for a
+    /// ChatGPT lookup, so [`FOLDER_OMITTED_ITEM_COUNT`] rows are omitted — the
+    /// folder menu is that many rows shorter than the app menu.
+    pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - FOLDER_OMITTED_ITEM_COUNT;
 
     /// Items shown when the menu targets a folder. See [`FOLDER_ITEM_COUNT`]:
-    /// a folder has neither a hide action nor a file to reveal, so "アプリを
-    /// 非表示" and "Finderで開く" are both omitted.
+    /// a folder has no hide action, no file to reveal, and no app metadata for
+    /// a ChatGPT lookup, so "アプリを非表示", "Finderで開く", and "ChatGPTで
+    /// 使い方を調べる" are all omitted.
     pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
         Self::EditHome,
         Self::IconLarger,
@@ -120,6 +130,7 @@ impl ContextMenuItem {
                     "エクスプローラーで開く"
                 }
             }
+            Self::ChatGptHelp => "ChatGPTで使い方を調べる",
             Self::IconLarger => "アイコンを大きくする",
             Self::IconSmaller => "アイコンを小さくする",
             Self::AppInfo => "アプリの概要",
@@ -135,6 +146,7 @@ impl ContextMenuItem {
         Self::EditHome.label(),
         Self::HideApp.label(),
         Self::RevealInFinder.label(),
+        Self::ChatGptHelp.label(),
         Self::IconLarger.label(),
         Self::IconSmaller.label(),
         Self::AppInfo.label(),
@@ -521,6 +533,7 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
         ContextMenuItem::EditHome => ControlKind::Pencil,
         ContextMenuItem::HideApp => ControlKind::EyeOff,
         ContextMenuItem::RevealInFinder => ControlKind::FolderIcon,
+        ContextMenuItem::ChatGptHelp => ControlKind::ChatGptLogo,
         ContextMenuItem::IconLarger => ControlKind::Plus,
         ContextMenuItem::IconSmaller => ControlKind::Minus,
         ContextMenuItem::AppInfo => ControlKind::Info,
@@ -536,18 +549,20 @@ mod tests {
     };
     use crate::ui_model::render_model::ControlKind;
 
-    /// A folder target has no hide action and no file to reveal, so its menu
-    /// omits both rows (two rows shorter than the app menu).
+    /// A folder target has no hide action, no file to reveal, and no app
+    /// metadata for a ChatGPT lookup, so its menu omits all three rows (three
+    /// rows shorter than the app menu).
     #[test]
-    fn folder_menu_omits_the_hide_app_and_reveal_rows() {
+    fn folder_menu_omits_the_hide_reveal_and_chatgpt_rows() {
         let (items, labels) = menu_rows(true);
         assert_eq!(items, &ContextMenuItem::FOLDER_ITEMS[..]);
         assert_eq!(labels, &ContextMenuItem::FOLDER_ITEMS_LABELS[..]);
-        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 2);
+        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 3);
         assert!(!items.contains(&ContextMenuItem::HideApp));
         assert!(!items.contains(&ContextMenuItem::RevealInFinder));
+        assert!(!items.contains(&ContextMenuItem::ChatGptHelp));
 
-        // App targets keep all six rows, in the same order as `ALL`.
+        // App targets keep all seven rows, in the same order as `ALL`.
         let (app_items, app_labels) = menu_rows(false);
         assert_eq!(app_items, &ContextMenuItem::ALL[..]);
         assert_eq!(app_labels, &ContextMenuItem::ALL_LABELS[..]);
@@ -687,7 +702,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
-            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             items: &ContextMenuItem::ALL,
             labels: &ContextMenuItem::ALL_LABELS,
         };
@@ -755,6 +770,7 @@ mod tests {
                 ControlKind::Pencil,
                 ControlKind::EyeOff,
                 ControlKind::FolderIcon,
+                ControlKind::ChatGptLogo,
                 ControlKind::Plus,
                 ControlKind::Minus,
                 ControlKind::Info,

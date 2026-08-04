@@ -19,6 +19,11 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+// binding 1 + 2 are the shared glyph atlas + sampler (used by the control-text
+// pipeline, unused by this shader). binding 3 + 4 are the dedicated ChatGPT
+// logo texture + sampler sampled by kind 19.
+@group(0) @binding(3) var chatgpt_logo: texture_2d<f32>;
+@group(0) @binding(4) var chatgpt_sampler: sampler;
 
 // kind values:
 //   0 = magnifier (ring + handle)
@@ -40,6 +45,8 @@ struct Uniforms {
 //  16 = plus (context menu: larger icon) — params: (size, alpha, stroke, _)
 //  17 = minus (context menu: smaller icon) — params: (size, alpha, stroke, _)
 //  18 = info (context menu: app info) — params: (size, alpha, stroke, _)
+//  19 = ChatGPT logo (context menu: ChatGPT help) — texture-sampled, not an SDF.
+//       params: (size, alpha, _, _); samples the dedicated texture at binding 3.
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -456,7 +463,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let len = size * 0.5;
         let d = sd_segment(p - vec2<f32>(-len, 0.0), vec2<f32>(2.0 * len, 0.0), w);
         coverage = 1.0 - smoothstep(-1.0, 1.0, d);
-    } else {
+    } else if kind < 18.5 {
         // Info (i): a dot above a vertical stem. params: (size, alpha, stroke, _).
         let size = in.params.x;
         let w = max(in.params.z, 1.0);
@@ -471,6 +478,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             1.0 - smoothstep(-1.0, 1.0, dot),
             1.0 - smoothstep(-1.0, 1.0, stem),
         );
+    } else {
+        // ChatGPT logo (kind 19): sample the dedicated rasterized SVG texture
+        // (binding 3). The vertex shader sized this kind's quad to a half-extent
+        // of `size * 1.2` (the context-menu glyph bbox, see element_extent), so
+        // `local` ranges over ±(size * 1.2). Map that full quad to [0,1]² UVs
+        // so the logo fills the same visual footprint as the SDF glyphs.
+        // (`size` alone would only cover the central ~83%, making the logo look
+        // noticeably smaller than its neighbours.) The texture is straight-alpha
+        // RGBA; we use its alpha as coverage. The PNG is already recolored to
+        // the menu label near-black, so the instance tint is a pass-through.
+        let half_extent = max(in.params.x * 1.2, 1.0);
+        let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
+        if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+            let sampled = textureSample(chatgpt_logo, chatgpt_sampler, uv);
+            coverage = sampled.a;
+        } else {
+            coverage = 0.0;
+        }
     }
 
     // Only the edit-badge glyph (kind 4) is masked to the page frame. The
