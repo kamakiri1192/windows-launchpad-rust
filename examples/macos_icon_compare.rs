@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use image::RgbaImage;
+use image::{imageops, ImageFormat, Rgba, RgbaImage};
 use serde::Serialize;
 
 #[derive(Debug)]
@@ -17,6 +17,7 @@ struct Args {
     root: PathBuf,
     baseline: String,
     report: PathBuf,
+    preview: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +107,7 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("serialize comparison JSON: {error}"))?;
     std::fs::write(&json_path, json)
         .map_err(|error| format!("write {}: {error}", json_path.display()))?;
+    write_preview(&args.root, &args.baseline, &comparisons, &args.preview)?;
     print!("{report}");
     Ok(())
 }
@@ -114,6 +116,7 @@ fn parse_args() -> Result<Args, String> {
     let mut root = PathBuf::from("target/macos-captures");
     let mut baseline = "macos-14".to_owned();
     let mut report = PathBuf::from("target/macos-captures/compatibility-report.md");
+    let mut preview = PathBuf::from("target/macos-captures/compatibility-preview.png");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -134,9 +137,15 @@ fn parse_args() -> Result<Args, String> {
                         .ok_or_else(|| "--report requires a file".to_owned())?,
                 );
             }
+            "--preview" => {
+                preview = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--preview requires a file".to_owned())?,
+                );
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: macos_icon_compare [--root DIR] [--baseline NAME] [--report FILE]"
+                    "Usage: macos_icon_compare [--root DIR] [--baseline NAME] [--report FILE] [--preview FILE]"
                 );
                 std::process::exit(0);
             }
@@ -147,6 +156,7 @@ fn parse_args() -> Result<Args, String> {
         root,
         baseline,
         report,
+        preview,
     })
 }
 
@@ -301,6 +311,70 @@ fn render_report(baseline: &str, comparisons: &[AppComparison]) -> String {
         ));
     }
     report
+}
+
+/// Create a single image that makes captured pixels easy to inspect after
+/// downloading the workflow artifact. Border colors are the legend:
+/// blue = baseline source, orange = candidate source, green = baseline
+/// normalized, magenta = candidate normalized.
+fn write_preview(
+    root: &Path,
+    baseline: &str,
+    comparisons: &[AppComparison],
+    output: &Path,
+) -> Result<(), String> {
+    const CELL: u32 = 256;
+    const GAP: u32 = 12;
+    const BORDER: u32 = 4;
+    let columns = 4;
+    let rows = comparisons.len() as u32;
+    let width = GAP + columns * (CELL + GAP);
+    let height = GAP + rows * (CELL + GAP);
+    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
+
+    for (row, comparison) in comparisons.iter().enumerate() {
+        let baseline_app = root.join(baseline).join(&comparison.app);
+        let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
+        let images = [
+            (baseline_app.join("source.png"), [80, 150, 255, 255]),
+            (candidate_app.join("source.png"), [255, 160, 70, 255]),
+            (baseline_app.join("normalized.png"), [100, 210, 130, 255]),
+            (candidate_app.join("normalized.png"), [230, 100, 220, 255]),
+        ];
+        for (column, (path, border_color)) in images.into_iter().enumerate() {
+            let bytes = std::fs::read(&path)
+                .map_err(|error| format!("read preview image {}: {error}", path.display()))?;
+            let image = image::load_from_memory(&bytes)
+                .map_err(|error| format!("decode preview image {}: {error}", path.display()))?
+                .to_rgba8();
+            let content_size = CELL - BORDER * 2;
+            let image = imageops::resize(
+                &image,
+                content_size,
+                content_size,
+                imageops::FilterType::Nearest,
+            );
+            let x = GAP + column as u32 * (CELL + GAP);
+            let y = GAP + row as u32 * (CELL + GAP);
+            imageops::overlay(
+                &mut canvas,
+                &image,
+                i64::from(x + BORDER),
+                i64::from(y + BORDER),
+            );
+            for offset in 0..CELL {
+                for border in 0..BORDER {
+                    canvas.put_pixel(x + offset, y + border, Rgba(border_color));
+                    canvas.put_pixel(x + offset, y + CELL - 1 - border, Rgba(border_color));
+                    canvas.put_pixel(x + border, y + offset, Rgba(border_color));
+                    canvas.put_pixel(x + CELL - 1 - border, y + offset, Rgba(border_color));
+                }
+            }
+        }
+    }
+    canvas
+        .save_with_format(output, ImageFormat::Png)
+        .map_err(|error| format!("write preview {}: {error}", output.display()))
 }
 
 fn yes_no(value: bool) -> &'static str {

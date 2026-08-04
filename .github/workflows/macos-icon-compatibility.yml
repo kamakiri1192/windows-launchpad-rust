@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: macos-icon-compatibility-${{ github.event.pull_request.number || github.ref }}
@@ -99,7 +102,8 @@ jobs:
           cargo run --locked --example macos_icon_compare -- \
             --root target/macos-captures \
             --baseline macos-14 \
-            --report target/macos-captures/compatibility-report.md
+            --report target/macos-captures/compatibility-report.md \
+            --preview target/macos-captures/compatibility-preview.png
 
       - name: Add comparison to job summary
         run: cat target/macos-captures/compatibility-report.md >> "$GITHUB_STEP_SUMMARY"
@@ -111,5 +115,95 @@ jobs:
           path: |
             target/macos-captures/compatibility-report.md
             target/macos-captures/compatibility-report.json
+            target/macos-captures/compatibility-preview.png
           if-no-files-found: error
           retention-days: 14
+
+      - name: Comment comparison on pull request
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          REPORT_JSON: target/macos-captures/compatibility-report.json
+          MARKER: '<!-- macos-icon-compatibility-report -->'
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync(process.env.REPORT_JSON, 'utf8'));
+            const { owner, repo } = context.repo;
+            const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+
+            const artifactLink = (name, label = name) => {
+              const artifact = artifacts.artifacts.find((item) => item.name === name);
+              if (!artifact) return `未取得: ${label}`;
+              const url = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}/artifacts/${artifact.id}`;
+              return `[${label}](${url})`;
+            };
+
+            const statusFor = (comparison) => {
+              const source = comparison.source.rgba_bytes_equal;
+              const normalized = comparison.normalized.rgba_bytes_equal;
+              if (source && normalized) return '✅ RGBA一致';
+              const sourceDiff = `${comparison.source.changed_pixels}/${comparison.source.total_pixels}`;
+              const normalizedDiff = `${comparison.normalized.changed_pixels}/${comparison.normalized.total_pixels}`;
+              return `⚠️ 差分あり（取得 ${sourceDiff} / 正規化 ${normalizedDiff}）`;
+            };
+
+            const rows = report.map((comparison) => [
+              `| ${comparison.app} | ${comparison.candidate_os} | ${statusFor(comparison)} |`,
+            ].join(''));
+
+            const body = [
+              process.env.MARKER,
+              '## macOSアイコン互換性検証',
+              '',
+              'macOS 14を基準に、同じアプリをmacOS 15・26で取得して比較しました。',
+              '',
+              '| アプリ | 比較対象 | 結果 |',
+              '| --- | --- | --- |',
+              ...rows,
+              '',
+              '判定はPNGファイルではなく、展開後のRGBA画素を基準にしています。',
+              '差分は失敗ではなく、macOS側のアイコン表示変更を確認するための情報です。',
+              '',
+              '### 結果ファイル',
+              '',
+              `- ${artifactLink('macos-icon-compatibility-report', '比較レポート（Markdown / JSON / コンタクトシート）')}`,
+              `- ${artifactLink('macos-icon-capture-macos-14', 'macOS 14の取得画像')}`,
+              `- ${artifactLink('macos-icon-capture-macos-15', 'macOS 15の取得画像')}`,
+              `- ${artifactLink('macos-icon-capture-macos-26', 'macOS 26の取得画像')}`,
+              '',
+              '画像は各Artifactを開くと、`source.png`（取得直後）と`normalized.png`（正規化後）を確認できます。',
+              '',
+              `[Workflow実行結果](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(process.env.MARKER)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
