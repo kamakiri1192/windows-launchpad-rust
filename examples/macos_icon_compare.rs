@@ -472,8 +472,8 @@ fn format_bbox(bbox: &Option<BoundingBox>) -> String {
         .unwrap_or_else(|| "none".to_owned())
 }
 
-/// Create a single image that makes captured pixels easy to inspect after
-/// downloading the workflow artifact. Border colors are the legend:
+/// Create a labeled contact sheet that makes captured pixels easy to inspect
+/// after downloading the workflow artifact. Border colors are the legend:
 /// blue = baseline source, orange = candidate source, green = baseline
 /// normalized, magenta = candidate normalized.
 fn write_preview(
@@ -483,15 +483,36 @@ fn write_preview(
     output: &Path,
 ) -> Result<(), String> {
     const CELL: u32 = 256;
+    const LABEL_HEIGHT: u32 = 32;
+    const ROW_HEIGHT: u32 = LABEL_HEIGHT + CELL;
+    const ROW_LABEL_WIDTH: u32 = 180;
     const GAP: u32 = 12;
     const BORDER: u32 = 4;
-    let columns = 4;
+    let columns = 4u32;
     let rows = comparisons.len() as u32;
-    let width = GAP + columns * (CELL + GAP);
-    let height = GAP + rows * (CELL + GAP);
+    let image_start_x = GAP + ROW_LABEL_WIDTH + GAP;
+    let width = image_start_x + columns * (CELL + GAP);
+    let height = GAP + rows * (ROW_HEIGHT + GAP);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
 
     for (row, comparison) in comparisons.iter().enumerate() {
+        let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
+        let baseline_label = os_label(baseline);
+        let candidate_label = os_label(&comparison.candidate);
+        draw_row_label(
+            &mut canvas,
+            GAP,
+            row_y,
+            ROW_LABEL_WIDTH,
+            &comparison.app,
+            &candidate_label,
+        );
+        let headers = [
+            format!("{baseline_label} SRC"),
+            format!("{candidate_label} SRC"),
+            format!("{baseline_label} NORM"),
+            format!("{candidate_label} NORM"),
+        ];
         let baseline_app = root.join(baseline).join(&comparison.app);
         let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
         let images = [
@@ -501,6 +522,16 @@ fn write_preview(
             (candidate_app.join("normalized.png"), [230, 100, 220, 255]),
         ];
         for (column, (path, border_color)) in images.into_iter().enumerate() {
+            let x = image_start_x + column as u32 * (CELL + GAP);
+            draw_text_centered(
+                &mut canvas,
+                x,
+                row_y + 4,
+                CELL,
+                &headers[column],
+                2,
+                Rgba([220, 220, 225, 255]),
+            );
             let bytes = std::fs::read(&path)
                 .map_err(|error| format!("read preview image {}: {error}", path.display()))?;
             let image = image::load_from_memory(&bytes)
@@ -513,8 +544,7 @@ fn write_preview(
                 content_size,
                 imageops::FilterType::Nearest,
             );
-            let x = GAP + column as u32 * (CELL + GAP);
-            let y = GAP + row as u32 * (CELL + GAP);
+            let y = row_y + LABEL_HEIGHT;
             imageops::overlay(
                 &mut canvas,
                 &image,
@@ -565,43 +595,13 @@ fn write_shape_preview(
         let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
         let baseline_label = os_label(baseline);
         let candidate_label = os_label(&comparison.candidate);
-        let app_line_1 = if comparison.app == "activity-monitor" {
-            "ACTIVITY"
-        } else {
-            "APP"
-        };
-        let app_line_2 = if comparison.app == "activity-monitor" {
-            "MONITOR"
-        } else {
-            "STORE"
-        };
-        let row_label_y = row_y + LABEL_HEIGHT + (CELL - 3 * 15 - 2 * 6) / 2;
-        draw_text_centered(
+        draw_row_label(
             &mut canvas,
             GAP,
-            row_label_y,
+            row_y,
             ROW_LABEL_WIDTH,
-            app_line_1,
-            3,
-            Rgba([230, 230, 235, 255]),
-        );
-        draw_text_centered(
-            &mut canvas,
-            GAP,
-            row_label_y + 21,
-            ROW_LABEL_WIDTH,
-            app_line_2,
-            3,
-            Rgba([230, 230, 235, 255]),
-        );
-        draw_text_centered(
-            &mut canvas,
-            GAP,
-            row_label_y + 42,
-            ROW_LABEL_WIDTH,
+            &comparison.app,
             &candidate_label,
-            3,
-            Rgba([170, 175, 185, 255]),
         );
 
         let baseline_app = root.join(baseline).join(&comparison.app);
@@ -664,6 +664,56 @@ fn write_shape_preview(
     canvas
         .save_with_format(output, ImageFormat::Png)
         .map_err(|error| format!("write shape preview {}: {error}", output.display()))
+}
+
+fn draw_row_label(
+    canvas: &mut RgbaImage,
+    x: u32,
+    row_y: u32,
+    width: u32,
+    app: &str,
+    candidate_label: &str,
+) {
+    const LABEL_HEIGHT: u32 = 32;
+    const CELL: u32 = 256;
+    let app_line_1 = if app == "activity-monitor" {
+        "ACTIVITY"
+    } else {
+        "APP"
+    };
+    let app_line_2 = if app == "activity-monitor" {
+        "MONITOR"
+    } else {
+        "STORE"
+    };
+    let row_label_y = row_y + LABEL_HEIGHT + (CELL - 3 * 15 - 2 * 6) / 2;
+    draw_text_centered(
+        canvas,
+        x,
+        row_label_y,
+        width,
+        app_line_1,
+        3,
+        Rgba([230, 230, 235, 255]),
+    );
+    draw_text_centered(
+        canvas,
+        x,
+        row_label_y + 21,
+        width,
+        app_line_2,
+        3,
+        Rgba([230, 230, 235, 255]),
+    );
+    draw_text_centered(
+        canvas,
+        x,
+        row_label_y + 42,
+        width,
+        candidate_label,
+        3,
+        Rgba([170, 175, 185, 255]),
+    );
 }
 
 fn os_label(name: &str) -> String {
