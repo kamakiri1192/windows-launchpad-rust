@@ -15,6 +15,7 @@
 use std::time::Instant;
 
 use crate::debug_log;
+use crate::domain::app_registry::AppLaunchInfo;
 use crate::features::edit_mode::EditModeCommand;
 use crate::scroll::Phase;
 
@@ -253,6 +254,17 @@ impl App {
                     ),
                 }
             }
+            AppCommand::RevealApp(info) => {
+                let name = info.name.clone();
+                let path = reveal_target_path(&info);
+                self.hide();
+                match crate::platform::launch::reveal(&path) {
+                    Ok(()) => eprintln!("revealed {} ({})", name, path.display()),
+                    Err(err) => {
+                        eprintln!("failed to reveal {} ({}): {}", name, path.display(), err)
+                    }
+                }
+            }
             AppCommand::PersistSettings => self.persist_settings(),
             AppCommand::PersistUserOrder => self.persist_user_order(),
             AppCommand::PersistHidden => self.persist_hidden(),
@@ -338,12 +350,80 @@ impl App {
     }
 }
 
+/// Pick the path the OS file manager should select for a reveal.
+///
+/// Windows selects the resolved target (the real `.exe` the `.lnk` expands
+/// to) when the shortcut resolved — the user sees the app's install folder
+/// with the app selected, which is the better experience — and falls back to
+/// the `.lnk` itself when the target could not be resolved. macOS selects the
+/// `.app` bundle (`link_path`): `open -R` on the executable inside a bundle
+/// would point Finder at `Contents/MacOS` instead of the app itself.
+fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        if info.resolved_target.as_os_str().is_empty() {
+            info.link_path.clone()
+        } else {
+            info.resolved_target.clone()
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        info.link_path.clone()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        info.link_path.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::app_id::AppId;
     use crate::domain::launcher_item::LauncherItem;
     use crate::features::edit_mode::EditModeCommand;
+
+    fn launch_info() -> AppLaunchInfo {
+        AppLaunchInfo {
+            name: "X".to_string(),
+            link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
+        }
+    }
+
+    /// The reveal path policy: Windows selects the resolved target (the real
+    /// `.exe`) when the shortcut resolved, falling back to the `.lnk`; macOS
+    /// always selects the `.app` bundle (`link_path`), never the executable
+    /// buried in `Contents/MacOS`.
+    #[test]
+    fn reveal_target_path_follows_platform_policy() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                reveal_target_path(&launch_info()),
+                std::path::PathBuf::from("x.exe")
+            );
+            // Unresolvable shortcut → the .lnk itself.
+            let unresolved = AppLaunchInfo {
+                resolved_target: std::path::PathBuf::new(),
+                ..launch_info()
+            };
+            assert_eq!(
+                reveal_target_path(&unresolved),
+                std::path::PathBuf::from("x.lnk")
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            // macOS (and other platforms): the bundle path, even when a
+            // resolved target exists.
+            assert_eq!(
+                reveal_target_path(&launch_info()),
+                std::path::PathBuf::from("x.lnk")
+            );
+        }
+    }
 
     /// The pure projection from `EditModeCommand` to `AppCommand` is total:
     /// every edit-mode variant maps to exactly one app command. This test

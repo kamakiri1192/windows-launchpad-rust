@@ -60,7 +60,7 @@ pub const MENU_LABEL_RGB: [f32; 3] = [0.11, 0.11, 0.118];
 pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
 /// One of the context-menu actions. Selecting an action runs it and closes the
-/// menu; the mock rows (reveal / icon size / app info) still close only.
+/// menu; the mock rows (icon size / app info) still close only.
 ///
 /// Defined here (in the pure layout layer) rather than in the feature module
 /// so the renderer-neutral geometry does not depend on the binary-only

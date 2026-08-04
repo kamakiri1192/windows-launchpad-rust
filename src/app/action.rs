@@ -1569,6 +1569,7 @@ mod tests {
         let launch = AppCommand::LaunchApp(crate::domain::app_registry::AppLaunchInfo {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
         });
         assert!(matches!(hide, AppCommand::HideWindow));
         assert!(matches!(launch, AppCommand::LaunchApp(_)));
