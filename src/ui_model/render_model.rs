@@ -81,6 +81,15 @@ pub struct GlassSurface {
     /// Per-surface glass activation level (0.0 = idle, 1.0 = fully active).
     /// Controls blur/edge-light/saturation/chromatic-aberration intensity per-shape.
     pub activation: f32,
+    /// Optional per-surface backdrop blur radius. `None` uses the renderer's
+    /// global glass blur setting.
+    pub blur_radius: Option<f32>,
+    /// How strongly this surface replaces the transparent window backdrop
+    /// with the filtered RGB selected by its compositing lane. That source
+    /// may be the native desktop capture or a flattened completed scene.
+    /// `0` keeps ordinary translucent glass compositing; `1` prevents the real
+    /// desktop from bleeding back through an opaque backdrop material.
+    pub backdrop_replacement: f32,
     /// Optional per-surface tint override applied to the glass color.
     pub tint: Option<Color>,
 }

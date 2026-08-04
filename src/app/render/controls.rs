@@ -392,6 +392,8 @@ fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSu
         z: 0,
         clip: None,
         activation: 0.0,
+        blur_radius: None,
+        backdrop_replacement: 0.0,
         tint: None,
     })
 }
@@ -411,6 +413,8 @@ fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometr
         z: 10,
         clip: None,
         activation: 0.0,
+        blur_radius: None,
+        backdrop_replacement: 0.0,
         tint: None,
     }
 }

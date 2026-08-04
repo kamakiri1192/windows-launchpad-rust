@@ -660,9 +660,26 @@ impl Renderer {
         }
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
-        // Context-menu glass must sample the complete modal scene. Folder child
-        // icons are modal content; rendering this pass before them lets those
-        // icons overwrite the tint and appear to punch through the menu.
+        // The context blur must see the exact pixels below the menu, including
+        // top-level icons and any modal/folder content. Finish those writes,
+        // copy the pre-menu swapchain, flatten it over the desktop capture,
+        // and blur that completed scene before encoding the menu itself.
+        if self.liquid_glass.has_context_menu_glass() {
+            self.gpu_profiler.resolve(&mut encoder);
+            self.queue.submit(std::iter::once(encoder.finish()));
+            self.liquid_glass.prepare_context_menu_scene_blur(
+                &self.device,
+                &self.queue,
+                frame.texture(),
+            );
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("context menu encoder"),
+                });
+        }
+
+        // Composite the blurred completed scene above every lower/modal layer.
         let profile_scope = self
             .gpu_profiler
             .begin("context_menu_liquid_glass", &mut encoder);

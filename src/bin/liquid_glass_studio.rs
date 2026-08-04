@@ -48,6 +48,13 @@ struct GlassUniforms {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurUniforms {
+    sample_scale: f32,
+    _pad: [f32; 3],
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct GlassShape {
     center: [f32; 2],
@@ -465,6 +472,7 @@ struct StudioRenderer {
     params: StudioParams,
     debug: DebugOptions,
     uniform_buffer: wgpu::Buffer,
+    blur_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
@@ -550,6 +558,14 @@ impl StudioRenderer {
             contents: bytemuck::bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let blur_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("studio liquid glass blur uniforms"),
+            contents: bytemuck::bytes_of(&BlurUniforms {
+                sample_scale: 1.0,
+                _pad: [0.0; 3],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let shape_buffer = create_shape_buffer(&device, &[]);
         let ui_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("studio ui uniforms"),
@@ -633,7 +649,11 @@ impl StudioRenderer {
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("studio liquid glass blur bgl"),
-                entries: &[texture_entry(0, true), sampler_entry(1)],
+                entries: &[
+                    texture_entry(0, true),
+                    sampler_entry(1),
+                    blur_uniform_entry(2),
+                ],
             });
         let final_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -679,6 +699,7 @@ impl StudioRenderer {
             &backdrop_view,
             &blur_levels,
             &sampler,
+            &blur_uniform_buffer,
         );
         let final_bind_group = create_final_bind_group(
             &device,
@@ -817,6 +838,7 @@ impl StudioRenderer {
             params,
             debug,
             uniform_buffer,
+            blur_uniform_buffer,
             shape_buffer,
             geometry_texture,
             geometry_view,
@@ -916,6 +938,7 @@ impl StudioRenderer {
             &self.backdrop_view,
             &self.blur_levels,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
@@ -987,6 +1010,14 @@ impl StudioRenderer {
         );
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        self.queue.write_buffer(
+            &self.blur_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&BlurUniforms {
+                sample_scale: (self.params.blur_radius / 16.0).clamp(0.25, 2.5),
+                _pad: [0.0; 3],
+            }),
+        );
         let ui_instances = build_ui_instances(
             self.config.width as f32,
             self.config.height as f32,
@@ -1877,6 +1908,7 @@ fn create_blur_bind_group(
     layout: &wgpu::BindGroupLayout,
     source_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("studio liquid glass blur bind group"),
@@ -1890,6 +1922,10 @@ fn create_blur_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
         ],
     })
 }
@@ -1900,16 +1936,17 @@ fn create_blur_pyramid_bind_groups(
     backdrop_view: &wgpu::TextureView,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> ([wgpu::BindGroup; 3], [wgpu::BindGroup; 3]) {
     let down = [
-        create_blur_bind_group(device, layout, backdrop_view, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
+        create_blur_bind_group(device, layout, backdrop_view, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
     ];
     let up = [
-        create_blur_bind_group(device, layout, &levels[2].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
+        create_blur_bind_group(device, layout, &levels[2].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
     ];
     (down, up)
 }
@@ -2076,6 +2113,19 @@ fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
             min_binding_size: NonZeroU64::new(std::mem::size_of::<GlassUniforms>() as u64),
+        },
+        count: None,
+    }
+}
+
+fn blur_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<BlurUniforms>() as u64),
         },
         count: None,
     }

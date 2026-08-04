@@ -5,7 +5,8 @@ use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
 use super::{
-    GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT, TINT_FORMAT,
+    BlurUniforms, GlassShape, GlassUniforms, SceneFlattenUniforms, BACKDROP_FORMAT, BLUR_FORMAT,
+    GEOMETRY_FORMAT, TINT_FORMAT,
 };
 
 pub(super) fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Buffer {
@@ -47,6 +48,29 @@ pub(super) fn create_uniform_buffer(
 ) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
+        contents: bytemuck::bytes_of(uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+pub(super) fn create_blur_uniform_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    uniforms: &BlurUniforms,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::bytes_of(uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+pub(super) fn create_scene_flatten_uniform_buffer(
+    device: &wgpu::Device,
+    uniforms: &SceneFlattenUniforms,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("liquid glass context menu scene flatten uniforms"),
         contents: bytemuck::bytes_of(uniforms),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     })
@@ -110,6 +134,22 @@ pub(super) fn create_backdrop_texture(
         height,
         BACKDROP_FORMAT,
         wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    )
+}
+
+pub(super) fn create_context_menu_scene_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    surface_format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    create_texture(
+        device,
+        "liquid glass context menu pre-menu scene texture",
+        width,
+        height,
+        surface_format.remove_srgb_suffix(),
+        wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
     )
 }
 
@@ -313,11 +353,44 @@ pub(super) fn create_final_bind_group(
     })
 }
 
+pub(super) fn create_scene_flatten_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    scene_view: &wgpu::TextureView,
+    backdrop_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("liquid glass context menu scene flatten bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(scene_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(backdrop_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: uniforms.as_entire_binding(),
+            },
+        ],
+    })
+}
+
 fn create_blur_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     source_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("liquid glass blur bg"),
@@ -331,6 +404,10 @@ fn create_blur_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
         ],
     })
 }
@@ -340,21 +417,46 @@ pub(super) fn create_blur_pyramid_bind_groups(
     layout: &wgpu::BindGroupLayout,
     backdrop_view: &wgpu::TextureView,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
-    blur_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> ([wgpu::BindGroup; 3], [wgpu::BindGroup; 3]) {
     let down = [
-        create_blur_bind_group(device, layout, backdrop_view, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
+        create_blur_bind_group(device, layout, backdrop_view, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
     ];
     let up = [
-        create_blur_bind_group(device, layout, &levels[2].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
+        create_blur_bind_group(device, layout, &levels[2].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
     ];
-    let _ = blur_view;
     (down, up)
+}
+
+pub(super) fn blur_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<BlurUniforms>() as u64),
+        },
+        count: None,
+    }
+}
+
+pub(super) fn scene_flatten_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<SceneFlattenUniforms>() as u64),
+        },
+        count: None,
+    }
 }
 
 #[cfg(test)]

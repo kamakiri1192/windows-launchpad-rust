@@ -6,6 +6,8 @@ use std::{
 
 const LAUNCHPAD_UNIFORMS_SIZE: u64 = 48;
 const GLASS_UNIFORMS_SIZE: u64 = 112;
+const BLUR_UNIFORMS_SIZE: u64 = 16;
+const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -286,7 +288,11 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
     });
     let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass blur bgl"),
-        entries: &[texture_entry(0, true), sampler_entry(1)],
+        entries: &[
+            texture_entry(0, true),
+            sampler_entry(1),
+            uniform_entry(2, wgpu::ShaderStages::FRAGMENT, BLUR_UNIFORMS_SIZE),
+        ],
     });
     let final_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass final bgl"),
@@ -297,6 +303,15 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
             texture_entry(3, false),
             texture_entry(4, true),
             texture_entry(5, true),
+        ],
+    });
+    let scene_flatten_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("test liquid glass scene flatten bgl"),
+        entries: &[
+            texture_entry(0, true),
+            texture_entry(1, true),
+            sampler_entry(2),
+            uniform_entry(3, wgpu::ShaderStages::FRAGMENT, SCENE_FLATTEN_UNIFORMS_SIZE),
         ],
     });
 
@@ -322,6 +337,12 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         device,
         "assets/shaders/liquid_glass_blur_upsample.wgsl",
         &manifest_dir.join("assets/shaders/liquid_glass_blur_upsample.wgsl"),
+    )
+    .await;
+    let scene_flatten_shader = create_shader_module_checked(
+        device,
+        "assets/shaders/liquid_glass_scene_flatten.wgsl",
+        &manifest_dir.join("assets/shaders/liquid_glass_scene_flatten.wgsl"),
     )
     .await;
 
@@ -362,6 +383,23 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         "test liquid glass blur upsample pipeline",
         &blur_pipeline_layout,
         &blur_upsample_shader,
+        BLUR_FORMAT,
+        None,
+    )
+    .await;
+
+    let scene_flatten_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("test liquid glass scene flatten pipeline layout"),
+            bind_group_layouts: &[Some(&scene_flatten_bgl)],
+            immediate_size: 0,
+        });
+    let _scene_flatten_pipeline = create_fullscreen_render_pipeline_checked(
+        device,
+        "liquid glass scene flatten pipeline",
+        "test liquid glass scene flatten pipeline",
+        &scene_flatten_pipeline_layout,
+        &scene_flatten_shader,
         BLUR_FORMAT,
         None,
     )

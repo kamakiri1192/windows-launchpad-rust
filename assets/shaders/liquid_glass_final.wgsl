@@ -20,7 +20,9 @@ struct GlassUniforms {
     // layout in sync with the Rust `GlassUniforms` struct. Existing surfaces
     // pass activation = 0.0 and render exactly as before.
     activation: f32,
-    pad1: f32,
+    // 0 = translucent glass over the existing target, 1 = replace the real
+    // desktop with the captured-and-filtered backdrop inside the shape.
+    backdrop_replacement: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
@@ -80,6 +82,8 @@ fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     if has_flag(7u) || u.blur_radius < 0.5 {
         return sample_backdrop(uv);
     }
+    // Every lane binds a fully reconstructed blur output. Pyramid levels are
+    // workspaces and must never be sampled here as blur-strength profiles.
     return sample_blurred_backdrop(uv);
 }
 
@@ -136,7 +140,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
         let sharp_color = sample_backdrop(screen_uv);
-        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, 0.12);
+        let replacement = clamp(u.backdrop_replacement, 0.0, 1.0);
+        // Ordinary glass retains a little crispness. A backdrop-replacing
+        // material must not reintroduce the sharp capture before composition.
+        let sharp_interior_mix = 0.12 * (1.0 - replacement);
+        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, sharp_interior_mix);
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
         interior_rgb = mix(interior_rgb, interior_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
@@ -144,7 +152,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-        let interior_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
+        let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
+        // At replacement=1 the lane's filtered backdrop becomes the actual
+        // pixel under the surface, so DirectComposition cannot blend the sharp
+        // desktop back through it. Context-menu lanes bind a completed scene;
+        // ordinary lanes bind the captured desktop. Geometry alpha still
+        // provides antialiased edge coverage.
+        let interior_alpha = mix(translucent_alpha, alpha, replacement);
         return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
     }
 
@@ -174,9 +188,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
     let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
-    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, 0.12);
+    let replacement = clamp(u.backdrop_replacement, 0.0, 1.0);
+    let sharp_edge_mix = 0.12 * (1.0 - replacement);
+    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, sharp_edge_mix);
     // Stronger reflection pull on the rim when the lens is active.
-    final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * (0.22 + 0.18 * u.activation));
+    let reflection_mix = mix(0.22 + 0.18 * u.activation, 0.08, replacement);
+    final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * reflection_mix);
 
     let bg_luma = luminance(final_rgb);
     let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
@@ -237,7 +254,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     final_rgb = clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + glass_tint.a * 0.5), 0.0, 0.92);
+    let translucent_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + glass_tint.a * 0.5), 0.0, 0.92);
+    let glass_alpha = mix(translucent_alpha, alpha, replacement);
 
     if has_flag(4u) {
         return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
