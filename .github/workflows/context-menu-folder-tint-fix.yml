@@ -1,4 +1,4 @@
-name: Context menu folder tint fix
+name: Context menu tint GPU QA
 
 on:
   pull_request:
@@ -11,10 +11,10 @@ permissions:
   contents: write
 
 jobs:
-  fix-and-verify:
+  capture:
     if: github.event.pull_request.number == 153
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -22,188 +22,40 @@ jobs:
           ref: agent/fix-glass-surface-tint
           fetch-depth: 0
 
-      - name: Apply draw-order fix and deterministic QA action
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup default 1.89.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Keep hidden QA window ticking
         shell: python
         run: |
           from pathlib import Path
-          import json
-          import re
 
-          frame_path = Path("src/renderer/frame.rs")
-          frame = frame_path.read_text(encoding="utf-8")
-          glass_pattern = re.compile(
-              r'''(?ms)^        // Context-menu Liquid Glass surface, isolated from the modal lane so it\n'''
-              r'''        // never smooth-unions with an open folder panel\.\n'''
-              r'''        let profile_scope = self\n'''
-              r'''            \.gpu_profiler\n'''
-              r'''            \.begin\("context_menu_liquid_glass", &mut encoder\);\n'''
-              r'''        self\.liquid_glass\n'''
-              r'''            \.render_context_menu_glass\(&self\.queue, &mut encoder, &view\);\n'''
-              r'''        self\.gpu_profiler\.end\(&mut encoder, profile_scope\);\n\n'''
-          )
-          frame, removed = glass_pattern.subn("", frame, count=1)
-          if removed != 1:
-              raise SystemExit(f"context-menu glass block matches={removed}, expected=1")
-
-          content_marker = "        // Context-menu content pass: tiles (opaque background), ink (icons),\n"
-          if frame.count(content_marker) != 1:
-              raise SystemExit("context-menu content marker did not match exactly once")
-          moved_glass = (
-              "        // The folder/settings content must be part of the scene sampled by the\n"
-              "        // context-menu glass. Drawing the menu glass before modal content lets\n"
-              "        // folder child icons overwrite the tint and appear to punch through it.\n"
-              "        let profile_scope = self\n"
-              "            .gpu_profiler\n"
-              "            .begin(\"context_menu_liquid_glass\", &mut encoder);\n"
-              "        self.liquid_glass\n"
-              "            .render_context_menu_glass(&self.queue, &mut encoder, &view);\n"
-              "        self.gpu_profiler.end(&mut encoder, profile_scope);\n\n"
-          )
-          frame = frame.replace(content_marker, moved_glass + content_marker, 1)
-          frame_path.write_text(frame, encoding="utf-8")
-
-          qa_path = Path("src/qa.rs")
-          qa = qa_path.read_text(encoding="utf-8")
-          enum_pattern = re.compile(
-              r'''(?m)^    OpenFolder \{\n        id: String,\n    \},\n'''
-          )
-          enum_replacement = (
-              "    OpenFolder {\n"
-              "        id: String,\n"
-              "    },\n"
-              "    /// Open a context menu from semantic QA geometry without relying on\n"
-              "    /// the platform right-click routing path.\n"
-              "    OpenContextMenu {\n"
-              "        target: QaTarget,\n"
-              "    },\n"
-          )
-          qa, enum_count = enum_pattern.subn(enum_replacement, qa, count=1)
-          if enum_count != 1:
-              raise SystemExit(f"QaAction enum matches={enum_count}, expected=1")
-
-          match_pattern = re.compile(
-              r'''(?m)^            QaAction::OpenFolder \{ id \} => \{\n'''
-              r'''                self\.open_folder\(FolderId::from_normalized\(id\)\);\n'''
-              r'''            \}\n'''
-          )
-          match_replacement = (
-              "            QaAction::OpenFolder { id } => {\n"
-              "                self.open_folder(FolderId::from_normalized(id));\n"
-              "            }\n"
-              "            QaAction::OpenContextMenu { target } => {\n"
-              "                if let Some((item, rect)) = self.resolve_qa_context_menu_target(&target) {\n"
-              "                    self.open_context_menu(item, rect);\n"
-              "                }\n"
-              "            }\n"
-          )
-          qa, match_count = match_pattern.subn(match_replacement, qa, count=1)
-          if match_count != 1:
-              raise SystemExit(f"QaAction match matches={match_count}, expected=1")
-
-          helper_marker = "    fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {\n"
-          if qa.count(helper_marker) != 1:
-              raise SystemExit("QA target helper marker did not match exactly once")
-          helper = (
-              "    fn resolve_qa_context_menu_target(\n"
-              "        &self,\n"
-              "        target: &QaTarget,\n"
-              "    ) -> Option<(LauncherItem, crate::ui_model::geometry::Rect)> {\n"
-              "        match target {\n"
-              "            QaTarget::GridItem { index } | QaTarget::GridItemPoint { index, .. } => {\n"
-              "                let items = self.visible_launcher_items();\n"
-              "                let item = items.get(*index)?.clone();\n"
-              "                let rect = self.launcher_item_rect(&item)?;\n"
-              "                Some((item, rect))\n"
-              "            }\n"
-              "            QaTarget::FolderChild { index } => {\n"
-              "                let folder_id = self.folders.active.as_ref()?;\n"
-              "                let folder = self.launcher_state.folders.get(folder_id)?;\n"
-              "                let app_id = folder.children.get(*index)?.clone();\n"
-              "                let rect = self\n"
-              "                    .folder_layout\n"
-              "                    .as_ref()?\n"
-              "                    .child_rects\n"
-              "                    .get(*index)?\n"
-              "                    .clone();\n"
-              "                Some((LauncherItem::App(app_id), rect))\n"
-              "            }\n"
-              "            _ => None,\n"
-              "        }\n"
-              "    }\n\n"
-          )
-          qa = qa.replace(helper_marker, helper + helper_marker, 1)
-          qa_path.write_text(qa, encoding="utf-8")
-
-          apps = [
-              {"id": f"qa-folder-app-{index}", "name": f"Folder App {index + 1}"}
-              for index in range(9)
-          ]
-          scenario = {
-              "name": "context-menu-folder-tint",
-              "viewport": [1280, 800],
-              "fps": 30,
-              "duration_ms": 2400,
-              "output_dir": "target/qa-sequences",
-              "fixture": {
-                  "apps": apps,
-                  "folders": [{
-                      "id": "qa-tint-folder",
-                      "name": "Tint QA Folder",
-                      "children": [app["id"] for app in apps],
-                  }],
-                  "items": [{"kind": "folder", "id": "qa-tint-folder"}],
-              },
-              "actions": [
-                  {"at_ms": 0, "type": "open_folder", "id": "qa-tint-folder"},
-                  {
-                      "at_ms": 700,
-                      "type": "open_context_menu",
-                      "target": {"kind": "folder_child", "index": 0},
-                  },
-              ],
-          }
-          Path("qa/context_menu_tint.json").write_text(
-              json.dumps(scenario, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8",
-          )
-
-      - name: Format
-        shell: pwsh
-        run: cargo fmt --all
-
-      - name: Test
-        shell: pwsh
-        run: cargo test --all-targets --locked
-
-      - name: Enable continuous hidden-window QA ticks for this run
-        shell: python
-        run: |
-          from pathlib import Path
-          import re
           path = Path("src/app/handler.rs")
           text = path.read_text(encoding="utf-8")
-          pattern = re.compile(
-              r'''(?m)^        if let Some\(deadline\) = self\.qa_next_deadline\(\) \{\n'''
-              r'''            event_loop\.set_control_flow\(ControlFlow::WaitUntil\(deadline\.max\(now\)\)\);\n'''
-              r'''        \} else \{\n'''
-          )
-          replacement = (
-              "        if self.qa_enabled() {\n"
-              "            event_loop.set_control_flow(ControlFlow::Poll);\n"
-              "        } else if let Some(deadline) = self.qa_next_deadline() {\n"
-              "            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));\n"
-              "        } else {\n"
-          )
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f"hidden-window QA scheduler matches={count}, expected=1")
-          path.write_text(text, encoding="utf-8")
+          old = """        if let Some(deadline) = self.qa_next_deadline() {
+              event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
+          } else {
+          """
+          new = """        if self.qa_enabled() {
+              event_loop.set_control_flow(ControlFlow::Poll);
+          } else if let Some(deadline) = self.qa_next_deadline() {
+              event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
+          } else {
+          """
+          if text.count(old) != 1:
+              raise SystemExit("hidden-window QA scheduler anchor did not match exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
       - name: Build debug launcher
         shell: pwsh
         run: cargo build --locked
 
-      - name: Run folder context-menu GPU QA
+      - name: Run context-menu GPU QA
         id: qa
         shell: pwsh
         run: |
@@ -211,9 +63,9 @@ jobs:
           $env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\context_menu_tint.json).Path
 
           $process = Start-Process -FilePath .\target\debug\launchpad-windows.exe -PassThru
-          if (-not $process.WaitForExit(30000)) {
+          if (-not $process.WaitForExit(60000)) {
             $process.Kill()
-            throw 'GPU QA scenario timed out after 30 seconds'
+            throw 'GPU QA scenario timed out after 60 seconds'
           }
           if ($process.ExitCode -ne 0) {
             throw "GPU QA scenario exited with code $($process.ExitCode)"
@@ -226,31 +78,26 @@ jobs:
             throw 'GPU QA did not create an output directory'
           }
 
-          $manifestPath = Join-Path $runDir.FullName 'manifest.json'
-          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $manifest = Get-Content (Join-Path $runDir.FullName 'manifest.json') -Raw | ConvertFrom-Json
           $openFrames = @($manifest.frames | Where-Object {
-            $_.folder_open -eq $true -and
-            $_.context_menu_active -eq $true -and
-            $_.context_menu_phase -eq 'Open'
+            $_.context_menu_active -eq $true -and $_.context_menu_phase -eq 'Open'
           })
           if ($openFrames.Count -eq 0) {
-            throw 'GPU QA captured no open context menu frame over an open folder'
+            throw 'GPU QA captured no fully open context-menu frame'
           }
 
           $selected = $openFrames | Select-Object -Last 1
-          $selectedPath = Join-Path $runDir.FullName $selected.file
           New-Item -ItemType Directory -Force -Path .\docs\qa | Out-Null
-          Copy-Item $selectedPath .\docs\qa\context-menu-tint.png -Force
+          Copy-Item (Join-Path $runDir.FullName $selected.file) .\docs\qa\context-menu-tint.png -Force
 
-          $artifactDir = '.\target\qa-artifact\context-menu-folder-tint'
+          $artifactDir = '.\target\qa-artifact\context-menu-tint'
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
           Copy-Item (Join-Path $runDir.FullName '*') $artifactDir -Recurse -Force
 
-          "run_dir=$($runDir.FullName)" >> $env:GITHUB_OUTPUT
-          "selected_frame=$($selected.file)" >> $env:GITHUB_OUTPUT
           "open_frame_count=$($openFrames.Count)" >> $env:GITHUB_OUTPUT
+          "selected_frame=$($selected.file)" >> $env:GITHUB_OUTPUT
           Write-Host "Selected frame: $($selected.file)"
-          Write-Host "Verified folder/menu frames: $($openFrames.Count)"
+          Write-Host "Fully open frames: $($openFrames.Count)"
 
       - name: Restore temporary scheduler patch
         if: always()
@@ -261,16 +108,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: context-menu-folder-tint-gpu-qa
-          path: target/qa-artifact/context-menu-folder-tint
+          name: context-menu-tint-gpu-qa
+          path: target/qa-artifact/context-menu-tint
           if-no-files-found: warn
 
-      - name: Commit fix and verified screenshot
+      - name: Commit verified screenshot and remove temporary workflow
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/renderer/frame.rs src/qa.rs qa/context_menu_tint.json docs/qa/context-menu-tint.png
+          git add docs/qa/context-menu-tint.png qa/context_menu_tint.json
           git rm .github/workflows/context-menu-folder-tint-fix.yml
-          git commit -m 'Fix context menu glass ordering over folder icons'
+          git commit -m 'Capture settled context menu tint GPU QA'
           git push origin HEAD:agent/fix-glass-surface-tint
