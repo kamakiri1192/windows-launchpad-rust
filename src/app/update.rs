@@ -534,6 +534,9 @@ impl App {
             crate::domain::settings::LiquidGlassParamField::Saturation => {
                 sp::LiquidGlassParamId::Saturation
             }
+            crate::domain::settings::LiquidGlassParamField::AdaptiveDarkness => {
+                sp::LiquidGlassParamId::AdaptiveDarkness
+            }
             crate::domain::settings::LiquidGlassParamField::ChromaticAberration => {
                 sp::LiquidGlassParamId::ChromaticAberration
             }
@@ -1971,6 +1974,7 @@ fn apply_param_to_renderer(
         LiquidGlassParamField::Thickness => r.set_liquid_glass_thickness(value),
         LiquidGlassParamField::RefractiveIndex => r.set_liquid_glass_refractive_index(value),
         LiquidGlassParamField::Saturation => r.set_liquid_glass_saturation(value),
+        LiquidGlassParamField::AdaptiveDarkness => r.set_liquid_glass_adaptive_darkness(value),
         LiquidGlassParamField::ChromaticAberration => {
             r.set_liquid_glass_chromatic_aberration(value)
         }

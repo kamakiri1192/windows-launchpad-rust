@@ -6,6 +6,9 @@ pub struct LiquidGlassParams {
     pub chromatic_aberration: f32,
     pub blur_radius: f32,
     pub saturation: f32,
+    /// Maximum black-tint strength applied when the sampled backdrop is
+    /// white-ish. The alpha equation stays unchanged; this only changes RGB.
+    pub adaptive_darkness: f32,
     pub glass_color: [f32; 4],
     pub light_direction: [f32; 2],
     pub light_intensity: f32,
@@ -22,6 +25,7 @@ impl Default for LiquidGlassParams {
             chromatic_aberration: 0.075,
             blur_radius: 16.0,
             saturation: 1.34,
+            adaptive_darkness: 0.65,
             glass_color: [0.94, 0.98, 1.0, 0.045],
             light_direction: normalize2([-0.45, -0.9]),
             light_intensity: 1.25,

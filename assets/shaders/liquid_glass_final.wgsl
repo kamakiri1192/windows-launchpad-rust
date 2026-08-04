@@ -23,7 +23,10 @@ struct GlassUniforms {
     // 0 = translucent glass over the existing target, 1 = replace the real
     // desktop with the captured-and-filtered backdrop inside the shape.
     backdrop_replacement: f32,
-    pad2: f32,
+    // Maximum black-tint strength for white-ish captured backdrops. This is
+    // intentionally an RGB-only control; the alpha equation below is kept
+    // independent so the material does not become more or less transparent.
+    adaptive_darkness: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
 };
@@ -101,6 +104,50 @@ fn luminance(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
 }
 
+fn white_backdrop_score(rgb: vec3<f32>) -> f32 {
+    let clamped = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let luma_score = smoothstep(0.64, 0.93, luminance(clamped));
+    // A bright saturated color is not necessarily a white backdrop. Requiring
+    // all channels to be reasonably high makes the response track "white-ish"
+    // surfaces instead of darkening vivid wallpapers indiscriminately.
+    let floor = min(min(clamped.r, clamped.g), clamped.b);
+    let neutral_score = smoothstep(0.50, 0.88, floor);
+    return luma_score * (0.45 + 0.55 * neutral_score);
+}
+
+fn sample_adaptive_white_score(screen_uv: vec2<f32>) -> f32 {
+    // The detector intentionally sees a wider, low-frequency neighborhood
+    // than the material itself. Use the whitest nearby sample rather than an
+    // average: a dark glyph over a white page should inherit the page's
+    // coefficient instead of creating a dark halo around its own pixels.
+    let radius_px = min(64.0, max(24.0, u.blur_radius * 2.0));
+    let offset_x = vec2<f32>(radius_px / max(u.viewport.x, 1.0), 0.0);
+    let offset_y = vec2<f32>(0.0, radius_px / max(u.viewport.y, 1.0));
+    var score = 0.0;
+    if has_flag(7u) || u.blur_radius < 0.5 {
+        score = max(score, white_backdrop_score(sample_backdrop(screen_uv).rgb));
+        score = max(score, white_backdrop_score(sample_backdrop(screen_uv + offset_x).rgb));
+        score = max(score, white_backdrop_score(sample_backdrop(screen_uv - offset_x).rgb));
+        score = max(score, white_backdrop_score(sample_backdrop(screen_uv + offset_y).rgb));
+        score = max(score, white_backdrop_score(sample_backdrop(screen_uv - offset_y).rgb));
+    } else {
+        score = max(score, white_backdrop_score(sample_blurred_backdrop(screen_uv).rgb));
+        score = max(score, white_backdrop_score(sample_blurred_backdrop(screen_uv + offset_x).rgb));
+        score = max(score, white_backdrop_score(sample_blurred_backdrop(screen_uv - offset_x).rgb));
+        score = max(score, white_backdrop_score(sample_blurred_backdrop(screen_uv + offset_y).rgb));
+        score = max(score, white_backdrop_score(sample_blurred_backdrop(screen_uv - offset_y).rgb));
+    }
+    return score;
+}
+
+fn apply_adaptive_darkness(rgb: vec3<f32>, white_score: f32) -> vec3<f32> {
+    let strength = white_score * clamp(u.adaptive_darkness, 0.0, 1.0);
+    // Scale RGB uniformly instead of mixing with a colored near-black. This
+    // preserves the backdrop's hue and local contrast, which is important for
+    // dark text and antialiased glyph edges over a white page.
+    return rgb * mix(1.0, 0.25, strength);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;
@@ -131,6 +178,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let alpha = geometry_data.a;
     let normalized_height = geometry_data.b;
     let inv_viewport = vec2<f32>(1.0) / max(u.viewport, vec2<f32>(1.0));
+    // Keep the legacy adaptive path fully opt-in. When its slider is zero,
+    // avoid all five detector texture reads; uniform glass darkness does not
+    // need backdrop analysis.
+    var adaptive_white_score = 0.0;
+    if u.adaptive_darkness > 0.001 {
+        adaptive_white_score = sample_adaptive_white_score(screen_uv);
+    }
 
     // More than one thickness inside a glass boundary the encoded height is
     // exactly 1, displacement is zero, and every rim/reflection term below is
@@ -151,6 +205,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         interior_rgb = glass_tint.rgb * glass_tint.a
             + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
+        interior_rgb = apply_adaptive_darkness(interior_rgb, adaptive_white_score);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
         // At replacement=1 the lane's filtered backdrop becomes the actual
@@ -204,6 +259,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // touch further only when active (never *reduces* it below standard).
     let effective_saturation = u.saturation + 0.12 * u.activation;
     final_rgb = apply_saturation(final_rgb, effective_saturation);
+    // Darken the material base before adding edge light and specular response.
+    // Highlights remain highlights instead of being crushed into dirty gray.
+    final_rgb = apply_adaptive_darkness(final_rgb, adaptive_white_score);
 
     if !has_flag(6u) {
         let thickness_scale = clamp(40.0 / max(u.thickness, 1.0), 1.0, 4.0);
