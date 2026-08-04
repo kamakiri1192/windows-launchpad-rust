@@ -1,6 +1,6 @@
 use crate::layout::context_menu::{
-    CONTEXT_MENU_BASE_BLUR, CONTEXT_MENU_TINT_ALPHA, FOCUS_ROW_OPACITY, FOCUS_ROW_RGB,
-    FOCUS_ROW_VERTICAL_INSET, MENU_LABEL_RGB,
+    CONTEXT_MENU_BASE_BLUR, CONTEXT_MENU_TINT_ALPHA, FOCUS_ROW_OPACITY, FOCUS_ROW_VERTICAL_INSET,
+    MENU_LABEL_RGB, SYSTEM_BLUE_RGB,
 };
 use crate::layout::hit_map::HitRegion;
 use crate::layout::LayoutResult;
@@ -74,10 +74,15 @@ pub const DIM: [f32; 4] = [
 /// context-menu system blue below, so hover remains distinguishable from the
 /// currently selected category while keeping the same animated pill geometry.
 const SETTINGS_HOVER_ROW_RGB: [f32; 3] = MENU_LABEL_RGB;
-const SETTINGS_SELECTED_ROW_RGB: [f32; 3] = FOCUS_ROW_RGB;
+const SETTINGS_SELECTED_ROW_RGB: [f32; 3] = SYSTEM_BLUE_RGB;
 /// Strong enough to read as selection while retaining the glass surface below.
 const SETTINGS_SELECTED_ROW_OPACITY: f32 = 0.28;
-pub const ACCENT: [f32; 4] = [FOCUS_ROW_RGB[0], FOCUS_ROW_RGB[1], FOCUS_ROW_RGB[2], 0.20];
+pub const ACCENT: [f32; 4] = [
+    SYSTEM_BLUE_RGB[0],
+    SYSTEM_BLUE_RGB[1],
+    SYSTEM_BLUE_RGB[2],
+    0.20,
+];
 pub const GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
 const Z_BACKDROP: i16 = 80;
