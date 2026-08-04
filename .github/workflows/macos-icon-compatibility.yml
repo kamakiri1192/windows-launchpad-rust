@@ -1,0 +1,115 @@
+name: macOS Icon Compatibility
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - src/icons/**
+      - src/platform/macos/**
+      - examples/macos_icon_capture.rs
+      - examples/macos_icon_compare.rs
+      - .github/workflows/macos-icon-compatibility.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-icon-compatibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+
+jobs:
+  capture:
+    name: Capture icons (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-14
+          - macos-15
+          - macos-26
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Cache Cargo registry and build outputs
+        uses: Swatinem/rust-cache@v2
+
+      - name: Capture production icon path
+        run: |
+          cargo run --locked --example macos_icon_capture -- \
+            --out "target/macos-icon-capture"
+
+      - name: Upload capture fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-icon-capture-${{ matrix.os }}
+          path: target/macos-icon-capture
+          if-no-files-found: error
+          retention-days: 14
+
+  compare:
+    name: Compare macOS captures
+    needs: capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS 14 capture
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-icon-capture-macos-14
+          path: target/macos-captures/macos-14
+
+      - name: Download macOS 15 capture
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-icon-capture-macos-15
+          path: target/macos-captures/macos-15
+
+      - name: Download macOS 26 capture
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-icon-capture-macos-26
+          path: target/macos-captures/macos-26
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Compare source and normalized images
+        run: |
+          cargo run --locked --example macos_icon_compare -- \
+            --root target/macos-captures \
+            --baseline macos-14 \
+            --report target/macos-captures/compatibility-report.md
+
+      - name: Add comparison to job summary
+        run: cat target/macos-captures/compatibility-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-icon-compatibility-report
+          path: |
+            target/macos-captures/compatibility-report.md
+            target/macos-captures/compatibility-report.json
+          if-no-files-found: error
+          retention-days: 14
