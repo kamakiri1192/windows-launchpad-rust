@@ -12,6 +12,40 @@ pub fn open_shortcut(path: &Path) -> Result<(), String> {
     }
 }
 
+/// Open the OS file manager (Explorer / Finder) with `path` selected.
+///
+/// Windows reveals a file by launching `explorer.exe /select,<path>`; macOS
+/// uses `open -R`. Both return as soon as the child process spawns, so the
+/// result only reflects whether the manager was *started*, not whether the
+/// selection actually appeared.
+#[cfg(windows)]
+pub fn reveal(path: &Path) -> Result<(), String> {
+    // `/select,<path>` must arrive as a single command-line argument (the
+    // comma is part of the switch, no space after it). Building the string
+    // here keeps `Command` from splitting on the comma.
+    let arg = format!("/select,{}", path.to_string_lossy());
+    std::process::Command::new("explorer.exe")
+        .arg(arg)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(target_os = "macos")]
+pub fn reveal(path: &Path) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open -R failed: {error}"))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn reveal(_path: &Path) -> Result<(), String> {
+    Err("revealing in a file manager is unsupported on this platform".to_string())
+}
+
 #[cfg(windows)]
 fn shell_execute(path: &Path) -> Result<(), String> {
     use windows::core::PCWSTR;

@@ -4,6 +4,7 @@
 //! are isolated from the folder panel's `Modal` lanes so the menu can float
 //! above an open folder without their Liquid Glass smooth-unioning together.
 
+use crate::app::event::AppCommand;
 use crate::app::state::App;
 use crate::domain::app_id::AppId;
 use crate::domain::launcher_item::LauncherItem;
@@ -185,7 +186,15 @@ impl App {
         match selection {
             ContextMenuSelection::EditHome => self.enter_edit_mode(None),
             ContextMenuSelection::HideApp(id) => self.hide_app(&id),
-            // Mock actions (and folder targets of HideApp): just close.
+            ContextMenuSelection::RevealApp(id) => {
+                // The reveal runs through the app command boundary like a
+                // launch: the executor hides the window first, then asks the
+                // OS file manager to select the app's file.
+                if let Some(info) = self.registry.launch_info(&id) {
+                    self.execute_command(AppCommand::RevealApp(info));
+                }
+            }
+            // Mock actions (and folder targets of hide/reveal): just close.
             ContextMenuSelection::CloseOnly => {}
         }
     }
@@ -458,8 +467,11 @@ enum ContextMenuSelection {
     EditHome,
     /// アプリを非表示: hide the target app, mirroring the ✕ badge path.
     HideApp(AppId),
-    /// Mock action (or a folder target of [`ContextMenuSelection::HideApp`],
-    /// which cannot be hidden): just close the menu.
+    /// Finderで開く / エクスプローラーで開く: reveal the target app in the OS
+    /// file manager, mirroring the launch path (via `AppCommand::RevealApp`).
+    RevealApp(AppId),
+    /// Mock action (or a folder target of hide/reveal, which have no file on
+    /// disk to act on): just close the menu.
     CloseOnly,
 }
 
@@ -480,6 +492,10 @@ fn resolve_context_menu_selection(
         Some(context_menu::ContextMenuItem::EditHome) => ContextMenuSelection::EditHome,
         Some(context_menu::ContextMenuItem::HideApp) => match target {
             Some(LauncherItem::App(id)) => ContextMenuSelection::HideApp(id.clone()),
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        Some(context_menu::ContextMenuItem::RevealInFinder) => match target {
+            Some(LauncherItem::App(id)) => ContextMenuSelection::RevealApp(id.clone()),
             _ => ContextMenuSelection::CloseOnly,
         },
         _ => ContextMenuSelection::CloseOnly,
@@ -567,15 +583,18 @@ mod tests {
     }
 
     #[test]
-    fn folder_menu_rows_omit_the_hide_app_row() {
+    fn folder_menu_rows_omit_hide_app_and_reveal_rows() {
         let (items, labels) = context_menu::menu_rows(true);
         assert_eq!(items, &context_menu::ContextMenuItem::FOLDER_ITEMS[..]);
         assert_eq!(
             labels,
             &context_menu::ContextMenuItem::FOLDER_ITEMS_LABELS[..]
         );
-        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 1);
+        // A folder has neither a hide action nor a file to reveal, so the
+        // folder menu omits both rows — two shorter than the app menu.
+        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 2);
         assert!(!items.contains(&context_menu::ContextMenuItem::HideApp));
+        assert!(!items.contains(&context_menu::ContextMenuItem::RevealInFinder));
     }
 
     #[test]
@@ -586,27 +605,52 @@ mod tests {
     }
 
     #[test]
-    fn folder_menu_row_indices_never_resolve_to_hide_app() {
+    fn folder_menu_row_indices_never_resolve_to_hide_app_or_reveal() {
         let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
             "folder-a",
         ));
         let (items, _labels) = context_menu::menu_rows(true);
-        // A folder menu has no hide-app row; every row resolves to
-        // close-only (or edit-home for row 0).
-        assert_eq!(
-            resolve_context_menu_selection(items, Some(1), Some(&target)),
-            ContextMenuSelection::CloseOnly
-        );
-        assert_eq!(
-            resolve_context_menu_selection(items, Some(0), Some(&target)),
-            ContextMenuSelection::EditHome
-        );
+        // A folder menu has neither a hide-app nor a reveal row; every row
+        // resolves to close-only (or edit-home for row 0). Walk every row.
+        for row in 0..items.len() {
+            let expected = if row == 0 {
+                ContextMenuSelection::EditHome
+            } else {
+                ContextMenuSelection::CloseOnly
+            };
+            assert_eq!(
+                resolve_context_menu_selection(items, Some(row), Some(&target)),
+                expected
+            );
+        }
     }
 
     #[test]
     fn hide_app_row_with_no_target_is_close_only() {
         assert_eq!(
             resolve_context_menu_selection(&context_menu::ContextMenuItem::ALL, Some(1), None),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
+    fn reveal_row_resolves_to_reveal_for_an_app_target() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        // RevealInFinder is row 2 in the app menu (EditHome, HideApp, …).
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(2),
+                Some(&target)
+            ),
+            ContextMenuSelection::RevealApp(AppId::from_normalized("calc"))
+        );
+    }
+
+    #[test]
+    fn reveal_row_with_no_target_is_close_only() {
+        assert_eq!(
+            resolve_context_menu_selection(&context_menu::ContextMenuItem::ALL, Some(2), None),
             ContextMenuSelection::CloseOnly
         );
     }
@@ -623,8 +667,8 @@ mod tests {
             ),
             ContextMenuSelection::CloseOnly
         );
-        // The mock rows (RevealInFinder, IconLarger, IconSmaller, AppInfo).
-        for row in 2..context_menu::ContextMenuItem::ALL.len() {
+        // The remaining mock rows (IconLarger, IconSmaller, AppInfo).
+        for row in 3..context_menu::ContextMenuItem::ALL.len() {
             assert_eq!(
                 resolve_context_menu_selection(
                     &context_menu::ContextMenuItem::ALL,

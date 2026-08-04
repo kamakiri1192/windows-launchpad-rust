@@ -93,6 +93,10 @@ pub enum AppCommand {
     /// Launch `info`'s shortcut. The launcher is hidden first, then the
     /// shortcut is opened (hide-before-launch ordering).
     LaunchApp(AppLaunchInfo),
+    /// Reveal `info` in the OS file manager (Explorer / Finder), selecting its
+    /// file. The launcher is hidden first, mirroring the launch ordering so
+    /// the file manager arrives on top.
+    RevealApp(AppLaunchInfo),
     /// Persist the current settings blob.
     PersistSettings,
     /// Persist the current display order (`registry.order()`).
@@ -146,10 +150,28 @@ mod tests {
         let launch = AppCommand::LaunchApp(crate::domain::app_registry::AppLaunchInfo {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
         });
         assert!(matches!(hide, AppCommand::HideWindow));
         assert!(matches!(launch, AppCommand::LaunchApp(_)));
         assert!(!matches!(hide, AppCommand::LaunchApp(_)));
+    }
+
+    /// The reveal-in-file-manager path is a distinct command from launch (and
+    /// from plain hide): it carries the same launch info snapshot, but the
+    /// executor's hide-then-reveal ordering must not be conflatable with
+    /// launch. The reveal row and the launch row are separate menu actions.
+    #[test]
+    fn reveal_command_is_distinct_from_launch_and_hide() {
+        let info = crate::domain::app_registry::AppLaunchInfo {
+            name: "X".to_string(),
+            link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
+        };
+        let reveal = AppCommand::RevealApp(info.clone());
+        assert!(matches!(reveal, AppCommand::RevealApp(_)));
+        assert!(!matches!(reveal, AppCommand::LaunchApp(_)));
+        assert!(!matches!(reveal, AppCommand::HideWindow));
     }
 
     /// A modal dismiss (settings overlay outside click) must hide the overlay

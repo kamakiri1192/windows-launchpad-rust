@@ -60,7 +60,7 @@ pub const MENU_LABEL_RGB: [f32; 3] = [0.11, 0.11, 0.118];
 pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
 /// One of the context-menu actions. Selecting an action runs it and closes the
-/// menu; the mock rows (reveal / icon size / app info) still close only.
+/// menu; the mock rows (icon size / app info) still close only.
 ///
 /// Defined here (in the pure layout layer) rather than in the feature module
 /// so the renderer-neutral geometry does not depend on the binary-only
@@ -92,12 +92,17 @@ impl ContextMenuItem {
         Self::AppInfo,
     ];
 
-    /// Items shown when the menu targets a folder. A folder has no hide
-    /// action, so "アプリを非表示" is omitted entirely — the folder menu is
-    /// one row shorter than the app menu.
-    pub const FOLDER_ITEMS: [Self; CONTEXT_MENU_ITEM_COUNT - 1] = [
+    /// Number of rows shown when the menu targets a folder. A folder has no
+    /// hide action (it cannot be hidden) and no reveal action (it is a virtual
+    /// launcher group with no file on disk to open), so both rows are omitted —
+    /// the folder menu is two rows shorter than the app menu.
+    pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - 2;
+
+    /// Items shown when the menu targets a folder. See [`FOLDER_ITEM_COUNT`]:
+    /// a folder has neither a hide action nor a file to reveal, so "アプリを
+    /// 非表示" and "Finderで開く" are both omitted.
+    pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
         Self::EditHome,
-        Self::RevealInFinder,
         Self::IconLarger,
         Self::IconSmaller,
         Self::AppInfo,
@@ -136,9 +141,8 @@ impl ContextMenuItem {
     ];
 
     /// Display labels for [`FOLDER_ITEMS`], in the same order.
-    pub const FOLDER_ITEMS_LABELS: [&'static str; CONTEXT_MENU_ITEM_COUNT - 1] = [
+    pub const FOLDER_ITEMS_LABELS: [&'static str; Self::FOLDER_ITEM_COUNT] = [
         Self::EditHome.label(),
-        Self::RevealInFinder.label(),
         Self::IconLarger.label(),
         Self::IconSmaller.label(),
         Self::AppInfo.label(),
@@ -154,9 +158,11 @@ impl ContextMenuItem {
 }
 
 /// The `(items, labels)` pair to display for a menu target, in display order.
-/// Folder targets omit the hide-app row; app targets show all six rows. The
-/// app shell picks this once at open time and reuses it every frame, so the
-/// rendered rows and the release-time row resolution always agree.
+/// Folder targets omit both the hide-app row (a folder cannot be hidden) and
+/// the reveal row (a folder is a virtual group with no file on disk); app
+/// targets show all six rows. The app shell picks this once at open time and
+/// reuses it every frame, so the rendered rows and the release-time row
+/// resolution always agree.
 pub fn menu_rows(is_folder_target: bool) -> (&'static [ContextMenuItem], &'static [&'static str]) {
     if is_folder_target {
         (
@@ -530,15 +536,16 @@ mod tests {
     };
     use crate::ui_model::render_model::ControlKind;
 
-    /// A folder target has no hide action, so its menu omits "アプリを非表示"
-    /// entirely (one row shorter than the app menu).
+    /// A folder target has no hide action and no file to reveal, so its menu
+    /// omits both rows (two rows shorter than the app menu).
     #[test]
-    fn folder_menu_omits_the_hide_app_row() {
+    fn folder_menu_omits_the_hide_app_and_reveal_rows() {
         let (items, labels) = menu_rows(true);
         assert_eq!(items, &ContextMenuItem::FOLDER_ITEMS[..]);
         assert_eq!(labels, &ContextMenuItem::FOLDER_ITEMS_LABELS[..]);
-        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 1);
+        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 2);
         assert!(!items.contains(&ContextMenuItem::HideApp));
+        assert!(!items.contains(&ContextMenuItem::RevealInFinder));
 
         // App targets keep all six rows, in the same order as `ALL`.
         let (app_items, app_labels) = menu_rows(false);

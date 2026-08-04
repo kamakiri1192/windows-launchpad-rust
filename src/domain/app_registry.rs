@@ -69,12 +69,17 @@ pub struct AppRecord {
     pub uv: Option<UvRect>,
 }
 
-/// Snapshot of one app for click-to-launch. Owns its data so it stays valid
-/// even if the registry is mutated between pick and launch.
+/// Snapshot of one app for click-to-launch (and reveal-in-file-manager). Owns
+/// its data so it stays valid even if the registry is mutated between pick and
+/// side effect.
 #[derive(Debug, Clone)]
 pub struct AppLaunchInfo {
     pub name: String,
     pub link_path: PathBuf,
+    /// Resolved target the shortcut points at (the `.exe` a `.lnk` expands to,
+    /// the executable inside a `.app` bundle), or empty when the shortcut has
+    /// no resolvable target.
+    pub resolved_target: PathBuf,
 }
 
 impl From<&AppRecord> for AppLaunchInfo {
@@ -82,6 +87,7 @@ impl From<&AppRecord> for AppLaunchInfo {
         Self {
             name: r.name.clone(),
             link_path: r.link_path.clone(),
+            resolved_target: r.resolved_target.clone(),
         }
     }
 }
