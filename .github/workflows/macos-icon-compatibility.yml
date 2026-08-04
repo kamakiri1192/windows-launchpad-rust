@@ -33,7 +33,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.action != 'labeled' ||
-      github.event.label.name == 'macos:icon-compatibility'
+      github.event.label.name == 'icon-compatibility:macos'
     strategy:
       fail-fast: false
       matrix:
@@ -74,7 +74,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.action != 'labeled' ||
-      github.event.label.name == 'macos:icon-compatibility'
+      github.event.label.name == 'icon-compatibility:macos'
     needs: capture
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -191,7 +191,7 @@ jobs:
               '## macOSアイコン互換性検証',
               '',
               'macOS 14を基準に、同じアプリをmacOS 15・26で取得して比較しました。',
-              '再取得したい場合は、PRに `macos:icon-compatibility` ラベルを付けると、この比較CIを起動できます。',
+              '再取得したい場合は、PRに `icon-compatibility:macos` ラベルを付けると、この比較CIを起動できます。',
               '',
               '| アプリ | 比較対象 | 結果 |',
               '| --- | --- | --- |',
