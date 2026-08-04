@@ -588,7 +588,10 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // shader_control.wgsl outputs premultiplied alpha
+                    // (`rgb * coverage * opacity`, alpha), so the source RGB
+                    // must not be multiplied by alpha a second time here.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
