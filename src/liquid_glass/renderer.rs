@@ -496,7 +496,15 @@ fn capture_sampling_padding(
         // support extends beyond the old fixed 40 px margin.
         requested_blur_radius * 3.0 + 8.0
     };
-    refraction.max(reflection) + blur_support + params.blend * 0.25 + 4.0
+    let adaptive_detector_support = if debug.disable_blur || requested_blur_radius < 0.5 {
+        24.0
+    } else {
+        (requested_blur_radius * 2.0).min(64.0)
+    };
+    refraction.max(reflection)
+        + blur_support.max(adaptive_detector_support)
+        + params.blend * 0.25
+        + 4.0
 }
 
 impl LiquidGlassRenderer {
@@ -1453,7 +1461,8 @@ impl LiquidGlassRenderer {
                 &self.params,
                 self.params
                     .blur_radius
-                    .max(self.context_menu_blur_radius.unwrap_or(0.0)),
+                    .max(self.context_menu_blur_radius.unwrap_or(0.0))
+                    .max(self.settings_panel_blur_radius.unwrap_or(0.0)),
                 self.debug,
                 width,
                 height,
