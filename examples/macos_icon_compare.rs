@@ -537,10 +537,11 @@ fn write_preview(
 }
 
 /// Create an alpha-only preview for the geometry comparison. Each row has six
-/// cells: baseline/candidate source masks, their overlay, then the same three
-/// views for normalized images. In the masks, light gray is alpha >= 128 and
-/// dark gray is the softer visible fringe alpha >= 11. In the overlay, blue
-/// is baseline-only, orange is candidate-only, and light gray is shared.
+/// labeled cells: baseline/candidate source masks, their overlay, then the
+/// same three views for normalized images. In the masks, light gray is alpha
+/// >= 128 and dark gray is the softer visible fringe alpha >= 11. In the
+/// overlay, blue is baseline-only, orange is candidate-only, and light gray
+/// is shared.
 fn write_shape_preview(
     root: &Path,
     baseline: &str,
@@ -548,15 +549,61 @@ fn write_shape_preview(
     output: &Path,
 ) -> Result<(), String> {
     const CELL: u32 = 256;
+    const LABEL_HEIGHT: u32 = 32;
+    const ROW_HEIGHT: u32 = LABEL_HEIGHT + CELL;
+    const ROW_LABEL_WIDTH: u32 = 180;
     const GAP: u32 = 12;
     const BORDER: u32 = 4;
     const COLUMNS: usize = 6;
     let rows = comparisons.len() as u32;
-    let width = GAP + COLUMNS as u32 * (CELL + GAP);
-    let height = GAP + rows * (CELL + GAP);
+    let image_start_x = GAP + ROW_LABEL_WIDTH + GAP;
+    let width = image_start_x + COLUMNS as u32 * (CELL + GAP);
+    let height = GAP + rows * (ROW_HEIGHT + GAP);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
 
     for (row, comparison) in comparisons.iter().enumerate() {
+        let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
+        let baseline_label = os_label(baseline);
+        let candidate_label = os_label(&comparison.candidate);
+        let app_line_1 = if comparison.app == "activity-monitor" {
+            "ACTIVITY"
+        } else {
+            "APP"
+        };
+        let app_line_2 = if comparison.app == "activity-monitor" {
+            "MONITOR"
+        } else {
+            "STORE"
+        };
+        let row_label_y = row_y + LABEL_HEIGHT + (CELL - 3 * 15 - 2 * 6) / 2;
+        draw_text_centered(
+            &mut canvas,
+            GAP,
+            row_label_y,
+            ROW_LABEL_WIDTH,
+            app_line_1,
+            3,
+            Rgba([230, 230, 235, 255]),
+        );
+        draw_text_centered(
+            &mut canvas,
+            GAP,
+            row_label_y + 21,
+            ROW_LABEL_WIDTH,
+            app_line_2,
+            3,
+            Rgba([230, 230, 235, 255]),
+        );
+        draw_text_centered(
+            &mut canvas,
+            GAP,
+            row_label_y + 42,
+            ROW_LABEL_WIDTH,
+            &candidate_label,
+            3,
+            Rgba([170, 175, 185, 255]),
+        );
+
         let baseline_app = root.join(baseline).join(&comparison.app);
         let candidate_app = root.join(&comparison.candidate).join(&comparison.app);
         let source_baseline = load_png(&baseline_app.join("source.png"))?;
@@ -571,15 +618,32 @@ fn write_shape_preview(
             alpha_mask_preview(&normalized_candidate),
             alpha_overlay_preview(&normalized_baseline, &normalized_candidate),
         ];
+        let headers = [
+            format!("{baseline_label} SRC"),
+            format!("{candidate_label} SRC"),
+            "SRC SHAPE DIFF".to_owned(),
+            format!("{baseline_label} NORM"),
+            format!("{candidate_label} NORM"),
+            "NORM SHAPE DIFF".to_owned(),
+        ];
         for (column, image) in cells.iter().enumerate() {
+            let x = image_start_x + column as u32 * (CELL + GAP);
+            draw_text_centered(
+                &mut canvas,
+                x,
+                row_y + 4,
+                CELL,
+                &headers[column],
+                2,
+                Rgba([220, 220, 225, 255]),
+            );
             let image = imageops::resize(
                 image,
                 CELL - BORDER * 2,
                 CELL - BORDER * 2,
                 imageops::FilterType::Nearest,
             );
-            let x = GAP + column as u32 * (CELL + GAP);
-            let y = GAP + row as u32 * (CELL + GAP);
+            let y = row_y + LABEL_HEIGHT;
             imageops::overlay(
                 &mut canvas,
                 &image,
@@ -600,6 +664,102 @@ fn write_shape_preview(
     canvas
         .save_with_format(output, ImageFormat::Png)
         .map_err(|error| format!("write shape preview {}: {error}", output.display()))
+}
+
+fn os_label(name: &str) -> String {
+    match name {
+        "macos-14" => "MACOS 14".to_owned(),
+        "macos-15" => "MACOS 15".to_owned(),
+        "macos-26" => "MACOS 26".to_owned(),
+        other => other.to_ascii_uppercase().replace('-', " "),
+    }
+}
+
+fn draw_text_centered(
+    canvas: &mut RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    text: &str,
+    scale: u32,
+    color: Rgba<u8>,
+) {
+    let text_width = text.len() as u32 * 4 * scale;
+    let text_x = x + width.saturating_sub(text_width) / 2;
+    draw_text(canvas, text_x, y, text, scale, color);
+}
+
+/// Draw the small fixed 3x5 uppercase/digit font used for deterministic
+/// labels in the PNG preview. This avoids depending on fonts installed on the
+/// GitHub runner.
+fn draw_text(canvas: &mut RgbaImage, x: u32, y: u32, text: &str, scale: u32, color: Rgba<u8>) {
+    let mut cursor_x = x;
+    for character in text.chars() {
+        if character == ' ' {
+            cursor_x += 4 * scale;
+            continue;
+        }
+        let glyph = glyph_3x5(character);
+        for (row, bits) in glyph.iter().enumerate() {
+            for column in 0..3 {
+                if bits & (1 << (2 - column)) == 0 {
+                    continue;
+                }
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        canvas.put_pixel(
+                            cursor_x + column * scale + dx,
+                            y + row as u32 * scale + dy,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+        cursor_x += 4 * scale;
+    }
+}
+
+fn glyph_3x5(character: char) -> [u8; 5] {
+    match character {
+        'A' => [0b111, 0b101, 0b111, 0b101, 0b101],
+        'B' => [0b110, 0b101, 0b110, 0b101, 0b110],
+        'C' => [0b111, 0b100, 0b100, 0b100, 0b111],
+        'D' => [0b110, 0b101, 0b101, 0b101, 0b110],
+        'E' => [0b111, 0b100, 0b110, 0b100, 0b111],
+        'F' => [0b111, 0b100, 0b110, 0b100, 0b100],
+        'G' => [0b111, 0b100, 0b101, 0b101, 0b111],
+        'H' => [0b101, 0b101, 0b111, 0b101, 0b101],
+        'I' => [0b111, 0b010, 0b010, 0b010, 0b111],
+        'J' => [0b001, 0b001, 0b001, 0b101, 0b111],
+        'K' => [0b101, 0b110, 0b100, 0b110, 0b101],
+        'L' => [0b100, 0b100, 0b100, 0b100, 0b111],
+        'M' => [0b101, 0b111, 0b111, 0b101, 0b101],
+        'N' => [0b101, 0b111, 0b111, 0b111, 0b101],
+        'O' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        'P' => [0b110, 0b101, 0b110, 0b100, 0b100],
+        'Q' => [0b111, 0b101, 0b101, 0b111, 0b001],
+        'R' => [0b110, 0b101, 0b110, 0b110, 0b101],
+        'S' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        'T' => [0b111, 0b010, 0b010, 0b010, 0b010],
+        'U' => [0b101, 0b101, 0b101, 0b101, 0b111],
+        'V' => [0b101, 0b101, 0b101, 0b101, 0b010],
+        'W' => [0b101, 0b101, 0b111, 0b111, 0b101],
+        'X' => [0b101, 0b101, 0b010, 0b101, 0b101],
+        'Y' => [0b101, 0b101, 0b010, 0b010, 0b010],
+        'Z' => [0b111, 0b001, 0b010, 0b100, 0b111],
+        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        '2' => [0b110, 0b001, 0b010, 0b100, 0b111],
+        '3' => [0b110, 0b001, 0b010, 0b001, 0b110],
+        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        '5' => [0b111, 0b100, 0b110, 0b001, 0b110],
+        '6' => [0b011, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
+        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        '9' => [0b111, 0b101, 0b111, 0b001, 0b110],
+        _ => [0; 5],
+    }
 }
 
 fn load_png(path: &Path) -> Result<RgbaImage, String> {

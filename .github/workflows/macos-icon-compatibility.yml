@@ -206,7 +206,7 @@ jobs:
               `- ${artifactLink('macos-icon-capture-macos-15', 'macOS 15の取得画像')}`,
               `- ${artifactLink('macos-icon-capture-macos-26', 'macOS 26の取得画像')}`,
               '',
-              '画像は各Artifactを開くと、`source.png`（取得直後）と`normalized.png`（正規化後）を確認できます。',
+              '画像は各Artifactを開くと、`source.png`（取得直後）と`normalized.png`（正規化後）を確認できます。`compatibility-shape-preview.png` は列見出し・アプリ名・対象OS入りの外形比較画像です。',
               '',
               `[Workflow実行結果](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})`,
             ].join('\n');
