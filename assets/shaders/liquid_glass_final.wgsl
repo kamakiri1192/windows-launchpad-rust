@@ -31,6 +31,7 @@ struct GlassUniforms {
 @group(0) @binding(2) var backdrop_sampler: sampler;
 @group(0) @binding(3) var geometry_texture: texture_2d<f32>;
 @group(0) @binding(4) var blur_texture: texture_2d<f32>;
+@group(0) @binding(5) var tint_texture: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -100,7 +101,9 @@ fn luminance(rgb: vec3<f32>) -> f32 {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;
     let screen_uv = frag_coord.xy / max(u.viewport, vec2<f32>(1.0));
-    let geometry_data = textureLoad(geometry_texture, vec2<i32>(frag_coord.xy), 0);
+    let pixel = vec2<i32>(frag_coord.xy);
+    let geometry_data = textureLoad(geometry_texture, pixel, 0);
+    let glass_tint = textureLoad(tint_texture, pixel, 0);
 
     if has_flag(0u) {
         let bg = sample_backdrop(screen_uv);
@@ -137,11 +140,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
         interior_rgb = mix(interior_rgb, interior_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
-        interior_rgb = u.glass_color.rgb * u.glass_color.a
-            + interior_rgb * (1.0 - u.glass_color.a);
+        interior_rgb = glass_tint.rgb * glass_tint.a
+            + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-        let interior_alpha = clamp(alpha * (0.64 + u.glass_color.a * 0.5), 0.0, 0.92);
+        let interior_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
         return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
     }
 
@@ -178,8 +181,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bg_luma = luminance(final_rgb);
     let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
     final_rgb = mix(final_rgb, final_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
-    final_rgb = u.glass_color.rgb * u.glass_color.a
-        + final_rgb * (1.0 - u.glass_color.a);
+    final_rgb = glass_tint.rgb * glass_tint.a
+        + final_rgb * (1.0 - glass_tint.a);
     // Saturation stays at the configured value at activation = 0 and pushes a
     // touch further only when active (never *reduces* it below standard).
     let effective_saturation = u.saturation + 0.12 * u.activation;
@@ -234,7 +237,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     final_rgb = clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + u.glass_color.a * 0.5), 0.0, 0.92);
+    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + glass_tint.a * 0.5), 0.0, 0.92);
 
     if has_flag(4u) {
         return vec4<f32>(final_rgb * glass_alpha, glass_alpha);

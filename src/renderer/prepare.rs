@@ -34,7 +34,9 @@ fn shape_for(surface: &GlassSurface) -> GlassShape {
         GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
         GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
     };
-    shape = shape.with_activation(surface.activation);
+    shape = shape
+        .with_activation(surface.activation)
+        .with_tint(surface.tint.map(|tint| [tint.r, tint.g, tint.b, tint.a]));
     // Pack the optional clip region into the per-shape clip fields.
     // Sentinels: clip_rect = [0,0,0,0] (width <= 0) and clip_radius = 0.0
     // mean "no clip" — the WGSL side checks clip_rect.z > 0.0.
@@ -69,6 +71,9 @@ fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape 
     } else {
         shape_for_geometry_only(surface)
     };
+    shape = shape
+        .with_activation(surface.activation)
+        .with_tint(surface.tint.map(|tint| [tint.r, tint.g, tint.b, tint.a]));
     // Propagate the optional clip region so grid/drag overlays respect the
     // clip stack (e.g. Toggle thumb inside a scrollable settings panel).
     let (clip_rect, clip_radius_packed) = clip_to_packed(&surface.clip);
@@ -87,7 +92,9 @@ fn shape_for_geometry_only(surface: &GlassSurface) -> GlassShape {
         GlassBehavior::Control => GlassShape::control_rounded_rect(center, size, surface.radius),
         GlassBehavior::ClipOnly => GlassShape::clip_rounded_rect(center, size, surface.radius),
     };
-    shape.with_activation(surface.activation)
+    shape
+        .with_activation(surface.activation)
+        .with_tint(surface.tint.map(|tint| [tint.r, tint.g, tint.b, tint.a]))
 }
 
 /// The current Liquid Glass modal pass accepts one surface. Select the
@@ -664,6 +671,15 @@ mod tests {
     }
 
     #[test]
+    fn shape_mapping_preserves_tint_override() {
+        let mut source = surface("tinted", 10, 100.0);
+        source.tint = Some(Color::rgba(1.0, 0.5, 0.25, 0.75));
+
+        let shape = shape_for(&source);
+        assert_eq!(shape.tint, [1.0, 0.5, 0.25, 0.75]);
+    }
+
+    #[test]
     fn dragged_folder_control_glass_keeps_the_tile_wiggle_phase() {
         let source = surface("folder", 22, 240.0);
         let tile = TileView {
@@ -685,6 +701,7 @@ mod tests {
         let shape = grid_overlay_shape(&source, &[tile]);
         assert_eq!(shape.shape_type, 6);
         assert_eq!(shape.motion, [240.0, 60.0, 1.75, 1.0]);
+        assert_eq!(shape.tint, [0.0, 0.0, 0.0, -1.0]);
     }
 
     #[test]

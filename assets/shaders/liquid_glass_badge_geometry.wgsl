@@ -49,10 +49,31 @@ struct GlassShape {
     _pad2_c: u32,
     // offset 64
     motion: vec4<f32>,
+    // offset 80; alpha < 0 uses the global glass tint
+    tint: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
 @group(0) @binding(1) var<storage, read> shapes: array<GlassShape>;
+
+struct FsOut {
+    @location(0) geometry: vec4<f32>,
+    @location(1) tint: vec4<f32>,
+};
+
+fn empty_output() -> FsOut {
+    var out: FsOut;
+    out.geometry = vec4<f32>(0.0);
+    out.tint = vec4<f32>(0.0);
+    return out;
+}
+
+fn resolved_tint(shape: GlassShape) -> vec4<f32> {
+    if shape.tint.a < 0.0 {
+        return u.glass_color;
+    }
+    return clamp(shape.tint, vec4<f32>(0.0), vec4<f32>(1.0));
+}
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -115,7 +136,7 @@ fn encode_displacement(v: vec2<f32>) -> vec2<f32> {
 }
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut) -> FsOut {
     let pixel = in.position.xy;
     let shape = shapes[in.shape_index];
     let center = resolved_center(shape);
@@ -127,7 +148,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let alpha = (1.0 - smoothstep(-2.0, 0.0, sd))
         * (1.0 - smoothstep(-2.0, 0.0, frame_sd));
     if alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
-        return vec4<f32>(0.0);
+        return empty_output();
     }
 
     let dx = dpdx(sd);
@@ -145,5 +166,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let displacement = refracted.xy * ray_len;
     let normalized_height = clamp(height / max(u.thickness, 1.0), 0.0, 1.0);
 
-    return vec4<f32>(encode_displacement(displacement), normalized_height, alpha);
+    var out: FsOut;
+    out.geometry = vec4<f32>(encode_displacement(displacement), normalized_height, alpha);
+    out.tint = resolved_tint(shape);
+    return out;
 }

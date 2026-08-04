@@ -17,7 +17,8 @@ use crate::ui_model::render_model::TileView;
 ///  48  clip_radius  f32       (4)
 ///  52  _pad2        [u32; 3]  (12) → align motion to 64
 ///  64  motion       [f32; 4]  (16)
-/// Total: 80 bytes
+///  80  tint         [f32; 4]  (16) → alpha < 0 uses the global glass tint
+/// Total: 96 bytes
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlassShape {
@@ -43,6 +44,9 @@ pub struct GlassShape {
     pub _pad2: [u32; 3],
     /// Optional GPU animation payload: `(pivot_x, pivot_y, phase, flags)`.
     pub motion: [f32; 4],
+    /// Optional per-shape tint. A negative alpha is the sentinel for using
+    /// the global `LiquidGlassParams::glass_color` value.
+    pub tint: [f32; 4],
 }
 
 /// Shape kind encoded into `shape_type`:
@@ -137,12 +141,19 @@ impl GlassShape {
             clip_radius: 0.0,
             _pad2: [0; 3],
             motion: [0.0; 4],
+            tint: [0.0, 0.0, 0.0, -1.0],
         }
     }
 
     /// Set the per-shape glass activation level.
     pub fn with_activation(mut self, activation: f32) -> Self {
         self.activation = activation;
+        self
+    }
+
+    /// Set an optional per-shape tint. `None` keeps the global glass tint.
+    pub fn with_tint(mut self, tint: Option<[f32; 4]>) -> Self {
+        self.tint = tint.unwrap_or([0.0, 0.0, 0.0, -1.0]);
         self
     }
 
@@ -159,6 +170,10 @@ impl GlassShape {
 
     pub(crate) fn is_clip_only(self) -> bool {
         self.shape_type == SHAPE_CLIP_ONLY
+    }
+
+    pub(crate) fn has_tint_override(self) -> bool {
+        self.tint[3] >= 0.0
     }
 
     pub(crate) fn is_scrolling(self) -> bool {
@@ -255,8 +270,19 @@ mod tests {
 
     #[test]
     fn glass_shape_layout_matches_wgsl_storage_struct() {
-        assert_eq!(std::mem::size_of::<GlassShape>(), 80);
+        assert_eq!(std::mem::size_of::<GlassShape>(), 96);
         assert_eq!(std::mem::align_of::<GlassShape>(), 4);
+    }
+
+    #[test]
+    fn tint_override_uses_negative_alpha_as_global_sentinel() {
+        let default = GlassShape::rounded_rect([0.0, 0.0], [20.0, 20.0], 4.0);
+        assert_eq!(default.tint, [0.0, 0.0, 0.0, -1.0]);
+        assert!(!default.has_tint_override());
+
+        let tinted = default.with_tint(Some([1.0, 0.5, 0.25, 0.75]));
+        assert_eq!(tinted.tint, [1.0, 0.5, 0.25, 0.75]);
+        assert!(tinted.has_tint_override());
     }
 
     #[test]

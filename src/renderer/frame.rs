@@ -472,15 +472,6 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
-        // Context-menu Liquid Glass surface, isolated from the modal lane so it
-        // never smooth-unions with an open folder panel.
-        let profile_scope = self
-            .gpu_profiler
-            .begin("context_menu_liquid_glass", &mut encoder);
-        self.liquid_glass
-            .render_context_menu_glass(&self.queue, &mut encoder, &view);
-        self.gpu_profiler.end(&mut encoder, profile_scope);
-
         // Generic fixed modal content, plus settings-specific content, on top
         // of the modal glass.
         let profile_scope = self.gpu_profiler.begin("modal_content", &mut encoder);
@@ -667,6 +658,16 @@ impl Renderer {
                 }
             }
         }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // Context-menu glass must sample the complete modal scene. Folder child
+        // icons are modal content; rendering this pass before them lets those
+        // icons overwrite the tint and appear to punch through the menu.
+        let profile_scope = self
+            .gpu_profiler
+            .begin("context_menu_liquid_glass", &mut encoder);
+        self.liquid_glass
+            .render_context_menu_glass(&self.queue, &mut encoder, &view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Context-menu content pass: tiles (opaque background), ink (icons),
