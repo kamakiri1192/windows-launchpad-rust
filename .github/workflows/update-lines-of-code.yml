@@ -211,7 +211,7 @@ jobs:
             const newTree = await github.rest.git.createTree({
               owner,
               repo,
-              base_tree: parentCommit.data.commit.tree.sha,
+              base_tree: parentCommit.data.tree.sha,
               tree,
             });
             const newCommit = await github.rest.git.createCommit({
