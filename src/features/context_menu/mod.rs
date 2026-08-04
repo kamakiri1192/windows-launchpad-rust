@@ -13,6 +13,7 @@
 //! position can spring fast while corner radius eases slowly.
 
 use crate::domain::launcher_item::LauncherItem;
+use crate::layout::context_menu::CONTEXT_MENU_ITEM_COUNT;
 use crate::spring_anim::{self, Channel, Ease, Transition};
 
 // Re-export the item enum from the pure layout layer so feature/app/render
@@ -130,6 +131,12 @@ const T_OPTICS: Transition = Transition::Easing {
     duration: 0.3,
     ease: Ease::EaseIn,
 };
+/// Short ease-out used for the row focus pill. It is deliberately slower than
+/// a pointer event but shorter than the menu's panel morph.
+const T_FOCUS: Transition = Transition::Easing {
+    duration: 0.20,
+    ease: Ease::EaseOut,
+};
 
 #[derive(Debug, Clone)]
 pub struct ContextMenuState {
@@ -147,6 +154,10 @@ pub struct ContextMenuState {
     elapsed: [f32; PROP_COUNT],
     /// Per-channel active transition. Retargeted on open/close.
     transitions: [Transition; PROP_COUNT],
+    /// Independent focus channels let adjacent rows cross-fade when the
+    /// pointer moves directly from one row to another.
+    focus_channels: [Channel; CONTEXT_MENU_ITEM_COUNT],
+    focus_elapsed: [f32; CONTEXT_MENU_ITEM_COUNT],
 }
 
 impl Default for ContextMenuState {
@@ -158,6 +169,8 @@ impl Default for ContextMenuState {
             channels: [Channel::rest(0.0); PROP_COUNT],
             elapsed: [0.0; PROP_COUNT],
             transitions: [Transition::Snap; PROP_COUNT],
+            focus_channels: [Channel::rest(0.0); CONTEXT_MENU_ITEM_COUNT],
+            focus_elapsed: [0.0; CONTEXT_MENU_ITEM_COUNT],
         }
     }
 }
@@ -188,6 +201,8 @@ impl ContextMenuState {
         ];
         self.channels = seed;
         self.elapsed = [0.0; PROP_COUNT];
+        self.focus_channels = [Channel::rest(0.0); CONTEXT_MENU_ITEM_COUNT];
+        self.focus_elapsed = [0.0; CONTEXT_MENU_ITEM_COUNT];
 
         // Retarget every channel toward its open target with the open preset.
         self.transitions = [
@@ -225,6 +240,7 @@ impl ContextMenuState {
             return;
         }
         self.phase = ContextMenuPhase::Closing;
+        self.set_hovered_item(None);
 
         let seed_x = self.anchor.0 - SEED_SIZE * 0.5;
         let seed_y = self.anchor.1 - SEED_SIZE * 0.5;
@@ -292,6 +308,14 @@ impl ContextMenuState {
                 dt,
             );
             animating |= still_going;
+        }
+        for i in 0..CONTEXT_MENU_ITEM_COUNT {
+            animating |= spring_anim::step(
+                &mut self.focus_channels[i],
+                T_FOCUS,
+                &mut self.focus_elapsed[i],
+                dt,
+            );
         }
 
         // Glass/ink/glyph rendering is already gated by this exact opacity.
@@ -370,6 +394,25 @@ impl ContextMenuState {
     }
     pub fn activation(&self) -> f32 {
         self.channels[Prop::Activation as usize].current
+    }
+
+    /// Retarget the row focus animation. Returns whether at least one row
+    /// changed target and therefore needs another redraw.
+    pub fn set_hovered_item(&mut self, hovered: Option<usize>) -> bool {
+        let mut changed = false;
+        for (index, channel) in self.focus_channels.iter_mut().enumerate() {
+            let target = f32::from(hovered == Some(index));
+            if (channel.target - target).abs() > f32::EPSILON {
+                spring_anim::retarget(channel, target, T_FOCUS, &mut self.focus_elapsed[index]);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Snapshot the animated focus amounts for the renderer-neutral layout.
+    pub fn focus_amounts(&self) -> [f32; CONTEXT_MENU_ITEM_COUNT] {
+        std::array::from_fn(|index| self.focus_channels[index].current)
     }
 }
 
@@ -481,6 +524,29 @@ mod tests {
 
         assert!(state.is_active(), "close animation should remain visible");
         assert!(!state.accepts_pointer_input());
+    }
+
+    #[test]
+    fn row_focus_crossfades_when_pointer_moves_between_rows() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+
+        state.set_hovered_item(Some(1));
+        assert_eq!(state.focus_amounts()[1], 0.0);
+        state.tick(0.1);
+        let first = state.focus_amounts();
+        assert!(first[1] > 0.0 && first[1] < 1.0);
+
+        state.set_hovered_item(Some(2));
+        state.tick(0.1);
+        let crossfade = state.focus_amounts();
+        assert!(crossfade[1] > 0.0 && crossfade[1] < first[1]);
+        assert!(crossfade[2] > 0.0 && crossfade[2] < 1.0);
     }
 
     #[test]

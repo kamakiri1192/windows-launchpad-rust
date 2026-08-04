@@ -34,6 +34,9 @@ const MAX_MENU_WIDTH: f32 = 320.0;
 /// engine is unavailable at open time. Roughly the width of the longest current
 /// label ("エクスプローラーで開く") at 14 px.
 pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
+/// Number of rows currently emitted by the context menu. Kept public so the
+/// feature animation and renderer-neutral input model share one array size.
+pub const CONTEXT_MENU_ITEM_COUNT: usize = 6;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
@@ -80,7 +83,7 @@ pub enum ContextMenuItem {
 
 impl ContextMenuItem {
     /// All items in display order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; CONTEXT_MENU_ITEM_COUNT] = [
         Self::EditHome,
         Self::HideApp,
         Self::RevealInFinder,
@@ -112,7 +115,7 @@ impl ContextMenuItem {
     /// can borrow a static slice instead of reallocating a `Vec` each frame.
     ///
     /// [`ALL`]: ContextMenuItem::ALL
-    pub const ALL_LABELS: [&'static str; 6] = [
+    pub const ALL_LABELS: [&'static str; CONTEXT_MENU_ITEM_COUNT] = [
         Self::EditHome.label(),
         Self::HideApp.label(),
         Self::RevealInFinder.label(),
@@ -155,10 +158,10 @@ pub struct ContextMenuInput<'a> {
     pub content_blur: f32,
     /// Per-surface glass activation 0..1 (the open-time optics bump).
     pub activation: f32,
-    /// Current pointer position in physical px. A row under this point gets
-    /// the focused translucent pill; `None` is useful for deterministic
-    /// layout callers that do not have pointer state.
-    pub pointer: Option<Point>,
+    /// Per-row focus amounts in the range 0..1. The app shell animates these
+    /// values from pointer hit changes; the layout only applies the resulting
+    /// opacity and scale to the focused pill.
+    pub focus_amounts: [f32; CONTEXT_MENU_ITEM_COUNT],
     pub items: &'a [ContextMenuItem],
     /// Localized label for each item, in display order.
     pub labels: &'a [&'a str],
@@ -361,17 +364,23 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         // foreground stays crisp above the translucent blue material. The
         // row hit rect intentionally remains unchanged: the visual inset is
         // only for the breathing room visible in the reference design.
-        if input
-            .pointer
-            .is_some_and(|pointer| row_rect.contains(pointer))
-        {
+        let focus_amount = input.focus_amounts.get(index).copied().unwrap_or(0.0);
+        if focus_amount > 0.001 {
             let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
             let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
+            let focus_scale = 0.96 + 0.04 * focus_amount.clamp(0.0, 1.0);
+            let focus_center = focus_rect.center();
+            let focus_rect = Rect::new(
+                focus_center.x - focus_rect.width * focus_scale * 0.5,
+                focus_center.y - focus_rect.height * focus_scale * 0.5,
+                focus_rect.width * focus_scale,
+                focus_rect.height * focus_scale,
+            );
             ink.push(InkView {
                 id: UiId::context_menu_item(input.target, index),
                 center: focus_rect.center(),
                 extent: focus_rect.height * 0.5,
-                opacity: reveal * FOCUS_ROW_OPACITY,
+                opacity: reveal * FOCUS_ROW_OPACITY * focus_amount.clamp(0.0, 1.0),
                 scene_blur: 0.0,
                 stroke: focus_rect.width * 0.5,
                 corner_radius: focus_rect.height * 0.5,
@@ -481,7 +490,7 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 mod tests {
     use super::{
         build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, InkLane,
-        Point, Rect, FOCUS_ROW_OPACITY, MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
+        Rect, CONTEXT_MENU_ITEM_COUNT, FOCUS_ROW_OPACITY, MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
     };
     use crate::ui_model::render_model::ControlKind;
 
@@ -547,7 +556,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
-            pointer: None,
+            focus_amounts: [0.0; CONTEXT_MENU_ITEM_COUNT],
             items: &ContextMenuItem::ALL,
             labels: &ContextMenuItem::ALL_LABELS,
         };
@@ -619,7 +628,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
-            pointer: Some(Point::new(460.0, 260.0)),
+            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
             items: &ContextMenuItem::ALL,
             labels: &ContextMenuItem::ALL_LABELS,
         };
@@ -664,7 +673,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
-            pointer: None,
+            focus_amounts: [0.0; CONTEXT_MENU_ITEM_COUNT],
             items: &ContextMenuItem::ALL,
             labels: &ContextMenuItem::ALL_LABELS,
         };
