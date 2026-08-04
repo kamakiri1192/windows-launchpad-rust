@@ -1,0 +1,65 @@
+name: Refine Issue 143 Culling
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-143-culling-fix
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.89.0
+
+jobs:
+  refine-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-glass-surface-tint
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          rustup component add clippy rustfmt --toolchain $env:RUST_VERSION
+          rustup default $env:RUST_VERSION
+
+      - name: Apply culling refinement
+        run: python .github/issue-143-culling-fix.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-targets --locked
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Remove temporary files
+        shell: pwsh
+        run: |
+          Remove-Item .github/issue-143-culling-fix.py
+          Remove-Item .github/workflows/issue-143-culling-fix.yml
+
+      - name: Commit verified refinement
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Refine per-surface tint culling"
+          git push origin HEAD:agent/fix-glass-surface-tint
