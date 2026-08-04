@@ -110,10 +110,12 @@ fn highest_shape(surfaces: &[GlassSurface]) -> Option<GlassShape> {
         .map(|(_, surface)| shape_for(surface))
 }
 
-/// Select the content clip for the modal pass. Empty batches are retained in
-/// the render model so lane ownership can be cleared, but they must not mask a
-/// non-empty folder/settings batch that follows them.
-fn modal_clip_from_model(model: &RenderModel) -> Option<(Rect, f32)> {
+/// Select the owner of the shared modal shape buffer. Empty batches are
+/// retained in the render model so lane ownership can be cleared, but only
+/// one non-empty Settings/Modal batch may be uploaded to that buffer.
+fn modal_surfaces_from_model(
+    model: &RenderModel,
+) -> &[crate::ui_model::render_model::GlassSurface] {
     model
         .glass
         .iter()
@@ -121,14 +123,18 @@ fn modal_clip_from_model(model: &RenderModel) -> Option<(Rect, f32)> {
             matches!(batch.layer, GlassLayer::Modal | GlassLayer::Settings)
                 && !batch.surfaces.is_empty()
         })
-        .and_then(|batch| {
-            batch
-                .surfaces
-                .iter()
-                .enumerate()
-                .max_by_key(|(index, surface)| (surface.z, *index))
-                .map(|(_, surface)| (surface.rect, surface.radius))
-        })
+        .map(|batch| batch.surfaces.as_slice())
+        .unwrap_or_default()
+}
+
+/// Select the content clip for the modal pass from the same owner surface
+/// that is uploaded to the shared modal shape buffer.
+fn modal_clip_from_model(model: &RenderModel) -> Option<(Rect, f32)> {
+    modal_surfaces_from_model(model)
+        .iter()
+        .enumerate()
+        .max_by_key(|(index, surface)| (surface.z, *index))
+        .map(|(_, surface)| (surface.rect, surface.radius))
 }
 
 fn control_kind(kind: &ControlKind) -> f32 {
@@ -327,6 +333,15 @@ impl Renderer {
             .set_settings_panel_completed_scene_enabled(
                 settings_panel.is_some_and(|batch| !batch.surfaces.is_empty()),
             );
+        let modal_shapes: Vec<_> = modal_surfaces_from_model(model)
+            .iter()
+            .map(shape_for)
+            .collect();
+        // Settings and folder panels share one GPU shape buffer for the
+        // ordinary modal pass. Resolve its owner once here; uploading every
+        // matching batch would let a later empty batch erase the active one.
+        self.liquid_glass
+            .set_modal_shapes(&self.device, &self.queue, &modal_shapes);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -369,11 +384,9 @@ impl Renderer {
                     self.liquid_glass
                         .set_overlay_shapes(&self.device, &self.queue, &shapes);
                 }
-                GlassLayer::Modal | GlassLayer::Settings => {
-                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
-                    self.liquid_glass
-                        .set_modal_shapes(&self.device, &self.queue, &shapes);
-                }
+                // Settings and Modal are resolved together above because
+                // they share the same GPU shape buffer.
+                GlassLayer::Modal | GlassLayer::Settings => {}
                 GlassLayer::ContextMenu => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
@@ -731,6 +744,23 @@ mod tests {
         assert_eq!(
             modal_clip_from_model(&model),
             Some((folder.rect, folder.radius))
+        );
+    }
+
+    #[test]
+    fn non_empty_settings_batch_owns_shared_modal_shapes_over_empty_modal() {
+        let mut model = RenderModel::new();
+        let settings = surface("settings", 90, 640.0);
+        model.set_glass_batch(GlassLayer::Settings, vec![settings.clone()]);
+        model.set_glass_batch(GlassLayer::Modal, Vec::new());
+
+        assert_eq!(
+            modal_surfaces_from_model(&model),
+            std::slice::from_ref(&settings)
+        );
+        assert_eq!(
+            modal_clip_from_model(&model),
+            Some((settings.rect, settings.radius))
         );
     }
 
