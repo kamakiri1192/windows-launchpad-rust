@@ -116,8 +116,8 @@ jobs:
           path: |
             target/macos-captures/compatibility-report.md
             target/macos-captures/compatibility-report.json
-            target/macos-captures/compatibility-preview.png
-            target/macos-captures/compatibility-shape-preview.png
+            target/macos-captures/compatibility-preview-*.png
+            target/macos-captures/compatibility-shape-preview-*.png
           if-no-files-found: error
           retention-days: 14
 
@@ -206,7 +206,7 @@ jobs:
               `- ${artifactLink('macos-icon-capture-macos-15', 'macOS 15の取得画像')}`,
               `- ${artifactLink('macos-icon-capture-macos-26', 'macOS 26の取得画像')}`,
               '',
-              '画像は各Artifactを開くと、`source.png`（取得直後）と`normalized.png`（正規化後）を確認できます。`compatibility-preview.png` はカラー比較、`compatibility-shape-preview.png` は外形比較で、どちらも列見出し・アプリ名・対象OS入りです。',
+              '画像は各Artifactを開くと、`source.png`（取得直後）と`normalized.png`（正規化後）を確認できます。`compatibility-preview-<app>.png` はアプリ別カラー比較、`compatibility-shape-preview-<app>.png` はアプリ別外形比較で、どちらも列見出し・対象OS入りです。',
               '',
               `[Workflow実行結果](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})`,
             ].join('\n');

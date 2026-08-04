@@ -107,9 +107,9 @@ fn run() -> Result<(), String> {
     }
 
     let mut comparisons = Vec::new();
-    for candidate in candidates {
-        let candidate_dir = args.root.join(&candidate);
-        for app in &app_names {
+    for app in &app_names {
+        for candidate in &candidates {
+            let candidate_dir = args.root.join(candidate);
             let baseline_app = baseline_dir.join(app);
             let candidate_app = candidate_dir.join(app);
             if !candidate_app.is_dir() {
@@ -120,7 +120,7 @@ fn run() -> Result<(), String> {
             comparisons.push(compare_app(
                 app,
                 &args.baseline,
-                &candidate,
+                candidate,
                 &baseline_app,
                 &candidate_app,
             )?);
@@ -472,14 +472,27 @@ fn format_bbox(bbox: &Option<BoundingBox>) -> String {
         .unwrap_or_else(|| "none".to_owned())
 }
 
-/// Create a labeled contact sheet that makes captured pixels easy to inspect
-/// after downloading the workflow artifact. Border colors are the legend:
-/// blue = baseline source, orange = candidate source, green = baseline
-/// normalized, magenta = candidate normalized.
+/// Create one labeled color contact sheet per app. Keeping one app per image
+/// makes the source/normalized and OS comparisons readable without mixing
+/// unrelated rows.
 fn write_preview(
     root: &Path,
     baseline: &str,
     comparisons: &[AppComparison],
+    output: &Path,
+) -> Result<(), String> {
+    for app in preview_app_names(comparisons) {
+        let output = app_preview_path(output, &app);
+        write_preview_sheet(root, baseline, comparisons, &app, &output)?;
+    }
+    Ok(())
+}
+
+fn write_preview_sheet(
+    root: &Path,
+    baseline: &str,
+    comparisons: &[AppComparison],
+    app: &str,
     output: &Path,
 ) -> Result<(), String> {
     const CELL: u32 = 256;
@@ -489,13 +502,17 @@ fn write_preview(
     const GAP: u32 = 12;
     const BORDER: u32 = 4;
     let columns = 4u32;
-    let rows = comparisons.len() as u32;
+    let app_comparisons = comparisons
+        .iter()
+        .filter(|comparison| comparison.app == app)
+        .collect::<Vec<_>>();
+    let rows = app_comparisons.len() as u32;
     let image_start_x = GAP + ROW_LABEL_WIDTH + GAP;
     let width = image_start_x + columns * (CELL + GAP);
     let height = GAP + rows * (ROW_HEIGHT + GAP);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
 
-    for (row, comparison) in comparisons.iter().enumerate() {
+    for (row, comparison) in app_comparisons.iter().enumerate() {
         let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
         let baseline_label = os_label(baseline);
         let candidate_label = os_label(&comparison.candidate);
@@ -566,6 +583,25 @@ fn write_preview(
         .map_err(|error| format!("write preview {}: {error}", output.display()))
 }
 
+fn preview_app_names(comparisons: &[AppComparison]) -> Vec<String> {
+    let mut names = comparisons
+        .iter()
+        .map(|comparison| comparison.app.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn app_preview_path(base: &Path, app: &str) -> PathBuf {
+    let parent = base.parent().unwrap_or_else(|| Path::new("."));
+    let stem = base
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("compatibility-preview");
+    parent.join(format!("{stem}-{app}.png"))
+}
+
 /// Create an alpha-only preview for the geometry comparison. Each row has six
 /// labeled cells: baseline/candidate source masks, their overlay, then the
 /// same three views for normalized images. In the masks, light gray is alpha
@@ -578,6 +614,20 @@ fn write_shape_preview(
     comparisons: &[AppComparison],
     output: &Path,
 ) -> Result<(), String> {
+    for app in preview_app_names(comparisons) {
+        let output = app_preview_path(output, &app);
+        write_shape_preview_sheet(root, baseline, comparisons, &app, &output)?;
+    }
+    Ok(())
+}
+
+fn write_shape_preview_sheet(
+    root: &Path,
+    baseline: &str,
+    comparisons: &[AppComparison],
+    app: &str,
+    output: &Path,
+) -> Result<(), String> {
     const CELL: u32 = 256;
     const LABEL_HEIGHT: u32 = 32;
     const ROW_HEIGHT: u32 = LABEL_HEIGHT + CELL;
@@ -585,13 +635,17 @@ fn write_shape_preview(
     const GAP: u32 = 12;
     const BORDER: u32 = 4;
     const COLUMNS: usize = 6;
-    let rows = comparisons.len() as u32;
+    let app_comparisons = comparisons
+        .iter()
+        .filter(|comparison| comparison.app == app)
+        .collect::<Vec<_>>();
+    let rows = app_comparisons.len() as u32;
     let image_start_x = GAP + ROW_LABEL_WIDTH + GAP;
     let width = image_start_x + COLUMNS as u32 * (CELL + GAP);
     let height = GAP + rows * (ROW_HEIGHT + GAP);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([32, 35, 41, 255]));
 
-    for (row, comparison) in comparisons.iter().enumerate() {
+    for (row, comparison) in app_comparisons.iter().enumerate() {
         let row_y = GAP + row as u32 * (ROW_HEIGHT + GAP);
         let baseline_label = os_label(baseline);
         let candidate_label = os_label(&comparison.candidate);
