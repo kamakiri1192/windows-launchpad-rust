@@ -70,6 +70,12 @@ pub const DIM: [f32; 4] = [
     MENU_LABEL_RGB[2],
     0.34,
 ];
+/// Neutral hover treatment for sidebar categories. Selection uses the
+/// context-menu system blue below, so hover remains distinguishable from the
+/// currently selected category while keeping the same animated pill geometry.
+const SETTINGS_HOVER_ROW_RGB: [f32; 3] = MENU_LABEL_RGB;
+const SETTINGS_SELECTED_ROW_RGB: [f32; 3] = FOCUS_ROW_RGB;
+const SETTINGS_SELECTED_ROW_OPACITY: f32 = FOCUS_ROW_OPACITY;
 pub const ACCENT: [f32; 4] = [FOCUS_ROW_RGB[0], FOCUS_ROW_RGB[1], FOCUS_ROW_RGB[2], 0.20];
 pub const GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
@@ -694,9 +700,8 @@ pub fn build_with_ui(
             sidebar_w,
             SIDEBAR_ROW_H * scale,
         );
-        let focus_amount = input.category_hover_amounts[cat_id.index()]
-            .max(f32::from(selected))
-            .clamp(0.0, 1.0);
+        let hover_amount = input.category_hover_amounts[cat_id.index()].clamp(0.0, 1.0);
+        let focus_amount = hover_amount.max(f32::from(selected)).clamp(0.0, 1.0);
         let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
         let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
         let focus_scale = 0.96 + 0.04 * focus_amount;
@@ -711,11 +716,29 @@ pub fn build_with_ui(
             id: UiId::settings_row(format!("category-focus-{}", cat_id.key())),
             center: focus_rect.center(),
             extent: focus_rect.height * 0.5,
-            opacity: FOCUS_ROW_OPACITY * focus_amount,
+            opacity: if selected {
+                SETTINGS_SELECTED_ROW_OPACITY
+            } else {
+                FOCUS_ROW_OPACITY * hover_amount
+            },
             scene_blur: 0.0,
             stroke: focus_rect.width * 0.5,
             corner_radius: focus_rect.height * 0.5,
-            color: Color::rgba(FOCUS_ROW_RGB[0], FOCUS_ROW_RGB[1], FOCUS_ROW_RGB[2], 1.0),
+            color: if selected {
+                Color::rgba(
+                    SETTINGS_SELECTED_ROW_RGB[0],
+                    SETTINGS_SELECTED_ROW_RGB[1],
+                    SETTINGS_SELECTED_ROW_RGB[2],
+                    1.0,
+                )
+            } else {
+                Color::rgba(
+                    SETTINGS_HOVER_ROW_RGB[0],
+                    SETTINGS_HOVER_ROW_RGB[1],
+                    SETTINGS_HOVER_ROW_RGB[2],
+                    1.0,
+                )
+            },
             kind: ControlKind::RowBackground,
             z: Z_CONTROL,
             clip: None,
@@ -1555,6 +1578,39 @@ mod tests {
         assert_eq!(
             search_label.style.color,
             Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0)
+        );
+
+        let apps_selection = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .and_then(|batch| {
+                batch
+                    .views
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row("category-focus-apps"))
+            })
+            .expect("selected settings category pill");
+        assert_eq!(apps_selection.opacity, SETTINGS_SELECTED_ROW_OPACITY);
+        assert_eq!(
+            apps_selection.color,
+            Color::rgba(
+                SETTINGS_SELECTED_ROW_RGB[0],
+                SETTINGS_SELECTED_ROW_RGB[1],
+                SETTINGS_SELECTED_ROW_RGB[2],
+                1.0
+            )
+        );
+        assert_eq!(
+            focus.color,
+            Color::rgba(
+                SETTINGS_HOVER_ROW_RGB[0],
+                SETTINGS_HOVER_ROW_RGB[1],
+                SETTINGS_HOVER_ROW_RGB[2],
+                1.0
+            )
         );
     }
 
