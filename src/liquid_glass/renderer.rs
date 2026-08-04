@@ -304,6 +304,9 @@ pub struct LiquidGlassRenderer {
     badge_final_bind_group: wgpu::BindGroup,
     modal_badge_final_bind_group: wgpu::BindGroup,
     control_final_bind_group: wgpu::BindGroup,
+    /// Ordinary modal compositing for folder panels. Settings has a separate
+    /// bind group because it samples the completed-scene blur resources.
+    modal_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     context_menu_final_bind_group: wgpu::BindGroup,
     grid_overlay_geometry_bind_group: wgpu::BindGroup,
@@ -800,6 +803,16 @@ impl LiquidGlassRenderer {
             &control_tint_view,
             &blur_view,
         );
+        let modal_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_panel_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &overlay_geometry_view,
+            &overlay_tint_view,
+            &blur_view,
+        );
         let settings_panel_final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
@@ -1160,6 +1173,7 @@ impl LiquidGlassRenderer {
             badge_final_bind_group,
             modal_badge_final_bind_group,
             control_final_bind_group,
+            modal_final_bind_group,
             settings_panel_final_bind_group,
             context_menu_final_bind_group,
             grid_overlay_geometry_bind_group,
@@ -1376,6 +1390,16 @@ impl LiquidGlassRenderer {
             &self.sampler,
             &self.control_geometry_view,
             &self.control_tint_view,
+            &self.blur_view,
+        );
+        self.modal_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_panel_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.overlay_tint_view,
             &self.blur_view,
         );
         self.settings_panel_final_bind_group = create_final_bind_group(

@@ -676,8 +676,9 @@ impl LiquidGlassRenderer {
     }
 
     /// Render the settings/folder modal glass from the shared modal-shape
-    /// buffer. Settings uses the completed-scene bind group; folders keep the
-    /// ordinary backdrop path through the same geometry method.
+    /// buffer. Settings uses the completed-scene bind group; folders use their
+    /// ordinary backdrop path so they do not sample an unprepared settings
+    /// capture.
     pub fn render_settings_panel(
         &mut self,
         queue: &wgpu::Queue,
@@ -702,12 +703,14 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
-        if !self.debug.disable_blur {
+        if self.settings_panel_completed_scene_enabled && !self.debug.disable_blur {
             uniforms.blur_radius = self
                 .settings_panel_blur_radius
                 .unwrap_or(self.params.blur_radius);
         }
-        uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
+        if self.settings_panel_completed_scene_enabled {
+            uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
+        }
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,
@@ -765,7 +768,12 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
+            let final_bind_group = if self.settings_panel_completed_scene_enabled {
+                &self.settings_panel_final_bind_group
+            } else {
+                &self.modal_final_bind_group
+            };
+            pass.set_bind_group(0, final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }
