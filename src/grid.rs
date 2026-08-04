@@ -74,6 +74,7 @@ impl GridLayout {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         });
         for (index, item) in items.iter().take(self.total_tiles()).enumerate() {
@@ -94,6 +95,7 @@ impl GridLayout {
                 clip: None,
                 activation: 0.0,
                 blur_radius: None,
+                backdrop_replacement: 0.0,
                 tint: None,
             });
         }

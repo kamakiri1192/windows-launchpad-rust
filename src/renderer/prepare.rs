@@ -270,6 +270,21 @@ impl Renderer {
             });
         self.liquid_glass
             .set_context_menu_blur_radius(context_menu_blur_radius);
+        let context_menu_backdrop_replacement = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| surface.backdrop_replacement)
+            })
+            .unwrap_or(0.0);
+        self.liquid_glass
+            .set_context_menu_backdrop_replacement(context_menu_backdrop_replacement);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -647,6 +662,7 @@ mod tests {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         }
     }

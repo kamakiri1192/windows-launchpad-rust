@@ -108,14 +108,19 @@ impl LiquidGlassRenderer {
         );
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let blur_levels = self.blur_level_count();
-        let requested_blur_radius = self
-            .params
-            .blur_radius
-            .max(self.context_menu_blur_radius.unwrap_or(0.0));
-        let refreshed_blur = should_refresh_blur(self.blur_dirty, captured)
+        let global_blur = self.blur_profile(self.params.blur_radius);
+        let context_menu_blur = self
+            .context_menu_blur_radius
+            .filter(|_| self.context_menu_shape_count > 0)
+            .map(|radius| self.blur_profile(radius));
+        let refreshed_global_blur = should_refresh_blur(self.blur_dirty, captured)
             && !self.debug.disable_blur
-            && requested_blur_radius >= 0.5;
+            && global_blur.level_count > 0;
+        let refreshed_context_menu_blur = context_menu_blur.is_some_and(|profile| {
+            should_refresh_blur(self.context_menu_blur_dirty, captured)
+                && !self.debug.disable_blur
+                && profile.level_count > 0
+        });
 
         // Each blur pass runs in its OWN command encoder. wgpu groups all
         // passes in a single encoder into one "usage scope", and a texture
@@ -127,85 +132,63 @@ impl LiquidGlassRenderer {
 
         // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
         // backdrop for i==0 else levels[i-1], and writes levels[i].
-        let mut blur_commands = Vec::with_capacity(blur_levels * 2);
-        for i in 0..if refreshed_blur { blur_levels } else { 0 } {
-            let dst = &self.blur_levels[i].1;
-            let label = format!("liquid glass blur downsample L{i}->L{}", i + 1);
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(label.as_str()),
-            });
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dst,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blur_downsample_pipeline);
-                pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
-                pass.draw(0..3, 0..1);
-            }
-            blur_commands.push(enc.finish());
-        }
-
-        // Upsample: L(k-1) -> L(k-2) -> ... -> L1 -> full-res blur.
-        // up pass j reads levels[k-1-j] (bind index 3-k+j in the fixed
-        // [L3,L2,L1] bind array) and writes levels[k-2-j], or the full-res
-        // blur texture for the final hop (j == k-1).
-        for j in 0..if refreshed_blur { blur_levels } else { 0 } {
-            let dst = if j == blur_levels - 1 {
-                &self.blur_view
-            } else {
-                &self.blur_levels[blur_levels - 2 - j].1
-            };
-            let bind_idx = 3 - blur_levels + j;
-            let label = format!(
-                "liquid glass blur upsample L{}->L{}",
-                blur_levels - j,
-                blur_levels - 1 - j
+        let mut blur_commands = Vec::with_capacity(
+            (global_blur.level_count + context_menu_blur.map_or(0, |profile| profile.level_count))
+                * 2,
+        );
+        if refreshed_global_blur {
+            queue.write_buffer(
+                &self.blur_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&BlurUniforms {
+                    sample_scale: global_blur.sample_scale,
+                    _pad: [0.0; 3],
+                }),
             );
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(label.as_str()),
-            });
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dst,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blur_upsample_pipeline);
-                pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
-                pass.draw(0..3, 0..1);
-            }
-            blur_commands.push(enc.finish());
+            blur_commands.extend(encode_blur_profile(
+                device,
+                &self.blur_downsample_pipeline,
+                &self.blur_upsample_pipeline,
+                &self.blur_levels,
+                &self.blur_view,
+                &self.blur_down_bind_groups,
+                &self.blur_up_bind_groups,
+                global_blur.level_count,
+                "liquid glass global blur",
+            ));
+        }
+        if refreshed_context_menu_blur {
+            let profile = context_menu_blur.expect("checked above");
+            queue.write_buffer(
+                &self.context_menu_blur_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&BlurUniforms {
+                    sample_scale: profile.sample_scale,
+                    _pad: [0.0; 3],
+                }),
+            );
+            blur_commands.extend(encode_blur_profile(
+                device,
+                &self.blur_downsample_pipeline,
+                &self.blur_upsample_pipeline,
+                &self.blur_levels,
+                &self.context_menu_blur_view,
+                &self.context_menu_blur_down_bind_groups,
+                &self.context_menu_blur_up_bind_groups,
+                profile.level_count,
+                "liquid glass context menu blur",
+            ));
         }
         if !blur_commands.is_empty() {
             queue.submit(blur_commands);
         }
-        if refreshed_blur {
+        if refreshed_global_blur {
             self.blur_dirty = false;
         }
+        if refreshed_context_menu_blur {
+            self.context_menu_blur_dirty = false;
+        }
+        let refreshed_blur = refreshed_global_blur || refreshed_context_menu_blur;
 
         let geometry_key = self.geometry_key(scroll_x);
         let refreshed_geometry = self.last_geometry_key != Some(geometry_key);
@@ -849,6 +832,7 @@ impl LiquidGlassRenderer {
                 .context_menu_blur_radius
                 .unwrap_or(self.params.blur_radius);
         }
+        uniforms.backdrop_replacement = self.context_menu_backdrop_replacement;
         queue.write_buffer(
             &self.context_menu_uniform_buffer,
             0,
@@ -910,4 +894,94 @@ impl LiquidGlassRenderer {
             pass.draw(0..3, 0..1);
         }
     }
+}
+
+/// Build one complete downsample + upsample chain into a full-resolution
+/// output. The shared pyramid is only scratch storage; callers must bind the
+/// returned `output` texture in the final material pass, never an intermediate
+/// level from `levels`.
+#[allow(clippy::too_many_arguments)]
+fn encode_blur_profile(
+    device: &wgpu::Device,
+    downsample_pipeline: &wgpu::RenderPipeline,
+    upsample_pipeline: &wgpu::RenderPipeline,
+    levels: &[(wgpu::Texture, wgpu::TextureView); 3],
+    output: &wgpu::TextureView,
+    down_bind_groups: &[wgpu::BindGroup; 3],
+    up_bind_groups: &[wgpu::BindGroup; 3],
+    level_count: usize,
+    label_prefix: &str,
+) -> Vec<wgpu::CommandBuffer> {
+    debug_assert!((1..=3).contains(&level_count));
+    let mut commands = Vec::with_capacity(level_count * 2);
+
+    for i in 0..level_count {
+        let label = format!("{label_prefix} downsample L{i}->L{}", i + 1);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some(label.as_str()),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label.as_str()),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &levels[i].1,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(downsample_pipeline);
+            pass.set_bind_group(0, &down_bind_groups[i], &[]);
+            pass.draw(0..3, 0..1);
+        }
+        commands.push(encoder.finish());
+    }
+
+    for j in 0..level_count {
+        let destination = if j == level_count - 1 {
+            output
+        } else {
+            &levels[level_count - 2 - j].1
+        };
+        let bind_index = 3 - level_count + j;
+        let label = format!(
+            "{label_prefix} upsample L{}->L{}",
+            level_count - j,
+            level_count - 1 - j
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some(label.as_str()),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label.as_str()),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: destination,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(upsample_pipeline);
+            pass.set_bind_group(0, &up_bind_groups[bind_index], &[]);
+            pass.draw(0..3, 0..1);
+        }
+        commands.push(encoder.finish());
+    }
+
+    commands
 }

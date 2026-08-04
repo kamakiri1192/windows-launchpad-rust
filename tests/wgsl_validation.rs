@@ -6,6 +6,7 @@ use std::{
 
 const LAUNCHPAD_UNIFORMS_SIZE: u64 = 48;
 const GLASS_UNIFORMS_SIZE: u64 = 112;
+const BLUR_UNIFORMS_SIZE: u64 = 16;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -286,7 +287,11 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
     });
     let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass blur bgl"),
-        entries: &[texture_entry(0, true), sampler_entry(1)],
+        entries: &[
+            texture_entry(0, true),
+            sampler_entry(1),
+            uniform_entry(2, wgpu::ShaderStages::FRAGMENT, BLUR_UNIFORMS_SIZE),
+        ],
     });
     let final_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass final bgl"),
@@ -297,9 +302,6 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
             texture_entry(3, false),
             texture_entry(4, true),
             texture_entry(5, true),
-            texture_entry(6, true),
-            texture_entry(7, true),
-            texture_entry(8, true),
         ],
     });
 

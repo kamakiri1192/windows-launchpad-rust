@@ -538,6 +538,7 @@ pub fn build_with_ui(
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         },
     );

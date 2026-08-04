@@ -38,9 +38,9 @@ pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
 const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
-/// Keep the menu body on a visibly blurred pyramid level even after the
-/// content-reveal animation reaches its resting value of zero. The animated
-/// `content_blur` is added on top of this per-surface baseline.
+/// Keep the menu body visibly blurred even after the content-reveal animation
+/// reaches its resting value of zero. The animated `content_blur` widens the
+/// dedicated context-menu blur kernel on top of this baseline.
 const CONTEXT_MENU_BASE_BLUR: f32 = 24.0;
 
 /// iOS/macOS-style primary label color on a light material. This is the
@@ -274,6 +274,10 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             clip: None,
             activation: input.activation,
             blur_radius: Some((CONTEXT_MENU_BASE_BLUR + input.content_blur).max(0.0)),
+            // The captured desktop is the material under the menu. Replace
+            // the real DWM backdrop while open, then release it with the same
+            // reveal channel so the closing seed does not remain opaque.
+            backdrop_replacement: content_opacity,
             // The context menu is intentionally brighter than the global glass tint.
             // Fade the override with the menu reveal so the collapsed seed does not
             // leave a white disc behind during close.
@@ -524,6 +528,7 @@ mod tests {
             .expect("context menu glass surface");
         assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.68)));
         assert_eq!(surface.blur_radius, Some(24.0));
+        assert_eq!(surface.backdrop_replacement, 1.0);
 
         input.content_blur = 8.0;
         let animated_model = build(&input);
@@ -536,6 +541,19 @@ mod tests {
             .and_then(|batch| batch.surfaces.first())
             .expect("animated context menu glass surface");
         assert_eq!(animated_surface.blur_radius, Some(32.0));
+        assert_eq!(animated_surface.backdrop_replacement, 1.0);
+
+        input.content_opacity = 0.4;
+        let closing_model = build(&input);
+        let closing_surface = closing_model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| batch.surfaces.first())
+            .expect("closing context menu glass surface");
+        assert_eq!(closing_surface.backdrop_replacement, 0.4);
     }
 
     #[test]

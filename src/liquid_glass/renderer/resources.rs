@@ -5,7 +5,8 @@ use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
 use super::{
-    GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT, TINT_FORMAT,
+    BlurUniforms, GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT,
+    TINT_FORMAT,
 };
 
 pub(super) fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Buffer {
@@ -44,6 +45,18 @@ pub(super) fn create_uniform_buffer(
     device: &wgpu::Device,
     label: &'static str,
     uniforms: &GlassUniforms,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::bytes_of(uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+pub(super) fn create_blur_uniform_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    uniforms: &BlurUniforms,
 ) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -280,7 +293,6 @@ pub(super) fn create_final_bind_group(
     geometry_view: &wgpu::TextureView,
     tint_view: &wgpu::TextureView,
     blur_view: &wgpu::TextureView,
-    blur_levels: &[(wgpu::Texture, wgpu::TextureView); 3],
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("liquid glass final bg"),
@@ -310,18 +322,6 @@ pub(super) fn create_final_bind_group(
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(tint_view),
             },
-            wgpu::BindGroupEntry {
-                binding: 6,
-                resource: wgpu::BindingResource::TextureView(&blur_levels[0].1),
-            },
-            wgpu::BindGroupEntry {
-                binding: 7,
-                resource: wgpu::BindingResource::TextureView(&blur_levels[1].1),
-            },
-            wgpu::BindGroupEntry {
-                binding: 8,
-                resource: wgpu::BindingResource::TextureView(&blur_levels[2].1),
-            },
         ],
     })
 }
@@ -331,6 +331,7 @@ fn create_blur_bind_group(
     layout: &wgpu::BindGroupLayout,
     source_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("liquid glass blur bg"),
@@ -344,6 +345,10 @@ fn create_blur_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
         ],
     })
 }
@@ -353,21 +358,33 @@ pub(super) fn create_blur_pyramid_bind_groups(
     layout: &wgpu::BindGroupLayout,
     backdrop_view: &wgpu::TextureView,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
-    blur_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> ([wgpu::BindGroup; 3], [wgpu::BindGroup; 3]) {
     let down = [
-        create_blur_bind_group(device, layout, backdrop_view, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
+        create_blur_bind_group(device, layout, backdrop_view, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
     ];
     let up = [
-        create_blur_bind_group(device, layout, &levels[2].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
+        create_blur_bind_group(device, layout, &levels[2].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
     ];
-    let _ = blur_view;
     (down, up)
+}
+
+pub(super) fn blur_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<BlurUniforms>() as u64),
+        },
+        count: None,
+    }
 }
 
 #[cfg(test)]

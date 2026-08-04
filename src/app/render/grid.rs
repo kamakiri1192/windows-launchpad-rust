@@ -268,6 +268,7 @@ impl App {
                 clip: None,
                 activation: 0.0,
                 blur_radius: None,
+                backdrop_replacement: 0.0,
                 tint: None,
             },
             GlassSurface {
@@ -285,6 +286,7 @@ impl App {
                 clip: None,
                 activation: 0.0,
                 blur_radius: None,
+                backdrop_replacement: 0.0,
                 tint: None,
             },
         ]);
@@ -313,6 +315,7 @@ impl App {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         })
     }
@@ -595,6 +598,7 @@ mod tests {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         };
         let mut surfaces = vec![surface(10.0)];
@@ -617,6 +621,7 @@ mod tests {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         };
         let app_id = UiId::launcher_item("app");
@@ -630,6 +635,7 @@ mod tests {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         };
         let folder_surface = GlassSurface {

@@ -200,6 +200,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             clip: None,
             activation: 0.0,
             blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         }],
     );

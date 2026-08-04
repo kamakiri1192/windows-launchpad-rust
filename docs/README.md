@@ -7,8 +7,8 @@
 - [GLASS_FOCUS_VEIL.md](GLASS_FOCUS_VEIL.md) - フォルダ表示時に下層シーンを
   ぼかすGlass Focus Veilの目的、描画順、GPU構成、調整方法、視覚QA項目。
 - [LIQUID_GLASS_PER_SURFACE_BLUR.md](LIQUID_GLASS_PER_SURFACE_BLUR.md) -
-  `GlassSurface` ごとの背景ブラー調査、推奨する blur profile/pyramid 構成、
-  context menu の接続方針、コスト・回帰リスク・視覚 QA。
+  `GlassSurface` ごとの背景ブラー、完成済みlane別blur出力、透明ウィンドウでの
+  backdrop replacement、context menu のGPUコストと視覚QA。
 - [INPUT_PASSTHROUGH_REQUIREMENTS.md](INPUT_PASSTHROUGH_REQUIREMENTS.md) —
   ページフレーム外のクリック、ドラッグ、縦スクロール、ホバーの入力要件。
 - [INPUT_PASSTHROUGH_TECHNICAL_RESEARCH.md](INPUT_PASSTHROUGH_TECHNICAL_RESEARCH.md) —

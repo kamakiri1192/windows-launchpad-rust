@@ -660,9 +660,9 @@ impl Renderer {
         }
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
-        // Context-menu glass must sample the complete modal scene. Folder child
-        // icons are modal content; rendering this pass before them lets those
-        // icons overwrite the tint and appear to punch through the menu.
+        // The context menu samples its dedicated blurred desktop capture, then
+        // composites above all modal content so folder children cannot punch
+        // through the menu surface.
         let profile_scope = self
             .gpu_profiler
             .begin("context_menu_liquid_glass", &mut encoder);

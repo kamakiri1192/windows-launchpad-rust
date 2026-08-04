@@ -20,7 +20,9 @@ struct GlassUniforms {
     // layout in sync with the Rust `GlassUniforms` struct. Existing surfaces
     // pass activation = 0.0 and render exactly as before.
     activation: f32,
-    pad1: f32,
+    // 0 = translucent glass over the existing target, 1 = replace the real
+    // desktop with the captured-and-filtered backdrop inside the shape.
+    backdrop_replacement: f32,
     pad2: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
@@ -32,12 +34,6 @@ struct GlassUniforms {
 @group(0) @binding(3) var geometry_texture: texture_2d<f32>;
 @group(0) @binding(4) var blur_texture: texture_2d<f32>;
 @group(0) @binding(5) var tint_texture: texture_2d<f32>;
-// The final upsampled blur is intentionally kept for the weakest profile.
-// These pyramid levels let each glass lane select a visibly different
-// backdrop blur without allocating a second capture or blur chain.
-@group(0) @binding(6) var blur_level_1_texture: texture_2d<f32>;
-@group(0) @binding(7) var blur_level_2_texture: texture_2d<f32>;
-@group(0) @binding(8) var blur_level_3_texture: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -82,39 +78,13 @@ fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
     return textureSample(blur_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
-fn sample_blurred_level_1(screen_uv: vec2<f32>) -> vec4<f32> {
-    let uv = backdrop_uv(screen_uv);
-    return textureSample(blur_level_1_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
-}
-
-fn sample_blurred_level_2(screen_uv: vec2<f32>) -> vec4<f32> {
-    let uv = backdrop_uv(screen_uv);
-    return textureSample(blur_level_2_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
-}
-
-fn sample_blurred_level_3(screen_uv: vec2<f32>) -> vec4<f32> {
-    let uv = backdrop_uv(screen_uv);
-    return textureSample(blur_level_3_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
-}
-
 fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     if has_flag(7u) || u.blur_radius < 0.5 {
         return sample_backdrop(uv);
     }
-    // Radius is expressed in captured-image pixels. Pick a shared pyramid
-    // profile rather than creating a per-surface blur pass. The thresholds
-    // keep the normal page glass on L2 while context-menu glass (24px+)
-    // reaches the strongest shared level.
-    if u.blur_radius < 8.0 {
-        return sample_blurred_backdrop(uv);
-    }
-    if u.blur_radius < 16.0 {
-        return sample_blurred_level_1(uv);
-    }
-    if u.blur_radius < 24.0 {
-        return sample_blurred_level_2(uv);
-    }
-    return sample_blurred_level_3(uv);
+    // Every lane binds a fully reconstructed blur output. Pyramid levels are
+    // workspaces and must never be sampled here as blur-strength profiles.
+    return sample_blurred_backdrop(uv);
 }
 
 fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
@@ -170,10 +140,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
         let sharp_color = sample_backdrop(screen_uv);
-        // Context-menu glass must show the blurred desktop underneath. Keep
-        // a tiny sharp contribution for ordinary glass, but do not let the
-        // sharp capture punch through the menu's interior.
-        let sharp_interior_mix = select(0.12, 0.0, u.blur_radius >= 24.0);
+        let replacement = clamp(u.backdrop_replacement, 0.0, 1.0);
+        // Ordinary glass retains a little crispness. A backdrop-replacing
+        // material must not reintroduce the sharp capture before composition.
+        let sharp_interior_mix = 0.12 * (1.0 - replacement);
         var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, sharp_interior_mix);
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
@@ -182,7 +152,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-        let interior_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
+        let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
+        // At replacement=1 the captured blur becomes the actual pixel under
+        // the menu, so DirectComposition cannot blend the sharp desktop back
+        // through it. Geometry alpha still provides antialiased edge coverage.
+        let interior_alpha = mix(translucent_alpha, alpha, replacement);
         return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
     }
 
@@ -212,10 +186,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
     let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
-    let sharp_edge_mix = select(0.12, 0.0, u.blur_radius >= 24.0);
+    let replacement = clamp(u.backdrop_replacement, 0.0, 1.0);
+    let sharp_edge_mix = 0.12 * (1.0 - replacement);
     var final_rgb = mix(refract_color.rgb, sharp_color.rgb, sharp_edge_mix);
     // Stronger reflection pull on the rim when the lens is active.
-    let reflection_mix = select(0.22 + 0.18 * u.activation, 0.08, u.blur_radius >= 24.0);
+    let reflection_mix = mix(0.22 + 0.18 * u.activation, 0.08, replacement);
     final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * reflection_mix);
 
     let bg_luma = luminance(final_rgb);
@@ -277,7 +252,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     final_rgb = clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
-    let glass_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + glass_tint.a * 0.5), 0.0, 0.92);
+    let translucent_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + glass_tint.a * 0.5), 0.0, 0.92);
+    let glass_alpha = mix(translucent_alpha, alpha, replacement);
 
     if has_flag(4u) {
         return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
