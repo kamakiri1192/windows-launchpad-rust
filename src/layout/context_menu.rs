@@ -37,6 +37,7 @@ pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
+const CONTEXT_MENU_TINT_ALPHA: f32 = 0.62;
 
 /// iOS/macOS-style primary label color on a light material. This is the
 /// familiar near-black `#1C1C1E`, rather than absolute black.
@@ -271,7 +272,12 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             // The context menu is intentionally brighter than the global glass tint.
             // Fade the override with the menu reveal so the collapsed seed does not
             // leave a white disc behind during close.
-            tint: Some(Color::rgba(0.93, 0.94, 0.96, 0.50 * content_opacity)),
+            tint: Some(Color::rgba(
+                0.93,
+                0.94,
+                0.96,
+                CONTEXT_MENU_TINT_ALPHA * content_opacity,
+            )),
         }],
     );
 
@@ -511,7 +517,7 @@ mod tests {
             .find(|batch| batch.layer == GlassLayer::ContextMenu)
             .and_then(|batch| batch.surfaces.first())
             .expect("context menu glass surface");
-        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.50)));
+        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.62)));
     }
 
     #[test]
