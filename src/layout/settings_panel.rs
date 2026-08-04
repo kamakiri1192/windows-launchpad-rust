@@ -75,7 +75,8 @@ pub const DIM: [f32; 4] = [
 /// currently selected category while keeping the same animated pill geometry.
 const SETTINGS_HOVER_ROW_RGB: [f32; 3] = MENU_LABEL_RGB;
 const SETTINGS_SELECTED_ROW_RGB: [f32; 3] = FOCUS_ROW_RGB;
-const SETTINGS_SELECTED_ROW_OPACITY: f32 = FOCUS_ROW_OPACITY;
+/// Strong enough to read as selection while retaining the glass surface below.
+const SETTINGS_SELECTED_ROW_OPACITY: f32 = 0.28;
 pub const ACCENT: [f32; 4] = [FOCUS_ROW_RGB[0], FOCUS_ROW_RGB[1], FOCUS_ROW_RGB[2], 0.20];
 pub const GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
@@ -369,6 +370,9 @@ pub struct SettingsPanelInput {
     /// Per-category hover amounts, animated by the app shell with the same
     /// easing used by context-menu rows.
     pub category_hover_amounts: [f32; 5],
+    /// Per-category selection amounts, animated independently so switching
+    /// categories fades the blue selection pill between rows.
+    pub category_selection_amounts: [f32; 5],
 }
 
 /// Persisted Liquid Glass values forwarded from
@@ -693,7 +697,6 @@ pub fn build_with_ui(
     for (index, (cat_id, label)) in copy.categories.iter().copied().enumerate() {
         let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
         let sidebar_w = layout.sidebar_w - 24.0 * scale;
-        let selected = cat_id == input.category;
         let row_rect = Rect::new(
             layout.left + 12.0 * scale,
             row_top,
@@ -701,7 +704,16 @@ pub fn build_with_ui(
             SIDEBAR_ROW_H * scale,
         );
         let hover_amount = input.category_hover_amounts[cat_id.index()].clamp(0.0, 1.0);
-        let focus_amount = hover_amount.max(f32::from(selected)).clamp(0.0, 1.0);
+        let selection_amount = input.category_selection_amounts[cat_id.index()].clamp(0.0, 1.0);
+        let focus_amount = hover_amount.max(selection_amount).clamp(0.0, 1.0);
+        let row_color = [
+            SETTINGS_HOVER_ROW_RGB[0]
+                + (SETTINGS_SELECTED_ROW_RGB[0] - SETTINGS_HOVER_ROW_RGB[0]) * selection_amount,
+            SETTINGS_HOVER_ROW_RGB[1]
+                + (SETTINGS_SELECTED_ROW_RGB[1] - SETTINGS_HOVER_ROW_RGB[1]) * selection_amount,
+            SETTINGS_HOVER_ROW_RGB[2]
+                + (SETTINGS_SELECTED_ROW_RGB[2] - SETTINGS_HOVER_ROW_RGB[2]) * selection_amount,
+        ];
         let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
         let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
         let focus_scale = 0.96 + 0.04 * focus_amount;
@@ -716,29 +728,12 @@ pub fn build_with_ui(
             id: UiId::settings_row(format!("category-focus-{}", cat_id.key())),
             center: focus_rect.center(),
             extent: focus_rect.height * 0.5,
-            opacity: if selected {
-                SETTINGS_SELECTED_ROW_OPACITY
-            } else {
-                FOCUS_ROW_OPACITY * hover_amount
-            },
+            opacity: (SETTINGS_SELECTED_ROW_OPACITY * selection_amount)
+                .max(FOCUS_ROW_OPACITY * hover_amount),
             scene_blur: 0.0,
             stroke: focus_rect.width * 0.5,
             corner_radius: focus_rect.height * 0.5,
-            color: if selected {
-                Color::rgba(
-                    SETTINGS_SELECTED_ROW_RGB[0],
-                    SETTINGS_SELECTED_ROW_RGB[1],
-                    SETTINGS_SELECTED_ROW_RGB[2],
-                    1.0,
-                )
-            } else {
-                Color::rgba(
-                    SETTINGS_HOVER_ROW_RGB[0],
-                    SETTINGS_HOVER_ROW_RGB[1],
-                    SETTINGS_HOVER_ROW_RGB[2],
-                    1.0,
-                )
-            },
+            color: Color::rgba(row_color[0], row_color[1], row_color[2], 1.0),
             kind: ControlKind::RowBackground,
             z: Z_CONTROL,
             clip: None,
@@ -1455,6 +1450,8 @@ mod tests {
     }
 
     fn input(category: SettingsCategoryId) -> SettingsPanelInput {
+        let mut category_selection_amounts = [0.0; 5];
+        category_selection_amounts[category.index()] = 1.0;
         SettingsPanelInput {
             viewport: (1280, 800),
             scale_factor: 1.0,
@@ -1476,6 +1473,7 @@ mod tests {
             page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
             page_frame_radius: 54.0,
             category_hover_amounts: [0.0; 5],
+            category_selection_amounts,
         }
     }
 
@@ -1594,15 +1592,15 @@ mod tests {
             })
             .expect("selected settings category pill");
         assert_eq!(apps_selection.opacity, SETTINGS_SELECTED_ROW_OPACITY);
-        assert_eq!(
-            apps_selection.color,
-            Color::rgba(
-                SETTINGS_SELECTED_ROW_RGB[0],
-                SETTINGS_SELECTED_ROW_RGB[1],
-                SETTINGS_SELECTED_ROW_RGB[2],
-                1.0
-            )
+        let expected_selection_color = Color::rgba(
+            SETTINGS_SELECTED_ROW_RGB[0],
+            SETTINGS_SELECTED_ROW_RGB[1],
+            SETTINGS_SELECTED_ROW_RGB[2],
+            1.0,
         );
+        assert!((apps_selection.color.r - expected_selection_color.r).abs() < 1e-6);
+        assert!((apps_selection.color.g - expected_selection_color.g).abs() < 1e-6);
+        assert!((apps_selection.color.b - expected_selection_color.b).abs() < 1e-6);
         assert_eq!(
             focus.color,
             Color::rgba(
@@ -1612,6 +1610,32 @@ mod tests {
                 1.0
             )
         );
+    }
+
+    #[test]
+    fn settings_selection_pill_fades_with_selection_amount() {
+        let mut inp = input(SettingsCategoryId::Apps);
+        inp.category_selection_amounts[SettingsCategoryId::Apps.index()] = 0.5;
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let selection = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .and_then(|batch| {
+                batch
+                    .views
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row("category-focus-apps"))
+            })
+            .expect("transitioning settings category pill");
+
+        assert!((selection.opacity - SETTINGS_SELECTED_ROW_OPACITY * 0.5).abs() < 1e-6);
+        assert!(selection.color.r > SETTINGS_SELECTED_ROW_RGB[0]);
+        assert!(selection.color.g < SETTINGS_SELECTED_ROW_RGB[1]);
     }
 
     #[test]

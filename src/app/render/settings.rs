@@ -112,6 +112,7 @@ impl App {
                 ),
                 page_frame_radius: self.layout.scaled(layout::grid::FRAME_CORNER_RADIUS),
                 category_hover_amounts: self.settings_category_hover_amounts(),
+                category_selection_amounts: self.settings_category_selection_amounts(),
             };
             layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
         };
@@ -354,8 +355,52 @@ impl App {
             })
     }
 
+    pub(crate) fn update_settings_category_selection(&mut self) {
+        if !self.settings_panel_active() {
+            return;
+        }
+        let selected_index = settings_category_id(self.settings_category).index();
+        let transition = crate::spring_anim::Transition::Easing {
+            duration: 0.20,
+            ease: crate::spring_anim::Ease::EaseOut,
+        };
+        let mut changed = false;
+        for (index, channel) in self.settings_category_selection.iter_mut().enumerate() {
+            let target = f32::from(index == selected_index);
+            if (channel.target - target).abs() > f32::EPSILON {
+                crate::spring_anim::retarget(
+                    channel,
+                    target,
+                    transition,
+                    &mut self.settings_category_selection_elapsed[index],
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn step_settings_category_selection(&mut self, dt: f32) -> bool {
+        let transition = crate::spring_anim::Transition::Easing {
+            duration: 0.20,
+            ease: crate::spring_anim::Ease::EaseOut,
+        };
+        self.settings_category_selection
+            .iter_mut()
+            .zip(self.settings_category_selection_elapsed.iter_mut())
+            .fold(false, |animating, (channel, elapsed)| {
+                crate::spring_anim::step(channel, transition, elapsed, dt) || animating
+            })
+    }
+
     pub(crate) fn settings_category_hover_amounts(&self) -> [f32; 5] {
         std::array::from_fn(|index| self.settings_category_hover[index].current)
+    }
+
+    pub(crate) fn settings_category_selection_amounts(&self) -> [f32; 5] {
+        std::array::from_fn(|index| self.settings_category_selection[index].current)
     }
 
     pub(crate) fn reset_settings_category_hover(&mut self) {

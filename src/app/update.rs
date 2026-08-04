@@ -389,6 +389,7 @@ impl App {
             SettingsPressTarget::Close => self.close_settings(),
             SettingsPressTarget::Category(category) => {
                 self.settings_category = category;
+                self.update_settings_category_selection();
                 self.reset_settings_scroll();
                 self.request_redraw();
             }

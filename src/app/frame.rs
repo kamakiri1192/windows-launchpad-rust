@@ -204,6 +204,7 @@ impl App {
         let edit_control_animating = self.step_edit_control_width(control_dt);
         let settings_animating = self.step_settings_panel(control_dt);
         let settings_hover_animating = self.step_settings_category_hover(control_dt);
+        let settings_selection_animating = self.step_settings_category_selection(control_dt);
 
         // Upload the control's capsule + overlays before the render.
         // This also measures query + preedit width for the IME cursor.
@@ -306,6 +307,7 @@ impl App {
             || edit_control_animating
             || settings_animating
             || settings_hover_animating
+            || settings_selection_animating
             || folder_animating
             || context_menu_animating
             || hover_changed

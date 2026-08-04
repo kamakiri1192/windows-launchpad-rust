@@ -332,6 +332,10 @@ pub struct App {
     /// Per-sidebar-row hover channels using the context-menu focus easing.
     pub settings_category_hover: [crate::spring_anim::Channel; 5],
     pub settings_category_hover_elapsed: [f32; 5],
+    /// Per-sidebar-row selection channels, used to animate the blue selection
+    /// pill when the visible settings category changes.
+    pub settings_category_selection: [crate::spring_anim::Channel; 5],
+    pub settings_category_selection_elapsed: [f32; 5],
     /// Persisted settings edited by the overlay.
     pub settings: Settings,
     /// Sidebar category currently shown by the settings overlay.
@@ -474,6 +478,14 @@ impl App {
             settings_panel_progress: 0.0,
             settings_category_hover: [crate::spring_anim::Channel::rest(0.0); 5],
             settings_category_hover_elapsed: [0.0; 5],
+            settings_category_selection: [
+                crate::spring_anim::Channel::rest(1.0),
+                crate::spring_anim::Channel::rest(0.0),
+                crate::spring_anim::Channel::rest(0.0),
+                crate::spring_anim::Channel::rest(0.0),
+                crate::spring_anim::Channel::rest(0.0),
+            ],
+            settings_category_selection_elapsed: [0.0; 5],
             settings: Settings::default(),
             settings_category: SettingsCategory::Apps,
             settings_scroll_rows: 0,
