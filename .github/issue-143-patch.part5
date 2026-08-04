@@ -3,3 +3,9 @@ replace(
     "pub(super) fn create_final_bind_group(",
     "#[allow(clippy::too_many_arguments)]\npub(super) fn create_final_bind_group(",
 )
+
+replace(
+    "tests/wgsl_validation.rs",
+    """            texture_entry(3, false),\n            texture_entry(4, true),\n        ],""",
+    """            texture_entry(3, false),\n            texture_entry(4, true),\n            texture_entry(5, true),\n        ],""",
+)
