@@ -1,48 +1,5 @@
 $ErrorActionPreference = 'Stop'
 
-$handlerPath = '.\src\app\handler.rs'
-$handler = Get-Content $handlerPath -Raw
-$waitUntil = @'
-        if let Some(deadline) = self.qa_next_deadline() {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-        } else {
-'@
-$pollQa = @'
-        if self.qa_enabled() {
-            // Temporary visual-QA override: Windows can coalesce WaitUntil
-            // wakeups for a hidden window, so poll for this short scenario.
-            event_loop.set_control_flow(ControlFlow::Poll);
-        } else if let Some(deadline) = self.qa_next_deadline() {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-        } else {
-'@
-if (-not $handler.Contains($waitUntil)) {
-    throw 'QA control-flow anchor was not found'
-}
-Set-Content $handlerPath ($handler.Replace($waitUntil, $pollQa)) -NoNewline
-
-$framePath = '.\src\app\frame.rs'
-$frame = Get-Content $framePath -Raw
-$normalAnimDt = @'
-        let anim_dt = match self.last_redraw {
-            Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
-            None => 1.0 / 60.0,
-        };
-'@
-$qaAnimDt = @'
-        let anim_dt = match self.last_redraw {
-            // Temporary visual-QA override: a hidden Windows window may only
-            // produce sparse GPU frames. Preserve elapsed time so the menu can
-            // reach its normal settled Open state before the selected capture.
-            Some(prev) => now.duration_since(prev).as_secs_f32().min(1.0),
-            None => 1.0 / 60.0,
-        };
-'@
-if (-not $frame.Contains($normalAnimDt)) {
-    throw 'animation dt anchor was not found'
-}
-Set-Content $framePath ($frame.Replace($normalAnimDt, $qaAnimDt)) -NoNewline
-
 cargo build --locked
 if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed with code $LASTEXITCODE"
@@ -87,7 +44,6 @@ Copy-Item $selectedPath .\docs\qa\context-menu-tint.png -Force
 Write-Host "Selected verified frame: $($selected.file)"
 Write-Host "Open context-menu frames: $($openFrames.Count)"
 
-git restore src/app/handler.rs src/app/frame.rs
 git config user.name 'github-actions[bot]'
 git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 git add docs/qa/context-menu-tint.png
