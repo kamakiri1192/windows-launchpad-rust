@@ -1,0 +1,43 @@
+name: Context menu tint GPU QA final
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  gpu-qa:
+    if: github.event.pull_request.number == 153
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-glass-surface-tint
+          fetch-depth: 0
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup default 1.89.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run verified GPU QA
+        shell: pwsh
+        run: .\qa\run_context_menu_tint_gpu_qa.ps1
+
+      - name: Upload complete GPU QA sequence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-menu-tint-visual-qa-final
+          path: target/qa-artifact/context-menu-tint
+          if-no-files-found: warn
