@@ -993,7 +993,7 @@ impl App {
             || self.editing
             || long_press_pending
             || folder_long_press_pending
-            || self.qa_capture_due(now)
+            || self.qa_capture_due()
             || self.profile_scroll.is_some()
             // Only keep redrawing for the FPS counter while the window is
             // visible. `about_to_wait` ticks keep firing even after hide(),
@@ -1047,11 +1047,8 @@ impl App {
                 .unwrap_or(false);
             if self.editing {
                 debug_log!("window_event: Focused(false) ignored (editing)");
-            } else if self.settings_panel_active()
-                || self.folders.is_active()
-                || self.context_menu.accepts_pointer_input()
-            {
-                debug_log!("window_event: Focused(false) ignored (modal surface open)");
+            } else if self.settings_panel_active() || self.folders.is_active() {
+                debug_log!("window_event: Focused(false) ignored (settings open)");
             } else if std::env::var_os("LAUNCHPAD_PROFILE_KEEP_VISIBLE").as_deref()
                 == Some(std::ffi::OsStr::new("1"))
             {

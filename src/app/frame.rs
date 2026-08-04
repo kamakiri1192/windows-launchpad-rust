@@ -113,7 +113,7 @@ impl App {
         let context_menu_anim_dt = self
             .qa_runner
             .as_mut()
-            .map(|runner| runner.animation_dt(now))
+            .map(|runner| runner.animation_dt())
             .unwrap_or(wall_anim_dt);
         let anim_dt = wall_anim_dt;
         if self.editing {
@@ -255,7 +255,7 @@ impl App {
         self.profiler.record_prepare(prepare_start.elapsed());
 
         // Render the frame (consumes the uploaded buffers).
-        let qa_capture_path = self.qa_capture_path(now);
+        let qa_capture_path = self.qa_capture_path();
         let qa_enabled = self.qa_enabled();
         let render_start = Instant::now();
         if let Some(r) = self.renderer.as_mut() {

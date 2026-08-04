@@ -442,7 +442,6 @@ impl MacInputPassthrough {
                 let _ = callback_event_proxy.send_event(UserEvent::NativeScroll(raw));
                 return original;
             }
-
             let Some(cg_event) = cg_event else {
                 return original;
             };

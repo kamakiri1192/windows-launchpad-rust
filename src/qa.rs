@@ -866,6 +866,7 @@ pub struct QaRunner {
     frame_index: u64,
     frames: Vec<QaFrameRecord>,
     scroll_trace: Vec<QaScrollTraceRecord>,
+    frame_ready: bool,
     animation_advanced: bool,
     finalized: bool,
 }
@@ -915,6 +916,7 @@ impl QaRunner {
             frame_index: 0,
             frames: Vec::new(),
             scroll_trace: Vec::new(),
+            frame_ready: false,
             animation_advanced: false,
             finalized: false,
         })
@@ -932,14 +934,26 @@ impl QaRunner {
         self.start.get_or_insert(now);
     }
 
-    pub fn elapsed_ms(&self, now: Instant) -> u64 {
+    fn wall_elapsed_ms(&self, now: Instant) -> u64 {
         self.start
             .map(|start| now.saturating_duration_since(start).as_millis() as u64)
             .unwrap_or(0)
     }
 
-    pub fn take_due_actions(&mut self, now: Instant) -> Vec<QaAction> {
-        let elapsed = self.elapsed_ms(now);
+    /// Prepare one fixed-step scenario frame once its wall-clock pacing
+    /// deadline is reached. Scenario actions use the frame's virtual timestamp,
+    /// so a slow render cannot skip ahead to later actions or end the run before
+    /// animations have received their expected number of steps.
+    pub fn prepare_due_frame(&mut self, now: Instant) -> Vec<QaAction> {
+        if self.frame_ready
+            || self.finished()
+            || self.start.is_none()
+            || self.wall_elapsed_ms(now) < self.next_capture_ms
+        {
+            return Vec::new();
+        }
+        self.frame_ready = true;
+        let elapsed = self.next_capture_ms;
         let mut due = Vec::new();
         while let Some(action) = self.scenario.actions.get(self.next_action) {
             if action.at_ms > elapsed {
@@ -951,8 +965,8 @@ impl QaRunner {
         due
     }
 
-    pub fn capture_due(&self, now: Instant) -> bool {
-        self.start.is_some() && self.elapsed_ms(now) >= self.next_capture_ms && !self.finished(now)
+    pub fn capture_due(&self) -> bool {
+        self.frame_ready
     }
 
     /// Advance app animations once per captured QA frame. Hidden-window QA can
@@ -960,8 +974,8 @@ impl QaRunner {
     /// the wall time between those callbacks would make animation progress
     /// depend on callback frequency and could leave a close transition in
     /// `Closing` indefinitely. The scenario FPS is the deterministic clock.
-    pub fn animation_dt(&mut self, now: Instant) -> f32 {
-        if self.capture_due(now) && !self.animation_advanced {
+    pub fn animation_dt(&mut self) -> f32 {
+        if self.capture_due() && !self.animation_advanced {
             self.animation_advanced = true;
             1.0 / self.scenario.fps.max(1) as f32
         } else {
@@ -969,11 +983,11 @@ impl QaRunner {
         }
     }
 
-    fn next_capture_path(&mut self, now: Instant, state: QaFrameState) -> Option<PathBuf> {
-        if !self.capture_due(now) {
+    fn next_capture_path(&mut self, state: QaFrameState) -> Option<PathBuf> {
+        if !self.capture_due() {
             return None;
         }
-        let elapsed_ms = self.elapsed_ms(now);
+        let elapsed_ms = self.next_capture_ms;
         let file = format!("frame_{:06}.png", self.frame_index);
         let previous = self.frames.last();
         let folder_scroll_frame_delta_x = state.folder_scroll.map(|scroll| {
@@ -1059,28 +1073,27 @@ impl QaRunner {
             text_atlas_grows: state.text_atlas.map(|stats| stats.grows),
             text_atlas_drops: state.text_atlas.map(|stats| stats.atlas_drops),
         });
-        self.frame_index += 1;
-        self.animation_advanced = false;
-        let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
-        self.next_capture_ms = self.next_capture_ms.saturating_add(frame_ms);
+        self.complete_capture();
         Some(self.run_dir.join(file))
     }
 
-    pub fn finished(&self, now: Instant) -> bool {
-        self.start.is_some() && self.elapsed_ms(now) >= self.scenario.duration_ms
+    fn complete_capture(&mut self) {
+        self.frame_index += 1;
+        self.frame_ready = false;
+        self.animation_advanced = false;
+        let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
+        self.next_capture_ms = self.next_capture_ms.saturating_add(frame_ms);
+    }
+
+    pub fn finished(&self) -> bool {
+        self.start.is_some()
+            && !self.frame_ready
+            && self.next_capture_ms >= self.scenario.duration_ms
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
         let start = self.start?;
-        let next_action_ms = self
-            .scenario
-            .actions
-            .get(self.next_action)
-            .map(|action| action.at_ms)
-            .unwrap_or(self.scenario.duration_ms);
-        let next_ms = next_action_ms
-            .min(self.next_capture_ms)
-            .min(self.scenario.duration_ms);
+        let next_ms = self.next_capture_ms.min(self.scenario.duration_ms);
         Some(start + Duration::from_millis(next_ms))
     }
 
@@ -1486,7 +1499,7 @@ impl App {
         let actions = self
             .qa_runner
             .as_mut()
-            .map(|runner| runner.take_due_actions(now))
+            .map(|runner| runner.prepare_due_frame(now))
             .unwrap_or_default();
         for action in actions {
             self.apply_qa_action(action);
@@ -1762,7 +1775,7 @@ impl App {
         }
     }
 
-    pub(crate) fn qa_capture_path(&mut self, now: Instant) -> Option<PathBuf> {
+    pub(crate) fn qa_capture_path(&mut self) -> Option<PathBuf> {
         let editing = self.editing;
         let context_menu_active = self.context_menu.is_active();
         let context_menu_phase = format!("{:?}", self.context_menu.phase);
@@ -1800,44 +1813,37 @@ impl App {
             });
         let pager = self.qa_pager_snapshot();
         let text_atlas = self.text.as_ref().map(|text| text.atlas_stats());
-        self.qa_runner.as_mut()?.next_capture_path(
-            now,
-            QaFrameState {
-                editing,
-                context_menu_active,
-                context_menu_phase,
-                folder_open,
-                folder_page,
-                renaming,
-                folder_rename_caret_visible,
-                folder_scroll,
-                folder_child_drag,
-                top_level_drag,
-                top_level_item_count,
-                active_folder_child_count,
-                frame_dt_ms: self.last_frame_dt_ms,
-                pointer_x: self.pointer_phys_x,
-                folder_scroll_diagnostics,
-                folder_pointer_move_serial: self.folder_pointer_move_serial,
-                relayout_serial: self.relayout_serial,
-                folder_child_page_target,
-                folder_child_page_hover_progress,
-                pager,
-                text_atlas,
-            },
-        )
+        self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
+            editing,
+            context_menu_active,
+            context_menu_phase,
+            folder_open,
+            folder_page,
+            renaming,
+            folder_rename_caret_visible,
+            folder_scroll,
+            folder_child_drag,
+            top_level_drag,
+            top_level_item_count,
+            active_folder_child_count,
+            frame_dt_ms: self.last_frame_dt_ms,
+            pointer_x: self.pointer_phys_x,
+            folder_scroll_diagnostics,
+            folder_pointer_move_serial: self.folder_pointer_move_serial,
+            relayout_serial: self.relayout_serial,
+            folder_child_page_target,
+            folder_child_page_hover_progress,
+            pager,
+            text_atlas,
+        })
     }
 
-    pub(crate) fn qa_capture_due(&self, now: Instant) -> bool {
-        self.qa_runner
-            .as_ref()
-            .is_some_and(|runner| runner.capture_due(now))
+    pub(crate) fn qa_capture_due(&self) -> bool {
+        self.qa_runner.as_ref().is_some_and(QaRunner::capture_due)
     }
 
-    pub(crate) fn qa_finished(&self, now: Instant) -> bool {
-        self.qa_runner
-            .as_ref()
-            .is_some_and(|runner| runner.finished(now))
+    pub(crate) fn qa_finished(&self) -> bool {
+        self.qa_runner.as_ref().is_some_and(QaRunner::finished)
     }
 
     pub(crate) fn qa_next_deadline(&self) -> Option<Instant> {
@@ -1912,6 +1918,64 @@ mod tests {
     #[test]
     fn runner_orders_actions_and_sanitizes_run_name() {
         assert_eq!(sanitize_name("Folder QA / 1"), "Folder-QA---1");
+    }
+
+    #[test]
+    fn slow_wall_clock_cannot_overtake_the_fixed_step_scenario_clock() {
+        let mut runner = QaRunner {
+            scenario: QaScenario {
+                name: "fixed-step-clock".to_owned(),
+                viewport: [1280, 800],
+                fps: 30,
+                duration_ms: 150,
+                output_dir: PathBuf::new(),
+                fixture: QaFixture {
+                    apps: Vec::new(),
+                    generated_apps: Vec::new(),
+                    folders: Vec::new(),
+                    items: Vec::new(),
+                },
+                scroll_expectations: None,
+                context_menu_expectations: None,
+                actions: vec![TimedAction {
+                    at_ms: 100,
+                    action: QaAction::RightClick,
+                }],
+            },
+            scenario_path: PathBuf::new(),
+            run_dir: PathBuf::new(),
+            start: None,
+            next_action: 0,
+            next_capture_ms: 0,
+            frame_index: 0,
+            frames: Vec::new(),
+            scroll_trace: Vec::new(),
+            frame_ready: false,
+            animation_advanced: false,
+            finalized: false,
+        };
+        let start = Instant::now();
+        let slow_now = start + Duration::from_secs(5);
+        runner.start(start);
+
+        // Even though five wall-clock seconds have elapsed, the first four
+        // fixed frames are still 0, 33, 66, and 99 ms in scenario time.
+        for expected_ms in [0, 33, 66, 99] {
+            assert!(runner.prepare_due_frame(slow_now).is_empty());
+            assert_eq!(runner.next_capture_ms, expected_ms);
+            assert!(runner.capture_due());
+            assert!(!runner.finished());
+            assert!((runner.animation_dt() - 1.0 / 30.0).abs() < f32::EPSILON);
+            assert_eq!(runner.animation_dt(), 0.0);
+            runner.complete_capture();
+        }
+
+        let actions = runner.prepare_due_frame(slow_now);
+        assert!(matches!(actions.as_slice(), [QaAction::RightClick]));
+        assert_eq!(runner.next_capture_ms, 132);
+        assert!(!runner.finished());
+        runner.complete_capture();
+        assert!(runner.finished());
     }
 
     fn scroll_action(

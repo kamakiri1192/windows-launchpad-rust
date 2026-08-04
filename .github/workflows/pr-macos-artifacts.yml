@@ -290,7 +290,7 @@ jobs:
 
           - Artifact: [$ARTIFACT_NAME]($ARTIFACT_URL)
           - Contents: deterministic GPU-captured PNG sequence, manifest, and logs
-          - Scenarios: folder interactions, folder creation, context-menu opening, and context-menu dismissal at 1280x800 / 30 fps
+          - Scenarios: folder interactions, folder creation, context-menu opening/dismissal, and trackpad secondary-click regression at 1280x800 / 30 fps
           - Retention: 7 days
 
           This validates the application render path. ScreenCaptureKit permission,

@@ -20,6 +20,8 @@ $env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\folder_interactions.json).Path
 
 シナリオの `duration_ms` に達するとプロセスは自動終了します。出力先はシナリオの `output_dir` 配下に実行時刻付きディレクトリとして作られます。
 
+シナリオ内のアクションと終了判定は `fps` から作る固定ステップ時刻で進み、コンテキストメニューの開閉も同じフレーム刻みで評価します。GPU readback が遅い環境でも壁時計だけが先行してアクションを飛ばしたり、開閉アニメーションの途中で QA が終了したりしません。
+
 ```text
 target/qa-sequences/folder-interactions-<timestamp>/
 ├── frame_000000.png
