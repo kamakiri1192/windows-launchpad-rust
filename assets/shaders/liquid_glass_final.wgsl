@@ -170,7 +170,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if normalized_height >= 1.0 {
         let filtered_color = sample_glass_backdrop(screen_uv);
         let sharp_color = sample_backdrop(screen_uv);
-        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, 0.12);
+        // Context-menu glass must show the blurred desktop underneath. Keep
+        // a tiny sharp contribution for ordinary glass, but do not let the
+        // sharp capture punch through the menu's interior.
+        let sharp_interior_mix = select(0.12, 0.0, u.blur_radius >= 24.0);
+        var interior_rgb = mix(filtered_color.rgb, sharp_color.rgb, sharp_interior_mix);
         let bg_luma = luminance(interior_rgb);
         let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
         interior_rgb = mix(interior_rgb, interior_rgb * adaptive_tint + adaptive_tint * 0.045, 0.55);
@@ -208,9 +212,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let sharp_color = sample_backdrop(screen_uv + displacement * 0.28 * inv_viewport);
     let reflection_color = sample_backdrop(screen_uv - displacement * 0.42 * inv_viewport + normalize(u.light_direction) * 0.035);
-    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, 0.12);
+    let sharp_edge_mix = select(0.12, 0.0, u.blur_radius >= 24.0);
+    var final_rgb = mix(refract_color.rgb, sharp_color.rgb, sharp_edge_mix);
     // Stronger reflection pull on the rim when the lens is active.
-    final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * (0.22 + 0.18 * u.activation));
+    let reflection_mix = select(0.22 + 0.18 * u.activation, 0.08, u.blur_radius >= 24.0);
+    final_rgb = mix(final_rgb, reflection_color.rgb, edge_factor * reflection_mix);
 
     let bg_luma = luminance(final_rgb);
     let adaptive_tint = mix(vec3<f32>(0.82, 0.90, 1.0), vec3<f32>(1.0, 0.98, 0.94), smoothstep(0.15, 0.85, bg_luma));
