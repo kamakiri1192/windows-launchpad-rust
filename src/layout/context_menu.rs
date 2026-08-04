@@ -9,12 +9,11 @@
 use crate::layout::hit_map::{HitMap, HitRegion};
 use crate::layout::LayoutResult;
 use crate::ui_model::geometry::{Point, Rect};
-use crate::ui_model::grid::TileAnim;
 use crate::ui_model::hit::HitTarget;
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
     Color, ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, InkLane, InkView,
-    RenderModel, TileView,
+    RenderModel,
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
 
@@ -243,24 +242,6 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     let content_opacity = input.content_opacity.clamp(0.0, 1.0);
     let reveal = content_opacity;
 
-    // --- Opaque background fill ---------------------------------------------
-    // `GlassSurface.tint` is not wired into the glass pipeline, so an explicit
-    // opaque tile is drawn beneath the glass to give the menu a solid white-ish
-    // body. This also visually separates the menu from an open folder panel,
-    // whose glass would otherwise smooth-union with this one.
-    render.context_menu_tiles = Some(vec![TileView {
-        id: UiId::context_menu_panel(),
-        rect: panel_rect,
-        radius: input.radius,
-        color: Color::rgba(0.93, 0.94, 0.96, content_opacity),
-        has_icon: false,
-        motion: TileAnim {
-            flags: TileAnim::FLAG_FIXED,
-            ..Default::default()
-        },
-        z: 99,
-    }]);
-
     // --- Glass surface (the menu body) --------------------------------------
     render.set_glass_batch(
         GlassLayer::ContextMenu,
@@ -273,7 +254,10 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             z: 100,
             clip: None,
             activation: input.activation,
-            tint: None,
+            // The context menu is intentionally brighter than the global glass tint.
+            // Fade the override with the menu reveal so the collapsed seed does not
+            // leave a white disc behind during close.
+            tint: Some(Color::rgba(0.93, 0.94, 0.96, 0.50 * content_opacity)),
         }],
     );
 
@@ -428,7 +412,9 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{open_panel_origin, Rect};
+    use super::{
+        build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, Rect,
+    };
 
     /// Icon near the right of the viewport so the menu cannot fit on its right
     /// side, but has ample room on the left: it must flip to the left edge,
@@ -476,5 +462,39 @@ mod tests {
         let ((x, _), _) = open_panel_origin(icon, (300.0, 80.0), (200, 300));
         // Centered on icon center (100), clamped: 100 − 150 = −50 → clamp to margin.
         assert!((x - 8.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn menu_uses_per_surface_tint_without_opaque_fallback() {
+        let input = ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            target: "app:qa-context-menu",
+            pos: (320.0, 180.0),
+            size: (280.0, 280.0),
+            open_size: (280.0, 280.0),
+            radius: 28.0,
+            content_scale: 1.0,
+            content_opacity: 1.0,
+            content_blur: 0.0,
+            activation: 0.0,
+            items: &ContextMenuItem::ALL,
+            labels: &ContextMenuItem::ALL_LABELS,
+        };
+
+        let model = build(&input);
+        assert!(
+            model.result.render.context_menu_tiles.is_none(),
+            "the former opaque TileView workaround must stay removed"
+        );
+        let surface = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| batch.surfaces.first())
+            .expect("context menu glass surface");
+        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.50)));
     }
 }

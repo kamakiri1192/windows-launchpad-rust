@@ -1,0 +1,30 @@
+{
+  "name": "context-menu-tint",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 1200,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-menu-0", "name": "Context Menu Target" },
+      { "id": "qa-menu-1", "name": "Second App" },
+      { "id": "qa-menu-2", "name": "Third App" },
+      { "id": "qa-menu-3", "name": "Fourth App" },
+      { "id": "qa-menu-4", "name": "Fifth App" },
+      { "id": "qa-menu-5", "name": "Sixth App" }
+    ],
+    "folders": [],
+    "items": [
+      { "kind": "app", "id": "qa-menu-0" },
+      { "kind": "app", "id": "qa-menu-1" },
+      { "kind": "app", "id": "qa-menu-2" },
+      { "kind": "app", "id": "qa-menu-3" },
+      { "kind": "app", "id": "qa-menu-4" },
+      { "kind": "app", "id": "qa-menu-5" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 100, "type": "right_click" }
+  ]
+}
