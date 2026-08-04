@@ -1000,6 +1000,7 @@ impl App {
         }
         self.pending_press = None;
         self.pressed_on_control = false;
+        self.reset_settings_category_hover();
         self.settings_open = true;
         debug_log!("settings: opened");
         self.request_redraw();
@@ -1011,6 +1012,7 @@ impl App {
             return;
         }
         self.settings_open = false;
+        self.reset_settings_category_hover();
         // Drop any in-flight slider drag and reset the per-category scroll so
         // the next open starts at the top.
         self.settings_slider_drag = None;

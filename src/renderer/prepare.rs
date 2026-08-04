@@ -228,7 +228,7 @@ impl Renderer {
         let modal_clip = model
             .glass
             .iter()
-            .find(|batch| batch.layer == GlassLayer::Modal)
+            .find(|batch| matches!(batch.layer, GlassLayer::Modal | GlassLayer::Settings))
             .and_then(|batch| {
                 batch
                     .surfaces
@@ -286,6 +286,36 @@ impl Renderer {
             .unwrap_or(0.0);
         self.liquid_glass
             .set_context_menu_backdrop_replacement(context_menu_backdrop_replacement);
+        let settings_panel = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Settings);
+        let settings_panel_blur_radius = settings_panel.and_then(|batch| {
+            batch
+                .surfaces
+                .iter()
+                .enumerate()
+                .max_by_key(|(index, surface)| (surface.z, *index))
+                .and_then(|(_, surface)| surface.blur_radius)
+        });
+        let settings_panel_backdrop_replacement = settings_panel
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| surface.backdrop_replacement)
+            })
+            .unwrap_or(0.0);
+        self.liquid_glass
+            .set_settings_panel_blur_radius(settings_panel_blur_radius);
+        self.liquid_glass
+            .set_settings_panel_backdrop_replacement(settings_panel_backdrop_replacement);
+        self.liquid_glass
+            .set_settings_panel_completed_scene_enabled(
+                settings_panel.is_some_and(|batch| !batch.surfaces.is_empty()),
+            );
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -328,7 +358,7 @@ impl Renderer {
                     self.liquid_glass
                         .set_overlay_shapes(&self.device, &self.queue, &shapes);
                 }
-                GlassLayer::Modal => {
+                GlassLayer::Modal | GlassLayer::Settings => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
                         .set_modal_shapes(&self.device, &self.queue, &shapes);

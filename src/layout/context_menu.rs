@@ -45,18 +45,18 @@ pub const FOLDER_OMITTED_ITEM_COUNT: usize = 3;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
-const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
+pub const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
 /// System-blue hover tint used by the focused row. The low opacity keeps the
 /// material and its blurred backdrop visible through the pill, matching the
 /// translucent highlight used by iOS/macOS menus.
-const FOCUS_ROW_RGB: [f32; 3] = [0.039, 0.518, 1.0];
-const FOCUS_ROW_OPACITY: f32 = 0.20;
+pub const FOCUS_ROW_RGB: [f32; 3] = [0.039, 0.518, 1.0];
+pub const FOCUS_ROW_OPACITY: f32 = 0.20;
 /// Leave a little breathing room between the focused pill and adjacent rows.
-const FOCUS_ROW_VERTICAL_INSET: f32 = 3.0;
+pub const FOCUS_ROW_VERTICAL_INSET: f32 = 3.0;
 /// Keep the menu body visibly blurred even after the content-reveal animation
 /// reaches its resting value of zero. The animated `content_blur` widens the
 /// dedicated context-menu blur kernel on top of this baseline.
-const CONTEXT_MENU_BASE_BLUR: f32 = 24.0;
+pub const CONTEXT_MENU_BASE_BLUR: f32 = 24.0;
 
 /// iOS/macOS-style primary label color on a light material. This is the
 /// familiar near-black `#1C1C1E`, rather than absolute black.

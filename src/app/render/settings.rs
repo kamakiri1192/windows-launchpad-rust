@@ -17,7 +17,9 @@ impl App {
     pub(crate) fn render_settings_panel(&mut self) {
         if !self.settings_panel_active() {
             self.render_model
-                .set_glass_batch(GlassLayer::Modal, Vec::new());
+                .set_glass_batch(GlassLayer::Settings, Vec::new());
+            self.render_model
+                .set_ink_batch(InkLane::Backdrop, Vec::new());
             self.render_model
                 .set_ink_batch(InkLane::Settings, Vec::new());
             self.render_model
@@ -56,6 +58,9 @@ impl App {
                 layout::settings_panel::LiquidGlassDebugState::default(),
             ));
         let lg = self.settings.liquid_glass;
+        let viewport = self.viewport_phys();
+        let (frame_cx, frame_cy, frame_w, frame_h) =
+            self.layout.frame_panel_rect(viewport.0 as f32);
 
         // Current pointer position in logical pixels (for widget hover/press states)
         let pointer_logical = if scale > 0.0 {
@@ -75,7 +80,7 @@ impl App {
         self.profiler.begin_settings_build();
         let model = {
             let input = layout::settings_panel::SettingsPanelInput {
-                viewport: self.viewport_phys(),
+                viewport,
                 scale_factor: scale,
                 category: settings_category_id(self.settings_category),
                 sort_order: sort_order_id(self.settings.sort_order),
@@ -99,6 +104,14 @@ impl App {
                 liquid_glass_debug: lg_debug_state,
                 pointer_pos: pointer_logical,
                 pointer_pressed,
+                page_frame_rect: Rect::new(
+                    frame_cx - frame_w * 0.5,
+                    frame_cy - frame_h * 0.5,
+                    frame_w,
+                    frame_h,
+                ),
+                page_frame_radius: self.layout.scaled(layout::grid::FRAME_CORNER_RADIUS),
+                category_hover_amounts: self.settings_category_hover_amounts(),
             };
             layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
         };
@@ -123,7 +136,7 @@ impl App {
             .render
             .glass
             .iter()
-            .find(|b| b.layer == GlassLayer::Modal)
+            .find(|b| b.layer == GlassLayer::Settings)
             .map(|b| b.surfaces.len() as u64)
             .unwrap_or(0);
         let ink_count = model
@@ -207,20 +220,31 @@ impl App {
         transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
 
         // Glass from the builder's output. The panel background lives on the
-        // Modal layer; the Liquid Glass toggle thumbs live on the Overlay
+        // Settings layer; the Liquid Glass toggle thumbs live on the Overlay
         // layer (so they render as independent glass lenses, not a union with
         // the panel capsule). Overlay is merged with whatever the rest of the
         // frame already pushed there (e.g. the bottom control capsule) because
         // `set_glass_batch` replaces per-layer.
-        let modal = model
+        let settings_glass = model
             .result
             .render
             .glass
             .iter()
-            .find(|batch| batch.layer == GlassLayer::Modal)
+            .find(|batch| batch.layer == GlassLayer::Settings)
             .map(|batch| batch.surfaces.clone())
             .unwrap_or_default();
-        self.render_model.set_glass_batch(GlassLayer::Modal, modal);
+        self.render_model
+            .set_glass_batch(GlassLayer::Settings, settings_glass);
+
+        let backdrop = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Backdrop)
+            .map(|batch| batch.views.clone())
+            .unwrap_or_default();
+        self.render_model.set_ink_batch(InkLane::Backdrop, backdrop);
 
         let ui_overlay = model
             .result
@@ -283,6 +307,60 @@ impl App {
         }
         (self.settings_panel_progress - before).abs() > 0.0001
             || (self.settings_panel_progress - target).abs() > 0.0001
+    }
+
+    pub(crate) fn update_settings_category_hover(&mut self, x: f32, y: f32) {
+        if !self.settings_panel_active() {
+            return;
+        }
+        let hovered = match self.settings_hit_target(x, y) {
+            crate::app::state::SettingsPressTarget::Category(category) => {
+                Some(settings_category_id(category).index())
+            }
+            _ => None,
+        };
+        let transition = crate::spring_anim::Transition::Easing {
+            duration: 0.15,
+            ease: crate::spring_anim::Ease::EaseOut,
+        };
+        let mut changed = false;
+        for (index, channel) in self.settings_category_hover.iter_mut().enumerate() {
+            let target = f32::from(hovered == Some(index));
+            if (channel.target - target).abs() > f32::EPSILON {
+                crate::spring_anim::retarget(
+                    channel,
+                    target,
+                    transition,
+                    &mut self.settings_category_hover_elapsed[index],
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn step_settings_category_hover(&mut self, dt: f32) -> bool {
+        let transition = crate::spring_anim::Transition::Easing {
+            duration: 0.15,
+            ease: crate::spring_anim::Ease::EaseOut,
+        };
+        self.settings_category_hover
+            .iter_mut()
+            .zip(self.settings_category_hover_elapsed.iter_mut())
+            .fold(false, |animating, (channel, elapsed)| {
+                crate::spring_anim::step(channel, transition, elapsed, dt) || animating
+            })
+    }
+
+    pub(crate) fn settings_category_hover_amounts(&self) -> [f32; 5] {
+        std::array::from_fn(|index| self.settings_category_hover[index].current)
+    }
+
+    pub(crate) fn reset_settings_category_hover(&mut self) {
+        self.settings_category_hover = [crate::spring_anim::Channel::rest(0.0); 5];
+        self.settings_category_hover_elapsed = [0.0; 5];
     }
 }
 

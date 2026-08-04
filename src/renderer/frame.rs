@@ -15,10 +15,11 @@
 //! 10. control overlay pass (control ink, gear ink, control text)
 //! 11. optional lower-scene Dual-Kawase blur + rounded focus composite
 //! 12. focus tint backdrop
-//! 13. Liquid Glass settings/folder panel pass (modal)
-//! 14. modal content pass
-//! 15. Liquid Glass context-menu pass (isolated SDF field above modal)
-//! 16. context-menu content pass (tiles, ink, text)
+//! 13. settings completed-scene checkpoint + per-surface Liquid Glass pass
+//! 14. Liquid Glass folder panel pass (modal)
+//! 15. modal/settings content pass
+//! 16. Liquid Glass context-menu pass (isolated SDF field above modal)
+//! 17. context-menu content pass (tiles, ink, text)
 //!
 //! The per-frame uniform updates are tiny (viewport + scroll + time + drag);
 //! no static scene is rebuilt here.
@@ -465,6 +466,25 @@ impl Renderer {
             }
         }
         self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // Settings uses the same completed-scene contract as the context menu:
+        // capture the pixels after the Glass Focus Veil and before the
+        // settings surface, flatten them over the desktop capture, and blur
+        // that result in a dedicated full-resolution output.
+        if self.liquid_glass.has_settings_panel_glass() {
+            self.gpu_profiler.resolve(&mut encoder);
+            self.queue.submit(std::iter::once(encoder.finish()));
+            self.liquid_glass.prepare_settings_panel_scene_blur(
+                &self.device,
+                &self.queue,
+                frame.texture(),
+            );
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("settings panel encoder"),
+                });
+        }
 
         // Generic dynamic modal Liquid Glass surface.
         let profile_scope = self.gpu_profiler.begin("modal_liquid_glass", &mut encoder);

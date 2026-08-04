@@ -28,7 +28,7 @@ const LABEL_HEIGHT: f32 = 36.0;
 const PANEL_RADIUS: f32 = 42.0;
 /// Cool-neutral tint layered after the scene-space focus blur. Blur carries the
 /// visual separation; this restrained wash only lowers residual contrast.
-const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.14;
+pub use crate::layout::GLASS_FOCUS_VEIL_OPACITY;
 /// Portion of the closed end of the morph used to collapse each child's
 /// colored tile fill into its own center. Icons keep their full trajectory.
 const CHILD_FILL_COLLAPSE_PROGRESS: f32 = 0.42;

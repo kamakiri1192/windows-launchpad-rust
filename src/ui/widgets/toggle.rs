@@ -29,7 +29,7 @@ use super::Z_CONTROL;
 // Palette constants (mirrors `settings_panel.rs`)
 // ---------------------------------------------------------------------------
 
-const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
+const INK: [f32; 4] = [0.11, 0.11, 0.118, 0.92];
 const GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 const TRACK_OFF: [f32; 4] = [1.0, 1.0, 1.0, 0.14];
 
@@ -574,7 +574,7 @@ impl Ui {
                 scene_blur: 0.0,
                 stroke: half_w,
                 corner_radius: corner,
-                color: Color::rgba(1.0, 1.0, 1.0, 0.12),
+                color: Color::rgba(0.11, 0.11, 0.118, 0.06),
                 kind: ControlKind::RowBackground,
                 z: Z_CONTROL,
                 clip: None,
@@ -624,7 +624,7 @@ impl Ui {
                 style: TextStyle::new(
                     TextRole::SettingsDetail,
                     12.0,
-                    Color::rgba(1.0, 1.0, 1.0, alpha),
+                    Color::rgba(0.11, 0.11, 0.118, alpha),
                     TextWeight::Regular,
                     TextAlign::Start,
                 ),
