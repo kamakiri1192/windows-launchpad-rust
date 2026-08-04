@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+source = Path("src/layout/context_menu.rs")
+text = source.read_text(encoding="utf-8")
+
+text = text.replace("use crate::ui_model::grid::TileAnim;\n", "")
+text = text.replace("    RenderModel, TileView,\n", "    RenderModel,\n")
+
+workaround = re.compile(
+    r"\n    // --- Opaque background fill -+\n"
+    r"    // `GlassSurface\.tint` is not wired into the glass pipeline, so an explicit\n"
+    r"    // opaque tile is drawn beneath the glass to give the menu a solid white-ish\n"
+    r"    // body\. This also visually separates the menu from an open folder panel,\n"
+    r"    // whose glass would otherwise smooth-union with this one\.\n"
+    r"    render\.context_menu_tiles = Some\(vec!\[TileView \{.*?\n"
+    r"    \}\]\);\n",
+    re.DOTALL,
+)
+text, removed = workaround.subn("\n", text, count=1)
+if removed != 1:
+    raise SystemExit(
+        f"expected to remove one opaque context-menu workaround, removed {removed}"
+    )
+
+old_tint = """            activation: input.activation,
+            tint: None,
+"""
+new_tint = """            activation: input.activation,
+            // The context menu is intentionally brighter than the global glass tint.
+            // Fade the override with the menu reveal so the collapsed seed does not
+            // leave a white disc behind during close.
+            tint: Some(Color::rgba(
+                0.93,
+                0.94,
+                0.96,
+                0.50 * content_opacity,
+            )),
+"""
+if text.count(old_tint) != 1:
+    raise SystemExit(f"expected one context-menu tint site, found {text.count(old_tint)}")
+text = text.replace(old_tint, new_tint, 1)
+
+old_test_import = "    use super::{open_panel_origin, Rect};\n"
+new_test_import = (
+    "    use super::{\n"
+    "        build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, Rect,\n"
+    "    };\n"
+)
+if old_test_import not in text:
+    raise SystemExit("context-menu test import anchor not found")
+text = text.replace(old_test_import, new_test_import, 1)
+
+test = r'''
+
+    #[test]
+    fn menu_uses_per_surface_tint_without_opaque_fallback() {
+        let input = ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            target: "app:qa-context-menu",
+            pos: (320.0, 180.0),
+            size: (280.0, 280.0),
+            open_size: (280.0, 280.0),
+            radius: 28.0,
+            content_scale: 1.0,
+            content_opacity: 1.0,
+            content_blur: 0.0,
+            activation: 0.0,
+            items: &ContextMenuItem::ALL,
+            labels: &ContextMenuItem::ALL_LABELS,
+        };
+
+        let model = build(&input);
+        assert!(
+            model.result.render.context_menu_tiles.is_none(),
+            "the former opaque TileView workaround must stay removed"
+        );
+        let surface = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| batch.surfaces.first())
+            .expect("context menu glass surface");
+        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.50)));
+    }
+'''
+final_brace = text.rfind("\n}")
+if final_brace < 0:
+    raise SystemExit("context-menu test module closing brace not found")
+text = text[:final_brace] + test + text[final_brace:]
+source.write_text(text, encoding="utf-8")
+
+scenario = Path("qa/context_menu_tint.json")
+scenario.write_text(
+    '''{
+  "name": "context-menu-tint",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 1200,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-menu-0", "name": "Context Menu Target" },
+      { "id": "qa-menu-1", "name": "Second App" },
+      { "id": "qa-menu-2", "name": "Third App" },
+      { "id": "qa-menu-3", "name": "Fourth App" },
+      { "id": "qa-menu-4", "name": "Fifth App" },
+      { "id": "qa-menu-5", "name": "Sixth App" }
+    ],
+    "folders": [],
+    "items": [
+      { "kind": "app", "id": "qa-menu-0" },
+      { "kind": "app", "id": "qa-menu-1" },
+      { "kind": "app", "id": "qa-menu-2" },
+      { "kind": "app", "id": "qa-menu-3" },
+      { "kind": "app", "id": "qa-menu-4" },
+      { "kind": "app", "id": "qa-menu-5" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 100, "type": "right_click" }
+  ]
+}
+''',
+    encoding="utf-8",
+)
