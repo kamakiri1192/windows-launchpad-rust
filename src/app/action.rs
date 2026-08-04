@@ -102,6 +102,9 @@ pub enum KeyAction {
     /// Esc while the search field wants keyboard → close the field + clear
     /// query (no launcher hide).
     SearchEscClose,
+    /// Esc while the context menu is active → close the menu without hiding
+    /// the launcher.
+    CloseContextMenu,
     /// Backspace inside the search field (preedit empty).
     SearchBackspace,
     /// Backspace inside the search field (preedit non-empty → OS IME owns it;
@@ -572,6 +575,7 @@ impl App {
                 self.request_redraw();
             }
             KeyAction::CloseSettings => self.close_settings(),
+            KeyAction::CloseContextMenu => self.close_context_menu(),
             KeyAction::ExitEditMode => self.exit_edit_mode(),
             KeyAction::SearchEscClose => {
                 self.control.press_close();
@@ -989,7 +993,7 @@ impl App {
             || self.editing
             || long_press_pending
             || folder_long_press_pending
-            || self.qa_capture_due(now)
+            || self.qa_capture_due()
             || self.profile_scroll.is_some()
             // Only keep redrawing for the FPS counter while the window is
             // visible. `about_to_wait` ticks keep firing even after hide(),

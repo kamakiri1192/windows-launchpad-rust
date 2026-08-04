@@ -109,7 +109,12 @@ impl App {
             debug_log!("hide: already hidden, no-op");
             return;
         }
-        debug_log!("hide: hiding window");
+        debug_log!(
+            "hide: hiding window context_menu_phase={:?} active={} router={:?}",
+            self.context_menu.phase,
+            self.context_menu.is_active(),
+            self.input_router.state(),
+        );
         self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::HideWindow);
         if let Some(r) = self.renderer.as_mut() {
             r.set_backdrop_capture_active(false);
@@ -126,6 +131,11 @@ impl App {
         self.folders = crate::features::folders::FolderFeatureState::default();
         self.folder_layout = None;
         self.folder_scroll_pending_commit = false;
+        // The menu is also transient window state. Reset it synchronously on
+        // hide instead of leaving an Opening/Closing menu to capture input
+        // after the next summon.
+        self.context_menu = crate::features::context_menu::ContextMenuState::default();
+        self.clear_context_menu_presentation();
         self.pending_press = None;
         self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon

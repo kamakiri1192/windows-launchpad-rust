@@ -49,6 +49,10 @@ use super::state::{
 
 use crate::{initial_window_position, load_window_icon};
 
+fn is_repeated_escape(repeat: bool, key_code: Option<winit::keyboard::KeyCode>) -> bool {
+    repeat && key_code == Some(winit::keyboard::KeyCode::Escape)
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         let action = match event {
@@ -257,13 +261,25 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
-                let key_action = if self.context_menu.is_active() {
-                    // ESC dismisses the context menu; any other key is swallowed
-                    // while the menu is open.
-                    if key_code == Some(winit::keyboard::KeyCode::Escape) {
-                        self.close_context_menu();
-                    }
+                let key_action = if is_repeated_escape(event.repeat, key_code) {
+                    // The first Escape press may dismiss the context menu. If
+                    // its key-repeat outlives the close animation, it must not
+                    // fall through to the launcher-level hide shortcut.
                     KeyAction::None
+                } else if self.context_menu.is_active() {
+                    // ESC dismisses the context menu while it owns input. Once
+                    // closing has started, swallow every key until the short
+                    // visual transition finishes. In particular, an OS key
+                    // repeat from the same Escape press must not hide the
+                    // launcher itself (the repeat guard above also covers the
+                    // first event delivered after the menu reaches Closed).
+                    if self.context_menu.accepts_pointer_input()
+                        && key_code == Some(winit::keyboard::KeyCode::Escape)
+                    {
+                        KeyAction::CloseContextMenu
+                    } else {
+                        KeyAction::None
+                    }
                 } else if self.folders.is_active() && !self.settings_open {
                     folder_keyboard_action(
                         self.folders.rename.is_some(),
@@ -415,14 +431,14 @@ impl ApplicationHandler<UserEvent> for App {
         let now = Instant::now();
         self.handle_action(AppAction::Tick { now });
         self.publish_input_routing_snapshot();
-        if self.qa_capture_due(now) {
+        if self.qa_capture_due() {
             // Windows does not deliver RedrawRequested for a hidden window.
             // QA therefore advances the exact production frame path from its
             // own fixed-rate deadline while normal visible mode remains event
             // driven.
             self.tick_frame();
         }
-        if self.qa_finished(now) {
+        if self.qa_finished() {
             self.finalize_qa();
             event_loop.exit();
             return;
@@ -553,5 +569,19 @@ impl App {
             has_launch_id,
             scroller_dragging,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_repeated_escape;
+    use winit::keyboard::KeyCode;
+
+    #[test]
+    fn only_repeated_escape_is_swallowed_after_context_menu_close() {
+        assert!(is_repeated_escape(true, Some(KeyCode::Escape)));
+        assert!(!is_repeated_escape(false, Some(KeyCode::Escape)));
+        assert!(!is_repeated_escape(true, Some(KeyCode::Enter)));
+        assert!(!is_repeated_escape(true, None));
     }
 }

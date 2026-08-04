@@ -117,6 +117,14 @@ const T_CLOSE_CONTENT_OPACITY: Transition = Transition::Easing {
     duration: 0.25,
     ease: Ease::EaseOut,
 };
+/// Rendering drops every context-menu lane below this opacity. Once the close
+/// transition has reached the same threshold, keeping the state alive only to
+/// wait for an invisible position-spring tail makes Escape/dismissal feel
+/// stuck.
+pub const CONTENT_VISIBILITY_THRESHOLD: f32 = 0.02;
+/// Preserve a few closing frames even when dismissal happens immediately
+/// after open, while avoiding the ~1 second invisible spring tail.
+const MIN_CLOSE_LIFETIME: f32 = 0.08;
 /// `CONTENT_OPTICS_TRANSITION`: the easeIn decay applied to the activation bump.
 const T_OPTICS: Transition = Transition::Easing {
     duration: 0.3,
@@ -213,7 +221,7 @@ impl ContextMenuState {
     /// Begin closing the menu. The channels retarget back toward the seed state
     /// at the anchor.
     pub fn close(&mut self) {
-        if self.active_target.is_none() {
+        if self.active_target.is_none() || self.phase == ContextMenuPhase::Closing {
             return;
         }
         self.phase = ContextMenuPhase::Closing;
@@ -284,6 +292,19 @@ impl ContextMenuState {
                 dt,
             );
             animating |= still_going;
+        }
+
+        // Glass/ink/glyph rendering is already gated by this exact opacity.
+        // Finish the lifecycle when the menu becomes visually absent instead
+        // of keeping keyboard routing trapped in Closing until the slower
+        // position spring settles.
+        if self.phase == ContextMenuPhase::Closing
+            && self.elapsed[Prop::ContentOpacity as usize] >= MIN_CLOSE_LIFETIME
+            && self.content_opacity() <= CONTENT_VISIBILITY_THRESHOLD
+        {
+            self.phase = ContextMenuPhase::Closed;
+            self.active_target = None;
+            return false;
         }
 
         if !animating {
@@ -460,5 +481,48 @@ mod tests {
 
         assert!(state.is_active(), "close animation should remain visible");
         assert!(!state.accepts_pointer_input());
+    }
+
+    #[test]
+    fn repeated_close_does_not_restart_the_transition() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        state.tick(1.0 / 60.0);
+        state.close();
+        state.tick(1.0 / 60.0);
+        let elapsed = state.elapsed;
+
+        state.close();
+
+        assert_eq!(state.elapsed, elapsed);
+        assert_eq!(state.phase, ContextMenuPhase::Closing);
+    }
+
+    #[test]
+    fn closing_finishes_when_the_menu_is_no_longer_rendered() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        while state.tick(1.0 / 60.0) {}
+        state.close();
+
+        let mut closing_frames = 0;
+        while state.tick(1.0 / 60.0) {
+            closing_frames += 1;
+            assert!(closing_frames < 30, "invisible close tail took too long");
+        }
+
+        assert_eq!(state.phase, ContextMenuPhase::Closed);
+        assert!(!state.is_active());
+        assert!(state.content_opacity() <= CONTENT_VISIBILITY_THRESHOLD);
     }
 }

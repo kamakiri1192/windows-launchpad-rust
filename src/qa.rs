@@ -35,6 +35,8 @@ pub struct QaScenario {
     #[serde(default)]
     pub scroll_expectations: Option<QaScrollExpectations>,
     #[serde(default)]
+    pub context_menu_expectations: Option<QaContextMenuExpectations>,
+    #[serde(default)]
     pub actions: Vec<TimedAction>,
 }
 
@@ -80,6 +82,39 @@ pub struct QaReleaseExpectation {
 
 fn default_target_tolerance() -> f32 {
     1.0
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QaContextMenuExpectations {
+    pub expected_open_count: u32,
+    #[serde(default = "default_min_context_menu_open_frames")]
+    pub min_open_frames: u32,
+    /// Number of opening attempts, including attempts dismissed before Open.
+    #[serde(default)]
+    pub expected_opening_count: Option<u32>,
+    /// Number of transitions into the Closing phase.
+    #[serde(default)]
+    pub expected_closing_count: u32,
+    /// Number of completed transitions back into Closed.
+    #[serde(default)]
+    pub expected_closed_count: u32,
+    #[serde(default = "default_min_context_menu_closing_frames")]
+    pub min_closing_frames: u32,
+    /// Maximum frames allowed for any single Closing streak. This catches a
+    /// visually absent menu whose lifecycle is kept alive by a slow spring or
+    /// by repeated dismiss events restarting its elapsed timers.
+    #[serde(default)]
+    pub max_closing_frames: Option<u32>,
+    #[serde(default)]
+    pub require_final_closed: bool,
+}
+
+fn default_min_context_menu_open_frames() -> u32 {
+    10
+}
+
+fn default_min_context_menu_closing_frames() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -584,6 +619,58 @@ fn validate_scroll_expectations(scenario: &QaScenario) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), String> {
+    let Some(expected) = scenario.context_menu_expectations.as_ref() else {
+        return Ok(());
+    };
+    if expected.expected_open_count == 0 {
+        return Err(
+            "context_menu_expectations expected_open_count must be greater than zero".to_owned(),
+        );
+    }
+    if expected.min_open_frames == 0 {
+        return Err(
+            "context_menu_expectations min_open_frames must be greater than zero".to_owned(),
+        );
+    }
+    if expected.expected_opening_count == Some(0) {
+        return Err(
+            "context_menu_expectations expected_opening_count must be greater than zero".to_owned(),
+        );
+    }
+    if expected.expected_closed_count > expected.expected_closing_count {
+        return Err(
+            "context_menu_expectations expected_closed_count cannot exceed expected_closing_count"
+                .to_owned(),
+        );
+    }
+    if expected.expected_closing_count > 0 && expected.min_closing_frames == 0 {
+        return Err(
+            "context_menu_expectations min_closing_frames must be greater than zero".to_owned(),
+        );
+    }
+    if expected.max_closing_frames == Some(0) {
+        return Err(
+            "context_menu_expectations max_closing_frames must be greater than zero".to_owned(),
+        );
+    }
+    if expected.require_final_closed && expected.expected_closed_count == 0 {
+        return Err(
+            "context_menu_expectations require_final_closed needs expected_closed_count".to_owned(),
+        );
+    }
+    if !scenario
+        .actions
+        .iter()
+        .any(|action| matches!(action.action, QaAction::RightClick))
+    {
+        return Err(
+            "context_menu_expectations requires at least one right_click action".to_owned(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QaTarget {
@@ -738,6 +825,19 @@ struct QaScrollAssertions {
     momentum_mutation_count: u32,
 }
 
+#[derive(Debug, Default, Serialize)]
+struct QaContextMenuAssertions {
+    passed: bool,
+    opening_count: u32,
+    open_entry_count: u32,
+    open_frame_count: u32,
+    closing_count: u32,
+    closing_frame_count: u32,
+    max_closing_streak_frames: u32,
+    closed_entry_count: u32,
+    final_phase: String,
+}
+
 #[derive(Debug, Serialize)]
 struct QaManifest<'a> {
     scenario: &'a str,
@@ -749,6 +849,10 @@ struct QaManifest<'a> {
     scroll_trace: &'a [QaScrollTraceRecord],
     scroll_expectations: Option<&'a QaScrollExpectations>,
     scroll_assertions: QaScrollAssertions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_menu_expectations: Option<&'a QaContextMenuExpectations>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_menu_assertions: Option<QaContextMenuAssertions>,
     video_command: String,
 }
 
@@ -762,6 +866,8 @@ pub struct QaRunner {
     frame_index: u64,
     frames: Vec<QaFrameRecord>,
     scroll_trace: Vec<QaScrollTraceRecord>,
+    frame_ready: bool,
+    animation_advanced: bool,
     finalized: bool,
 }
 
@@ -786,6 +892,7 @@ impl QaRunner {
         normalize_scroll_actions(&mut scenario.actions)?;
         validate_native_scroll_actions(&scenario.actions)?;
         validate_scroll_expectations(&scenario)?;
+        validate_context_menu_expectations(&scenario)?;
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -809,6 +916,8 @@ impl QaRunner {
             frame_index: 0,
             frames: Vec::new(),
             scroll_trace: Vec::new(),
+            frame_ready: false,
+            animation_advanced: false,
             finalized: false,
         })
     }
@@ -825,14 +934,26 @@ impl QaRunner {
         self.start.get_or_insert(now);
     }
 
-    pub fn elapsed_ms(&self, now: Instant) -> u64 {
+    fn wall_elapsed_ms(&self, now: Instant) -> u64 {
         self.start
             .map(|start| now.saturating_duration_since(start).as_millis() as u64)
             .unwrap_or(0)
     }
 
-    pub fn take_due_actions(&mut self, now: Instant) -> Vec<QaAction> {
-        let elapsed = self.elapsed_ms(now);
+    /// Prepare one fixed-step scenario frame once its wall-clock pacing
+    /// deadline is reached. Scenario actions use the frame's virtual timestamp,
+    /// so a slow render cannot skip ahead to later actions or end the run before
+    /// animations have received their expected number of steps.
+    pub fn prepare_due_frame(&mut self, now: Instant) -> Vec<QaAction> {
+        if self.frame_ready
+            || self.finished()
+            || self.start.is_none()
+            || self.wall_elapsed_ms(now) < self.next_capture_ms
+        {
+            return Vec::new();
+        }
+        self.frame_ready = true;
+        let elapsed = self.next_capture_ms;
         let mut due = Vec::new();
         while let Some(action) = self.scenario.actions.get(self.next_action) {
             if action.at_ms > elapsed {
@@ -844,15 +965,29 @@ impl QaRunner {
         due
     }
 
-    pub fn capture_due(&self, now: Instant) -> bool {
-        self.start.is_some() && self.elapsed_ms(now) >= self.next_capture_ms && !self.finished(now)
+    pub fn capture_due(&self) -> bool {
+        self.frame_ready
     }
 
-    fn next_capture_path(&mut self, now: Instant, state: QaFrameState) -> Option<PathBuf> {
-        if !self.capture_due(now) {
+    /// Advance app animations once per captured QA frame. Hidden-window QA can
+    /// receive several redraw callbacks within one OS scheduling slice; using
+    /// the wall time between those callbacks would make animation progress
+    /// depend on callback frequency and could leave a close transition in
+    /// `Closing` indefinitely. The scenario FPS is the deterministic clock.
+    pub fn animation_dt(&mut self) -> f32 {
+        if self.capture_due() && !self.animation_advanced {
+            self.animation_advanced = true;
+            1.0 / self.scenario.fps.max(1) as f32
+        } else {
+            0.0
+        }
+    }
+
+    fn next_capture_path(&mut self, state: QaFrameState) -> Option<PathBuf> {
+        if !self.capture_due() {
             return None;
         }
-        let elapsed_ms = self.elapsed_ms(now);
+        let elapsed_ms = self.next_capture_ms;
         let file = format!("frame_{:06}.png", self.frame_index);
         let previous = self.frames.last();
         let folder_scroll_frame_delta_x = state.folder_scroll.map(|scroll| {
@@ -938,27 +1073,27 @@ impl QaRunner {
             text_atlas_grows: state.text_atlas.map(|stats| stats.grows),
             text_atlas_drops: state.text_atlas.map(|stats| stats.atlas_drops),
         });
-        self.frame_index += 1;
-        let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
-        self.next_capture_ms = self.next_capture_ms.saturating_add(frame_ms);
+        self.complete_capture();
         Some(self.run_dir.join(file))
     }
 
-    pub fn finished(&self, now: Instant) -> bool {
-        self.start.is_some() && self.elapsed_ms(now) >= self.scenario.duration_ms
+    fn complete_capture(&mut self) {
+        self.frame_index += 1;
+        self.frame_ready = false;
+        self.animation_advanced = false;
+        let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
+        self.next_capture_ms = self.next_capture_ms.saturating_add(frame_ms);
+    }
+
+    pub fn finished(&self) -> bool {
+        self.start.is_some()
+            && !self.frame_ready
+            && self.next_capture_ms >= self.scenario.duration_ms
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
         let start = self.start?;
-        let next_action_ms = self
-            .scenario
-            .actions
-            .get(self.next_action)
-            .map(|action| action.at_ms)
-            .unwrap_or(self.scenario.duration_ms);
-        let next_ms = next_action_ms
-            .min(self.next_capture_ms)
-            .min(self.scenario.duration_ms);
+        let next_ms = self.next_capture_ms.min(self.scenario.duration_ms);
         Some(start + Duration::from_millis(next_ms))
     }
 
@@ -980,6 +1115,12 @@ impl QaRunner {
                 &self.frames,
                 self.scenario.scroll_expectations.as_ref(),
             ),
+            context_menu_expectations: self.scenario.context_menu_expectations.as_ref(),
+            context_menu_assertions: self
+                .scenario
+                .context_menu_expectations
+                .as_ref()
+                .map(|expected| evaluate_context_menu_assertions(&self.frames, expected)),
             video_command: format!(
                 "ffmpeg -framerate {} -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p {}.mp4",
                 self.scenario.fps,
@@ -1217,6 +1358,70 @@ fn evaluate_scroll_assertions(
     result
 }
 
+fn evaluate_context_menu_assertions(
+    frames: &[QaFrameRecord],
+    expected: &QaContextMenuExpectations,
+) -> QaContextMenuAssertions {
+    evaluate_context_menu_phases(
+        frames.iter().map(|frame| frame.context_menu_phase.as_str()),
+        expected,
+    )
+}
+
+fn evaluate_context_menu_phases<'a>(
+    phases: impl IntoIterator<Item = &'a str>,
+    expected: &QaContextMenuExpectations,
+) -> QaContextMenuAssertions {
+    let mut result = QaContextMenuAssertions::default();
+    let mut previous_phase = "Closed";
+    let mut closing_streak_frames = 0_u32;
+    for phase in phases {
+        if phase == "Opening" && previous_phase != "Opening" {
+            result.opening_count += 1;
+        }
+        if phase == "Open" {
+            result.open_frame_count += 1;
+            if previous_phase != "Open" {
+                result.open_entry_count += 1;
+            }
+        }
+        if phase == "Closing" {
+            result.closing_frame_count += 1;
+            closing_streak_frames += 1;
+            result.max_closing_streak_frames =
+                result.max_closing_streak_frames.max(closing_streak_frames);
+            if previous_phase != "Closing" {
+                result.closing_count += 1;
+            }
+        } else {
+            closing_streak_frames = 0;
+        }
+        if phase == "Closed" && previous_phase != "Closed" {
+            result.closed_entry_count += 1;
+        }
+        previous_phase = phase;
+    }
+    result.final_phase = previous_phase.to_owned();
+    let expected_opening_count = expected
+        .expected_opening_count
+        .unwrap_or(expected.expected_open_count);
+    result.passed = result.opening_count == expected_opening_count
+        && result.open_entry_count == expected.expected_open_count
+        && result.open_frame_count >= expected.min_open_frames;
+    result.passed = result.passed
+        && result.closing_count == expected.expected_closing_count
+        && result.closed_entry_count == expected.expected_closed_count
+        && result.closing_frame_count
+            >= expected
+                .expected_closing_count
+                .saturating_mul(expected.min_closing_frames)
+        && expected
+            .max_closing_frames
+            .is_none_or(|max_frames| result.max_closing_streak_frames <= max_frames)
+        && (!expected.require_final_closed || result.final_phase == "Closed");
+    result
+}
+
 impl App {
     pub(crate) fn qa_enabled(&self) -> bool {
         self.qa_runner.is_some()
@@ -1294,7 +1499,7 @@ impl App {
         let actions = self
             .qa_runner
             .as_mut()
-            .map(|runner| runner.take_due_actions(now))
+            .map(|runner| runner.prepare_due_frame(now))
             .unwrap_or_default();
         for action in actions {
             self.apply_qa_action(action);
@@ -1355,6 +1560,8 @@ impl App {
                     KeyAction::CancelFolderRename
                 } else if self.editing {
                     KeyAction::ExitEditMode
+                } else if self.context_menu.is_active() {
+                    KeyAction::CloseContextMenu
                 } else if self.folders.is_active() {
                     KeyAction::CloseFolder
                 } else {
@@ -1568,7 +1775,7 @@ impl App {
         }
     }
 
-    pub(crate) fn qa_capture_path(&mut self, now: Instant) -> Option<PathBuf> {
+    pub(crate) fn qa_capture_path(&mut self) -> Option<PathBuf> {
         let editing = self.editing;
         let context_menu_active = self.context_menu.is_active();
         let context_menu_phase = format!("{:?}", self.context_menu.phase);
@@ -1606,44 +1813,37 @@ impl App {
             });
         let pager = self.qa_pager_snapshot();
         let text_atlas = self.text.as_ref().map(|text| text.atlas_stats());
-        self.qa_runner.as_mut()?.next_capture_path(
-            now,
-            QaFrameState {
-                editing,
-                context_menu_active,
-                context_menu_phase,
-                folder_open,
-                folder_page,
-                renaming,
-                folder_rename_caret_visible,
-                folder_scroll,
-                folder_child_drag,
-                top_level_drag,
-                top_level_item_count,
-                active_folder_child_count,
-                frame_dt_ms: self.last_frame_dt_ms,
-                pointer_x: self.pointer_phys_x,
-                folder_scroll_diagnostics,
-                folder_pointer_move_serial: self.folder_pointer_move_serial,
-                relayout_serial: self.relayout_serial,
-                folder_child_page_target,
-                folder_child_page_hover_progress,
-                pager,
-                text_atlas,
-            },
-        )
+        self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
+            editing,
+            context_menu_active,
+            context_menu_phase,
+            folder_open,
+            folder_page,
+            renaming,
+            folder_rename_caret_visible,
+            folder_scroll,
+            folder_child_drag,
+            top_level_drag,
+            top_level_item_count,
+            active_folder_child_count,
+            frame_dt_ms: self.last_frame_dt_ms,
+            pointer_x: self.pointer_phys_x,
+            folder_scroll_diagnostics,
+            folder_pointer_move_serial: self.folder_pointer_move_serial,
+            relayout_serial: self.relayout_serial,
+            folder_child_page_target,
+            folder_child_page_hover_progress,
+            pager,
+            text_atlas,
+        })
     }
 
-    pub(crate) fn qa_capture_due(&self, now: Instant) -> bool {
-        self.qa_runner
-            .as_ref()
-            .is_some_and(|runner| runner.capture_due(now))
+    pub(crate) fn qa_capture_due(&self) -> bool {
+        self.qa_runner.as_ref().is_some_and(QaRunner::capture_due)
     }
 
-    pub(crate) fn qa_finished(&self, now: Instant) -> bool {
-        self.qa_runner
-            .as_ref()
-            .is_some_and(|runner| runner.finished(now))
+    pub(crate) fn qa_finished(&self) -> bool {
+        self.qa_runner.as_ref().is_some_and(QaRunner::finished)
     }
 
     pub(crate) fn qa_next_deadline(&self) -> Option<Instant> {
@@ -1718,6 +1918,64 @@ mod tests {
     #[test]
     fn runner_orders_actions_and_sanitizes_run_name() {
         assert_eq!(sanitize_name("Folder QA / 1"), "Folder-QA---1");
+    }
+
+    #[test]
+    fn slow_wall_clock_cannot_overtake_the_fixed_step_scenario_clock() {
+        let mut runner = QaRunner {
+            scenario: QaScenario {
+                name: "fixed-step-clock".to_owned(),
+                viewport: [1280, 800],
+                fps: 30,
+                duration_ms: 150,
+                output_dir: PathBuf::new(),
+                fixture: QaFixture {
+                    apps: Vec::new(),
+                    generated_apps: Vec::new(),
+                    folders: Vec::new(),
+                    items: Vec::new(),
+                },
+                scroll_expectations: None,
+                context_menu_expectations: None,
+                actions: vec![TimedAction {
+                    at_ms: 100,
+                    action: QaAction::RightClick,
+                }],
+            },
+            scenario_path: PathBuf::new(),
+            run_dir: PathBuf::new(),
+            start: None,
+            next_action: 0,
+            next_capture_ms: 0,
+            frame_index: 0,
+            frames: Vec::new(),
+            scroll_trace: Vec::new(),
+            frame_ready: false,
+            animation_advanced: false,
+            finalized: false,
+        };
+        let start = Instant::now();
+        let slow_now = start + Duration::from_secs(5);
+        runner.start(start);
+
+        // Even though five wall-clock seconds have elapsed, the first four
+        // fixed frames are still 0, 33, 66, and 99 ms in scenario time.
+        for expected_ms in [0, 33, 66, 99] {
+            assert!(runner.prepare_due_frame(slow_now).is_empty());
+            assert_eq!(runner.next_capture_ms, expected_ms);
+            assert!(runner.capture_due());
+            assert!(!runner.finished());
+            assert!((runner.animation_dt() - 1.0 / 30.0).abs() < f32::EPSILON);
+            assert_eq!(runner.animation_dt(), 0.0);
+            runner.complete_capture();
+        }
+
+        let actions = runner.prepare_due_frame(slow_now);
+        assert!(matches!(actions.as_slice(), [QaAction::RightClick]));
+        assert_eq!(runner.next_capture_ms, 132);
+        assert!(!runner.finished());
+        runner.complete_capture();
+        assert!(runner.finished());
     }
 
     fn scroll_action(
@@ -2086,6 +2344,160 @@ mod tests {
         assert!(validate_scroll_expectations(&scenario)
             .unwrap_err()
             .contains("require a scroll_expectations contract"));
+    }
+
+    #[test]
+    fn context_menu_contract_rejects_opening_without_open() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 1,
+            min_open_frames: 3,
+            expected_opening_count: None,
+            expected_closing_count: 0,
+            expected_closed_count: 0,
+            min_closing_frames: 3,
+            max_closing_frames: None,
+            require_final_closed: false,
+        };
+        let result = evaluate_context_menu_phases(
+            ["Closed", "Opening", "Opening", "Closing", "Closed"],
+            &expected,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.opening_count, 1);
+        assert_eq!(result.open_entry_count, 0);
+        assert_eq!(result.open_frame_count, 0);
+    }
+
+    #[test]
+    fn context_menu_contract_requires_a_sustained_open_state() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 1,
+            min_open_frames: 3,
+            expected_opening_count: None,
+            expected_closing_count: 0,
+            expected_closed_count: 0,
+            min_closing_frames: 3,
+            max_closing_frames: None,
+            require_final_closed: false,
+        };
+        let result = evaluate_context_menu_phases(
+            ["Closed", "Opening", "Open", "Open", "Closed"],
+            &expected,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.open_entry_count, 1);
+        assert_eq!(result.open_frame_count, 2);
+    }
+
+    #[test]
+    fn context_menu_contract_covers_dismissal_during_and_after_opening() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 2,
+            min_open_frames: 3,
+            expected_opening_count: Some(4),
+            expected_closing_count: 4,
+            expected_closed_count: 4,
+            min_closing_frames: 1,
+            max_closing_frames: None,
+            require_final_closed: true,
+        };
+        let result = evaluate_context_menu_phases(
+            [
+                "Closed", "Opening", "Closing", "Closed", "Opening", "Open", "Open", "Open",
+                "Closing", "Closed", "Opening", "Closing", "Closed", "Opening", "Open", "Open",
+                "Open", "Closing", "Closed",
+            ],
+            &expected,
+        );
+        assert!(result.passed);
+        assert_eq!(result.opening_count, 4);
+        assert_eq!(result.open_entry_count, 2);
+        assert_eq!(result.closing_count, 4);
+        assert_eq!(result.closed_entry_count, 4);
+        assert_eq!(result.final_phase, "Closed");
+    }
+
+    #[test]
+    fn context_menu_contract_rejects_an_invisible_closing_tail() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 1,
+            min_open_frames: 3,
+            expected_opening_count: Some(1),
+            expected_closing_count: 1,
+            expected_closed_count: 1,
+            min_closing_frames: 1,
+            max_closing_frames: Some(2),
+            require_final_closed: true,
+        };
+        let result = evaluate_context_menu_phases(
+            [
+                "Closed", "Opening", "Open", "Open", "Open", "Closing", "Closing", "Closing",
+                "Closed",
+            ],
+            &expected,
+        );
+
+        assert!(!result.passed);
+        assert_eq!(result.max_closing_streak_frames, 3);
+    }
+
+    #[test]
+    fn context_menu_scenario_has_an_open_contract() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/context_menu_open.json")).unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        assert_eq!(
+            scenario
+                .context_menu_expectations
+                .unwrap()
+                .expected_open_count,
+            1
+        );
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::RightClick)));
+    }
+
+    #[test]
+    fn context_menu_dismiss_scenario_has_a_close_contract() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/context_menu_dismiss.json")).unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        let expected = scenario.context_menu_expectations.unwrap();
+        assert_eq!(expected.expected_opening_count, Some(5));
+        assert_eq!(expected.expected_closing_count, 5);
+        assert_eq!(expected.expected_closed_count, 5);
+        assert!(expected.require_final_closed);
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::RightClick))
+                .count(),
+            5
+        );
+    }
+
+    #[test]
+    fn trackpad_secondary_click_scenario_ignores_zero_delta_scroll_lifecycle() {
+        let scenario: QaScenario = serde_json::from_str(include_str!(
+            "../qa/context_menu_trackpad_secondary_click.json"
+        ))
+        .unwrap();
+        validate_scroll_expectations(&scenario).unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        let expected = scenario.context_menu_expectations.unwrap();
+        assert_eq!(expected.expected_open_count, 1);
+        assert_eq!(expected.expected_closed_count, 1);
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::ScrollSample { .. }))
+                .count(),
+            2
+        );
     }
 
     #[test]

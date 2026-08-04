@@ -1,0 +1,71 @@
+{
+  "name": "context-menu-dismiss",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 22000,
+  "output_dir": "target/qa-sequences",
+  "context_menu_expectations": {
+    "expected_open_count": 2,
+    "min_open_frames": 10,
+    "expected_opening_count": 5,
+    "expected_closing_count": 5,
+    "expected_closed_count": 5,
+    "min_closing_frames": 3,
+    "max_closing_frames": 8,
+    "require_final_closed": true
+  },
+  "fixture": {
+    "apps": [
+      { "id": "qa-context-dismiss-0", "name": "Context Menu Target" },
+      { "id": "qa-context-dismiss-1", "name": "Second App" },
+      { "id": "qa-context-dismiss-2", "name": "Third App" },
+      { "id": "qa-context-dismiss-3", "name": "Fourth App" }
+    ],
+    "folders": [],
+    "items": [
+      { "kind": "app", "id": "qa-context-dismiss-0" },
+      { "kind": "app", "id": "qa-context-dismiss-1" },
+      { "kind": "app", "id": "qa-context-dismiss-2" },
+      { "kind": "app", "id": "qa-context-dismiss-3" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 400, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 500, "type": "right_click" },
+    { "at_ms": 700, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 800, "type": "move", "target": { "kind": "point", "x": 5.0, "y": 5.0 } },
+    { "at_ms": 850, "type": "pointer_down" },
+    { "at_ms": 900, "type": "pointer_up" },
+
+    { "at_ms": 4200, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 4400, "type": "right_click" },
+    { "at_ms": 4800, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 5400, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 6000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 6500, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 6550, "type": "pointer_down" },
+    { "at_ms": 6600, "type": "pointer_up" },
+
+    { "at_ms": 10000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 10200, "type": "right_click" },
+    { "at_ms": 10400, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 10500, "type": "escape" },
+    { "at_ms": 10600, "type": "escape" },
+    { "at_ms": 10650, "type": "escape" },
+
+    { "at_ms": 14000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 14200, "type": "right_click" },
+    { "at_ms": 14600, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 15200, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 15800, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 16600, "type": "move", "target": { "kind": "point", "x": 5.0, "y": 5.0 } },
+    { "at_ms": 16650, "type": "pointer_down" },
+    { "at_ms": 16700, "type": "pointer_up" },
+
+    { "at_ms": 18000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 18200, "type": "right_click" },
+    { "at_ms": 18500, "type": "move", "target": { "kind": "grid_item", "index": 3 } },
+    { "at_ms": 18550, "type": "pointer_down" },
+    { "at_ms": 18600, "type": "pointer_up" }
+  ]
+}

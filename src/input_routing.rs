@@ -1283,6 +1283,21 @@ mod tests {
     }
 
     #[test]
+    fn right_click_on_owned_surface_stays_with_launcher() {
+        let mut router = InputRouter::default();
+        let point = PhysicalPoint::new(100.0, 100.0);
+        assert_eq!(
+            router.press(PointerButton::Right, point, OWNED),
+            RouterAction::LaunchpadOwns
+        );
+        assert_eq!(
+            router.release(PointerButton::Right, point),
+            RouterAction::LaunchpadOwns
+        );
+        assert!(router.is_idle());
+    }
+
+    #[test]
     fn wheel_only_forwards_while_idle_and_outside() {
         let mut router = InputRouter::default();
         assert_eq!(

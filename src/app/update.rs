@@ -195,7 +195,17 @@ impl App {
         let point = PhysicalPoint::new(self.pointer_phys_x, self.pointer_phys_y);
         if pressed {
             let region = self.input_region_at(point.x, point.y);
+            let router_before = self.input_router.state();
             let decision = self.input_router.press(button, point, region);
+            debug_log!(
+                "pointer-button: {button:?} down point=({:.1},{:.1}) region={region:?} router={router_before:?}->{:?} decision={decision:?} menu={:?} visible={} focused={}",
+                point.x,
+                point.y,
+                self.input_router.state(),
+                self.context_menu.phase,
+                self.visible,
+                self.window_focused,
+            );
             if button == crate::input_routing::PointerButton::Left
                 && matches!(
                     decision,
@@ -210,6 +220,7 @@ impl App {
                 // In edit mode (home grid or an open folder) the context menu
                 // is suppressed everywhere — icons are being rearranged/deleted.
                 if self.editing {
+                    debug_log!("context-menu: right-down ignored because edit mode is active");
                     return;
                 }
                 // Right-click on a launcher-owned surface opens the context
@@ -252,7 +263,14 @@ impl App {
                         });
                     match resolved {
                         Some((target, rect)) => (target, rect),
-                        None => return,
+                        None => {
+                            debug_log!(
+                                "context-menu: right-down had no folder-child hit at ({:.1},{:.1})",
+                                point.x,
+                                point.y,
+                            );
+                            return;
+                        }
                     }
                 } else {
                     // Grid: hit-test in the SAME index space the renderer uses
@@ -273,7 +291,16 @@ impl App {
                         visible_items.len(),
                     ) {
                         Some(i) => i,
-                        None => return,
+                        None => {
+                            debug_log!(
+                                "context-menu: right-down had no grid hit at ({:.1},{:.1}); items={} scroll_x={:.1}",
+                                point.x,
+                                point.y,
+                                visible_items.len(),
+                                scroll_x,
+                            );
+                            return;
+                        }
                     };
                     match visible_items.get(index) {
                         Some(item @ (LauncherItem::App(_) | LauncherItem::Folder(_))) => {
@@ -282,15 +309,39 @@ impl App {
                                 .map_or_else(click_fallback, |r| r);
                             (item.clone(), rect)
                         }
-                        _ => return,
+                        _ => {
+                            debug_log!(
+                                "context-menu: grid hit index={index} did not resolve to an interactive item"
+                            );
+                            return;
+                        }
                     }
                 };
+                debug_log!(
+                    "context-menu: right-down resolved target={} icon=({:.1},{:.1},{:.1},{:.1})",
+                    target.stable_key(),
+                    icon_rect.x,
+                    icon_rect.y,
+                    icon_rect.width,
+                    icon_rect.height,
+                );
                 self.open_context_menu(target, icon_rect);
             }
             return;
         }
 
-        match self.input_router.release(button, point) {
+        let router_before = self.input_router.state();
+        let decision = self.input_router.release(button, point);
+        debug_log!(
+            "pointer-button: {button:?} up point=({:.1},{:.1}) router={router_before:?}->{:?} decision={decision:?} menu={:?} visible={} focused={}",
+            point.x,
+            point.y,
+            self.input_router.state(),
+            self.context_menu.phase,
+            self.visible,
+            self.window_focused,
+        );
+        match decision {
             RouterAction::DeliverClick { button, .. } => {
                 self.pending_press = None;
                 self.execute_command(crate::app::event::AppCommand::HideWithClickPassthrough(
@@ -512,10 +563,37 @@ impl App {
         use crate::features::folders::FolderPhase;
         use crate::input_routing::{FolderRoutePhase, ScrollRoute, ScrollRouteContext};
 
-        // Wheel/trackpad input dismisses the menu and continues to the pager.
-        // Routing the same sample ensures the first movement is not lost.
+        // Wheel/trackpad movement dismisses the menu and continues to the
+        // pager. AppKit also emits zero-delta Began/Cancelled packets as part
+        // of a two-finger secondary click; those are lifecycle markers, not a
+        // scroll gesture, and must not cancel the menu that click just opened.
+        // Routing every sample below still preserves the pager's phase
+        // contract and the first real movement.
         if self.context_menu.is_active() {
-            self.close_context_menu();
+            if scroll_sample_dismisses_context_menu(sample) {
+                debug_log!(
+                    "context-menu: dismissing on scroll gesture={} raw=({:.3},{:.3}) canonical=({:.3},{:.3}) contact={:?} momentum={:?} complete={} source={:?}",
+                    sample.gesture_id,
+                    sample.raw_dx,
+                    sample.raw_dy,
+                    sample.canonical_dx,
+                    sample.canonical_dy,
+                    sample.contact_phase,
+                    sample.momentum_phase,
+                    sample.sequence_complete,
+                    sample.source,
+                );
+                self.close_context_menu();
+            } else {
+                debug_log!(
+                    "context-menu: preserving after zero-delta scroll lifecycle gesture={} contact={:?} momentum={:?} complete={} source={:?}",
+                    sample.gesture_id,
+                    sample.contact_phase,
+                    sample.momentum_phase,
+                    sample.sequence_complete,
+                    sample.source,
+                );
+            }
         }
 
         let folder_phase = match self.folders.phase {
@@ -1875,6 +1953,10 @@ fn folder_scroll_commit_pending_after_sample(
             && sample.contact_phase != crate::input_routing::NativeScrollPhase::None)
 }
 
+fn scroll_sample_dismisses_context_menu(sample: crate::input_routing::ScrollSample) -> bool {
+    sample.canonical_dx != 0.0 || sample.canonical_dy != 0.0
+}
+
 /// Push a single parameter value into the renderer.
 fn apply_param_to_renderer(
     r: &mut crate::renderer::Renderer,
@@ -1986,6 +2068,61 @@ mod folder_page_commit_tests {
             folder_page_commit_after_settle(scroller.position, 1000.0, 3, scroller.phase, pending);
         assert_eq!(commit, Some(1));
         assert!(!pending);
+    }
+
+    #[test]
+    fn zero_delta_trackpad_lifecycle_does_not_dismiss_context_menu() {
+        use crate::input_routing::{
+            NativeScrollPhase, ScrollPhaseCapability, ScrollSample, ScrollSource,
+        };
+
+        let sample = |phase| ScrollSample {
+            gesture_id: 1,
+            timestamp_us: 0,
+            raw_dx: 0.0,
+            raw_dy: 0.0,
+            canonical_dx: 0.0,
+            canonical_dy: -0.0,
+            source: ScrollSource::Precise,
+            contact_phase: phase,
+            momentum_phase: NativeScrollPhase::None,
+            sequence_complete: false,
+            scale_factor: 2.0,
+            direction_inverted_from_device: false,
+            phase_capability: ScrollPhaseCapability::Separate,
+        };
+
+        assert!(!scroll_sample_dismisses_context_menu(sample(
+            NativeScrollPhase::Began
+        )));
+        assert!(!scroll_sample_dismisses_context_menu(sample(
+            NativeScrollPhase::Cancelled
+        )));
+    }
+
+    #[test]
+    fn first_nonzero_trackpad_movement_dismisses_context_menu() {
+        use crate::input_routing::{
+            NativeScrollPhase, ScrollPhaseCapability, ScrollSample, ScrollSource,
+        };
+
+        let sample = ScrollSample {
+            gesture_id: 1,
+            timestamp_us: 16_000,
+            raw_dx: 0.25,
+            raw_dy: 0.0,
+            canonical_dx: 0.25,
+            canonical_dy: 0.0,
+            source: ScrollSource::Precise,
+            contact_phase: NativeScrollPhase::Changed,
+            momentum_phase: NativeScrollPhase::None,
+            sequence_complete: false,
+            scale_factor: 2.0,
+            direction_inverted_from_device: false,
+            phase_capability: ScrollPhaseCapability::Separate,
+        };
+
+        assert!(scroll_sample_dismisses_context_menu(sample));
     }
 
     #[test]

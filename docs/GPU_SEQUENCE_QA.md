@@ -20,6 +20,8 @@ $env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\folder_interactions.json).Path
 
 シナリオの `duration_ms` に達するとプロセスは自動終了します。出力先はシナリオの `output_dir` 配下に実行時刻付きディレクトリとして作られます。
 
+シナリオ内のアクションと終了判定は `fps` から作る固定ステップ時刻で進み、コンテキストメニューの開閉も同じフレーム刻みで評価します。GPU readback が遅い環境でも壁時計だけが先行してアクションを飛ばしたり、開閉アニメーションの途中で QA が終了したりしません。
+
 ```text
 target/qa-sequences/folder-interactions-<timestamp>/
 ├── frame_000000.png
@@ -106,6 +108,38 @@ scenario load errorです。`scroll_sample`があるのに契約がないscenari
 `raw_dx < 0 / false`をproduction adapterへ通します。両方でraw符号が保持され、軽い払いが
 target page 0を一度だけ選び、release位置から700 ms以内にposition 0 / Idleへ戻ることを
 GPU frameとmanifestで検証します。
+
+## コンテキストメニューの開閉QA
+
+`qa/context_menu_open.json`は、fixtureのアプリへproduction input router経由で右クリックし、
+コンテキストメニューが初期エフェクトの`Opening`だけで止まらず、`Open`へ到達して一定時間
+維持されることを確認します。
+`qa/context_menu_trackpad_secondary_click.json`は、macOSのトラックパッド副クリックに付随する
+delta 0の`Began`/`Cancelled` scroll lifecycleを右クリック直後に注入し、それらがメニューを
+閉じず`Open`まで到達することを確認します。`qa/context_menu_dismiss.json`は、次のdismiss経路を
+1本の連番で確認します。
+
+- `Opening`中の外側クリック
+- `Open`後の外側クリック
+- `Open`後のメニュー行クリック
+- `Opening`中のEscape
+- `Closing`中に連続するEscape（closeタイマーを再始動しない）
+- `Open`後に別アプリをクリックしても、別アプリを起動せずメニューだけ閉じる
+- 各ケースの再オープンと`Closing`→`Closed`完了
+
+シナリオには次の契約を指定します。
+
+```json
+"context_menu_expectations": {
+  "expected_open_count": 1,
+  "min_open_frames": 10
+}
+```
+
+実行結果の`manifest.json`には`context_menu_assertions`が出力され、
+`open_entry_count`、`closing_count`、`closed_entry_count`、または各phaseのフレーム数が不足すると
+`passed: false`になります。
+したがって、右クリックイベントだけ通ってメニュー本体が表示されない回帰もQA結果上で失敗にできます。
 
 ## 長押しとスクロールの検証
 
