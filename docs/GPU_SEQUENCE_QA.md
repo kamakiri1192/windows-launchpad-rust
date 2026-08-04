@@ -107,6 +107,25 @@ scenario load errorです。`scroll_sample`があるのに契約がないscenari
 target page 0を一度だけ選び、release位置から700 ms以内にposition 0 / Idleへ戻ることを
 GPU frameとmanifestで検証します。
 
+## コンテキストメニューの開閉QA
+
+`qa/context_menu_open.json`は、fixtureのアプリへproduction input router経由で右クリックし、
+コンテキストメニューが初期エフェクトの`Opening`だけで止まらず、`Open`へ到達して一定時間
+維持されることを確認します。
+
+シナリオには次の契約を指定します。
+
+```json
+"context_menu_expectations": {
+  "expected_open_count": 1,
+  "min_open_frames": 10
+}
+```
+
+実行結果の`manifest.json`には`context_menu_assertions`が出力され、
+`open_entry_count`または`open_frame_count`が不足すると`passed: false`になります。
+したがって、右クリックイベントだけ通ってメニュー本体が表示されない回帰もQA結果上で失敗にできます。
+
 ## 長押しとスクロールの検証
 
 長押しは `editing = true` を直接設定しません。`pointer_down` を保持したまま通常の `Tick` を500ms以上進め、production の長押し判定で編集モードへ入ります。フォルダページもページ番号を直接変更せず、pointer の移動量と release 速度を通常の `Scroller` へ渡します。

@@ -1,0 +1,38 @@
+{
+  "name": "context-menu-open",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 4000,
+  "output_dir": "target/qa-sequences",
+  "context_menu_expectations": {
+    "expected_open_count": 1,
+    "min_open_frames": 10
+  },
+  "fixture": {
+    "apps": [
+      { "id": "qa-context-open-0", "name": "Context Menu Target" },
+      { "id": "qa-context-open-1", "name": "Second App" },
+      { "id": "qa-context-open-2", "name": "Third App" }
+    ],
+    "folders": [],
+    "items": [
+      { "kind": "app", "id": "qa-context-open-0" },
+      { "kind": "app", "id": "qa-context-open-1" },
+      { "kind": "app", "id": "qa-context-open-2" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 400, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 500, "type": "right_click" },
+    { "at_ms": 700, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 900, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 1100, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 1300, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 1500, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 1800, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 2200, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 2600, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 3000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 3500, "type": "move", "target": { "kind": "grid_item", "index": 0 } }
+  ]
+}

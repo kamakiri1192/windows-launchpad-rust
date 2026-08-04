@@ -35,6 +35,8 @@ pub struct QaScenario {
     #[serde(default)]
     pub scroll_expectations: Option<QaScrollExpectations>,
     #[serde(default)]
+    pub context_menu_expectations: Option<QaContextMenuExpectations>,
+    #[serde(default)]
     pub actions: Vec<TimedAction>,
 }
 
@@ -80,6 +82,17 @@ pub struct QaReleaseExpectation {
 
 fn default_target_tolerance() -> f32 {
     1.0
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QaContextMenuExpectations {
+    pub expected_open_count: u32,
+    #[serde(default = "default_min_context_menu_open_frames")]
+    pub min_open_frames: u32,
+}
+
+fn default_min_context_menu_open_frames() -> u32 {
+    10
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -584,6 +597,32 @@ fn validate_scroll_expectations(scenario: &QaScenario) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), String> {
+    let Some(expected) = scenario.context_menu_expectations.as_ref() else {
+        return Ok(());
+    };
+    if expected.expected_open_count == 0 {
+        return Err(
+            "context_menu_expectations expected_open_count must be greater than zero".to_owned(),
+        );
+    }
+    if expected.min_open_frames == 0 {
+        return Err(
+            "context_menu_expectations min_open_frames must be greater than zero".to_owned(),
+        );
+    }
+    if !scenario
+        .actions
+        .iter()
+        .any(|action| matches!(action.action, QaAction::RightClick))
+    {
+        return Err(
+            "context_menu_expectations requires at least one right_click action".to_owned(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QaTarget {
@@ -738,6 +777,14 @@ struct QaScrollAssertions {
     momentum_mutation_count: u32,
 }
 
+#[derive(Debug, Default, Serialize)]
+struct QaContextMenuAssertions {
+    passed: bool,
+    opening_count: u32,
+    open_entry_count: u32,
+    open_frame_count: u32,
+}
+
 #[derive(Debug, Serialize)]
 struct QaManifest<'a> {
     scenario: &'a str,
@@ -749,6 +796,10 @@ struct QaManifest<'a> {
     scroll_trace: &'a [QaScrollTraceRecord],
     scroll_expectations: Option<&'a QaScrollExpectations>,
     scroll_assertions: QaScrollAssertions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_menu_expectations: Option<&'a QaContextMenuExpectations>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_menu_assertions: Option<QaContextMenuAssertions>,
     video_command: String,
 }
 
@@ -786,6 +837,7 @@ impl QaRunner {
         normalize_scroll_actions(&mut scenario.actions)?;
         validate_native_scroll_actions(&scenario.actions)?;
         validate_scroll_expectations(&scenario)?;
+        validate_context_menu_expectations(&scenario)?;
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -980,6 +1032,12 @@ impl QaRunner {
                 &self.frames,
                 self.scenario.scroll_expectations.as_ref(),
             ),
+            context_menu_expectations: self.scenario.context_menu_expectations.as_ref(),
+            context_menu_assertions: self
+                .scenario
+                .context_menu_expectations
+                .as_ref()
+                .map(|expected| evaluate_context_menu_assertions(&self.frames, expected)),
             video_command: format!(
                 "ffmpeg -framerate {} -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p {}.mp4",
                 self.scenario.fps,
@@ -1214,6 +1272,39 @@ fn evaluate_scroll_assertions(
             && result.release_spring_generation_count == expected.expected_spring_generations
             && result.momentum_mutation_count == 0;
     }
+    result
+}
+
+fn evaluate_context_menu_assertions(
+    frames: &[QaFrameRecord],
+    expected: &QaContextMenuExpectations,
+) -> QaContextMenuAssertions {
+    evaluate_context_menu_phases(
+        frames.iter().map(|frame| frame.context_menu_phase.as_str()),
+        expected,
+    )
+}
+
+fn evaluate_context_menu_phases<'a>(
+    phases: impl IntoIterator<Item = &'a str>,
+    expected: &QaContextMenuExpectations,
+) -> QaContextMenuAssertions {
+    let mut result = QaContextMenuAssertions::default();
+    let mut previous_phase = "Closed";
+    for phase in phases {
+        if phase == "Opening" && previous_phase != "Opening" {
+            result.opening_count += 1;
+        }
+        if phase == "Open" {
+            result.open_frame_count += 1;
+            if previous_phase != "Open" {
+                result.open_entry_count += 1;
+            }
+        }
+        previous_phase = phase;
+    }
+    result.passed = result.open_entry_count == expected.expected_open_count
+        && result.open_frame_count >= expected.min_open_frames;
     result
 }
 
@@ -2086,6 +2177,55 @@ mod tests {
         assert!(validate_scroll_expectations(&scenario)
             .unwrap_err()
             .contains("require a scroll_expectations contract"));
+    }
+
+    #[test]
+    fn context_menu_contract_rejects_opening_without_open() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 1,
+            min_open_frames: 3,
+        };
+        let result = evaluate_context_menu_phases(
+            ["Closed", "Opening", "Opening", "Closing", "Closed"],
+            &expected,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.opening_count, 1);
+        assert_eq!(result.open_entry_count, 0);
+        assert_eq!(result.open_frame_count, 0);
+    }
+
+    #[test]
+    fn context_menu_contract_requires_a_sustained_open_state() {
+        let expected = QaContextMenuExpectations {
+            expected_open_count: 1,
+            min_open_frames: 3,
+        };
+        let result = evaluate_context_menu_phases(
+            ["Closed", "Opening", "Open", "Open", "Closed"],
+            &expected,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.open_entry_count, 1);
+        assert_eq!(result.open_frame_count, 2);
+    }
+
+    #[test]
+    fn context_menu_scenario_has_an_open_contract() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/context_menu_open.json")).unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        assert_eq!(
+            scenario
+                .context_menu_expectations
+                .unwrap()
+                .expected_open_count,
+            1
+        );
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::RightClick)));
     }
 
     #[test]
