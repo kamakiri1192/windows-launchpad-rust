@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-glass-surface-tint
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -18,8 +21,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout feature branch
         uses: actions/checkout@v4
+        with:
+          ref: agent/fix-glass-surface-tint
 
       - name: Install Rust
         shell: pwsh
@@ -62,4 +67,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Fix per-surface Liquid Glass tint rendering"
-          git push
+          git push origin HEAD:agent/fix-glass-surface-tint
