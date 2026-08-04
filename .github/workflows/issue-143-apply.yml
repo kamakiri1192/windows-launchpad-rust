@@ -36,7 +36,7 @@ jobs:
       - name: Assemble and apply patch
         shell: pwsh
         run: |
-          Get-Content .github/issue-143-patch.part1, .github/issue-143-patch.part2, .github/issue-143-patch.part3, .github/issue-143-patch.part4 | Set-Content "$env:RUNNER_TEMP/issue-143-patch.py" -Encoding utf8
+          Get-Content .github/issue-143-patch.part1, .github/issue-143-patch.part2, .github/issue-143-patch.part3, .github/issue-143-patch.part4, .github/issue-143-patch.part5 | Set-Content "$env:RUNNER_TEMP/issue-143-patch.py" -Encoding utf8
           python "$env:RUNNER_TEMP/issue-143-patch.py"
 
       - name: Format
@@ -58,6 +58,7 @@ jobs:
           Remove-Item .github/issue-143-patch.part2
           Remove-Item .github/issue-143-patch.part3
           Remove-Item .github/issue-143-patch.part4
+          Remove-Item .github/issue-143-patch.part5
           Remove-Item .github/workflows/issue-143-apply.yml
 
       - name: Commit verified fix
