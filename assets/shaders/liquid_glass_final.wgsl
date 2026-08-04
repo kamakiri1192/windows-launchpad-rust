@@ -186,7 +186,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let alpha = geometry_data.a;
     let normalized_height = geometry_data.b;
     let inv_viewport = vec2<f32>(1.0) / max(u.viewport, vec2<f32>(1.0));
-    let adaptive_white_score = sample_adaptive_white_score(screen_uv);
+    // Keep the legacy adaptive path fully opt-in. When its slider is zero,
+    // avoid all five detector texture reads; uniform glass darkness does not
+    // need backdrop analysis.
+    var adaptive_white_score = 0.0;
+    if u.adaptive_darkness > 0.001 {
+        adaptive_white_score = sample_adaptive_white_score(screen_uv);
+    }
 
     // More than one thickness inside a glass boundary the encoded height is
     // exactly 1, displacement is zero, and every rim/reflection term below is

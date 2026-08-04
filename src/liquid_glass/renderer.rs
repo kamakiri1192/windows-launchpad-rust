@@ -500,7 +500,9 @@ fn capture_sampling_padding(
         // support extends beyond the old fixed 40 px margin.
         requested_blur_radius * 3.0 + 8.0
     };
-    let adaptive_detector_support = if debug.disable_blur || requested_blur_radius < 0.5 {
+    let adaptive_detector_support = if params.adaptive_darkness <= 0.001 {
+        0.0
+    } else if debug.disable_blur || requested_blur_radius < 0.5 {
         24.0
     } else {
         (requested_blur_radius * 2.0).min(64.0)
