@@ -2287,6 +2287,7 @@ impl LiquidGlassRenderer {
 
     /// Apply the seven persisted fields from a settings snapshot. Debug options
     /// are not touched. Used at startup to restore the user's last values.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_params(
         &mut self,
         enabled: bool,

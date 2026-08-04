@@ -884,6 +884,7 @@ impl Renderer {
         self.liquid_glass.reset_params_to_defaults();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_liquid_glass(
         &mut self,
         enabled: bool,
