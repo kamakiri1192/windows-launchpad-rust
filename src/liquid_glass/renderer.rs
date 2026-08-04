@@ -276,6 +276,8 @@ pub struct LiquidGlassRenderer {
     settings_panel_blur_radius: Option<f32>,
     settings_panel_backdrop_replacement: f32,
     settings_panel_completed_scene_enabled: bool,
+    context_menu_glass_darkness: f32,
+    settings_panel_glass_darkness: f32,
     blur_uniform_buffer: wgpu::Buffer,
     context_menu_blur_uniform_buffer: wgpu::Buffer,
     context_menu_flatten_uniform_buffer: wgpu::Buffer,
@@ -1157,6 +1159,8 @@ impl LiquidGlassRenderer {
             settings_panel_blur_radius: None,
             settings_panel_backdrop_replacement: 0.0,
             settings_panel_completed_scene_enabled: false,
+            context_menu_glass_darkness: 0.0,
+            settings_panel_glass_darkness: 0.0,
             blur_uniform_buffer,
             context_menu_blur_uniform_buffer,
             context_menu_flatten_uniform_buffer,
@@ -1938,6 +1942,10 @@ impl LiquidGlassRenderer {
         };
     }
 
+    pub fn set_context_menu_glass_darkness(&mut self, value: f32) {
+        self.context_menu_glass_darkness = value.clamp(0.0, 1.0);
+    }
+
     /// Set the settings panel's local completed-scene blur profile.
     pub fn set_settings_panel_blur_radius(&mut self, radius: Option<f32>) {
         self.settings_panel_blur_radius = radius.map(|value| {
@@ -1955,6 +1963,10 @@ impl LiquidGlassRenderer {
         } else {
             0.0
         };
+    }
+
+    pub fn set_settings_panel_glass_darkness(&mut self, value: f32) {
+        self.settings_panel_glass_darkness = value.clamp(0.0, 1.0);
     }
 
     /// Tell the frame pass whether the modal-shape buffer currently belongs to
@@ -2279,13 +2291,15 @@ impl LiquidGlassRenderer {
         self.params.refractive_index = default.refractive_index;
         self.params.saturation = default.saturation;
         self.params.glass_darkness = default.glass_darkness;
+        self.context_menu_glass_darkness = 0.0;
+        self.settings_panel_glass_darkness = 0.0;
         self.params.adaptive_darkness = default.adaptive_darkness;
         self.params.chromatic_aberration = default.chromatic_aberration;
         self.params.blur_radius = default.blur_radius;
         self.blur_dirty = true;
     }
 
-    /// Apply the eight persisted fields from a settings snapshot. Debug options
+    /// Apply the ten persisted fields from a settings snapshot. Debug options
     /// are not touched. Used at startup to restore the user's last values.
     #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_params(
@@ -2295,6 +2309,8 @@ impl LiquidGlassRenderer {
         refractive_index: f32,
         saturation: f32,
         glass_darkness: f32,
+        context_menu_glass_darkness: f32,
+        settings_panel_glass_darkness: f32,
         adaptive_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
@@ -2304,6 +2320,8 @@ impl LiquidGlassRenderer {
         self.params.refractive_index = refractive_index.clamp(1.02, 1.75);
         self.params.saturation = saturation.clamp(0.5, 2.0);
         self.params.glass_darkness = glass_darkness.clamp(0.0, 1.0);
+        self.context_menu_glass_darkness = context_menu_glass_darkness.clamp(0.0, 1.0);
+        self.settings_panel_glass_darkness = settings_panel_glass_darkness.clamp(0.0, 1.0);
         self.params.adaptive_darkness = adaptive_darkness.clamp(0.0, 1.0);
         self.params.chromatic_aberration = chromatic_aberration.clamp(0.0, 0.18);
         self.params.blur_radius = blur_radius.clamp(0.0, 40.0);

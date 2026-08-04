@@ -189,17 +189,21 @@ pub enum LiquidGlassParamId {
     RefractiveIndex,
     Saturation,
     GlassDarkness,
+    ContextMenuGlassDarkness,
+    SettingsPanelGlassDarkness,
     AdaptiveDarkness,
     ChromaticAberration,
     BlurRadius,
 }
 
 impl LiquidGlassParamId {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Thickness,
         Self::RefractiveIndex,
         Self::Saturation,
         Self::GlassDarkness,
+        Self::ContextMenuGlassDarkness,
+        Self::SettingsPanelGlassDarkness,
         Self::AdaptiveDarkness,
         Self::ChromaticAberration,
         Self::BlurRadius,
@@ -211,6 +215,8 @@ impl LiquidGlassParamId {
             Self::RefractiveIndex => "refractive-index",
             Self::Saturation => "saturation",
             Self::GlassDarkness => "glass-darkness",
+            Self::ContextMenuGlassDarkness => "context-menu-glass-darkness",
+            Self::SettingsPanelGlassDarkness => "settings-panel-glass-darkness",
             Self::AdaptiveDarkness => "adaptive-darkness",
             Self::ChromaticAberration => "chromatic-aberration",
             Self::BlurRadius => "blur-radius",
@@ -224,6 +230,8 @@ impl LiquidGlassParamId {
             Self::RefractiveIndex => (1.02, 1.75),
             Self::Saturation => (0.5, 2.0),
             Self::GlassDarkness => (0.0, 1.0),
+            Self::ContextMenuGlassDarkness => (0.0, 1.0),
+            Self::SettingsPanelGlassDarkness => (0.0, 1.0),
             Self::AdaptiveDarkness => (0.0, 1.0),
             Self::ChromaticAberration => (0.0, 0.18),
             Self::BlurRadius => (0.0, 40.0),
@@ -366,7 +374,7 @@ pub struct SettingsPanelInput {
     pub scroll_rows: i32,
     /// Window decoration state (M-equivalent). Session-only.
     pub window_decorated: bool,
-    /// Liquid Glass persisted snapshot (the eight user-facing fields).
+    /// Liquid Glass persisted snapshot (the ten user-facing fields).
     pub liquid_glass: LiquidGlassValues,
     /// Per-flag session state for the B/G/D/A/F and C/E/L toggles, in the
     /// order given by `LiquidGlassDebugId` (disable flags first, then view
@@ -398,6 +406,8 @@ pub struct LiquidGlassValues {
     pub refractive_index: f32,
     pub saturation: f32,
     pub glass_darkness: f32,
+    pub context_menu_glass_darkness: f32,
+    pub settings_panel_glass_darkness: f32,
     pub adaptive_darkness: f32,
     pub chromatic_aberration: f32,
     pub blur_radius: f32,
@@ -411,6 +421,8 @@ impl Default for LiquidGlassValues {
             refractive_index: 1.42,
             saturation: 1.34,
             glass_darkness: 0.0,
+            context_menu_glass_darkness: 0.0,
+            settings_panel_glass_darkness: 0.0,
             adaptive_darkness: 0.65,
             chromatic_aberration: 0.075,
             blur_radius: 16.0,
@@ -425,6 +437,8 @@ impl LiquidGlassValues {
             LiquidGlassParamId::RefractiveIndex => self.refractive_index,
             LiquidGlassParamId::Saturation => self.saturation,
             LiquidGlassParamId::GlassDarkness => self.glass_darkness,
+            LiquidGlassParamId::ContextMenuGlassDarkness => self.context_menu_glass_darkness,
+            LiquidGlassParamId::SettingsPanelGlassDarkness => self.settings_panel_glass_darkness,
             LiquidGlassParamId::AdaptiveDarkness => self.adaptive_darkness,
             LiquidGlassParamId::ChromaticAberration => self.chromatic_aberration,
             LiquidGlassParamId::BlurRadius => self.blur_radius,
@@ -498,6 +512,8 @@ pub struct SettingsPanelCopy<'a> {
     pub debug_lg_refractive_index_label: &'a str,
     pub debug_lg_saturation_label: &'a str,
     pub debug_lg_glass_darkness_label: &'a str,
+    pub debug_lg_context_menu_glass_darkness_label: &'a str,
+    pub debug_lg_settings_panel_glass_darkness_label: &'a str,
     pub debug_lg_adaptive_darkness_label: &'a str,
     pub debug_lg_chromatic_aberration_label: &'a str,
     pub debug_lg_blur_radius_label: &'a str,
@@ -1099,8 +1115,8 @@ pub fn build_with_ui(
                         .hit_target(SettingsPanelHit::LiquidGlassEnabled.target()),
                 );
 
-                // Rows 4-10: Liquid Glass parameter sliders
-                let param_labels: [(LiquidGlassParamId, &str); 7] = [
+                // Rows 4-12: Liquid Glass parameter sliders
+                let param_labels: [(LiquidGlassParamId, &str); 9] = [
                     (LiquidGlassParamId::Thickness, copy.debug_lg_thickness_label),
                     (
                         LiquidGlassParamId::RefractiveIndex,
@@ -1113,6 +1129,14 @@ pub fn build_with_ui(
                     (
                         LiquidGlassParamId::GlassDarkness,
                         copy.debug_lg_glass_darkness_label,
+                    ),
+                    (
+                        LiquidGlassParamId::ContextMenuGlassDarkness,
+                        copy.debug_lg_context_menu_glass_darkness_label,
+                    ),
+                    (
+                        LiquidGlassParamId::SettingsPanelGlassDarkness,
+                        copy.debug_lg_settings_panel_glass_darkness_label,
                     ),
                     (
                         LiquidGlassParamId::AdaptiveDarkness,
@@ -1144,7 +1168,7 @@ pub fn build_with_ui(
                     );
                 }
 
-                // Rows 11-13: Disable-flag toggles
+                // Rows 13-15: Disable-flag toggles
                 let disable_items = [
                     (
                         LiquidGlassDebugId::DisableChromaticAberration,
@@ -1176,7 +1200,7 @@ pub fn build_with_ui(
                     );
                 }
 
-                // Row 14: Reset-all button
+                // Row 16: Reset-all button
                 ui.begin_absolute_placement();
                 ui.set_available_width(cw);
                 ui.button(
@@ -1210,7 +1234,7 @@ pub fn build_with_ui(
                 );
                 ui.spacer(2.0 * scale);
 
-                // Rows 15-19: Debug-view toggles
+                // Rows 17-21: Debug-view toggles
                 let view_items = [
                     (
                         LiquidGlassDebugId::ShowBackdropTexture,
@@ -1330,21 +1354,23 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   5  refractive_index slider
 //   6  saturation slider
 //   7  glass_darkness slider
-//   8  adaptive_darkness slider
-//   9  chromatic_aberration slider
-//  10  blur_radius slider
-//  11  disable chromatic aberration (C)
-//  12  disable edge lighting (E)
-//  13  disable blur (L)
-//  14  "Reset Liquid Glass to defaults" button
-//  15  show backdrop texture (B)
-//  16  show geometry texture (G)
-//  17  show displacement (D)
-//  18  show alpha mask (A)
-//  19  show final glass only (F)
+//   8  context_menu_glass_darkness slider
+//   9  settings_panel_glass_darkness slider
+//  10  adaptive_darkness slider
+//  11  chromatic_aberration slider
+//  12  blur_radius slider
+//  13  disable chromatic aberration (C)
+//  14  disable edge lighting (E)
+//  15  disable blur (L)
+//  16  "Reset Liquid Glass to defaults" button
+//  17  show backdrop texture (B)
+//  18  show geometry texture (G)
+//  19  show displacement (D)
+//  20  show alpha mask (A)
+//  21  show final glass only (F)
 
 /// Total number of full-row slots the Debug category uses.
-pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 20;
+pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 22;
 
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
@@ -1466,6 +1492,8 @@ mod tests {
             debug_lg_refractive_index_label: "Refractive index",
             debug_lg_saturation_label: "Saturation",
             debug_lg_glass_darkness_label: "Glass darkness",
+            debug_lg_context_menu_glass_darkness_label: "Context menu darkness",
+            debug_lg_settings_panel_glass_darkness_label: "Settings panel darkness",
             debug_lg_adaptive_darkness_label: "Adaptive darkness",
             debug_lg_chromatic_aberration_label: "Chromatic aberration",
             debug_lg_blur_radius_label: "Blur radius",
@@ -2057,7 +2085,7 @@ mod tests {
     }
 
     #[test]
-    fn build_with_ui_debug_has_seven_sliders() {
+    fn build_with_ui_debug_has_nine_sliders() {
         let inp = input(SettingsCategoryId::Debug);
         let c = copy("0");
         let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
@@ -2073,7 +2101,7 @@ mod tests {
             .iter()
             .filter(|v| v.kind == ControlKind::SliderKnob)
             .collect();
-        assert_eq!(knobs.len(), 7, "7 slider knobs");
+        assert_eq!(knobs.len(), 9, "9 slider knobs");
     }
 
     // ------------------------------------------------------------------

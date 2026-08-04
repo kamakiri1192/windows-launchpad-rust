@@ -872,6 +872,14 @@ impl Renderer {
         self.liquid_glass.set_glass_darkness(value);
     }
 
+    pub fn set_liquid_glass_context_menu_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_context_menu_glass_darkness(value);
+    }
+
+    pub fn set_liquid_glass_settings_panel_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_settings_panel_glass_darkness(value);
+    }
+
     pub fn set_liquid_glass_adaptive_darkness(&mut self, value: f32) {
         self.liquid_glass.set_adaptive_darkness(value);
     }
@@ -896,6 +904,8 @@ impl Renderer {
         refractive_index: f32,
         saturation: f32,
         glass_darkness: f32,
+        context_menu_glass_darkness: f32,
+        settings_panel_glass_darkness: f32,
         adaptive_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
@@ -906,6 +916,8 @@ impl Renderer {
             refractive_index,
             saturation,
             glass_darkness,
+            context_menu_glass_darkness,
+            settings_panel_glass_darkness,
             adaptive_darkness,
             chromatic_aberration,
             blur_radius,
