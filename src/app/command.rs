@@ -97,6 +97,7 @@ impl App {
             lg.thickness,
             lg.refractive_index,
             lg.saturation,
+            lg.adaptive_darkness,
             lg.chromatic_aberration,
             lg.blur_radius,
         );

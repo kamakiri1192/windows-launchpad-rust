@@ -38,7 +38,7 @@ pub(super) struct GlassUniforms {
     time: f32,
     activation: f32,
     backdrop_replacement: f32,
-    _pad: f32,
+    adaptive_darkness: f32,
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
 }
@@ -2240,6 +2240,10 @@ impl LiquidGlassRenderer {
         self.blur_dirty = true;
     }
 
+    pub fn set_adaptive_darkness(&mut self, value: f32) {
+        self.params.adaptive_darkness = value.clamp(0.0, 1.0);
+    }
+
     pub fn set_chromatic_aberration(&mut self, value: f32) {
         self.params.chromatic_aberration = value.clamp(0.0, 0.18);
         self.blur_dirty = true;
@@ -2259,19 +2263,22 @@ impl LiquidGlassRenderer {
         self.params.thickness = default.thickness;
         self.params.refractive_index = default.refractive_index;
         self.params.saturation = default.saturation;
+        self.params.adaptive_darkness = default.adaptive_darkness;
         self.params.chromatic_aberration = default.chromatic_aberration;
         self.params.blur_radius = default.blur_radius;
         self.blur_dirty = true;
     }
 
-    /// Apply the six persisted fields from a settings snapshot. Debug options
+    /// Apply the seven persisted fields from a settings snapshot. Debug options
     /// are not touched. Used at startup to restore the user's last values.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_params(
         &mut self,
         enabled: bool,
         thickness: f32,
         refractive_index: f32,
         saturation: f32,
+        adaptive_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
     ) {
@@ -2279,6 +2286,7 @@ impl LiquidGlassRenderer {
         self.params.thickness = thickness.clamp(6.0, 48.0);
         self.params.refractive_index = refractive_index.clamp(1.02, 1.75);
         self.params.saturation = saturation.clamp(0.5, 2.0);
+        self.params.adaptive_darkness = adaptive_darkness.clamp(0.0, 1.0);
         self.params.chromatic_aberration = chromatic_aberration.clamp(0.0, 0.18);
         self.params.blur_radius = blur_radius.clamp(0.0, 40.0);
         self.blur_dirty = true;
@@ -2380,7 +2388,7 @@ fn uniforms_from_params(
         time,
         activation,
         backdrop_replacement: 0.0,
-        _pad: 0.0,
+        adaptive_darkness: params.adaptive_darkness,
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
     }

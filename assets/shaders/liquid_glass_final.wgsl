@@ -23,7 +23,10 @@ struct GlassUniforms {
     // 0 = translucent glass over the existing target, 1 = replace the real
     // desktop with the captured-and-filtered backdrop inside the shape.
     backdrop_replacement: f32,
-    pad2: f32,
+    // Maximum black-tint strength for white-ish captured backdrops. This is
+    // intentionally an RGB-only control; the alpha equation below is kept
+    // independent so the material does not become more or less transparent.
+    adaptive_darkness: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
 };
@@ -101,6 +104,23 @@ fn luminance(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
 }
 
+fn white_backdrop_score(rgb: vec3<f32>) -> f32 {
+    let clamped = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let luma_score = smoothstep(0.60, 0.93, luminance(clamped));
+    // A bright saturated color is not necessarily a white backdrop. Requiring
+    // all channels to be reasonably high makes the response track "white-ish"
+    // surfaces instead of darkening vivid wallpapers indiscriminately.
+    let floor = min(min(clamped.r, clamped.g), clamped.b);
+    let neutral_score = smoothstep(0.50, 0.88, floor);
+    return luma_score * (0.35 + 0.65 * neutral_score);
+}
+
+fn apply_adaptive_darkness(rgb: vec3<f32>, backdrop_rgb: vec3<f32>) -> vec3<f32> {
+    let score = white_backdrop_score(backdrop_rgb);
+    let strength = score * clamp(u.adaptive_darkness, 0.0, 1.0);
+    return mix(rgb, vec3<f32>(0.015, 0.018, 0.022), strength);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;
@@ -151,6 +171,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         interior_rgb = glass_tint.rgb * glass_tint.a
             + interior_rgb * (1.0 - glass_tint.a);
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
+        interior_rgb = apply_adaptive_darkness(interior_rgb, filtered_color.rgb);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
         // At replacement=1 the lane's filtered backdrop becomes the actual
@@ -253,6 +274,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
+    // Adapt once more after rim lighting so a white desktop cannot turn the
+    // edge back into a bright translucent highlight. Only RGB is modified;
+    // `translucent_alpha` below remains exactly the existing calculation.
+    final_rgb = apply_adaptive_darkness(final_rgb, sample_glass_backdrop(screen_uv).rgb);
     final_rgb = clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
     let translucent_alpha = clamp(alpha * (0.64 + edge_factor * 0.26 + glass_tint.a * 0.5), 0.0, 0.92);
     let glass_alpha = mix(translucent_alpha, alpha, replacement);
