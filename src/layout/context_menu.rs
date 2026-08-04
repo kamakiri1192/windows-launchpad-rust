@@ -434,9 +434,10 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, Rect,
-        MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
+        build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, InkLane,
+        Rect, MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
     };
+    use crate::ui_model::render_model::ControlKind;
 
     /// Icon near the right of the viewport so the menu cannot fit on its right
     /// side, but has ample room on the left: it must flip to the left edge,
@@ -528,5 +529,48 @@ mod tests {
             MENU_DESTRUCTIVE_RGB
         );
         assert_ne!(MENU_LABEL_RGB, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn menu_icons_follow_the_display_order() {
+        let input = ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            target: "app:qa-context-menu-order",
+            pos: (320.0, 180.0),
+            size: (280.0, 280.0),
+            open_size: (280.0, 280.0),
+            radius: 28.0,
+            content_scale: 1.0,
+            content_opacity: 1.0,
+            content_blur: 0.0,
+            activation: 0.0,
+            items: &ContextMenuItem::ALL,
+            labels: &ContextMenuItem::ALL_LABELS,
+        };
+
+        let model = build(&input);
+        let icons = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::ContextMenu)
+            .expect("context-menu icon batch")
+            .views
+            .iter()
+            .map(|view| view.kind.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            icons,
+            vec![
+                ControlKind::Pencil,
+                ControlKind::EyeOff,
+                ControlKind::FolderIcon,
+                ControlKind::Plus,
+                ControlKind::Minus,
+                ControlKind::Info,
+            ]
+        );
     }
 }

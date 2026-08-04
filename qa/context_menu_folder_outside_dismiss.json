@@ -1,0 +1,39 @@
+{
+  "name": "context-menu-folder-outside-dismiss",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 5000,
+  "output_dir": "target/qa-sequences",
+  "context_menu_expectations": {
+    "expected_open_count": 1,
+    "min_open_frames": 5,
+    "expected_closing_count": 1,
+    "expected_closed_count": 1,
+    "min_closing_frames": 3,
+    "max_closing_frames": 8,
+    "require_final_closed": true
+  },
+  "fixture": {
+    "generated_apps": [
+      { "prefix": "qa-folder-dismiss-child", "name_prefix": "Folder Dismiss Child", "count": 1, "top_level": false }
+    ],
+    "folders": [
+      {
+        "id": "qa-folder-dismiss-id",
+        "name": "Folder Dismiss Target",
+        "children": ["qa-folder-dismiss-child-000"]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-folder-dismiss-id" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 400, "type": "open_folder", "id": "qa-folder-dismiss-id" },
+    { "at_ms": 1100, "type": "move", "target": { "kind": "folder_child", "index": 0 } },
+    { "at_ms": 1150, "type": "right_click" },
+    { "at_ms": 2800, "type": "move", "target": { "kind": "point", "x": 5.0, "y": 5.0 } },
+    { "at_ms": 2850, "type": "pointer_down" },
+    { "at_ms": 2900, "type": "pointer_up" }
+  ]
+}

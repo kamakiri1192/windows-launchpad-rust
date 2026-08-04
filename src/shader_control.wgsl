@@ -90,7 +90,12 @@ fn vs_main(
     // Both badge kinds share the tile's GPU wiggle. Only the top-level badge
     // (kind 4) receives main-page scroll; modal folder badges (kind 9) already
     // carry their folder-page position in screen coordinates.
-    if (kind.x > 3.5 && kind.x < 4.5) || kind.x > 8.5 {
+    // Only the two edit-badge kinds carry animation data in `kind.yzw`.
+    // Context-menu icons use kinds 13–18 and leave those fields at zero; if
+    // they enter this branch they rotate around the screen origin using the
+    // shared frame clock, making their position drift away from the label.
+    if (kind.x > 3.5 && kind.x < 4.5)
+        || (kind.x > 8.5 && kind.x < 9.5) {
         let t = u.viewport_scroll.w + kind.w;
         let rot = sin(t * 8.0) * 0.06;
         let dy = abs(sin(t * 8.0)) * 2.0;
@@ -151,16 +156,16 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         // slider knob: a filled disk of radius `size`.
         return size * 1.6;
     }
-    if kind > 11.5 {
+    if kind > 12.5 {
+        // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
+        return size * 1.2;
+    }
+    if kind > 11.5 && kind < 12.5 {
         // reset arrow: roughly a disk of radius `size`.
         return size * 1.6;
     }
     if kind > 6.5 {
         return size * 1.8;
-    }
-    // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
-    if kind > 12.5 {
-        return size * 1.2;
     }
     // dot / caret / close: a square of side ~2*size fits the shape.
     return size * 1.6;

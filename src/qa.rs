@@ -2460,6 +2460,49 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_repeated_targets_scenario_covers_main_and_folder_apps() {
+        let scenario: QaScenario = serde_json::from_str(include_str!(
+            "../qa/context_menu_repeated_targets_stable.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::RightClick))
+                .count(),
+            20
+        );
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::OpenFolder { .. })));
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::Escape)));
+    }
+
+    #[test]
+    fn folder_context_menu_outside_dismiss_scenario_keeps_folder_open() {
+        let scenario: QaScenario = serde_json::from_str(include_str!(
+            "../qa/context_menu_folder_outside_dismiss.json"
+        ))
+        .unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::OpenFolder { .. })));
+        assert!(scenario.actions.iter().any(|action| matches!(
+            action.action,
+            QaAction::Move {
+                target: QaTarget::Point { .. }
+            }
+        )));
+    }
+
+    #[test]
     fn context_menu_dismiss_scenario_has_a_close_contract() {
         let scenario: QaScenario =
             serde_json::from_str(include_str!("../qa/context_menu_dismiss.json")).unwrap();
