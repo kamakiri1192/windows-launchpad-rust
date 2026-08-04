@@ -590,6 +590,7 @@ pub enum QaTarget {
     Point { x: f32, y: f32 },
     GridItem { index: usize },
     GridItemPoint { index: usize, x: f32, y: f32 },
+    ContextMenuRow { index: usize },
     FolderChild { index: usize },
     FolderTitle,
     FolderPanel { x: f32, y: f32 },
@@ -639,6 +640,13 @@ pub struct QaFrameRecord {
     pub pager_spring_generation_count: Option<u32>,
     pub pager_reanchor_count: Option<u32>,
     pub pager_spring_id: Option<u64>,
+    pub text_atlas_width: Option<u32>,
+    pub text_atlas_height: Option<u32>,
+    pub text_atlas_cached_glyphs: Option<usize>,
+    pub text_atlas_cache_hits: Option<u64>,
+    pub text_atlas_cache_misses: Option<u64>,
+    pub text_atlas_grows: Option<u64>,
+    pub text_atlas_drops: Option<u64>,
 }
 
 struct QaFrameState {
@@ -662,6 +670,7 @@ struct QaFrameState {
     folder_child_page_target: Option<usize>,
     folder_child_page_hover_progress: Option<f32>,
     pager: Option<QaPagerSnapshot>,
+    text_atlas: Option<crate::renderer::text_engine::TextAtlasStats>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -921,6 +930,13 @@ impl QaRunner {
                 .map(|pager| pager.spring_generation_count),
             pager_reanchor_count: state.pager.as_ref().map(|pager| pager.reanchor_count),
             pager_spring_id: state.pager.as_ref().and_then(|pager| pager.spring_id),
+            text_atlas_width: state.text_atlas.map(|stats| stats.width),
+            text_atlas_height: state.text_atlas.map(|stats| stats.height),
+            text_atlas_cached_glyphs: state.text_atlas.map(|stats| stats.cached_glyphs),
+            text_atlas_cache_hits: state.text_atlas.map(|stats| stats.cache_hits),
+            text_atlas_cache_misses: state.text_atlas.map(|stats| stats.cache_misses),
+            text_atlas_grows: state.text_atlas.map(|stats| stats.grows),
+            text_atlas_drops: state.text_atlas.map(|stats| stats.atlas_drops),
         });
         self.frame_index += 1;
         let frame_ms = (1000 / self.scenario.fps.max(1) as u64).max(1);
@@ -1526,6 +1542,12 @@ impl App {
                         rect.y + rect.height * y.clamp(0.0, 1.0),
                     )
                 }),
+            QaTarget::ContextMenuRow { index } => self
+                .context_menu_layout
+                .as_ref()?
+                .rows
+                .get(*index)
+                .map(|row| row.rect.center()),
             QaTarget::FolderChild { index } => self
                 .folder_layout
                 .as_ref()?
@@ -1583,6 +1605,7 @@ impl App {
                 (hover.elapsed / crate::features::folders::CHILD_PAGE_EDGE_DWELL).clamp(0.0, 1.0)
             });
         let pager = self.qa_pager_snapshot();
+        let text_atlas = self.text.as_ref().map(|text| text.atlas_stats());
         self.qa_runner.as_mut()?.next_capture_path(
             now,
             QaFrameState {
@@ -1606,6 +1629,7 @@ impl App {
                 folder_child_page_target,
                 folder_child_page_hover_progress,
                 pager,
+                text_atlas,
             },
         )
     }

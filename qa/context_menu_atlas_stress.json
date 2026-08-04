@@ -1,0 +1,80 @@
+{
+  "name": "context-menu-atlas-stress",
+  "viewport": [1280, 800],
+  "fps": 6,
+  "duration_ms": 20000,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "generated_apps": [
+      {
+        "prefix": "qa-atlas",
+        "name_prefix": "Atlas Stress App",
+        "count": 12
+      }
+    ]
+  },
+  "actions": [
+    { "at_ms": 100, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 150, "type": "right_click" },
+    { "at_ms": 900, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 950, "type": "pointer_down" },
+    { "at_ms": 1000, "type": "pointer_up" },
+
+    { "at_ms": 1800, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 1850, "type": "right_click" },
+    { "at_ms": 2600, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 2650, "type": "pointer_down" },
+    { "at_ms": 2700, "type": "pointer_up" },
+
+    { "at_ms": 3500, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 3550, "type": "right_click" },
+    { "at_ms": 4300, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 4350, "type": "pointer_down" },
+    { "at_ms": 4400, "type": "pointer_up" },
+
+    { "at_ms": 5200, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 5250, "type": "right_click" },
+    { "at_ms": 6000, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 6050, "type": "pointer_down" },
+    { "at_ms": 6100, "type": "pointer_up" },
+
+    { "at_ms": 6900, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 6950, "type": "right_click" },
+    { "at_ms": 7700, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 7750, "type": "pointer_down" },
+    { "at_ms": 7800, "type": "pointer_up" },
+
+    { "at_ms": 8600, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 8650, "type": "right_click" },
+    { "at_ms": 9400, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 9450, "type": "pointer_down" },
+    { "at_ms": 9500, "type": "pointer_up" },
+
+    { "at_ms": 10300, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 10350, "type": "right_click" },
+    { "at_ms": 11100, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 11150, "type": "pointer_down" },
+    { "at_ms": 11200, "type": "pointer_up" },
+
+    { "at_ms": 12000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 12050, "type": "right_click" },
+    { "at_ms": 12800, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 12850, "type": "pointer_down" },
+    { "at_ms": 12900, "type": "pointer_up" },
+
+    { "at_ms": 13700, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 13750, "type": "right_click" },
+    { "at_ms": 14500, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 14550, "type": "pointer_down" },
+    { "at_ms": 14600, "type": "pointer_up" },
+
+    { "at_ms": 15400, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 15450, "type": "right_click" },
+    { "at_ms": 16200, "type": "move", "target": { "kind": "context_menu_row", "index": 0 } },
+    { "at_ms": 16250, "type": "pointer_down" },
+    { "at_ms": 16300, "type": "pointer_up" },
+
+    { "at_ms": 17200, "type": "move", "target": { "kind": "grid_item", "index": 1 } },
+    { "at_ms": 17250, "type": "long_press" }
+  ]
+}
