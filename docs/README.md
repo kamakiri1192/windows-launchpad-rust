@@ -26,6 +26,8 @@
   invalidation rules, and corruption recovery.
 - [ICON_COMPATIBILITY_CI.md](ICON_COMPATIBILITY_CI.md) — macOS 14 / 15 / 26
   icon capture, pixel and outer-shape comparison, artifacts, and label trigger.
+- [CONTEXT_MENU_ICON_ASSETS.md](CONTEXT_MENU_ICON_ASSETS.md) — SVGを透過PNGへ
+  変換し、コンテキストメニューのテクスチャアイコンとして取り込む手順。
 - [APP_REFRESH.md](APP_REFRESH.md) — live Start Menu change detection
   (added / updated / removed) and click-stability via stable app ids.
 - [EDIT_MODE_VISUAL_QA.md](EDIT_MODE_VISUAL_QA.md) — manual visual QA for
