@@ -106,10 +106,16 @@ impl App {
 
         // Advance the wiggle animation phase while editing. dt is taken
         // from the redraw cadence (clamped like the control's).
-        let anim_dt = match self.last_redraw {
+        let wall_anim_dt = match self.last_redraw {
             Some(prev) => now.duration_since(prev).as_secs_f32().min(0.1),
             None => 1.0 / 60.0,
         };
+        let context_menu_anim_dt = self
+            .qa_runner
+            .as_mut()
+            .map(|runner| runner.animation_dt(now))
+            .unwrap_or(wall_anim_dt);
+        let anim_dt = wall_anim_dt;
         if self.editing {
             self.wiggle_phase += anim_dt;
         }
@@ -144,7 +150,7 @@ impl App {
         // Modal glass lane with the folder/settings panels, so only one is
         // ever active.
         let context_menu_was_active = self.context_menu.is_active();
-        let context_menu_animating = self.context_menu.tick(anim_dt);
+        let context_menu_animating = self.context_menu.tick(context_menu_anim_dt);
         if context_menu_was_active && !self.context_menu.is_active() {
             // Animation finished closing: clear the Modal-lane content.
             self.clear_context_menu_presentation();

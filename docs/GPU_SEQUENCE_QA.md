@@ -111,7 +111,14 @@ GPU frameとmanifestで検証します。
 
 `qa/context_menu_open.json`は、fixtureのアプリへproduction input router経由で右クリックし、
 コンテキストメニューが初期エフェクトの`Opening`だけで止まらず、`Open`へ到達して一定時間
-維持されることを確認します。
+維持されることを確認します。`qa/context_menu_dismiss.json`は、次のdismiss経路を1本の連番で
+確認します。
+
+- `Opening`中の外側クリック
+- `Open`後の外側クリック
+- `Open`後のメニュー行クリック
+- `Opening`中のEscape
+- 各ケースの再オープンと`Closing`→`Closed`完了
 
 シナリオには次の契約を指定します。
 
@@ -123,7 +130,8 @@ GPU frameとmanifestで検証します。
 ```
 
 実行結果の`manifest.json`には`context_menu_assertions`が出力され、
-`open_entry_count`または`open_frame_count`が不足すると`passed: false`になります。
+`open_entry_count`、`closing_count`、`closed_entry_count`、または各phaseのフレーム数が不足すると
+`passed: false`になります。
 したがって、右クリックイベントだけ通ってメニュー本体が表示されない回帰もQA結果上で失敗にできます。
 
 ## 長押しとスクロールの検証

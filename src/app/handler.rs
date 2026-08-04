@@ -261,9 +261,10 @@ impl ApplicationHandler<UserEvent> for App {
                     // ESC dismisses the context menu; any other key is swallowed
                     // while the menu is open.
                     if key_code == Some(winit::keyboard::KeyCode::Escape) {
-                        self.close_context_menu();
+                        KeyAction::CloseContextMenu
+                    } else {
+                        KeyAction::None
                     }
-                    KeyAction::None
                 } else if self.folders.is_active() && !self.settings_open {
                     folder_keyboard_action(
                         self.folders.rename.is_some(),
