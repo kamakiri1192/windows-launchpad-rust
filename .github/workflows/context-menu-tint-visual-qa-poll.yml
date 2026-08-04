@@ -1,11 +1,9 @@
 name: Context menu tint visual QA poll
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
-    types:
-      - synchronize
+      - agent/fix-glass-surface-tint
 
 permissions:
   contents: write
@@ -109,7 +107,7 @@ jobs:
             throw 'Selected context menu screenshot was not produced'
           }
 
-      - name: Commit verified screenshot and remove temporary workflows
+      - name: Commit verified screenshot and remove temporary QA files
         shell: pwsh
         run: |
           git restore src/app/handler.rs
@@ -118,5 +116,6 @@ jobs:
           git add docs/qa/context-menu-tint.png
           git rm .github/workflows/context-menu-tint-visual-qa.yml
           git rm .github/workflows/context-menu-tint-visual-qa-poll.yml
+          git rm qa/context_menu_tint_qa.trigger
           git commit -m 'Capture verified context menu tint GPU QA'
           git push origin HEAD:agent/fix-glass-surface-tint
