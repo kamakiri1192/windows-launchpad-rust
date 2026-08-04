@@ -81,11 +81,42 @@ impl App {
         if !inside {
             self.close_context_menu();
 
-            // Closing is visual-only, so reclassifying now hands this same
-            // gesture to the page or folder below. Recursion stops after this
-            // one handoff because a closing menu no longer accepts input.
-            let action = self.classify_pointer_press(x, y);
-            self.handle_pointer_press(action);
+            // A click on another app/folder is a dismissal gesture, not a
+            // second activation. Passing that press through used to leave a
+            // pending grid click behind, so releasing outside the menu could
+            // launch an unrelated app. Preserve passthrough for empty
+            // backdrop areas (for example, closing a folder or continuing a
+            // page gesture), but never hand an interactive tile the same
+            // pointer contact.
+            let over_interactive_item = if self.folders.is_active() {
+                self.folder_layout
+                    .as_ref()
+                    .and_then(|layout| {
+                        layout
+                            .result
+                            .hits
+                            .hit_test(crate::ui_model::geometry::Point::new(x, y))
+                    })
+                    .is_some_and(|hit| {
+                        matches!(
+                            hit.target,
+                            crate::ui_model::hit::HitTarget::FolderChild { .. }
+                        )
+                    })
+            } else {
+                matches!(
+                    self.grid_hit_at_pointer(x, y),
+                    crate::layout::grid::GridHit::App(_)
+                )
+            };
+            if !over_interactive_item {
+                // Closing is visual-only, so reclassifying now hands this
+                // same gesture to the page or folder below. Recursion stops
+                // after this one handoff because a closing menu no longer
+                // accepts input.
+                let action = self.classify_pointer_press(x, y);
+                self.handle_pointer_press(action);
+            }
         }
     }
 

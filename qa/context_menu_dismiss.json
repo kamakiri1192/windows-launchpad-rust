@@ -7,9 +7,9 @@
   "context_menu_expectations": {
     "expected_open_count": 2,
     "min_open_frames": 10,
-    "expected_opening_count": 4,
-    "expected_closing_count": 4,
-    "expected_closed_count": 4,
+    "expected_opening_count": 5,
+    "expected_closing_count": 5,
+    "expected_closed_count": 5,
     "min_closing_frames": 3,
     "require_final_closed": true
   },
@@ -57,6 +57,12 @@
     { "at_ms": 15800, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
     { "at_ms": 16600, "type": "move", "target": { "kind": "point", "x": 5.0, "y": 5.0 } },
     { "at_ms": 16650, "type": "pointer_down" },
-    { "at_ms": 16700, "type": "pointer_up" }
+    { "at_ms": 16700, "type": "pointer_up" },
+
+    { "at_ms": 18000, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 18200, "type": "right_click" },
+    { "at_ms": 18500, "type": "move", "target": { "kind": "grid_item", "index": 3 } },
+    { "at_ms": 18550, "type": "pointer_down" },
+    { "at_ms": 18600, "type": "pointer_up" }
   ]
 }

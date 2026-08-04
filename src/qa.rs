@@ -2354,9 +2354,9 @@ mod tests {
             serde_json::from_str(include_str!("../qa/context_menu_dismiss.json")).unwrap();
         validate_context_menu_expectations(&scenario).unwrap();
         let expected = scenario.context_menu_expectations.unwrap();
-        assert_eq!(expected.expected_opening_count, Some(4));
-        assert_eq!(expected.expected_closing_count, 4);
-        assert_eq!(expected.expected_closed_count, 4);
+        assert_eq!(expected.expected_opening_count, Some(5));
+        assert_eq!(expected.expected_closing_count, 5);
+        assert_eq!(expected.expected_closed_count, 5);
         assert!(expected.require_final_closed);
         assert_eq!(
             scenario
@@ -2364,7 +2364,7 @@ mod tests {
                 .iter()
                 .filter(|action| matches!(action.action, QaAction::RightClick))
                 .count(),
-            4
+            5
         );
     }
 

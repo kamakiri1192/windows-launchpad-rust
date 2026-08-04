@@ -52,6 +52,18 @@ struct ClickCapture {
 #[derive(Default)]
 struct MonitorState {
     click: Option<ClickCapture>,
+    /// Exact coordinates from the native mouse event currently being
+    /// delivered to winit. `MouseInput` has no position, and asking AppKit
+    /// for the current cursor after the event can return the previous
+    /// position while a newly summoned window is becoming key.
+    button_point: Option<ButtonPoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ButtonPoint {
+    button: PointerButton,
+    pressed: bool,
+    point: PhysicalPoint,
 }
 
 /// Maps AppKit's system-uptime timestamp onto the app-wide monotonic epoch.
@@ -442,6 +454,47 @@ impl MacInputPassthrough {
                 let _ = callback_event_proxy.send_event(UserEvent::NativeScroll(raw));
                 return original;
             }
+
+            // Capture the coordinates from the same NSEvent that winit will
+            // turn into MouseInput. This is more reliable than
+            // mouseLocationOutsideOfEventStream() at the button boundary:
+            // immediately after summon, AppKit may still report the cursor
+            // position from the previous key window.
+            if matches!(
+                event_type,
+                NSEventType::LeftMouseDown
+                    | NSEventType::LeftMouseUp
+                    | NSEventType::RightMouseDown
+                    | NSEventType::RightMouseUp
+            ) && event.windowNumber() == launcher_window_number
+            {
+                if let Some(main_thread) = MainThreadMarker::new() {
+                    if let Some(event_window) = event.window(main_thread) {
+                        if let Some(point) =
+                            physical_point_in_window(&event_window, event.locationInWindow())
+                        {
+                            let button = if matches!(
+                                event_type,
+                                NSEventType::LeftMouseDown | NSEventType::LeftMouseUp
+                            ) {
+                                PointerButton::Left
+                            } else {
+                                PointerButton::Right
+                            };
+                            let pressed = matches!(
+                                event_type,
+                                NSEventType::LeftMouseDown | NSEventType::RightMouseDown
+                            );
+                            callback_state.borrow_mut().button_point = Some(ButtonPoint {
+                                button,
+                                pressed,
+                                point,
+                            });
+                        }
+                    }
+                }
+            }
+
             let Some(cg_event) = cg_event else {
                 return original;
             };
@@ -549,6 +602,19 @@ impl MacInputPassthrough {
             return down_result;
         }
         post_hidden_click(&up)
+    }
+
+    /// Take the exact point captured from the matching native button event.
+    /// The value is consumed once by the corresponding winit `MouseInput`.
+    pub fn take_button_point(&self, button: PointerButton, pressed: bool) -> Option<PhysicalPoint> {
+        let mut state = self.state.borrow_mut();
+        if state
+            .button_point
+            .is_some_and(|sample| sample.button == button && sample.pressed == pressed)
+        {
+            return state.button_point.take().map(|sample| sample.point);
+        }
+        None
     }
 
     /// Refresh the cached window geometry used by the background tap thread.

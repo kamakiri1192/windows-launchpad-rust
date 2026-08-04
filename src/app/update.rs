@@ -195,6 +195,8 @@ impl App {
         // MouseInput has no position. Refresh it at the button boundary so a
         // click made immediately after summoning the hidden window does not
         // reuse the last CursorMoved coordinate from the previous session.
+        // On macOS the local monitor supplies the exact native event point;
+        // the AppKit cursor query remains only as a fallback.
         // Deterministic QA injects pointer coordinates directly and has no
         // corresponding OS cursor movement, so it must keep using the
         // injected point rather than the physical cursor position.
@@ -207,11 +209,18 @@ impl App {
                 self.pointer_phys_y = point.y;
             }
             #[cfg(target_os = "macos")]
-            if let Some(point) = self.renderer.as_ref().and_then(|renderer| {
-                crate::platform::macos::input_passthrough::cursor_position_in_window(
-                    &renderer.window,
-                )
-            }) {
+            if let Some(point) = self
+                ._macos_input
+                .as_ref()
+                .and_then(|input| input.take_button_point(button, pressed))
+                .or_else(|| {
+                    self.renderer.as_ref().and_then(|renderer| {
+                        crate::platform::macos::input_passthrough::cursor_position_in_window(
+                            &renderer.window,
+                        )
+                    })
+                })
+            {
                 self.pointer_phys_x = point.x;
                 self.pointer_phys_y = point.y;
             }
