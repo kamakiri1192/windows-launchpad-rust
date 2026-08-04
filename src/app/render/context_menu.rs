@@ -38,6 +38,10 @@ impl App {
             self.control.press_close();
         }
         self.pending_press = None;
+        // A previous menu model can still be retained until its close tail
+        // finishes. Do not let a pointer move re-hit-test that stale geometry
+        // while this menu is opening; the new menu starts with no focused row.
+        self.context_menu_layout = None;
 
         // Compute the stable key once here; the per-frame layout reads it back
         // from `context_menu_target_key` instead of re-running `format!`.
@@ -172,6 +176,19 @@ impl App {
         }
     }
 
+    /// Update the row focus target from the current pointer. The feature state
+    /// eases each row independently so moving between rows cross-fades the
+    /// outgoing and incoming pills instead of switching them in one frame.
+    pub(crate) fn update_context_menu_hover(&mut self, x: f32, y: f32) {
+        if !self.context_menu.accepts_pointer_input() {
+            return;
+        }
+        let hovered = self.context_menu_hit_target(x, y);
+        if self.context_menu.set_hovered_item(hovered) {
+            self.request_redraw();
+        }
+    }
+
     fn context_menu_hit_target(&self, x: f32, y: f32) -> Option<usize> {
         let model = self.context_menu_layout.as_ref()?;
         let p = crate::ui_model::geometry::Point::new(x, y);
@@ -221,6 +238,7 @@ impl App {
             content_opacity: self.context_menu.content_opacity(),
             content_blur: self.context_menu.content_blur(),
             activation: self.context_menu.activation(),
+            focus_amounts: self.context_menu.focus_amounts(),
             items: &items,
             labels,
         };

@@ -796,6 +796,12 @@ impl App {
         let _ = self
             .input_router
             .pointer_moved(crate::input_routing::PhysicalPoint::new(x, y));
+        // Context-menu row focus is animated by the feature state. Update its
+        // target as the pointer crosses rows so the settled menu still
+        // requests the short fade/scale transition.
+        if self.context_menu.is_active() {
+            self.update_context_menu_hover(x, y);
+        }
         // Settings overlay slider drag: follow the pointer live.
         if self.settings_slider_drag.is_some() {
             self.update_settings_slider_drag(x);
