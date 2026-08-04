@@ -1,0 +1,5 @@
+replace(
+    "src/liquid_glass/renderer/resources.rs",
+    "pub(super) fn create_final_bind_group(",
+    "#[allow(clippy::too_many_arguments)]\npub(super) fn create_final_bind_group(",
+)
