@@ -43,9 +43,9 @@ pub enum UserEvent {
     QuitRequested,
     /// Toggle the settings overlay (tray "Settings" / gear button).
     ToggleSettings,
-    /// macOS AppKit packet retaining separate physical-contact and momentum
-    /// phases. The winit MouseWheel duplicate is suppressed while this monitor
-    /// is installed.
+    /// Native platform packet retaining physical-contact phases. On macOS the
+    /// AppKit monitor supplies it; on Windows the Precision Touchpad adapter
+    /// supplies it before winit can collapse the gesture into a line wheel.
     NativeScroll(crate::input_routing::RawScrollEvent),
 }
 

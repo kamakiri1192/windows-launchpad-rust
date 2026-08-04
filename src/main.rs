@@ -205,11 +205,15 @@ fn main() {
     let mut event_loop_builder = EventLoop::<UserEvent>::with_user_event();
     let input_routing_publisher = input_routing::InputRoutingPublisher::default();
     #[cfg(windows)]
+    let windows_touchpad = platform::windows::touchpad::WindowsTouchpadInput::new();
+    #[cfg(windows)]
     {
         use winit::platform::windows::EventLoopBuilderExtWindows;
         let publisher = input_routing_publisher.clone();
+        let touchpad = windows_touchpad.clone();
         event_loop_builder.with_msg_hook(move |message| {
-            platform::windows::input_passthrough::handle_message(message, &publisher)
+            touchpad.handle_message(message, &publisher)
+                || platform::windows::input_passthrough::handle_message(message, &publisher)
         });
     }
     #[cfg(target_os = "macos")]
@@ -230,6 +234,8 @@ fn main() {
     let event_loop = event_loop_builder.build().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
+    #[cfg(windows)]
+    windows_touchpad.set_proxy(proxy.clone());
 
     #[cfg(target_os = "macos")]
     let mut _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some()
@@ -289,7 +295,16 @@ fn main() {
         && std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_none())
     .then(|| platform::macos::integration::MacOsIntegration::install(proxy.clone()));
 
-    let mut app = App::new(proxy, timer, cache, inbox, worker, input_routing_publisher);
+    let mut app = App::new(
+        proxy,
+        timer,
+        cache,
+        inbox,
+        worker,
+        input_routing_publisher,
+        #[cfg(windows)]
+        windows_touchpad,
+    );
     // Anchor the OS-integration thread for the whole process lifetime.
     #[cfg(windows)]
     {

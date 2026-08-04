@@ -56,6 +56,9 @@ use crate::{app_icon, UserEvent};
 #[path = "windows/input_passthrough.rs"]
 pub mod input_passthrough;
 
+#[path = "windows/touchpad.rs"]
+pub mod touchpad;
+
 /// App-private window message used by the shell to deliver tray notifications.
 /// Anything in the `WM_APP`..`WM_APP+0x7FFF` range is safe for this.
 const WM_TRAYICON: u32 = 0x8000; // WM_APP

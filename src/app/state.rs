@@ -242,6 +242,8 @@ pub struct App {
     pub scroll_sample_adapter: crate::input_routing::ScrollSampleAdapter,
     pub pager_input_router: crate::input_routing::PagerInputRouter,
     pub scroll_clock_origin: Instant,
+    #[cfg(windows)]
+    pub windows_touchpad: crate::platform::windows::touchpad::WindowsTouchpadInput,
     pub drag_start_x: f32,
     pub drag_start_y: f32,
     pub first_frame_rendered: bool,
@@ -403,12 +405,16 @@ impl App {
         inbox: Arc<Inbox>,
         worker: WorkerHandle,
         input_routing_publisher: crate::input_routing::InputRoutingPublisher,
+        #[cfg(windows)] windows_touchpad: crate::platform::windows::touchpad::WindowsTouchpadInput,
     ) -> Self {
         let profile_edit = std::env::var_os("LAUNCHPAD_PROFILE_EDIT").as_deref()
             == Some(std::ffi::OsStr::new("1"));
         if profile_edit {
             eprintln!("profile edit workload: enabled (continuous production edit animation)");
         }
+        let scroll_clock_origin = Instant::now();
+        #[cfg(windows)]
+        windows_touchpad.set_clock_origin(scroll_clock_origin);
         Self {
             event_proxy,
             renderer: None,
@@ -436,7 +442,9 @@ impl App {
             input_qa_last_signature: None,
             scroll_sample_adapter: crate::input_routing::ScrollSampleAdapter::default(),
             pager_input_router: crate::input_routing::PagerInputRouter::default(),
-            scroll_clock_origin: Instant::now(),
+            scroll_clock_origin,
+            #[cfg(windows)]
+            windows_touchpad,
             drag_start_x: 0.0,
             drag_start_y: 0.0,
             first_frame_rendered: false,
