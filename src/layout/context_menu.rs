@@ -37,6 +37,13 @@ pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
+const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
+
+/// iOS/macOS-style primary label color on a light material. This is the
+/// familiar near-black `#1C1C1E`, rather than absolute black.
+pub const MENU_LABEL_RGB: [f32; 3] = [0.11, 0.11, 0.118];
+/// iOS-style destructive action color (`systemRed`, approximately `#FF3B30`).
+pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
 /// One of the six placeholder menu actions. All items are mock actions for
 /// this iteration: selecting any of them simply closes the menu.
@@ -102,6 +109,14 @@ impl ContextMenuItem {
         Self::IconSmaller.label(),
         Self::AppInfo.label(),
     ];
+
+    /// Foreground color for this menu action, shared by its label and icon.
+    pub const fn foreground_rgb(self) -> [f32; 3] {
+        match self {
+            Self::HideApp => MENU_DESTRUCTIVE_RGB,
+            _ => MENU_LABEL_RGB,
+        }
+    }
 }
 
 /// Inputs resolved by the app shell from the live [`ContextMenuState`].
@@ -257,7 +272,12 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             // The context menu is intentionally brighter than the global glass tint.
             // Fade the override with the menu reveal so the collapsed seed does not
             // leave a white disc behind during close.
-            tint: Some(Color::rgba(0.93, 0.94, 0.96, 0.50 * content_opacity)),
+            tint: Some(Color::rgba(
+                0.93,
+                0.94,
+                0.96,
+                CONTEXT_MENU_TINT_ALPHA * content_opacity,
+            )),
         }],
     );
 
@@ -288,7 +308,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     let mut text_views: Vec<TextView> = Vec::new();
     let mut rows: Vec<ContextMenuItemRow> = Vec::new();
 
-    for (index, (_item, label)) in input.items.iter().zip(input.labels.iter()).enumerate() {
+    for (index, (item, label)) in input.items.iter().zip(input.labels.iter()).enumerate() {
         // Position in fully-open panel space.
         let open_row_y = pad_y + index as f32 * row_h;
         let open_icon_x = pad_x;
@@ -304,6 +324,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
 
         let (icon_cx, icon_cy) = map(open_icon_x + icon_size * 0.5, open_row_cy);
         let (label_cx, label_cy) = map(open_label_x, open_row_cy);
+        let color = item.foreground_rgb();
 
         // Hit-test row rect (in current panel space).
         let (row_left, row_top) = map(ROW_INNER_MARGIN_X * scale, open_row_y);
@@ -323,7 +344,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             scene_blur: 0.0,
             stroke: 1.8 * scale * content_scale,
             corner_radius: 0.0,
-            color: Color::rgba(0.95, 0.96, 0.98, 1.0),
+            color: Color::rgba(color[0], color[1], color[2], 1.0),
             kind: item_icon_kind(input.items[index]),
             z: 140,
             clip: None,
@@ -342,7 +363,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             style: TextStyle::new(
                 TextRole::ControlLabel,
                 font_size,
-                Color::rgba(0.95, 0.96, 0.98, reveal),
+                Color::rgba(color[0], color[1], color[2], reveal),
                 TextWeight::Regular,
                 TextAlign::Start,
             ),
@@ -414,6 +435,7 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 mod tests {
     use super::{
         build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, Rect,
+        MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
     };
 
     /// Icon near the right of the viewport so the menu cannot fit on its right
@@ -495,6 +517,16 @@ mod tests {
             .find(|batch| batch.layer == GlassLayer::ContextMenu)
             .and_then(|batch| batch.surfaces.first())
             .expect("context menu glass surface");
-        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.50)));
+        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.68)));
+    }
+
+    #[test]
+    fn menu_uses_near_black_label_and_system_red_destructive_colors() {
+        assert_eq!(ContextMenuItem::EditHome.foreground_rgb(), MENU_LABEL_RGB);
+        assert_eq!(
+            ContextMenuItem::HideApp.foreground_rgb(),
+            MENU_DESTRUCTIVE_RGB
+        );
+        assert_ne!(MENU_LABEL_RGB, [0.0, 0.0, 0.0]);
     }
 }
