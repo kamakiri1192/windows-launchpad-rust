@@ -5,6 +5,7 @@
 //! above an open folder without their Liquid Glass smooth-unioning together.
 
 use crate::app::state::App;
+use crate::domain::app_id::AppId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::features::context_menu::MenuTarget;
 use crate::layout::context_menu::{
@@ -49,11 +50,13 @@ impl App {
 
         let scale = self.scale_factor.max(0.01);
         // Measure the longest label once at open time so the open-animation
-        // target and the per-frame layout agree on the same panel width.
-        let max_label_w = self.measure_menu_max_label_width_logical(scale);
+        // target and the per-frame layout agree on the same panel width. The
+        // measured set is the rows this target will display: a folder menu
+        // omits "アプリを非表示", so its panel is one row shorter.
+        let (items, _labels) = context_menu::menu_rows(matches!(target, LauncherItem::Folder(_)));
+        let max_label_w = self.measure_menu_max_label_width_logical(scale, items);
         self.context_menu_open_width_logical = max_label_w;
-        let (lw, lh) =
-            open_panel_size_logical(context_menu::ContextMenuItem::ALL.len(), max_label_w);
+        let (lw, lh) = open_panel_size_logical(items.len(), max_label_w);
         let size_phys = (lw * scale, lh * scale);
         let ((origin_x, origin_y), seed) =
             open_panel_origin(icon_rect, size_phys, self.viewport_phys());
@@ -161,18 +164,29 @@ impl App {
         !folder_open && !over_interactive_item
     }
 
-    /// Release while the menu is open. Inside a row → mock action (close);
+    /// Release while the menu is open. Inside a row → run the selected action;
     /// outside → already closed by the press, or close now.
     pub(crate) fn handle_context_menu_pointer_release(&mut self, x: f32, y: f32) {
         if !self.context_menu.is_active() {
             return;
         }
-        let hit = self.context_menu_hit_target(x, y);
-        match hit {
-            // A row was selected: mock action — just close. Real actions are
-            // wired in a later iteration.
-            Some(_) => self.close_context_menu(),
-            None => self.close_context_menu(),
+        let (items, _labels) = context_menu::menu_rows(matches!(
+            self.context_menu.active_target,
+            Some(LauncherItem::Folder(_))
+        ));
+        let selection = resolve_context_menu_selection(
+            items,
+            self.context_menu_hit_target(x, y),
+            self.context_menu.active_target.as_ref(),
+        );
+        // Close the menu before running the action: edit mode suppresses the
+        // right-click menu, and hide relayouts the grid beneath the panel.
+        self.close_context_menu();
+        match selection {
+            ContextMenuSelection::EditHome => self.enter_edit_mode(None),
+            ContextMenuSelection::HideApp(id) => self.hide_app(&id),
+            // Mock actions (and folder targets of HideApp): just close.
+            ContextMenuSelection::CloseOnly => {}
         }
     }
 
@@ -210,10 +224,13 @@ impl App {
         }
 
         let scale = self.scale_factor.max(0.01);
-        let items = context_menu::ContextMenuItem::ALL;
-        // `ALL_LABELS` is a compile-time constant matching `ALL` order, so we
-        // borrow a static slice instead of reallocating a `Vec` every frame.
-        let labels: &[&str] = context_menu::ContextMenuItem::ALL_LABELS.as_slice();
+        // The row set is fixed at open time by the target kind (folder menus
+        // omit "アプリを非表示"), so the laid-out rows always match the rows
+        // the release path resolves against.
+        let (items, labels) = context_menu::menu_rows(matches!(
+            self.context_menu.active_target,
+            Some(LauncherItem::Folder(_))
+        ));
 
         // The fully-open panel size is fixed at open time and stays constant
         // through the animation; the live (animated) size is separate. We reuse
@@ -239,7 +256,7 @@ impl App {
             content_blur: self.context_menu.content_blur(),
             activation: self.context_menu.activation(),
             focus_amounts: self.context_menu.focus_amounts(),
-            items: &items,
+            items,
             labels,
         };
         let model = context_menu::build(&input);
@@ -359,16 +376,21 @@ impl App {
         self.context_menu_target_key = None;
     }
 
-    /// Measure the widest menu label and return its width in logical px at 1×
-    /// DPI (i.e. the physical measurement divided by `scale`). Used once at
-    /// open time to size the panel to its content. Falls back to the layout
-    /// layer's [`FALLBACK_MAX_LABEL_WIDTH`] when the text engine is absent.
-    fn measure_menu_max_label_width_logical(&mut self, scale: f32) -> f32 {
+    /// Measure the widest label among `items` and return its width in logical
+    /// px at 1× DPI (i.e. the physical measurement divided by `scale`). Used
+    /// once at open time to size the panel to its content. Falls back to the
+    /// layout layer's [`FALLBACK_MAX_LABEL_WIDTH`] when the text engine is
+    /// absent.
+    fn measure_menu_max_label_width_logical(
+        &mut self,
+        scale: f32,
+        items: &[context_menu::ContextMenuItem],
+    ) -> f32 {
         let Some(t) = self.text.as_mut() else {
             return context_menu::FALLBACK_MAX_LABEL_WIDTH;
         };
         let mut widest_phys = 0.0f32;
-        for item in context_menu::ContextMenuItem::ALL {
+        for item in items {
             let w = t.measure_text(&text_engine::CenteredLineSpec {
                 text: item.label(),
                 font_size: MENU_FONT_SIZE,
@@ -428,6 +450,42 @@ fn menu_text_color(item: context_menu::ContextMenuItem, opacity: f32) -> [f32; 4
     [rgb[0], rgb[1], rgb[2], opacity.clamp(0.0, 1.0)]
 }
 
+/// What a released menu row should do. Resolved from the row hit and the
+/// menu's target; the app shell runs the side effects after closing the menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContextMenuSelection {
+    /// ホーム画面を編集: enter edit mode on the home grid (✕ badges appear).
+    EditHome,
+    /// アプリを非表示: hide the target app, mirroring the ✕ badge path.
+    HideApp(AppId),
+    /// Mock action (or a folder target of [`ContextMenuSelection::HideApp`],
+    /// which cannot be hidden): just close the menu.
+    CloseOnly,
+}
+
+/// Resolve a release inside the menu into the action to run. `items` is the
+/// row set the menu is actually displaying (folder menus omit the hide-app
+/// row, so its row indices never land on [`ContextMenuSelection::HideApp`]).
+/// An outside release (no row hit) and every mock row resolve to
+/// [`ContextMenuSelection::CloseOnly`].
+fn resolve_context_menu_selection(
+    items: &[context_menu::ContextMenuItem],
+    row: Option<usize>,
+    target: Option<&LauncherItem>,
+) -> ContextMenuSelection {
+    let Some(index) = row else {
+        return ContextMenuSelection::CloseOnly;
+    };
+    match items.get(index) {
+        Some(context_menu::ContextMenuItem::EditHome) => ContextMenuSelection::EditHome,
+        Some(context_menu::ContextMenuItem::HideApp) => match target {
+            Some(LauncherItem::App(id)) => ContextMenuSelection::HideApp(id.clone()),
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        _ => ContextMenuSelection::CloseOnly,
+    }
+}
+
 fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphView> {
     quads
         .iter()
@@ -480,6 +538,102 @@ mod tests {
             menu_text_color(context_menu::ContextMenuItem::HideApp, 0.75),
             [1.0, 0.231, 0.188, 0.75]
         );
+    }
+
+    #[test]
+    fn edit_home_row_resolves_to_edit_home_for_an_app_target() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(0),
+                Some(&target)
+            ),
+            ContextMenuSelection::EditHome
+        );
+    }
+
+    #[test]
+    fn hide_app_row_resolves_to_hiding_the_target_app() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(1),
+                Some(&target)
+            ),
+            ContextMenuSelection::HideApp(AppId::from_normalized("calc"))
+        );
+    }
+
+    #[test]
+    fn folder_menu_rows_omit_the_hide_app_row() {
+        let (items, labels) = context_menu::menu_rows(true);
+        assert_eq!(items, &context_menu::ContextMenuItem::FOLDER_ITEMS[..]);
+        assert_eq!(
+            labels,
+            &context_menu::ContextMenuItem::FOLDER_ITEMS_LABELS[..]
+        );
+        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 1);
+        assert!(!items.contains(&context_menu::ContextMenuItem::HideApp));
+    }
+
+    #[test]
+    fn app_menu_rows_show_all_six_items() {
+        let (items, labels) = context_menu::menu_rows(false);
+        assert_eq!(items, &context_menu::ContextMenuItem::ALL[..]);
+        assert_eq!(labels, &context_menu::ContextMenuItem::ALL_LABELS[..]);
+    }
+
+    #[test]
+    fn folder_menu_row_indices_never_resolve_to_hide_app() {
+        let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
+            "folder-a",
+        ));
+        let (items, _labels) = context_menu::menu_rows(true);
+        // A folder menu has no hide-app row; every row resolves to
+        // close-only (or edit-home for row 0).
+        assert_eq!(
+            resolve_context_menu_selection(items, Some(1), Some(&target)),
+            ContextMenuSelection::CloseOnly
+        );
+        assert_eq!(
+            resolve_context_menu_selection(items, Some(0), Some(&target)),
+            ContextMenuSelection::EditHome
+        );
+    }
+
+    #[test]
+    fn hide_app_row_with_no_target_is_close_only() {
+        assert_eq!(
+            resolve_context_menu_selection(&context_menu::ContextMenuItem::ALL, Some(1), None),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
+    fn outside_release_and_mock_rows_are_close_only() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        // Outside the panel: no row hit.
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                None,
+                Some(&target)
+            ),
+            ContextMenuSelection::CloseOnly
+        );
+        // The mock rows (RevealInFinder, IconLarger, IconSmaller, AppInfo).
+        for row in 2..context_menu::ContextMenuItem::ALL.len() {
+            assert_eq!(
+                resolve_context_menu_selection(
+                    &context_menu::ContextMenuItem::ALL,
+                    Some(row),
+                    Some(&target)
+                ),
+                ContextMenuSelection::CloseOnly
+            );
+        }
     }
 
     #[test]

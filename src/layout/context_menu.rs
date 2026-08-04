@@ -59,8 +59,8 @@ pub const MENU_LABEL_RGB: [f32; 3] = [0.11, 0.11, 0.118];
 /// iOS-style destructive action color (`systemRed`, approximately `#FF3B30`).
 pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
-/// One of the six placeholder menu actions. All items are mock actions for
-/// this iteration: selecting any of them simply closes the menu.
+/// One of the context-menu actions. Selecting an action runs it and closes the
+/// menu; the mock rows (reveal / icon size / app info) still close only.
 ///
 /// Defined here (in the pure layout layer) rather than in the feature module
 /// so the renderer-neutral geometry does not depend on the binary-only
@@ -86,6 +86,17 @@ impl ContextMenuItem {
     pub const ALL: [Self; CONTEXT_MENU_ITEM_COUNT] = [
         Self::EditHome,
         Self::HideApp,
+        Self::RevealInFinder,
+        Self::IconLarger,
+        Self::IconSmaller,
+        Self::AppInfo,
+    ];
+
+    /// Items shown when the menu targets a folder. A folder has no hide
+    /// action, so "アプリを非表示" is omitted entirely — the folder menu is
+    /// one row shorter than the app menu.
+    pub const FOLDER_ITEMS: [Self; CONTEXT_MENU_ITEM_COUNT - 1] = [
+        Self::EditHome,
         Self::RevealInFinder,
         Self::IconLarger,
         Self::IconSmaller,
@@ -124,12 +135,36 @@ impl ContextMenuItem {
         Self::AppInfo.label(),
     ];
 
+    /// Display labels for [`FOLDER_ITEMS`], in the same order.
+    pub const FOLDER_ITEMS_LABELS: [&'static str; CONTEXT_MENU_ITEM_COUNT - 1] = [
+        Self::EditHome.label(),
+        Self::RevealInFinder.label(),
+        Self::IconLarger.label(),
+        Self::IconSmaller.label(),
+        Self::AppInfo.label(),
+    ];
+
     /// Foreground color for this menu action, shared by its label and icon.
     pub const fn foreground_rgb(self) -> [f32; 3] {
         match self {
             Self::HideApp => MENU_DESTRUCTIVE_RGB,
             _ => MENU_LABEL_RGB,
         }
+    }
+}
+
+/// The `(items, labels)` pair to display for a menu target, in display order.
+/// Folder targets omit the hide-app row; app targets show all six rows. The
+/// app shell picks this once at open time and reuses it every frame, so the
+/// rendered rows and the release-time row resolution always agree.
+pub fn menu_rows(is_folder_target: bool) -> (&'static [ContextMenuItem], &'static [&'static str]) {
+    if is_folder_target {
+        (
+            &ContextMenuItem::FOLDER_ITEMS[..],
+            &ContextMenuItem::FOLDER_ITEMS_LABELS[..],
+        )
+    } else {
+        (&ContextMenuItem::ALL[..], &ContextMenuItem::ALL_LABELS[..])
     }
 }
 
@@ -489,10 +524,27 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, InkLane,
-        Rect, CONTEXT_MENU_ITEM_COUNT, FOCUS_ROW_OPACITY, MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
+        build, menu_rows, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer,
+        InkLane, Rect, CONTEXT_MENU_ITEM_COUNT, FOCUS_ROW_OPACITY, MENU_DESTRUCTIVE_RGB,
+        MENU_LABEL_RGB,
     };
     use crate::ui_model::render_model::ControlKind;
+
+    /// A folder target has no hide action, so its menu omits "アプリを非表示"
+    /// entirely (one row shorter than the app menu).
+    #[test]
+    fn folder_menu_omits_the_hide_app_row() {
+        let (items, labels) = menu_rows(true);
+        assert_eq!(items, &ContextMenuItem::FOLDER_ITEMS[..]);
+        assert_eq!(labels, &ContextMenuItem::FOLDER_ITEMS_LABELS[..]);
+        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 1);
+        assert!(!items.contains(&ContextMenuItem::HideApp));
+
+        // App targets keep all six rows, in the same order as `ALL`.
+        let (app_items, app_labels) = menu_rows(false);
+        assert_eq!(app_items, &ContextMenuItem::ALL[..]);
+        assert_eq!(app_labels, &ContextMenuItem::ALL_LABELS[..]);
+    }
 
     /// Icon near the right of the viewport so the menu cannot fit on its right
     /// side, but has ample room on the left: it must flip to the left edge,
