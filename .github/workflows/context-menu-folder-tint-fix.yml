@@ -33,23 +33,27 @@ jobs:
       - name: Keep hidden QA window ticking
         shell: python
         run: |
+          import re
           from pathlib import Path
 
           path = Path("src/app/handler.rs")
           text = path.read_text(encoding="utf-8")
-          old = """        if let Some(deadline) = self.qa_next_deadline() {
-              event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-          } else {
-          """
-          new = """        if self.qa_enabled() {
-              event_loop.set_control_flow(ControlFlow::Poll);
-          } else if let Some(deadline) = self.qa_next_deadline() {
-              event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-          } else {
-          """
-          if text.count(old) != 1:
-              raise SystemExit("hidden-window QA scheduler anchor did not match exactly once")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          pattern = re.compile(
+              r"(?m)^(?P<indent>\s*)if let Some\(deadline\) = self\.qa_next_deadline\(\) \{\n"
+              r"(?P=indent)    event_loop\.set_control_flow\(ControlFlow::WaitUntil\(deadline\.max\(now\)\)\);\n"
+              r"(?P=indent)\} else \{"
+          )
+          replacement = (
+              r"\g<indent>if self.qa_enabled() {\n"
+              r"\g<indent>    event_loop.set_control_flow(ControlFlow::Poll);\n"
+              r"\g<indent>} else if let Some(deadline) = self.qa_next_deadline() {\n"
+              r"\g<indent>    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));\n"
+              r"\g<indent>} else {"
+          )
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"hidden-window QA scheduler anchor matched {count} times")
+          path.write_text(text, encoding="utf-8")
 
       - name: Build debug launcher
         shell: pwsh
