@@ -45,6 +45,8 @@ struct GlassUniforms {
     _pad: [f32; 3],
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
+    glass_darkness: f32,
+    _uniform_pad: [f32; 3],
 }
 
 #[repr(C)]
@@ -1336,6 +1338,8 @@ fn uniforms_from_params(
         _pad: [0.0; 3],
         backdrop_origin: [0.0, 0.0],
         backdrop_extent: [width as f32, height as f32],
+        glass_darkness: 0.0,
+        _uniform_pad: [0.0; 3],
     }
 }
 

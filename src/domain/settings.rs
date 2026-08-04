@@ -38,7 +38,7 @@ pub struct Settings {
     /// `frame.present()` cadence EMA otherwise. Off by default.
     #[serde(default)]
     pub show_fps: bool,
-    /// Persisted Liquid Glass parameters (the master switch plus the six
+    /// Persisted Liquid Glass parameters (the master switch plus the seven
     /// numeric parameters exposed in the settings panel). Debug-only flags
     /// (the B/G/D/A/F debug views and the C/E/L disable toggles) and the
     /// window-decoration toggle are *not* persisted: they reset on every
@@ -79,6 +79,8 @@ pub struct LiquidGlassSettings {
     pub refractive_index: f32,
     #[serde(default = "default_lg_saturation")]
     pub saturation: f32,
+    #[serde(default = "default_lg_glass_darkness")]
+    pub glass_darkness: f32,
     #[serde(default = "default_lg_adaptive_darkness")]
     pub adaptive_darkness: f32,
     #[serde(default = "default_lg_chromatic_aberration")]
@@ -94,6 +96,7 @@ impl Default for LiquidGlassSettings {
             thickness: default_lg_thickness(),
             refractive_index: default_lg_refractive_index(),
             saturation: default_lg_saturation(),
+            glass_darkness: default_lg_glass_darkness(),
             adaptive_darkness: default_lg_adaptive_darkness(),
             chromatic_aberration: default_lg_chromatic_aberration(),
             blur_radius: default_lg_blur_radius(),
@@ -130,6 +133,10 @@ const fn default_lg_saturation() -> f32 {
     1.34
 }
 
+const fn default_lg_glass_darkness() -> f32 {
+    0.0
+}
+
 const fn default_lg_adaptive_darkness() -> f32 {
     0.65
 }
@@ -142,7 +149,7 @@ const fn default_lg_blur_radius() -> f32 {
     16.0
 }
 
-/// Identifies one of the six numeric Liquid Glass parameters that the
+/// Identifies one of the seven numeric Liquid Glass parameters that the
 /// settings panel exposes as a slider. Used by hit-testing, drag tracking,
 /// and the per-parameter reset action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,16 +157,18 @@ pub enum LiquidGlassParamField {
     Thickness,
     RefractiveIndex,
     Saturation,
+    GlassDarkness,
     AdaptiveDarkness,
     ChromaticAberration,
     BlurRadius,
 }
 
 impl LiquidGlassParamField {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Thickness,
         Self::RefractiveIndex,
         Self::Saturation,
+        Self::GlassDarkness,
         Self::AdaptiveDarkness,
         Self::ChromaticAberration,
         Self::BlurRadius,
@@ -172,6 +181,7 @@ impl LiquidGlassParamField {
             Self::Thickness => (6.0, 48.0, default_lg_thickness()),
             Self::RefractiveIndex => (1.02, 1.75, default_lg_refractive_index()),
             Self::Saturation => (0.5, 2.0, default_lg_saturation()),
+            Self::GlassDarkness => (0.0, 1.0, default_lg_glass_darkness()),
             Self::AdaptiveDarkness => (0.0, 1.0, default_lg_adaptive_darkness()),
             Self::ChromaticAberration => (0.0, 0.18, default_lg_chromatic_aberration()),
             Self::BlurRadius => (0.0, 40.0, default_lg_blur_radius()),
@@ -183,6 +193,7 @@ impl LiquidGlassParamField {
             Self::Thickness => s.thickness,
             Self::RefractiveIndex => s.refractive_index,
             Self::Saturation => s.saturation,
+            Self::GlassDarkness => s.glass_darkness,
             Self::AdaptiveDarkness => s.adaptive_darkness,
             Self::ChromaticAberration => s.chromatic_aberration,
             Self::BlurRadius => s.blur_radius,
@@ -196,6 +207,7 @@ impl LiquidGlassParamField {
             Self::Thickness => s.thickness = value,
             Self::RefractiveIndex => s.refractive_index = value,
             Self::Saturation => s.saturation = value,
+            Self::GlassDarkness => s.glass_darkness = value,
             Self::AdaptiveDarkness => s.adaptive_darkness = value,
             Self::ChromaticAberration => s.chromatic_aberration = value,
             Self::BlurRadius => s.blur_radius = value,
@@ -208,6 +220,7 @@ impl LiquidGlassParamField {
             Self::Thickness => "thickness",
             Self::RefractiveIndex => "refractive-index",
             Self::Saturation => "saturation",
+            Self::GlassDarkness => "glass-darkness",
             Self::AdaptiveDarkness => "adaptive-darkness",
             Self::ChromaticAberration => "chromatic-aberration",
             Self::BlurRadius => "blur-radius",
@@ -323,6 +336,7 @@ mod tests {
                 thickness: 40.0,
                 refractive_index: 1.5,
                 saturation: 1.8,
+                glass_darkness: 0.3,
                 adaptive_darkness: 0.4,
                 chromatic_aberration: 0.1,
                 blur_radius: 24.0,
@@ -393,6 +407,10 @@ mod tests {
         );
         assert_eq!(decoded.liquid_glass.saturation, default_lg_saturation());
         assert_eq!(
+            decoded.liquid_glass.glass_darkness,
+            default_lg_glass_darkness()
+        );
+        assert_eq!(
             decoded.liquid_glass.adaptive_darkness,
             default_lg_adaptive_darkness()
         );
@@ -413,6 +431,7 @@ mod tests {
         assert_eq!(s.thickness, 26.0);
         assert_eq!(s.refractive_index, 1.42);
         assert_eq!(s.saturation, 1.34);
+        assert_eq!(s.glass_darkness, 0.0);
         assert_eq!(s.adaptive_darkness, 0.65);
         assert_eq!(s.chromatic_aberration, 0.075);
         assert_eq!(s.blur_radius, 16.0);
@@ -425,6 +444,7 @@ mod tests {
             thickness: 6.0,
             refractive_index: 1.02,
             saturation: 0.5,
+            glass_darkness: 1.0,
             adaptive_darkness: 0.0,
             chromatic_aberration: 0.0,
             blur_radius: 0.0,

@@ -811,6 +811,10 @@ impl Renderer {
         self.liquid_glass.params().saturation
     }
 
+    pub fn liquid_glass_darkness(&self) -> f32 {
+        self.liquid_glass.params().glass_darkness
+    }
+
     pub fn liquid_glass_adaptive_darkness(&self) -> f32 {
         self.liquid_glass.params().adaptive_darkness
     }
@@ -864,6 +868,10 @@ impl Renderer {
         self.liquid_glass.set_saturation(value);
     }
 
+    pub fn set_liquid_glass_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_glass_darkness(value);
+    }
+
     pub fn set_liquid_glass_adaptive_darkness(&mut self, value: f32) {
         self.liquid_glass.set_adaptive_darkness(value);
     }
@@ -887,6 +895,7 @@ impl Renderer {
         thickness: f32,
         refractive_index: f32,
         saturation: f32,
+        glass_darkness: f32,
         adaptive_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
@@ -896,6 +905,7 @@ impl Renderer {
             thickness,
             refractive_index,
             saturation,
+            glass_darkness,
             adaptive_darkness,
             chromatic_aberration,
             blur_radius,
