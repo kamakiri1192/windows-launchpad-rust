@@ -235,16 +235,16 @@ impl App {
         let opacity = self.context_menu.content_opacity();
         let content_scale = self.context_menu.content_scale().max(0.0);
         if opacity > crate::features::context_menu::CONTENT_VISIBILITY_THRESHOLD {
-            let color = [0.95, 0.96, 0.98, opacity.clamp(0.0, 1.0)];
             if let Some(text) = self.text.as_mut() {
                 // cosmic-text includes the exact f32 font size in its cache
                 // key. The menu animates `content_scale` every frame, so pass
                 // a physical-pixel-quantized scale to keep repeated open/close
                 // animations from manufacturing unbounded glyph variants.
                 let text_scale = quantize_menu_text_scale(content_scale, scale);
-                for (row, label) in model.rows.iter().zip(labels.iter()) {
+                for ((item, row), label) in items.iter().zip(model.rows.iter()).zip(labels.iter()) {
                     let left = row.label_rect.x;
                     let center_y = row.label_rect.y;
+                    let color = menu_text_color(*item, opacity);
                     // Scale the font with content_scale so the text shrinks/grows
                     // in sync with the glass + ink during open/close morph.
                     push_menu_text(
@@ -388,6 +388,11 @@ fn push_menu_text(
     quads.extend(row_quads);
 }
 
+fn menu_text_color(item: context_menu::ContextMenuItem, opacity: f32) -> [f32; 4] {
+    let rgb = item.foreground_rgb();
+    [rgb[0], rgb[1], rgb[2], opacity.clamp(0.0, 1.0)]
+}
+
 fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphView> {
     quads
         .iter()
@@ -428,5 +433,17 @@ mod tests {
         assert_eq!(sampled.len(), 18);
         assert_eq!(sampled.first(), Some(&18));
         assert_eq!(sampled.last(), Some(&35));
+    }
+
+    #[test]
+    fn menu_text_color_marks_only_hide_as_destructive() {
+        assert_eq!(
+            menu_text_color(context_menu::ContextMenuItem::EditHome, 0.75),
+            [0.11, 0.11, 0.118, 0.75]
+        );
+        assert_eq!(
+            menu_text_color(context_menu::ContextMenuItem::HideApp, 0.75),
+            [1.0, 0.231, 0.188, 0.75]
+        );
     }
 }
