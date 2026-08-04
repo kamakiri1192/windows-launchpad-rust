@@ -5,6 +5,7 @@
 //! above an open folder without their Liquid Glass smooth-unioning together.
 
 use crate::app::state::App;
+use crate::domain::app_id::AppId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::features::context_menu::MenuTarget;
 use crate::layout::context_menu::{
@@ -161,18 +162,31 @@ impl App {
         !folder_open && !over_interactive_item
     }
 
-    /// Release while the menu is open. Inside a row → mock action (close);
+    /// Release while the menu is open. Inside a row → run the selected action;
     /// outside → already closed by the press, or close now.
     pub(crate) fn handle_context_menu_pointer_release(&mut self, x: f32, y: f32) {
         if !self.context_menu.is_active() {
             return;
         }
-        let hit = self.context_menu_hit_target(x, y);
-        match hit {
-            // A row was selected: mock action — just close. Real actions are
-            // wired in a later iteration.
-            Some(_) => self.close_context_menu(),
-            None => self.close_context_menu(),
+        let selection = resolve_context_menu_selection(
+            self.context_menu_hit_target(x, y),
+            self.context_menu.active_target.as_ref(),
+        );
+        // Close the menu before running the action: edit mode suppresses the
+        // right-click menu, and hide relayouts the grid beneath the panel.
+        self.close_context_menu();
+        match selection {
+            ContextMenuSelection::EditHome => {
+                // Edit mode applies to the home grid. Close a viewing folder
+                // first so the folder overlay cannot sit above the ✕ badges.
+                if self.folders.is_active() {
+                    self.close_folder();
+                }
+                self.enter_edit_mode(None);
+            }
+            ContextMenuSelection::HideApp(id) => self.hide_app(&id),
+            // Mock actions (and folder targets of HideApp): just close.
+            ContextMenuSelection::CloseOnly => {}
         }
     }
 
@@ -428,6 +442,40 @@ fn menu_text_color(item: context_menu::ContextMenuItem, opacity: f32) -> [f32; 4
     [rgb[0], rgb[1], rgb[2], opacity.clamp(0.0, 1.0)]
 }
 
+/// What a released menu row should do. Resolved from the row hit and the
+/// menu's target; the app shell runs the side effects after closing the menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContextMenuSelection {
+    /// ホーム画面を編集: enter edit mode on the home grid (✕ badges appear).
+    EditHome,
+    /// アプリを非表示: hide the target app, mirroring the ✕ badge path.
+    HideApp(AppId),
+    /// Mock action (or a folder target of [`ContextMenuSelection::HideApp`],
+    /// which cannot be hidden): just close the menu.
+    CloseOnly,
+}
+
+/// Resolve a release inside the menu into the action to run. An outside
+/// release (no row hit) and every mock row resolve to [`ContextMenuSelection::CloseOnly`];
+/// "アプリを非表示" additionally resolves to close-only when the menu target
+/// is a folder — folders have no hide action.
+fn resolve_context_menu_selection(
+    row: Option<usize>,
+    target: Option<&LauncherItem>,
+) -> ContextMenuSelection {
+    let Some(index) = row else {
+        return ContextMenuSelection::CloseOnly;
+    };
+    match context_menu::ContextMenuItem::ALL.get(index) {
+        Some(context_menu::ContextMenuItem::EditHome) => ContextMenuSelection::EditHome,
+        Some(context_menu::ContextMenuItem::HideApp) => match target {
+            Some(LauncherItem::App(id)) => ContextMenuSelection::HideApp(id.clone()),
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        _ => ContextMenuSelection::CloseOnly,
+    }
+}
+
 fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphView> {
     quads
         .iter()
@@ -480,6 +528,60 @@ mod tests {
             menu_text_color(context_menu::ContextMenuItem::HideApp, 0.75),
             [1.0, 0.231, 0.188, 0.75]
         );
+    }
+
+    #[test]
+    fn edit_home_row_resolves_to_edit_home_for_an_app_target() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(
+            resolve_context_menu_selection(Some(0), Some(&target)),
+            ContextMenuSelection::EditHome
+        );
+    }
+
+    #[test]
+    fn hide_app_row_resolves_to_hiding_the_target_app() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(
+            resolve_context_menu_selection(Some(1), Some(&target)),
+            ContextMenuSelection::HideApp(AppId::from_normalized("calc"))
+        );
+    }
+
+    #[test]
+    fn hide_app_row_on_a_folder_target_is_close_only() {
+        let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
+            "folder-a",
+        ));
+        assert_eq!(
+            resolve_context_menu_selection(Some(1), Some(&target)),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
+    fn hide_app_row_with_no_target_is_close_only() {
+        assert_eq!(
+            resolve_context_menu_selection(Some(1), None),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
+    fn outside_release_and_mock_rows_are_close_only() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        // Outside the panel: no row hit.
+        assert_eq!(
+            resolve_context_menu_selection(None, Some(&target)),
+            ContextMenuSelection::CloseOnly
+        );
+        // The mock rows (RevealInFinder, IconLarger, IconSmaller, AppInfo).
+        for row in 2..context_menu::ContextMenuItem::ALL.len() {
+            assert_eq!(
+                resolve_context_menu_selection(Some(row), Some(&target)),
+                ContextMenuSelection::CloseOnly
+            );
+        }
     }
 
     #[test]
