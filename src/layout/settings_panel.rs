@@ -669,10 +669,10 @@ pub fn build_with_ui(
     let sidebar_div = InkView {
         id: UiId::settings_row("sidebar-divider"),
         center: Point::new(layout.right_left, layout.cy),
-        extent: 0.55 * scale,
+        extent: layout.hh - 28.0 * scale,
         opacity: DIM[3],
         scene_blur: 0.0,
-        stroke: layout.hh - 28.0 * scale,
+        stroke: 0.55 * scale,
         corner_radius: 0.55 * scale,
         color: color_from_array(DIM),
         kind: ControlKind::Divider,
@@ -1209,25 +1209,6 @@ pub fn build_with_ui(
     }
 
     // ------------------------------------------------------------------
-    // Bottom divider
-    // ------------------------------------------------------------------
-    let panel_bottom = layout.panel_bottom();
-    let bottom_div = InkView {
-        id: UiId::settings_row("bottom-divider"),
-        center: Point::new(layout.cx, panel_bottom - 56.0 * scale),
-        extent: 0.45 * scale,
-        opacity: DIM[3],
-        scene_blur: 0.0,
-        stroke: layout.hw - 26.0 * scale,
-        corner_radius: 0.45 * scale,
-        color: color_from_array(DIM),
-        kind: ControlKind::Divider,
-        z: Z_CONTROL,
-        clip: None,
-    };
-    ui.push_ink(bottom_div);
-
-    // ------------------------------------------------------------------
     // Assemble the model
     // ------------------------------------------------------------------
     let result = ui.into_layout_result();
@@ -1575,6 +1556,34 @@ mod tests {
             search_label.style.color,
             Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0)
         );
+    }
+
+    #[test]
+    fn settings_dividers_match_column_layout() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let settings_ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .expect("settings ink batch");
+        let sidebar_divider = settings_ink
+            .views
+            .iter()
+            .find(|view| view.id == UiId::settings_row("sidebar-divider"))
+            .expect("sidebar divider");
+        let expected_layout = layout();
+
+        assert!((sidebar_divider.extent - (expected_layout.hh - 28.0)).abs() < f32::EPSILON);
+        assert!((sidebar_divider.stroke - 0.55).abs() < f32::EPSILON);
+        assert!(!settings_ink
+            .views
+            .iter()
+            .any(|view| view.id == UiId::settings_row("bottom-divider")));
     }
 
     // ------------------------------------------------------------------
