@@ -38,6 +38,10 @@ impl App {
             self.control.press_close();
         }
         self.pending_press = None;
+        // A previous menu model can still be retained until its close tail
+        // finishes. Do not let a pointer move re-hit-test that stale geometry
+        // while this menu is opening; the new menu starts with no focused row.
+        self.context_menu_layout = None;
 
         // Compute the stable key once here; the per-frame layout reads it back
         // from `context_menu_target_key` instead of re-running `format!`.

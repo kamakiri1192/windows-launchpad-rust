@@ -134,7 +134,7 @@ const T_OPTICS: Transition = Transition::Easing {
 /// Short ease-out used for the row focus pill. It is deliberately slower than
 /// a pointer event but shorter than the menu's panel morph.
 const T_FOCUS: Transition = Transition::Easing {
-    duration: 0.20,
+    duration: 0.15,
     ease: Ease::EaseOut,
 };
 
@@ -547,6 +547,28 @@ mod tests {
         let crossfade = state.focus_amounts();
         assert!(crossfade[1] > 0.0 && crossfade[1] < first[1]);
         assert!(crossfade[2] > 0.0 && crossfade[2] < 1.0);
+    }
+
+    #[test]
+    fn opening_a_menu_clears_focus_from_the_previous_menu() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        state.set_hovered_item(Some(3));
+        state.tick(0.1);
+        assert!(state.focus_amounts()[3] > 0.0);
+
+        state.open(
+            LauncherItem::app(AppId::from_normalized("notes")),
+            200.0,
+            200.0,
+            target_at(200.0, 200.0),
+        );
+        assert!(state.focus_amounts().iter().all(|amount| *amount == 0.0));
     }
 
     #[test]
