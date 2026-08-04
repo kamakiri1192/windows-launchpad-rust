@@ -796,6 +796,12 @@ impl App {
         let _ = self
             .input_router
             .pointer_moved(crate::input_routing::PhysicalPoint::new(x, y));
+        // Context-menu row focus is derived from the current pointer during
+        // render. Keep the otherwise event-driven window repainting while the
+        // pointer crosses menu rows, even after the open animation settles.
+        if self.context_menu.is_active() {
+            self.request_redraw();
+        }
         // Settings overlay slider drag: follow the pointer live.
         if self.settings_slider_drag.is_some() {
             self.update_settings_slider_drag(x);

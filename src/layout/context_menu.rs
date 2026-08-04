@@ -8,7 +8,7 @@
 
 use crate::layout::hit_map::{HitMap, HitRegion};
 use crate::layout::LayoutResult;
-use crate::ui_model::geometry::{Point, Rect};
+use crate::ui_model::geometry::{Insets, Point, Rect};
 use crate::ui_model::hit::HitTarget;
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
@@ -38,6 +38,13 @@ pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
 const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
+/// System-blue hover tint used by the focused row. The low opacity keeps the
+/// material and its blurred backdrop visible through the pill, matching the
+/// translucent highlight used by iOS/macOS menus.
+const FOCUS_ROW_RGB: [f32; 3] = [0.039, 0.518, 1.0];
+const FOCUS_ROW_OPACITY: f32 = 0.20;
+/// Leave a little breathing room between the focused pill and adjacent rows.
+const FOCUS_ROW_VERTICAL_INSET: f32 = 3.0;
 /// Keep the menu body visibly blurred even after the content-reveal animation
 /// reaches its resting value of zero. The animated `content_blur` widens the
 /// dedicated context-menu blur kernel on top of this baseline.
@@ -148,6 +155,10 @@ pub struct ContextMenuInput<'a> {
     pub content_blur: f32,
     /// Per-surface glass activation 0..1 (the open-time optics bump).
     pub activation: f32,
+    /// Current pointer position in physical px. A row under this point gets
+    /// the focused translucent pill; `None` is useful for deterministic
+    /// layout callers that do not have pointer state.
+    pub pointer: Option<Point>,
     pub items: &'a [ContextMenuItem],
     /// Localized label for each item, in display order.
     pub labels: &'a [&'a str],
@@ -346,6 +357,31 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             (row_bottom - row_top).abs(),
         );
 
+        // Draw the focus treatment before the row's icon and label so the
+        // foreground stays crisp above the translucent blue material. The
+        // row hit rect intentionally remains unchanged: the visual inset is
+        // only for the breathing room visible in the reference design.
+        if input
+            .pointer
+            .is_some_and(|pointer| row_rect.contains(pointer))
+        {
+            let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
+            let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
+            ink.push(InkView {
+                id: UiId::context_menu_item(input.target, index),
+                center: focus_rect.center(),
+                extent: focus_rect.height * 0.5,
+                opacity: reveal * FOCUS_ROW_OPACITY,
+                scene_blur: 0.0,
+                stroke: focus_rect.width * 0.5,
+                corner_radius: focus_rect.height * 0.5,
+                color: Color::rgba(FOCUS_ROW_RGB[0], FOCUS_ROW_RGB[1], FOCUS_ROW_RGB[2], 1.0),
+                kind: ControlKind::RowBackground,
+                z: 130,
+                clip: None,
+            });
+        }
+
         ink.push(InkView {
             id: UiId::context_menu_item(input.target, index),
             center: Point::new(icon_cx, icon_cy),
@@ -445,7 +481,7 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 mod tests {
     use super::{
         build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, InkLane,
-        Rect, MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
+        Point, Rect, FOCUS_ROW_OPACITY, MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
     };
     use crate::ui_model::render_model::ControlKind;
 
@@ -511,6 +547,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
+            pointer: None,
             items: &ContextMenuItem::ALL,
             labels: &ContextMenuItem::ALL_LABELS,
         };
@@ -569,6 +606,51 @@ mod tests {
     }
 
     #[test]
+    fn focused_row_emits_a_translucent_pill_behind_its_content() {
+        let input = ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            target: "app:qa-context-menu-focus",
+            pos: (320.0, 180.0),
+            size: (280.0, 280.0),
+            open_size: (280.0, 280.0),
+            radius: 28.0,
+            content_scale: 1.0,
+            content_opacity: 1.0,
+            content_blur: 0.0,
+            activation: 0.0,
+            pointer: Some(Point::new(460.0, 260.0)),
+            items: &ContextMenuItem::ALL,
+            labels: &ContextMenuItem::ALL_LABELS,
+        };
+
+        let model = build(&input);
+        let ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::ContextMenu)
+            .expect("context-menu ink batch");
+        let focus = ink
+            .views
+            .iter()
+            .find(|view| view.kind == ControlKind::RowBackground)
+            .expect("focused row background");
+
+        assert_eq!(focus.center, model.rows[1].rect.center());
+        assert_eq!(focus.opacity, FOCUS_ROW_OPACITY);
+        assert_eq!(focus.corner_radius, focus.extent);
+        assert_eq!(
+            ink.views
+                .iter()
+                .filter(|view| view.kind == ControlKind::RowBackground)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn menu_icons_follow_the_display_order() {
         let input = ContextMenuInput {
             viewport: (1280, 800),
@@ -582,6 +664,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
+            pointer: None,
             items: &ContextMenuItem::ALL,
             labels: &ContextMenuItem::ALL_LABELS,
         };

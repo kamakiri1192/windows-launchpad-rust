@@ -221,6 +221,10 @@ impl App {
             content_opacity: self.context_menu.content_opacity(),
             content_blur: self.context_menu.content_blur(),
             activation: self.context_menu.activation(),
+            pointer: Some(crate::ui_model::geometry::Point::new(
+                self.pointer_phys_x,
+                self.pointer_phys_y,
+            )),
             items: &items,
             labels,
         };
