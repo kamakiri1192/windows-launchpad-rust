@@ -169,6 +169,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
         #[cfg(windows)]
         {
+            if !self.windows_touchpad.register_window(&window) {
+                eprintln!(
+                    "input-routing: Windows Precision Touchpad native path unavailable; using winit wheel fallback"
+                );
+            }
             if std::env::var_os("LAUNCHPAD_ALLOW_SCREENSHOT").is_some() {
                 eprintln!("capture exclusion skipped: LAUNCHPAD_ALLOW_SCREENSHOT is set");
             } else {
@@ -181,6 +186,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.scale_factor = window.scale_factor() as f32;
+        #[cfg(windows)]
+        self.windows_touchpad.set_scale_factor(self.scale_factor);
         let (w, _h) = (window.inner_size().width, window.inner_size().height);
         self.layout = grid::GridLayout::default()
             .with_scale_factor(self.scale_factor)
@@ -311,6 +318,8 @@ impl ApplicationHandler<UserEvent> for App {
                 height: new_size.height,
             },
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                #[cfg(windows)]
+                self.windows_touchpad.set_scale_factor(scale_factor as f32);
                 AppAction::ScaleFactorChanged { scale_factor }
             }
             WindowEvent::Moved(_) => {
