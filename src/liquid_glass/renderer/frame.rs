@@ -675,8 +675,10 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// Render the settings overlay panel glass. Drawn last (over everything),
-    /// so it composites above the grid, control, and gear.
+    /// Render the settings/folder modal glass from the shared modal-shape
+    /// buffer. Settings uses the completed-scene bind group; folders use their
+    /// ordinary backdrop path so they do not sample an unprepared settings
+    /// capture.
     pub fn render_settings_panel(
         &mut self,
         queue: &wgpu::Queue,
@@ -691,7 +693,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -701,6 +703,14 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        if self.settings_panel_completed_scene_enabled && !self.debug.disable_blur {
+            uniforms.blur_radius = self
+                .settings_panel_blur_radius
+                .unwrap_or(self.params.blur_radius);
+        }
+        if self.settings_panel_completed_scene_enabled {
+            uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
+        }
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,
@@ -758,13 +768,24 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
+            let final_bind_group = if self.settings_panel_completed_scene_enabled {
+                &self.settings_panel_final_bind_group
+            } else {
+                &self.modal_final_bind_group
+            };
+            pass.set_bind_group(0, final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }
 
     pub fn has_context_menu_glass(&self) -> bool {
         self.params.enabled && self.context_menu_shape_count > 0
+    }
+
+    pub fn has_settings_panel_glass(&self) -> bool {
+        self.params.enabled
+            && self.settings_panel_completed_scene_enabled
+            && self.settings_panel_shape_count > 0
     }
 
     /// Capture every layer already rendered to the transparent swapchain,
@@ -779,7 +800,42 @@ impl LiquidGlassRenderer {
         if !self.has_context_menu_glass() {
             return;
         }
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            pre_menu_scene,
+            self.context_menu_blur_radius
+                .unwrap_or(self.params.blur_radius),
+        );
+    }
 
+    /// Capture the completed scene immediately below the settings surface and
+    /// build the same full-resolution blur used by the context menu.
+    pub fn prepare_settings_panel_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pre_settings_scene: &wgpu::Texture,
+    ) {
+        if !self.has_settings_panel_glass() {
+            return;
+        }
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            pre_settings_scene,
+            self.settings_panel_blur_radius
+                .unwrap_or(self.params.blur_radius),
+        );
+    }
+
+    fn prepare_completed_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pre_scene: &wgpu::Texture,
+        blur_radius: f32,
+    ) {
         let (viewport_width, viewport_height) = self.texture_size;
         queue.write_buffer(
             &self.context_menu_flatten_uniform_buffer,
@@ -804,7 +860,7 @@ impl LiquidGlassRenderer {
         });
         copy_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: pre_menu_scene,
+                texture: pre_scene,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -849,10 +905,7 @@ impl LiquidGlassRenderer {
         }
         commands.push(flatten_encoder.finish());
 
-        let profile = self.blur_profile(
-            self.context_menu_blur_radius
-                .unwrap_or(self.params.blur_radius),
-        );
+        let profile = self.blur_profile(blur_radius);
         if !self.debug.disable_blur && profile.level_count > 0 {
             queue.write_buffer(
                 &self.context_menu_blur_uniform_buffer,

@@ -802,6 +802,9 @@ impl App {
         if self.context_menu.is_active() {
             self.update_context_menu_hover(x, y);
         }
+        if self.settings_panel_active() {
+            self.update_settings_category_hover(x, y);
+        }
         // Settings overlay slider drag: follow the pointer live.
         if self.settings_slider_drag.is_some() {
             self.update_settings_slider_drag(x);

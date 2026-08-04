@@ -124,6 +124,10 @@ pub enum GlassLayer {
     DragOverlay,
     Overlay,
     Modal,
+    /// Settings panel glass. Isolated from folder/modal glass so its completed
+    /// scene blur can be captured after the Glass Focus Veil and before the
+    /// settings surface itself is composited.
+    Settings,
     /// Context menu glass. Isolated from `Modal` so the menu's glass never
     /// smooth-unions with an open folder panel's glass — they stay visually
     /// distinct even when overlapping. Composited above `Modal`.

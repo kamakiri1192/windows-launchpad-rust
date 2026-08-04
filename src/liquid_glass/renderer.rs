@@ -269,6 +269,11 @@ pub struct LiquidGlassRenderer {
     /// Optional context-menu-local blur radius. Other lanes use `params`.
     context_menu_blur_radius: Option<f32>,
     context_menu_backdrop_replacement: f32,
+    /// Settings-panel-local blur and completed-scene replacement. These use
+    /// the same per-surface completed-scene resources as the context menu.
+    settings_panel_blur_radius: Option<f32>,
+    settings_panel_backdrop_replacement: f32,
+    settings_panel_completed_scene_enabled: bool,
     blur_uniform_buffer: wgpu::Buffer,
     context_menu_blur_uniform_buffer: wgpu::Buffer,
     context_menu_flatten_uniform_buffer: wgpu::Buffer,
@@ -299,6 +304,9 @@ pub struct LiquidGlassRenderer {
     badge_final_bind_group: wgpu::BindGroup,
     modal_badge_final_bind_group: wgpu::BindGroup,
     control_final_bind_group: wgpu::BindGroup,
+    /// Ordinary modal compositing for folder panels. Settings has a separate
+    /// bind group because it samples the completed-scene blur resources.
+    modal_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     context_menu_final_bind_group: wgpu::BindGroup,
     grid_overlay_geometry_bind_group: wgpu::BindGroup,
@@ -795,7 +803,7 @@ impl LiquidGlassRenderer {
             &control_tint_view,
             &blur_view,
         );
-        let settings_panel_final_bind_group = create_final_bind_group(
+        let modal_final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
             &settings_panel_uniform_buffer,
@@ -804,6 +812,16 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+        );
+        let settings_panel_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_panel_uniform_buffer,
+            &context_menu_source_view,
+            &sampler,
+            &overlay_geometry_view,
+            &overlay_tint_view,
+            &context_menu_blur_view,
         );
         let context_menu_final_bind_group = create_final_bind_group(
             device,
@@ -1126,6 +1144,9 @@ impl LiquidGlassRenderer {
             blur_levels,
             context_menu_blur_radius: None,
             context_menu_backdrop_replacement: 0.0,
+            settings_panel_blur_radius: None,
+            settings_panel_backdrop_replacement: 0.0,
+            settings_panel_completed_scene_enabled: false,
             blur_uniform_buffer,
             context_menu_blur_uniform_buffer,
             context_menu_flatten_uniform_buffer,
@@ -1152,6 +1173,7 @@ impl LiquidGlassRenderer {
             badge_final_bind_group,
             modal_badge_final_bind_group,
             control_final_bind_group,
+            modal_final_bind_group,
             settings_panel_final_bind_group,
             context_menu_final_bind_group,
             grid_overlay_geometry_bind_group,
@@ -1370,7 +1392,7 @@ impl LiquidGlassRenderer {
             &self.control_tint_view,
             &self.blur_view,
         );
-        self.settings_panel_final_bind_group = create_final_bind_group(
+        self.modal_final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
             &self.settings_panel_uniform_buffer,
@@ -1379,6 +1401,16 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+        );
+        self.settings_panel_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_panel_uniform_buffer,
+            &self.context_menu_source_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.overlay_tint_view,
+            &self.context_menu_blur_view,
         );
         self.context_menu_final_bind_group = create_final_bind_group(
             device,
@@ -1893,6 +1925,32 @@ impl LiquidGlassRenderer {
         } else {
             0.0
         };
+    }
+
+    /// Set the settings panel's local completed-scene blur profile.
+    pub fn set_settings_panel_blur_radius(&mut self, radius: Option<f32>) {
+        self.settings_panel_blur_radius = radius.map(|value| {
+            if value.is_finite() {
+                value.clamp(0.0, 64.0)
+            } else {
+                0.0
+            }
+        });
+    }
+
+    pub fn set_settings_panel_backdrop_replacement(&mut self, replacement: f32) {
+        self.settings_panel_backdrop_replacement = if replacement.is_finite() {
+            replacement.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// Tell the frame pass whether the modal-shape buffer currently belongs to
+    /// a settings surface. Folder panels reuse that buffer but must not cause a
+    /// settings checkpoint.
+    pub fn set_settings_panel_completed_scene_enabled(&mut self, enabled: bool) {
+        self.settings_panel_completed_scene_enabled = enabled;
     }
 
     /// Replace the edit-mode delete-badge glass shapes. These are rendered as

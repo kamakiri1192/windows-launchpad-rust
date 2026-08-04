@@ -129,6 +129,7 @@ impl App {
         // Close the settings overlay so a re-summon starts clean.
         self.settings_open = false;
         self.settings_panel_progress = 0.0;
+        self.reset_settings_category_hover();
         self.folders = crate::features::folders::FolderFeatureState::default();
         self.folder_layout = None;
         self.folder_scroll_pending_commit = false;

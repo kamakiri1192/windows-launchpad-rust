@@ -45,22 +45,25 @@ pub const FOLDER_OMITTED_ITEM_COUNT: usize = 3;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
-const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
-/// System-blue hover tint used by the focused row. The low opacity keeps the
-/// material and its blurred backdrop visible through the pill, matching the
-/// translucent highlight used by iOS/macOS menus.
-const FOCUS_ROW_RGB: [f32; 3] = [0.039, 0.518, 1.0];
-const FOCUS_ROW_OPACITY: f32 = 0.20;
+pub const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
+/// System blue reserved for persistent selection states such as the settings
+/// category selection. Context-menu hover is intentionally neutral so a
+/// transient pointer focus is not confused with a selected item.
+pub const SYSTEM_BLUE_RGB: [f32; 3] = [0.039, 0.518, 1.0];
+pub const FOCUS_ROW_OPACITY: f32 = 0.20;
 /// Leave a little breathing room between the focused pill and adjacent rows.
-const FOCUS_ROW_VERTICAL_INSET: f32 = 3.0;
+pub const FOCUS_ROW_VERTICAL_INSET: f32 = 3.0;
 /// Keep the menu body visibly blurred even after the content-reveal animation
 /// reaches its resting value of zero. The animated `content_blur` widens the
 /// dedicated context-menu blur kernel on top of this baseline.
-const CONTEXT_MENU_BASE_BLUR: f32 = 24.0;
+pub const CONTEXT_MENU_BASE_BLUR: f32 = 24.0;
 
 /// iOS/macOS-style primary label color on a light material. This is the
 /// familiar near-black `#1C1C1E`, rather than absolute black.
 pub const MENU_LABEL_RGB: [f32; 3] = [0.11, 0.11, 0.118];
+/// Neutral hover tint for context-menu rows. Keep it close to the menu label
+/// color so the translucent pill follows the light Liquid Glass surface.
+pub const CONTEXT_MENU_HOVER_RGB: [f32; 3] = MENU_LABEL_RGB;
 /// iOS-style destructive action color (`systemRed`, approximately `#FF3B30`).
 pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
@@ -414,7 +417,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         );
 
         // Draw the focus treatment before the row's icon and label so the
-        // foreground stays crisp above the translucent blue material. The
+        // foreground stays crisp above the translucent neutral material. The
         // row hit rect intentionally remains unchanged: the visual inset is
         // only for the breathing room visible in the reference design.
         let focus_amount = input.focus_amounts.get(index).copied().unwrap_or(0.0);
@@ -437,7 +440,12 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
                 scene_blur: 0.0,
                 stroke: focus_rect.width * 0.5,
                 corner_radius: focus_rect.height * 0.5,
-                color: Color::rgba(FOCUS_ROW_RGB[0], FOCUS_ROW_RGB[1], FOCUS_ROW_RGB[2], 1.0),
+                color: Color::rgba(
+                    CONTEXT_MENU_HOVER_RGB[0],
+                    CONTEXT_MENU_HOVER_RGB[1],
+                    CONTEXT_MENU_HOVER_RGB[2],
+                    1.0,
+                ),
                 kind: ControlKind::RowBackground,
                 z: 130,
                 clip: None,
@@ -544,8 +552,8 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 mod tests {
     use super::{
         build, menu_rows, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer,
-        InkLane, Rect, CONTEXT_MENU_ITEM_COUNT, FOCUS_ROW_OPACITY, MENU_DESTRUCTIVE_RGB,
-        MENU_LABEL_RGB,
+        InkLane, Rect, CONTEXT_MENU_HOVER_RGB, CONTEXT_MENU_ITEM_COUNT, FOCUS_ROW_OPACITY,
+        MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
     };
     use crate::ui_model::render_model::ControlKind;
 
@@ -724,6 +732,10 @@ mod tests {
         assert_eq!(focus.center, model.rows[1].rect.center());
         assert_eq!(focus.opacity, FOCUS_ROW_OPACITY);
         assert_eq!(focus.corner_radius, focus.extent);
+        assert_eq!(
+            [focus.color.r, focus.color.g, focus.color.b],
+            CONTEXT_MENU_HOVER_RGB
+        );
         assert_eq!(
             ink.views
                 .iter()

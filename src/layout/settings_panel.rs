@@ -1,15 +1,19 @@
+use crate::layout::context_menu::{
+    CONTEXT_MENU_BASE_BLUR, CONTEXT_MENU_TINT_ALPHA, FOCUS_ROW_OPACITY, FOCUS_ROW_VERTICAL_INSET,
+    MENU_LABEL_RGB, SYSTEM_BLUE_RGB,
+};
 use crate::layout::hit_map::HitRegion;
 use crate::layout::LayoutResult;
 use crate::scroll::ContinuousScroller;
 use crate::ui::context::Ui;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::color_from_array;
-use crate::ui::widgets::{Button, ButtonStyle, Heading, IconButton, Label, Slider, Toggle};
-use crate::ui_model::geometry::{Point, Rect};
+use crate::ui::widgets::{Button, ButtonStyle, IconButton, Label, Slider, Toggle};
+use crate::ui_model::geometry::{Insets, Point, Rect};
 use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
-    ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, InkView,
+    Color, ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, InkLane, InkView,
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextWeight};
 
@@ -48,10 +52,37 @@ const ROW_STEP: f32 = 62.0;
 const SEGMENT_H: f32 = 32.0;
 const SEGMENT_GAP: f32 = 8.0;
 
-pub const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
-pub const MUTED: [f32; 4] = [1.0, 1.0, 1.0, 0.58];
-pub const DIM: [f32; 4] = [1.0, 1.0, 1.0, 0.34];
-pub const ACCENT: [f32; 4] = [0.35, 0.68, 1.0, 0.42];
+pub const INK: [f32; 4] = [
+    MENU_LABEL_RGB[0],
+    MENU_LABEL_RGB[1],
+    MENU_LABEL_RGB[2],
+    0.92,
+];
+pub const MUTED: [f32; 4] = [
+    MENU_LABEL_RGB[0],
+    MENU_LABEL_RGB[1],
+    MENU_LABEL_RGB[2],
+    0.58,
+];
+pub const DIM: [f32; 4] = [
+    MENU_LABEL_RGB[0],
+    MENU_LABEL_RGB[1],
+    MENU_LABEL_RGB[2],
+    0.34,
+];
+/// Neutral hover treatment for sidebar categories. Selection uses the
+/// context-menu system blue below, so hover remains distinguishable from the
+/// currently selected category while keeping the same animated pill geometry.
+const SETTINGS_HOVER_ROW_RGB: [f32; 3] = MENU_LABEL_RGB;
+const SETTINGS_SELECTED_ROW_RGB: [f32; 3] = SYSTEM_BLUE_RGB;
+/// Strong enough to read as selection while retaining the glass surface below.
+const SETTINGS_SELECTED_ROW_OPACITY: f32 = 0.28;
+pub const ACCENT: [f32; 4] = [
+    SYSTEM_BLUE_RGB[0],
+    SYSTEM_BLUE_RGB[1],
+    SYSTEM_BLUE_RGB[2],
+    0.20,
+];
 pub const GREEN: [f32; 4] = [0.28, 0.82, 0.48, 0.78];
 
 const Z_BACKDROP: i16 = 80;
@@ -83,6 +114,16 @@ impl SettingsCategoryId {
             Self::System => "system",
             Self::About => "about",
             Self::Debug => "debug",
+        }
+    }
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Apps => 0,
+            Self::Search => 1,
+            Self::System => 2,
+            Self::About => 3,
+            Self::Debug => 4,
         }
     }
 }
@@ -327,6 +368,16 @@ pub struct SettingsPanelInput {
     pub pointer_pos: Option<Point>,
     /// Whether the primary pointer button is currently pressed.
     pub pointer_pressed: bool,
+    /// Physical page-frame geometry used by the Glass Focus Veil outside the
+    /// settings surface.
+    pub page_frame_rect: Rect,
+    pub page_frame_radius: f32,
+    /// Per-category hover amounts, animated by the app shell with the same
+    /// easing used by context-menu rows.
+    pub category_hover_amounts: [f32; 5],
+    /// Per-category selection amounts, animated independently so switching
+    /// categories fades the blue selection pill between rows.
+    pub category_selection_amounts: [f32; 5],
 }
 
 /// Persisted Liquid Glass values forwarded from
@@ -527,7 +578,7 @@ pub fn build_with_ui(
     // Panel glass background (scaled for pop animation)
     // ------------------------------------------------------------------
     ui.push_glass(
-        GlassLayer::Modal,
+        GlassLayer::Settings,
         GlassSurface {
             id: UiId::settings_panel(),
             rect: scaled_rect_around_center(&layout, visual_scale),
@@ -537,9 +588,39 @@ pub fn build_with_ui(
             z: Z_PANEL,
             clip: None,
             activation: 0.0,
-            blur_radius: None,
-            backdrop_replacement: 0.0,
-            tint: None,
+            blur_radius: Some(CONTEXT_MENU_BASE_BLUR),
+            backdrop_replacement: visual_alpha,
+            tint: Some(Color::rgba(
+                0.93,
+                0.94,
+                0.96,
+                CONTEXT_MENU_TINT_ALPHA * visual_alpha,
+            )),
+        },
+    );
+
+    // ------------------------------------------------------------------
+    // Glass Focus Veil outside the settings surface
+    // ------------------------------------------------------------------
+    let page_frame_radius = input
+        .page_frame_radius
+        .max(0.0)
+        .min(input.page_frame_rect.width * 0.5)
+        .min(input.page_frame_rect.height * 0.5);
+    ui.push_ink_with_lane(
+        InkLane::Backdrop,
+        InkView {
+            id: UiId::backdrop("glass-focus-veil"),
+            center: input.page_frame_rect.center(),
+            extent: input.page_frame_rect.height * 0.5,
+            opacity: crate::layout::GLASS_FOCUS_VEIL_OPACITY * raw_progress,
+            scene_blur: raw_progress,
+            stroke: input.page_frame_rect.width * 0.5,
+            corner_radius: page_frame_radius,
+            color: Color::rgba(0.12, 0.15, 0.20, 1.0),
+            kind: ControlKind::RowBackground,
+            z: Z_BACKDROP,
+            clip: None,
         },
     );
 
@@ -603,10 +684,10 @@ pub fn build_with_ui(
     let sidebar_div = InkView {
         id: UiId::settings_row("sidebar-divider"),
         center: Point::new(layout.right_left, layout.cy),
-        extent: 0.55 * scale,
+        extent: layout.hh - 28.0 * scale,
         opacity: DIM[3],
         scene_blur: 0.0,
-        stroke: layout.hh - 28.0 * scale,
+        stroke: 0.55 * scale,
         corner_radius: 0.55 * scale,
         color: color_from_array(DIM),
         kind: ControlKind::Divider,
@@ -621,21 +702,71 @@ pub fn build_with_ui(
     for (index, (cat_id, label)) in copy.categories.iter().copied().enumerate() {
         let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
         let sidebar_w = layout.sidebar_w - 24.0 * scale;
-        let selected = cat_id == input.category;
-
+        let row_rect = Rect::new(
+            layout.left + 12.0 * scale,
+            row_top,
+            sidebar_w,
+            SIDEBAR_ROW_H * scale,
+        );
+        let hover_amount = input.category_hover_amounts[cat_id.index()].clamp(0.0, 1.0);
+        let selection_amount = input.category_selection_amounts[cat_id.index()].clamp(0.0, 1.0);
+        let focus_amount = hover_amount.max(selection_amount).clamp(0.0, 1.0);
+        let row_color = [
+            SETTINGS_HOVER_ROW_RGB[0]
+                + (SETTINGS_SELECTED_ROW_RGB[0] - SETTINGS_HOVER_ROW_RGB[0]) * selection_amount,
+            SETTINGS_HOVER_ROW_RGB[1]
+                + (SETTINGS_SELECTED_ROW_RGB[1] - SETTINGS_HOVER_ROW_RGB[1]) * selection_amount,
+            SETTINGS_HOVER_ROW_RGB[2]
+                + (SETTINGS_SELECTED_ROW_RGB[2] - SETTINGS_HOVER_ROW_RGB[2]) * selection_amount,
+        ];
+        let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
+        let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
+        let focus_scale = 0.96 + 0.04 * focus_amount;
+        let focus_center = focus_rect.center();
+        let focus_rect = Rect::new(
+            focus_center.x - focus_rect.width * focus_scale * 0.5,
+            focus_center.y - focus_rect.height * focus_scale * 0.5,
+            focus_rect.width * focus_scale,
+            focus_rect.height * focus_scale,
+        );
+        ui.push_ink(InkView {
+            id: UiId::settings_row(format!("category-focus-{}", cat_id.key())),
+            center: focus_rect.center(),
+            extent: focus_rect.height * 0.5,
+            opacity: (SETTINGS_SELECTED_ROW_OPACITY * selection_amount)
+                .max(FOCUS_ROW_OPACITY * hover_amount),
+            scene_blur: 0.0,
+            stroke: focus_rect.width * 0.5,
+            corner_radius: focus_rect.height * 0.5,
+            color: Color::rgba(row_color[0], row_color[1], row_color[2], 1.0),
+            kind: ControlKind::RowBackground,
+            z: Z_CONTROL,
+            clip: None,
+        });
+        let id = UiId::settings_row(format!("category-{}", cat_id.key()));
+        ui.push_hit(HitRegion::new(
+            id.clone(),
+            row_rect,
+            SettingsPanelHit::Category(cat_id).target(),
+            Z_CONTROL + 2,
+        ));
         ui.begin_absolute_placement();
-        ui.set_cursor(layout.left + 12.0 * scale, row_top);
+        ui.set_cursor(
+            row_rect.x + 16.0 * scale,
+            row_top + (SIDEBAR_ROW_H - LABEL_SIZE) * 0.5 * scale,
+        );
         ui.set_available_width(sidebar_w);
-        ui.button(
-            &Button::new(label)
-                .id(UiId::settings_row(format!("category-{}", cat_id.key())))
-                .style(if selected {
-                    ButtonStyle::Prominent
-                } else {
-                    ButtonStyle::Plain
-                })
-                .chevron_opt(false)
-                .hit_target(SettingsPanelHit::Category(cat_id).target()),
+        ui.label(
+            &Label::new(label)
+                .id(id)
+                .style(TextStyle::new(
+                    TextRole::SettingsRow,
+                    LABEL_SIZE,
+                    Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+                    TextWeight::Regular,
+                    TextAlign::Start,
+                ))
+                .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
         );
     }
 
@@ -657,7 +788,18 @@ pub fn build_with_ui(
     ui.begin_absolute_placement();
     ui.set_cursor(content_left, layout.top + 32.0 * scale);
     ui.set_available_width(content_w);
-    ui.heading(&Heading::new(cat_label).id(UiId::settings_row("category-heading")));
+    ui.label(
+        &Label::new(cat_label)
+            .id(UiId::settings_row("category-heading"))
+            .style(TextStyle::new(
+                TextRole::SettingsHeader,
+                HEADER_SIZE,
+                Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+                TextWeight::Bold,
+                TextAlign::Start,
+            ))
+            .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
+    );
 
     match input.category {
         // ==============================================================
@@ -866,9 +1008,22 @@ pub fn build_with_ui(
                 ui.begin_absolute_placement();
                 ui.set_available_width(cw);
                 ui.spacer(8.0 * scale);
-                ui.heading(
-                    &Heading::new(copy.debug_section_window)
-                        .id(UiId::settings_row("debug-section-0")),
+                ui.label(
+                    &Label::new(copy.debug_section_window)
+                        .id(UiId::settings_row("debug-section-0"))
+                        .style(TextStyle::new(
+                            TextRole::SettingsHeader,
+                            HEADER_SIZE,
+                            Color::rgba(
+                                MENU_LABEL_RGB[0],
+                                MENU_LABEL_RGB[1],
+                                MENU_LABEL_RGB[2],
+                                1.0,
+                            ),
+                            TextWeight::Bold,
+                            TextAlign::Start,
+                        ))
+                        .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
                 );
                 ui.spacer(2.0 * scale);
 
@@ -898,9 +1053,22 @@ pub fn build_with_ui(
                 ui.begin_absolute_placement();
                 ui.set_available_width(cw);
                 ui.spacer(8.0 * scale);
-                ui.heading(
-                    &Heading::new(copy.debug_section_liquid_glass)
-                        .id(UiId::settings_row("debug-section-1")),
+                ui.label(
+                    &Label::new(copy.debug_section_liquid_glass)
+                        .id(UiId::settings_row("debug-section-1"))
+                        .style(TextStyle::new(
+                            TextRole::SettingsHeader,
+                            HEADER_SIZE,
+                            Color::rgba(
+                                MENU_LABEL_RGB[0],
+                                MENU_LABEL_RGB[1],
+                                MENU_LABEL_RGB[2],
+                                1.0,
+                            ),
+                            TextWeight::Bold,
+                            TextAlign::Start,
+                        ))
+                        .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
                 );
                 ui.spacer(2.0 * scale);
 
@@ -999,9 +1167,22 @@ pub fn build_with_ui(
                 ui.begin_absolute_placement();
                 ui.set_available_width(cw);
                 ui.spacer(8.0 * scale);
-                ui.heading(
-                    &Heading::new(copy.debug_section_debug_views)
-                        .id(UiId::settings_row("debug-section-2")),
+                ui.label(
+                    &Label::new(copy.debug_section_debug_views)
+                        .id(UiId::settings_row("debug-section-2"))
+                        .style(TextStyle::new(
+                            TextRole::SettingsHeader,
+                            HEADER_SIZE,
+                            Color::rgba(
+                                MENU_LABEL_RGB[0],
+                                MENU_LABEL_RGB[1],
+                                MENU_LABEL_RGB[2],
+                                1.0,
+                            ),
+                            TextWeight::Bold,
+                            TextAlign::Start,
+                        ))
+                        .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
                 );
                 ui.spacer(2.0 * scale);
 
@@ -1049,25 +1230,6 @@ pub fn build_with_ui(
             });
         }
     }
-
-    // ------------------------------------------------------------------
-    // Bottom divider
-    // ------------------------------------------------------------------
-    let panel_bottom = layout.panel_bottom();
-    let bottom_div = InkView {
-        id: UiId::settings_row("bottom-divider"),
-        center: Point::new(layout.cx, panel_bottom - 56.0 * scale),
-        extent: 0.45 * scale,
-        opacity: DIM[3],
-        scene_blur: 0.0,
-        stroke: layout.hw - 26.0 * scale,
-        corner_radius: 0.45 * scale,
-        color: color_from_array(DIM),
-        kind: ControlKind::Divider,
-        z: Z_CONTROL,
-        clip: None,
-    };
-    ui.push_ink(bottom_div);
 
     // ------------------------------------------------------------------
     // Assemble the model
@@ -1293,6 +1455,8 @@ mod tests {
     }
 
     fn input(category: SettingsCategoryId) -> SettingsPanelInput {
+        let mut category_selection_amounts = [0.0; 5];
+        category_selection_amounts[category.index()] = 1.0;
         SettingsPanelInput {
             viewport: (1280, 800),
             scale_factor: 1.0,
@@ -1311,6 +1475,10 @@ mod tests {
             liquid_glass_debug: LiquidGlassDebugState::default(),
             pointer_pos: None,
             pointer_pressed: false,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0,
+            category_hover_amounts: [0.0; 5],
+            category_selection_amounts,
         }
     }
 
@@ -1354,6 +1522,153 @@ mod tests {
             &layout,
             Point::new(layout.panel_right(), layout.panel_bottom())
         ));
+    }
+
+    #[test]
+    fn settings_matches_context_menu_glass_and_focus_contract() {
+        let mut inp = input(SettingsCategoryId::Apps);
+        inp.category_hover_amounts[SettingsCategoryId::Search.index()] = 1.0;
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+
+        let surface = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Settings)
+            .and_then(|batch| batch.surfaces.first())
+            .expect("settings glass surface");
+        assert_eq!(surface.blur_radius, Some(CONTEXT_MENU_BASE_BLUR));
+        assert_eq!(surface.backdrop_replacement, 1.0);
+        assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.68)));
+
+        let veil = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Backdrop)
+            .and_then(|batch| batch.views.first())
+            .expect("settings Glass Focus Veil");
+        assert_eq!(veil.id, UiId::backdrop("glass-focus-veil"));
+        assert_eq!(veil.scene_blur, 1.0);
+        assert_eq!(veil.center, Point::new(640.0, 400.0));
+
+        let focus = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .and_then(|batch| {
+                batch
+                    .views
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row("category-focus-search"))
+            })
+            .expect("focused settings category pill");
+        assert_eq!(focus.opacity, FOCUS_ROW_OPACITY);
+
+        let search_label = model
+            .result
+            .render
+            .text
+            .iter()
+            .find(|view| view.id == UiId::settings_row("category-search"))
+            .expect("settings category label");
+        assert_eq!(
+            search_label.style.color,
+            Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0)
+        );
+
+        let apps_selection = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .and_then(|batch| {
+                batch
+                    .views
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row("category-focus-apps"))
+            })
+            .expect("selected settings category pill");
+        assert_eq!(apps_selection.opacity, SETTINGS_SELECTED_ROW_OPACITY);
+        let expected_selection_color = Color::rgba(
+            SETTINGS_SELECTED_ROW_RGB[0],
+            SETTINGS_SELECTED_ROW_RGB[1],
+            SETTINGS_SELECTED_ROW_RGB[2],
+            1.0,
+        );
+        assert!((apps_selection.color.r - expected_selection_color.r).abs() < 1e-6);
+        assert!((apps_selection.color.g - expected_selection_color.g).abs() < 1e-6);
+        assert!((apps_selection.color.b - expected_selection_color.b).abs() < 1e-6);
+        assert_eq!(
+            focus.color,
+            Color::rgba(
+                SETTINGS_HOVER_ROW_RGB[0],
+                SETTINGS_HOVER_ROW_RGB[1],
+                SETTINGS_HOVER_ROW_RGB[2],
+                1.0
+            )
+        );
+    }
+
+    #[test]
+    fn settings_selection_pill_fades_with_selection_amount() {
+        let mut inp = input(SettingsCategoryId::Apps);
+        inp.category_selection_amounts[SettingsCategoryId::Apps.index()] = 0.5;
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let selection = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .and_then(|batch| {
+                batch
+                    .views
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row("category-focus-apps"))
+            })
+            .expect("transitioning settings category pill");
+
+        assert!((selection.opacity - SETTINGS_SELECTED_ROW_OPACITY * 0.5).abs() < 1e-6);
+        assert!(selection.color.r > SETTINGS_SELECTED_ROW_RGB[0]);
+        assert!(selection.color.g < SETTINGS_SELECTED_ROW_RGB[1]);
+    }
+
+    #[test]
+    fn settings_dividers_match_column_layout() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let settings_ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .expect("settings ink batch");
+        let sidebar_divider = settings_ink
+            .views
+            .iter()
+            .find(|view| view.id == UiId::settings_row("sidebar-divider"))
+            .expect("sidebar divider");
+        let expected_layout = layout();
+
+        assert!((sidebar_divider.extent - (expected_layout.hh - 28.0)).abs() < f32::EPSILON);
+        assert!((sidebar_divider.stroke - 0.55).abs() < f32::EPSILON);
+        assert!(!settings_ink
+            .views
+            .iter()
+            .any(|view| view.id == UiId::settings_row("bottom-divider")));
     }
 
     // ------------------------------------------------------------------
@@ -1773,7 +2088,7 @@ mod tests {
             .render
             .glass
             .iter()
-            .find(|b| b.layer == GlassLayer::Modal)
+            .find(|b| b.layer == GlassLayer::Settings)
             .map(|b| b.surfaces.len())
             .unwrap_or(0);
         let overlay_glass = model
@@ -1856,7 +2171,7 @@ mod tests {
             .render
             .glass
             .iter()
-            .find(|b| b.layer == GlassLayer::Modal)
+            .find(|b| b.layer == GlassLayer::Settings)
             .map(|b| b.surfaces.len())
             .unwrap_or(0);
         let overlay_glass = model
