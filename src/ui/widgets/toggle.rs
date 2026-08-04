@@ -716,6 +716,7 @@ impl Ui {
             z: Z_CONTROL + 2,
             clip: None,
             activation: glass_a,
+            blur_radius: None,
             tint: None,
         };
         self.push_glass(GlassLayer::Overlay, thumb_glass);

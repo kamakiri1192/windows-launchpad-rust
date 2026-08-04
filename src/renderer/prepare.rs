@@ -256,6 +256,20 @@ impl Renderer {
             });
         self.context_menu_clip_rect = context_menu_clip.map(|(rect, _)| rect);
         self.context_menu_clip_radius = context_menu_clip.map_or(0.0, |(_, radius)| radius);
+        let context_menu_blur_radius = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .and_then(|(_, surface)| surface.blur_radius)
+            });
+        self.liquid_glass
+            .set_context_menu_blur_radius(context_menu_blur_radius);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -632,6 +646,7 @@ mod tests {
             z,
             clip: None,
             activation: 0.0,
+            blur_radius: None,
             tint: None,
         }
     }

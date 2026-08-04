@@ -4,11 +4,11 @@ Issue #160 の調査メモ。目的は、`GlassSurface` ごとに背景ブラー
 
 ## 結論
 
-推奨する実装順は次のとおり。
+調査結果と今回の PR で実装した第一段階は次のとおり。
 
-1. **短期**: context menu を独立した「component/pass 単位」の blur override として実装する。context menu は `GlassLayer::ContextMenu` と専用 shape buffer/final pass をすでに持ち、表示中のガラス面も一枚なので、`content_blur` を実際の shader 入力へ接続する最初の対象に適している。
-2. **共通化**: UI モデルには `GlassSurface` の optional な blur override を追加する。ただし `GlassShape` に連続値を直接追加せず、CPU 側で値を少数の `BlurProfile` に量子化し、同じ profile の面をまとめて描画する。
-3. **GPU**: backdrop capture は一枚を共有し、最大要求 profile までの dual-Kawase pyramid を一度だけ生成する。final shader は profile に対応する pyramid level を参照する。surface ごとに別の pyramid を作る方式は採用しない。
+1. **今回実装**: `GlassSurface` に optional な blur override を追加し、context menu の `content_blur` をその値へ接続した。context menu は既存の `GlassLayer::ContextMenu` と専用 final pass を持つため、まず一面だけを安全に検証できる。
+2. **GPU**: backdrop capture は一枚を共有し、既存の L1/L2/L3 dual-Kawase pyramid を一度だけ生成する。final shader は surface/lane の blur radius に応じて共有 pyramid の level を選択する。surface ごとに別の pyramid を作る方式は採用しない。
+3. **後続の一般化**: 同じ layer 内で複数の異なる blur を同時に扱う場合は、CPU 側で profile ごとに surface を partition して pass を分ける。今回の PR では context menu lane が一枚なので、追加の partition はまだ不要。
 
 この方式なら、通常の面は既存の共通値を使い続けられる。異なる blur を要求する面だけが追加の geometry/final fullscreen pass を発生させるため、`GlassSurface` の API と GPU コストを直接結びつけずに済む。
 
@@ -18,11 +18,11 @@ Issue #160 の調査メモ。目的は、`GlassSurface` ごとに背景ブラー
 
 | 段階 | 現在の責務 | per-surface blur に関係する制約 |
 | --- | --- | --- |
-| `ui_model::render_model::GlassSurface` | rect、radius、material、behavior、z、clip、activation、tint を renderer-neutral に保持 | blur のフィールドはない。`GlassLayer` ごとに `GlassBatch` へまとめられる |
+| `ui_model::render_model::GlassSurface` | rect、radius、material、behavior、z、clip、activation、tint、optional blur radius を renderer-neutral に保持 | `None` は global blur。指定値はその surface/lane の final pass に使う |
 | `renderer::prepare` | `GlassSurface` を `GlassShape` へ pack し、layer ごとの shape buffer を更新 | 現在の `GlassShape` は 96 bytes 固定。activation/tint/clip は pack されるが、blur は pack されない |
 | geometry shader | shape storage buffer を走査して SDF、displacement、height、alpha、tint を生成 | 一つの pass 内では面を smooth-union する。面ごとの blur の勝者を出力する契約はない |
 | blur pass | captured backdrop から L1=1/2、L2=1/4、L3=1/8 を生成し、最後に full-res `blur_texture` へ upsample | pyramid は renderer 全体で共有。深さは共通 `LiquidGlassParams.blur_radius` から決まる |
-| final shader | geometry/tint と、backdrop および full-res `blur_texture` をサンプルして合成 | final bind group に blur texture は一つだけ。全面が同じ `u.blur_radius` と同じ blurred backdrop を使う |
+| final shader | geometry/tint と、backdrop および共有 blur pyramid をサンプルして合成 | full-res blur、L1、L2、L3 を bind し、`u.blur_radius` で参照 level を選ぶ |
 
 対応する主な実装箇所は以下。
 
@@ -33,6 +33,15 @@ Issue #160 の調査メモ。目的は、`GlassSurface` ごとに背景ブラー
 - `src/liquid_glass/renderer/frame.rs`: capture、blur down/up、geometry pass、final pass
 - `assets/shaders/liquid_glass_geometry.wgsl`: SDF と geometry/tint attachment
 - `assets/shaders/liquid_glass_final.wgsl`: backdrop/blur のサンプルと最終合成
+
+### 今回の PR で実際に変わる見え方
+
+- デスクトップのキャプチャ元は一枚のまま保持する。キャプチャ画像そのものを上書きしてぼかすわけではない。
+- 通常の Glass は、最終合成時に共有 blur pyramid からぼけた画像を読む。したがって Glass の内側は、これまでの「ほぼシャープなキャプチャ」より明確にぼけて見える。
+- context menu は通常面より強い profile を使う。`content_blur` は `GlassSurface.blur_radius` に反映され、開閉アニメーション中は 24〜32 px 相当の profile を選ぶ。
+- edge の refraction/reflection では既存どおり sharp backdrop も混ぜるため、輪郭まで完全に溶けるのではなく、内部がぼけて境界にガラスらしい反射が残る。
+
+つまり、見え方は「背景キャプチャが全部ぼける」ではなく、「キャプチャは共有し、各 Glass が必要な強さのぼけたキャプチャを内側に表示する」になる。
 
 ### blur pyramid の更新条件
 
@@ -108,15 +117,15 @@ selector を追加すると、以下の仕様を新たに決める必要があ�
 
 ## context menu への接続方針
 
-現状は `ContextMenuState::content_blur()` が存在し、`ContextMenuInput` に渡っている。しかし `GlassSurface` に反映されず、`render_context_menu_glass` も `uniforms_from_params(..., activation = 0.0, ...)` を使っており、content blur は shader の blur 入力になっていない。
+現状は `ContextMenuState::content_blur()` が `ContextMenuInput` に渡っている。今回の PR では、それを context menu の `GlassSurface.blur_radius` に反映し、`render_context_menu_glass` がその radius を専用 uniform に書き込む。
 
-実装時は次の流れにする。
+今回の流れは次のとおり。
 
-1. `ContextMenuState` の open/close spring が返す `content_blur` を、context menu layout が生成する `GlassSurface.blur_radius` に渡す。
-2. `None`/未対応時は global blur profile にフォールバックし、既存の表示を変えない。
-3. renderer が context menu surface を `ContextMenu` lane の profile として partition する。
-4. 開くときは iOS 風の目標 blur へ spring で近づけ、閉じるときは content opacity の fade と同じライフサイクルで profile を浅くする。
-5. `content_opacity` が可視性閾値を下回ったら、現在と同じく context menu glass pass 自体を空にする。
+1. `ContextMenuState` の open/close spring が返す `content_blur` に context menu の基準値を加え、`GlassSurface.blur_radius` に渡す。
+2. renderer は context menu の radius を global radius と比較し、必要な最大深度までだけ共有 pyramid を生成する。
+3. final shader は radius を full-res/L1/L2/L3 の profile に量子化して、対応する texture view を読む。
+4. `content_opacity` が可視性閾値を下回ったら、現在と同じく context menu glass pass 自体を空にする。
+5. `GlassSurface.blur_radius = None` の面は global blur にフォールバックするため、他の面は従来の入力経路を維持する。
 
 `content_blur` の目的は背景をぼかすことであり、文字の opacity/scale の代替にはしない。文字の可読性は現行の `content_opacity`、tint、foreground color と独立に QA する。
 
@@ -127,7 +136,8 @@ selector を追加すると、以下の仕様を新たに決める必要があ�
 - backdrop capture は共有のまま。surface 数に応じた capture の増加はない。
 - 最大 level までの dual-Kawase down/up は一回だけ。profile が既存の最大 level 以下なら blur pass 数は増えない。
 - pyramid texture 自体は既存の L1/L2/L3 を再利用する。final bind group の view 数は増えるが、texture allocation は増やさない。
-- profile 数が 1 より多い frame は geometry と final の fullscreen pass が profile 数分増える。通常の context menu は一枚なので追加は一組に限定できる。
+- 今回の context menu 実装では専用 lane の uniform を変えるだけで、profile の数だけ geometry pass を増やさない。通常の frame では既存の共有 pyramid pass 数と同じである。
+- 将来、同じ layer 内で異なる profile を持つ面を一般化すると、その時点では profile 数に応じて geometry/final の fullscreen pass が増える。
 - CPU 側の shape partition と bind group 切り替えは、アプリ tile 数に比例する SDF 走査に比べて小さい。ただし upload の dirty check は profile ごとに維持する。
 
 ### 回帰リスク
@@ -144,7 +154,7 @@ selector を追加すると、以下の仕様を新たに決める必要があ�
 ### 自動テスト
 
 - `GlassSurface.blur_radius = None` が global profile にフォールバックする。
-- blur radius が profile 境界（0、6、16 付近）で決定的に量子化される。
+- blur radius が profile 境界（0、8、24、32 付近）で決定的に量子化される。
 - 同一 layer の surface が profile 別に partition され、同じ profile の順序と `z`/model order が保持される。
 - context menu の open/close で `content_blur` が surface の profile に伝わり、content opacity が閾値を下回ると glass batch が空になる。
 - `GlassShape` の size/alignment と WGSL struct の ABI テストが引き続き 96 bytes を保証する。
@@ -164,4 +174,4 @@ selector を追加すると、以下の仕様を新たに決める必要があ�
 
 ## 今回の PR の範囲
 
-この PR は調査・設計メモの追加に限定する。実際の `GlassSurface.blur_radius` 追加、pyramid view の bind、profile partition、`content_blur` の shader 接続は、上記の自動テストと視覚 QA を伴う後続実装で行う。
+この PR では、`GlassSurface.blur_radius`、共有 pyramid view の bind、final shader の profile 選択、context menu の `content_blur` 接続まで実装する。複数 surface の profile partition と Windows 実機での視覚 QA は、実機確認後の一般化として残す。

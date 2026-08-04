@@ -280,6 +280,7 @@ pub(super) fn create_final_bind_group(
     geometry_view: &wgpu::TextureView,
     tint_view: &wgpu::TextureView,
     blur_view: &wgpu::TextureView,
+    blur_levels: &[(wgpu::Texture, wgpu::TextureView); 3],
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("liquid glass final bg"),
@@ -308,6 +309,18 @@ pub(super) fn create_final_bind_group(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(tint_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&blur_levels[0].1),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&blur_levels[1].1),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(&blur_levels[2].1),
             },
         ],
     })

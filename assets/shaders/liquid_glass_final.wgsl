@@ -32,6 +32,12 @@ struct GlassUniforms {
 @group(0) @binding(3) var geometry_texture: texture_2d<f32>;
 @group(0) @binding(4) var blur_texture: texture_2d<f32>;
 @group(0) @binding(5) var tint_texture: texture_2d<f32>;
+// The final upsampled blur is intentionally kept for the weakest profile.
+// These pyramid levels let each glass lane select a visibly different
+// backdrop blur without allocating a second capture or blur chain.
+@group(0) @binding(6) var blur_level_1_texture: texture_2d<f32>;
+@group(0) @binding(7) var blur_level_2_texture: texture_2d<f32>;
+@group(0) @binding(8) var blur_level_3_texture: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -76,11 +82,39 @@ fn sample_blurred_backdrop(screen_uv: vec2<f32>) -> vec4<f32> {
     return textureSample(blur_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
+fn sample_blurred_level_1(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
+    return textureSample(blur_level_1_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
+}
+
+fn sample_blurred_level_2(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
+    return textureSample(blur_level_2_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
+}
+
+fn sample_blurred_level_3(screen_uv: vec2<f32>) -> vec4<f32> {
+    let uv = backdrop_uv(screen_uv);
+    return textureSample(blur_level_3_texture, backdrop_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
+}
+
 fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     if has_flag(7u) || u.blur_radius < 0.5 {
         return sample_backdrop(uv);
     }
-    return sample_blurred_backdrop(uv);
+    // Radius is expressed in captured-image pixels. Pick a shared pyramid
+    // profile rather than creating a per-surface blur pass. The thresholds
+    // keep the normal page glass moderate while context-menu glass (24px+)
+    // reaches a visibly stronger level.
+    if u.blur_radius < 8.0 {
+        return sample_blurred_backdrop(uv);
+    }
+    if u.blur_radius < 24.0 {
+        return sample_blurred_level_1(uv);
+    }
+    if u.blur_radius < 32.0 {
+        return sample_blurred_level_2(uv);
+    }
+    return sample_blurred_level_3(uv);
 }
 
 fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {

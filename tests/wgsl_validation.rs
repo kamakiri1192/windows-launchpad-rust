@@ -297,6 +297,9 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
             texture_entry(3, false),
             texture_entry(4, true),
             texture_entry(5, true),
+            texture_entry(6, true),
+            texture_entry(7, true),
+            texture_entry(8, true),
         ],
     });
 

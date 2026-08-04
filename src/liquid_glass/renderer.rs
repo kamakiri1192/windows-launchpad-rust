@@ -238,6 +238,8 @@ pub struct LiquidGlassRenderer {
     blur_view: wgpu::TextureView,
     /// Pyramids L1=1/2, L2=1/4, L3=1/8 (src for downsample, dst for upsample).
     blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
+    /// Optional context-menu-local blur radius. Other lanes use `params`.
+    context_menu_blur_radius: Option<f32>,
     sampler: wgpu::Sampler,
     geometry_pipeline: wgpu::RenderPipeline,
     badge_geometry_pipeline: wgpu::RenderPipeline,
@@ -585,6 +587,9 @@ impl LiquidGlassRenderer {
                     texture_entry(3, false),
                     texture_entry(4, true),
                     texture_entry(5, true),
+                    texture_entry(6, true),
+                    texture_entry(7, true),
+                    texture_entry(8, true),
                 ],
             });
 
@@ -651,6 +656,7 @@ impl LiquidGlassRenderer {
             &geometry_view,
             &geometry_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let grid_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -661,6 +667,7 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let drag_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -671,6 +678,7 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let badge_final_bind_group = create_final_bind_group(
             device,
@@ -681,6 +689,7 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let modal_badge_final_bind_group = create_final_bind_group(
             device,
@@ -691,6 +700,7 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let control_final_bind_group = create_final_bind_group(
             device,
@@ -701,6 +711,7 @@ impl LiquidGlassRenderer {
             &control_geometry_view,
             &control_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let settings_panel_final_bind_group = create_final_bind_group(
             device,
@@ -711,6 +722,7 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let context_menu_final_bind_group = create_final_bind_group(
             device,
@@ -721,6 +733,7 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &blur_levels,
         );
         let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
             device,
@@ -973,6 +986,7 @@ impl LiquidGlassRenderer {
             blur_texture,
             blur_view,
             blur_levels,
+            context_menu_blur_radius: None,
             sampler,
             geometry_pipeline,
             badge_geometry_pipeline,
@@ -1104,6 +1118,7 @@ impl LiquidGlassRenderer {
             &self.geometry_view,
             &self.geometry_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.grid_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -1114,6 +1129,7 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.drag_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -1124,6 +1140,7 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.badge_final_bind_group = create_final_bind_group(
             device,
@@ -1134,6 +1151,7 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.modal_badge_final_bind_group = create_final_bind_group(
             device,
@@ -1144,6 +1162,7 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.control_final_bind_group = create_final_bind_group(
             device,
@@ -1154,6 +1173,7 @@ impl LiquidGlassRenderer {
             &self.control_geometry_view,
             &self.control_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.settings_panel_final_bind_group = create_final_bind_group(
             device,
@@ -1164,6 +1184,7 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
         self.context_menu_final_bind_group = create_final_bind_group(
             device,
@@ -1174,6 +1195,7 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.blur_levels,
         );
     }
 
@@ -1616,6 +1638,24 @@ impl LiquidGlassRenderer {
         }
     }
 
+    /// Set the context menu's local blur profile without rebuilding its
+    /// geometry resources. The final bind groups already expose all pyramid
+    /// levels; only the uniform value and blur depth need to change.
+    pub fn set_context_menu_blur_radius(&mut self, radius: Option<f32>) {
+        let radius = radius.map(|value| {
+            if value.is_finite() {
+                value.clamp(0.0, 64.0)
+            } else {
+                0.0
+            }
+        });
+        if self.context_menu_blur_radius == radius {
+            return;
+        }
+        self.context_menu_blur_radius = radius;
+        self.blur_dirty = true;
+    }
+
     /// Replace the edit-mode delete-badge glass shapes. These are rendered as
     /// a separate Liquid Glass overlay after the app tiles/icons, so the badge
     /// actually refracts through the Liquid Glass shader instead of being a
@@ -1848,10 +1888,32 @@ impl LiquidGlassRenderer {
         // A lower-resolution texture covers more physical pixels per texel.
         // Scale the requested radius before selecting pyramid depth so a 2x
         // Retina downsample does not accidentally double the visible blur.
-        let radius = self.params.blur_radius * capture_scale;
+        let requested_radius = self
+            .params
+            .blur_radius
+            .max(self.context_menu_blur_radius.unwrap_or(0.0));
+        let radius = requested_radius * capture_scale;
+        // The shader profile is selected from the unscaled uniform value. Keep
+        // enough levels alive for that selection even when capture scaling
+        // would otherwise choose a shallower pyramid.
+        Self::blur_level_count_for_radius(radius)
+            .max(Self::shader_blur_level_count_for_radius(requested_radius))
+    }
+
+    fn blur_level_count_for_radius(radius: f32) -> usize {
         if radius < 6.0 {
             1
         } else if radius < 16.0 {
+            2
+        } else {
+            3
+        }
+    }
+
+    fn shader_blur_level_count_for_radius(radius: f32) -> usize {
+        if radius < 8.0 {
+            1
+        } else if radius < 24.0 {
             2
         } else {
             3
@@ -2083,7 +2145,7 @@ mod shape_capacity_tests {
     use super::{
         base_shape_may_affect_frame, capture_region_for_shapes, next_shape_capacity,
         overlay_shape_may_affect_clip, should_refresh_blur, CaptureRegion, GlassShape,
-        GlassUniforms,
+        GlassUniforms, LiquidGlassRenderer,
     };
 
     fn test_scene_sdf(shapes: &[GlassShape], scroll_x: f32, point: [f32; 2], blend: f32) -> f32 {
@@ -2116,6 +2178,26 @@ mod shape_capacity_tests {
         assert!(should_refresh_blur(true, false));
         assert!(should_refresh_blur(false, true));
         assert!(!should_refresh_blur(false, false));
+    }
+
+    #[test]
+    fn blur_profile_levels_cover_the_shader_selected_pyramid_level() {
+        assert_eq!(
+            LiquidGlassRenderer::shader_blur_level_count_for_radius(0.0),
+            1
+        );
+        assert_eq!(
+            LiquidGlassRenderer::shader_blur_level_count_for_radius(8.0),
+            2
+        );
+        assert_eq!(
+            LiquidGlassRenderer::shader_blur_level_count_for_radius(24.0),
+            3
+        );
+        assert_eq!(
+            LiquidGlassRenderer::shader_blur_level_count_for_radius(32.0),
+            3
+        );
     }
 
     #[test]

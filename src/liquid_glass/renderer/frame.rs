@@ -109,9 +109,13 @@ impl LiquidGlassRenderer {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let blur_levels = self.blur_level_count();
+        let requested_blur_radius = self
+            .params
+            .blur_radius
+            .max(self.context_menu_blur_radius.unwrap_or(0.0));
         let refreshed_blur = should_refresh_blur(self.blur_dirty, captured)
             && !self.debug.disable_blur
-            && self.params.blur_radius >= 0.5;
+            && requested_blur_radius >= 0.5;
 
         // Each blur pass runs in its OWN command encoder. wgpu groups all
         // passes in a single encoder into one "usage scope", and a texture
@@ -830,7 +834,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -840,6 +844,11 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        if !self.debug.disable_blur {
+            uniforms.blur_radius = self
+                .context_menu_blur_radius
+                .unwrap_or(self.params.blur_radius);
+        }
         queue.write_buffer(
             &self.context_menu_uniform_buffer,
             0,

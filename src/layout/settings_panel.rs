@@ -537,6 +537,7 @@ pub fn build_with_ui(
             z: Z_PANEL,
             clip: None,
             activation: 0.0,
+            blur_radius: None,
             tint: None,
         },
     );
