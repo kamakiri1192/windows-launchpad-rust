@@ -304,7 +304,7 @@ fn base_shape_may_affect_frame(
     frame: GlassShape,
     smooth_union_radius: f32,
 ) -> bool {
-    if !shape.is_scrolling() || shape.has_tint_override() {
+    if !shape.is_scrolling() {
         return true;
     }
     let bounds = shape.screen_bounds(scroll_x);
@@ -317,6 +317,9 @@ fn base_shape_may_affect_frame(
     ];
     if intersect_bounds(influence_bounds, frame.screen_bounds(0.0)).is_none() {
         return false;
+    }
+    if shape.has_tint_override() {
+        return true;
     }
 
     // A scrolling rounded rect that remains at least `blend` inside the fixed
@@ -2120,12 +2123,19 @@ mod shape_capacity_tests {
         let frame = GlassShape::fixed_rounded_rect([500.0, 350.0], [600.0, 400.0], 40.0);
         let just_outside = GlassShape::rounded_rect([850.0, 350.0], [100.0, 100.0], 30.0);
         let far_page = GlassShape::rounded_rect([1_200.0, 350.0], [100.0, 100.0], 30.0);
+        let tinted_far_page = far_page.with_tint(Some([1.0, 0.5, 0.25, 0.75]));
         let swallowed = GlassShape::rounded_rect([500.0, 350.0], [100.0, 100.0], 30.0);
         let tinted_swallowed = swallowed.with_tint(Some([1.0, 0.5, 0.25, 0.75]));
         let fixed_control = GlassShape::control_rounded_rect([1_200.0, 700.0], [100.0, 40.0], 20.0);
 
         assert!(base_shape_may_affect_frame(just_outside, 0.0, frame, 26.0));
         assert!(!base_shape_may_affect_frame(far_page, 0.0, frame, 26.0));
+        assert!(!base_shape_may_affect_frame(
+            tinted_far_page,
+            0.0,
+            frame,
+            26.0
+        ));
         assert!(!base_shape_may_affect_frame(swallowed, 0.0, frame, 26.0));
         assert!(base_shape_may_affect_frame(
             tinted_swallowed,
