@@ -87,8 +87,8 @@ impl App {
         self.request_redraw();
     }
 
-    /// Press while the menu is open. Outside the panel dismisses it and hands
-    /// the same gesture to the underlying page or folder.
+    /// Press while the menu is open. Outside the panel dismisses it; a
+    /// top-level backdrop click may also continue to the underlying page.
     pub(crate) fn handle_context_menu_pointer_press(&mut self, x: f32, y: f32) {
         let inside = self
             .context_menu_layout
@@ -104,10 +104,10 @@ impl App {
             // A click on another app/folder is a dismissal gesture, not a
             // second activation. Passing that press through used to leave a
             // pending grid click behind, so releasing outside the menu could
-            // launch an unrelated app. Preserve passthrough for empty
-            // backdrop areas (for example, closing a folder or continuing a
-            // page gesture), but never hand an interactive tile the same
-            // pointer contact.
+            // launch an unrelated app. Preserve passthrough for top-level
+            // backdrop areas or continuing a page gesture, but never hand an
+            // interactive tile the same pointer contact. A folder-child menu
+            // keeps the folder open for every outside dismissal location.
             let over_interactive_item = if self.folders.is_active() {
                 self.folder_layout
                     .as_ref()
@@ -129,7 +129,10 @@ impl App {
                     crate::layout::grid::GridHit::App(_)
                 )
             };
-            if !over_interactive_item {
+            if Self::should_pass_context_menu_dismissal_through(
+                self.folders.is_active(),
+                over_interactive_item,
+            ) {
                 // Closing is visual-only, so reclassifying now hands this
                 // same gesture to the page or folder below. Recursion stops
                 // after this one handoff because a closing menu no longer
@@ -138,6 +141,20 @@ impl App {
                 self.handle_pointer_press(action);
             }
         }
+    }
+
+    /// Whether a click outside the context-menu panel should continue into the
+    /// underlying surface after dismissing the menu.
+    ///
+    /// A top-level backdrop click can still continue through to the launcher, but
+    /// a context menu opened from a folder child must not turn the same click into
+    /// a folder dismissal. The folder remains open; only the menu owns the
+    /// dismissal gesture.
+    fn should_pass_context_menu_dismissal_through(
+        folder_open: bool,
+        over_interactive_item: bool,
+    ) -> bool {
+        !folder_open && !over_interactive_item
     }
 
     /// Release while the menu is open. Inside a row → mock action (close);
@@ -445,5 +462,23 @@ mod tests {
             menu_text_color(context_menu::ContextMenuItem::HideApp, 0.75),
             [1.0, 0.231, 0.188, 0.75]
         );
+    }
+
+    #[test]
+    fn folder_context_menu_dismissal_does_not_pass_through() {
+        assert!(!App::should_pass_context_menu_dismissal_through(
+            true, false
+        ));
+        assert!(!App::should_pass_context_menu_dismissal_through(true, true));
+    }
+
+    #[test]
+    fn top_level_context_menu_keeps_existing_passthrough_rules() {
+        assert!(App::should_pass_context_menu_dismissal_through(
+            false, false
+        ));
+        assert!(!App::should_pass_context_menu_dismissal_through(
+            false, true
+        ));
     }
 }

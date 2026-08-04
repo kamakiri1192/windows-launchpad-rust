@@ -121,6 +121,8 @@ delta 0の`Began`/`Cancelled` scroll lifecycleを右クリック直後に注入�
 
 `qa/context_menu_repeated_targets_stable.json`は、トップレベルの別アプリ10件とフォルダ内アプリ10件を
 長時間表示付きで順に右クリックし、再オープンを20回繰り返してアイコン位置の時間依存ずれを確認します。
+`qa/context_menu_folder_outside_dismiss.json`は、フォルダー内の子アプリで開いたメニューをフォルダー外で
+dismissし、メニューだけ閉じてフォルダーが開いたままになることを確認します。
 
 - `Opening`中の外側クリック
 - `Open`後の外側クリック
