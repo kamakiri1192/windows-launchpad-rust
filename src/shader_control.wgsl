@@ -480,14 +480,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         );
     } else {
         // ChatGPT logo (kind 19): sample the dedicated rasterized SVG texture
-        // (binding 3). The icon is drawn inside a square of side `size` centered
-        // at the element center; `local` is the pixel offset from that center,
-        // so UV = (local / size) + 0.5 maps the square to [0,1]². The texture
-        // is straight-alpha RGBA; we use its alpha as coverage and tint with
-        // the instance color (the PNG is already recolored to the menu label
-        // near-black, so the tint is effectively a pass-through).
-        let size = max(in.params.x, 1.0);
-        let uv = vec2<f32>(p.x / size + 0.5, p.y / size + 0.5);
+        // (binding 3). The vertex shader sized this kind's quad to a half-extent
+        // of `size * 1.2` (the context-menu glyph bbox, see element_extent), so
+        // `local` ranges over ±(size * 1.2). Map that full quad to [0,1]² UVs
+        // so the logo fills the same visual footprint as the SDF glyphs.
+        // (`size` alone would only cover the central ~83%, making the logo look
+        // noticeably smaller than its neighbours.) The texture is straight-alpha
+        // RGBA; we use its alpha as coverage. The PNG is already recolored to
+        // the menu label near-black, so the instance tint is a pass-through.
+        let half_extent = max(in.params.x * 1.2, 1.0);
+        let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
         if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
             let sampled = textureSample(chatgpt_logo, chatgpt_sampler, uv);
             coverage = sampled.a;
