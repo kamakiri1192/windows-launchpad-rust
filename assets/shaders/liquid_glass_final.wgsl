@@ -103,15 +103,15 @@ fn sample_glass_backdrop(uv: vec2<f32>) -> vec4<f32> {
     }
     // Radius is expressed in captured-image pixels. Pick a shared pyramid
     // profile rather than creating a per-surface blur pass. The thresholds
-    // keep the normal page glass moderate while context-menu glass (24px+)
-    // reaches a visibly stronger level.
+    // keep the normal page glass on L2 while context-menu glass (24px+)
+    // reaches the strongest shared level.
     if u.blur_radius < 8.0 {
         return sample_blurred_backdrop(uv);
     }
-    if u.blur_radius < 24.0 {
+    if u.blur_radius < 16.0 {
         return sample_blurred_level_1(uv);
     }
-    if u.blur_radius < 32.0 {
+    if u.blur_radius < 24.0 {
         return sample_blurred_level_2(uv);
     }
     return sample_blurred_level_3(uv);

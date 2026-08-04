@@ -37,8 +37,8 @@ Issue #160 の調査メモ。目的は、`GlassSurface` ごとに背景ブラー
 ### 今回の PR で実際に変わる見え方
 
 - デスクトップのキャプチャ元は一枚のまま保持する。キャプチャ画像そのものを上書きしてぼかすわけではない。
-- 通常の Glass は、最終合成時に共有 blur pyramid からぼけた画像を読む。したがって Glass の内側は、これまでの「ほぼシャープなキャプチャ」より明確にぼけて見える。
-- context menu は通常面より強い profile を使う。`content_blur` は `GlassSurface.blur_radius` に反映され、開閉アニメーション中は 24〜32 px 相当の profile を選ぶ。
+- 通常の Glass は、最終合成時に共有 blur pyramid の L2 からぼけた画像を読む。したがって Glass の内側は、これまでの「ほぼシャープなキャプチャ」より明確にぼけて見える。
+- context menu は通常面より強い L3 profile を使う。`content_blur` は `GlassSurface.blur_radius` に反映され、開閉アニメーション中は 24〜32 px 相当の profile を選ぶ。
 - edge の refraction/reflection では既存どおり sharp backdrop も混ぜるため、輪郭まで完全に溶けるのではなく、内部がぼけて境界にガラスらしい反射が残る。
 
 つまり、見え方は「背景キャプチャが全部ぼける」ではなく、「キャプチャは共有し、各 Glass が必要な強さのぼけたキャプチャを内側に表示する」になる。
@@ -154,7 +154,7 @@ selector を追加すると、以下の仕様を新たに決める必要があ�
 ### 自動テスト
 
 - `GlassSurface.blur_radius = None` が global profile にフォールバックする。
-- blur radius が profile 境界（0、8、24、32 付近）で決定的に量子化される。
+- blur radius が profile 境界（0、8、16、24 付近）で決定的に量子化される。
 - 同一 layer の surface が profile 別に partition され、同じ profile の順序と `z`/model order が保持される。
 - context menu の open/close で `content_blur` が surface の profile に伝わり、content opacity が閾値を下回ると glass batch が空になる。
 - `GlassShape` の size/alignment と WGSL struct の ABI テストが引き続き 96 bytes を保証する。
