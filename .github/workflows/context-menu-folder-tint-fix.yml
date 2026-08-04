@@ -27,119 +27,111 @@ jobs:
         run: |
           from pathlib import Path
           import json
+          import re
 
           frame_path = Path("src/renderer/frame.rs")
           frame = frame_path.read_text(encoding="utf-8")
-          glass_block = '''        // Context-menu Liquid Glass surface, isolated from the modal lane so it
-                  // never smooth-unions with an open folder panel.
-                  let profile_scope = self
-                      .gpu_profiler
-                      .begin("context_menu_liquid_glass", &mut encoder);
-                  self.liquid_glass
-                      .render_context_menu_glass(&self.queue, &mut encoder, &view);
-                  self.gpu_profiler.end(&mut encoder, profile_scope);
+          glass_pattern = re.compile(
+              r'''(?ms)^        // Context-menu Liquid Glass surface, isolated from the modal lane so it\n'''
+              r'''        // never smooth-unions with an open folder panel\.\n'''
+              r'''        let profile_scope = self\n'''
+              r'''            \.gpu_profiler\n'''
+              r'''            \.begin\("context_menu_liquid_glass", &mut encoder\);\n'''
+              r'''        self\.liquid_glass\n'''
+              r'''            \.render_context_menu_glass\(&self\.queue, &mut encoder, &view\);\n'''
+              r'''        self\.gpu_profiler\.end\(&mut encoder, profile_scope\);\n\n'''
+          )
+          frame, removed = glass_pattern.subn("", frame, count=1)
+          if removed != 1:
+              raise SystemExit(f"context-menu glass block matches={removed}, expected=1")
 
-          '''
-          if frame.count(glass_block) != 1:
-              raise SystemExit("context-menu glass block anchor did not match exactly once")
-          frame = frame.replace(glass_block, "", 1)
-          content_anchor = '''        self.gpu_profiler.end(&mut encoder, profile_scope);
-
-                  // Context-menu content pass: tiles (opaque background), ink (icons),
-          '''
-          content_replacement = '''        self.gpu_profiler.end(&mut encoder, profile_scope);
-
-                  // The folder/settings content must be part of the scene sampled by the
-                  // context-menu glass. Drawing the menu glass before modal content lets
-                  // folder child icons overwrite the tint and appear to punch through it.
-                  let profile_scope = self
-                      .gpu_profiler
-                      .begin("context_menu_liquid_glass", &mut encoder);
-                  self.liquid_glass
-                      .render_context_menu_glass(&self.queue, &mut encoder, &view);
-                  self.gpu_profiler.end(&mut encoder, profile_scope);
-
-                  // Context-menu content pass: tiles (opaque background), ink (icons),
-          '''
-          if frame.count(content_anchor) != 1:
-              raise SystemExit("context-menu content insertion anchor did not match exactly once")
-          frame = frame.replace(content_anchor, content_replacement, 1)
+          content_marker = "        // Context-menu content pass: tiles (opaque background), ink (icons),\n"
+          if frame.count(content_marker) != 1:
+              raise SystemExit("context-menu content marker did not match exactly once")
+          moved_glass = (
+              "        // The folder/settings content must be part of the scene sampled by the\n"
+              "        // context-menu glass. Drawing the menu glass before modal content lets\n"
+              "        // folder child icons overwrite the tint and appear to punch through it.\n"
+              "        let profile_scope = self\n"
+              "            .gpu_profiler\n"
+              "            .begin(\"context_menu_liquid_glass\", &mut encoder);\n"
+              "        self.liquid_glass\n"
+              "            .render_context_menu_glass(&self.queue, &mut encoder, &view);\n"
+              "        self.gpu_profiler.end(&mut encoder, profile_scope);\n\n"
+          )
+          frame = frame.replace(content_marker, moved_glass + content_marker, 1)
           frame_path.write_text(frame, encoding="utf-8")
 
           qa_path = Path("src/qa.rs")
           qa = qa_path.read_text(encoding="utf-8")
-          enum_anchor = '''    OpenFolder {
-                      id: String,
-                  },
-                  Move {
-          '''
-          enum_replacement = '''    OpenFolder {
-                      id: String,
-                  },
-                  /// Open a context menu from semantic QA geometry without relying on
-                  /// the platform right-click routing path.
-                  OpenContextMenu {
-                      target: QaTarget,
-                  },
-                  Move {
-          '''
-          if qa.count(enum_anchor) != 1:
-              raise SystemExit("QaAction enum anchor did not match exactly once")
-          qa = qa.replace(enum_anchor, enum_replacement, 1)
+          enum_pattern = re.compile(
+              r'''(?m)^    OpenFolder \{\n        id: String,\n    \},\n'''
+          )
+          enum_replacement = (
+              "    OpenFolder {\n"
+              "        id: String,\n"
+              "    },\n"
+              "    /// Open a context menu from semantic QA geometry without relying on\n"
+              "    /// the platform right-click routing path.\n"
+              "    OpenContextMenu {\n"
+              "        target: QaTarget,\n"
+              "    },\n"
+          )
+          qa, enum_count = enum_pattern.subn(enum_replacement, qa, count=1)
+          if enum_count != 1:
+              raise SystemExit(f"QaAction enum matches={enum_count}, expected=1")
 
-          match_anchor = '''            QaAction::OpenFolder { id } => {
-                          self.open_folder(FolderId::from_normalized(id));
-                      }
-                      QaAction::Move { target } => {
-          '''
-          match_replacement = '''            QaAction::OpenFolder { id } => {
-                          self.open_folder(FolderId::from_normalized(id));
-                      }
-                      QaAction::OpenContextMenu { target } => {
-                          if let Some((item, rect)) = self.resolve_qa_context_menu_target(&target) {
-                              self.open_context_menu(item, rect);
-                          }
-                      }
-                      QaAction::Move { target } => {
-          '''
-          if qa.count(match_anchor) != 1:
-              raise SystemExit("QaAction match anchor did not match exactly once")
-          qa = qa.replace(match_anchor, match_replacement, 1)
+          match_pattern = re.compile(
+              r'''(?m)^            QaAction::OpenFolder \{ id \} => \{\n'''
+              r'''                self\.open_folder\(FolderId::from_normalized\(id\)\);\n'''
+              r'''            \}\n'''
+          )
+          match_replacement = (
+              "            QaAction::OpenFolder { id } => {\n"
+              "                self.open_folder(FolderId::from_normalized(id));\n"
+              "            }\n"
+              "            QaAction::OpenContextMenu { target } => {\n"
+              "                if let Some((item, rect)) = self.resolve_qa_context_menu_target(&target) {\n"
+              "                    self.open_context_menu(item, rect);\n"
+              "                }\n"
+              "            }\n"
+          )
+          qa, match_count = match_pattern.subn(match_replacement, qa, count=1)
+          if match_count != 1:
+              raise SystemExit(f"QaAction match matches={match_count}, expected=1")
 
-          helper_anchor = '''    fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {
-          '''
-          helper = '''    fn resolve_qa_context_menu_target(
-                      &self,
-                      target: &QaTarget,
-                  ) -> Option<(LauncherItem, crate::ui_model::geometry::Rect)> {
-                      match target {
-                          QaTarget::GridItem { index } | QaTarget::GridItemPoint { index, .. } => {
-                              let items = self.visible_launcher_items();
-                              let item = items.get(*index)?.clone();
-                              let rect = self.launcher_item_rect(&item)?;
-                              Some((item, rect))
-                          }
-                          QaTarget::FolderChild { index } => {
-                              let folder_id = self.folders.active.as_ref()?;
-                              let folder = self.launcher_state.folders.get(folder_id)?;
-                              let app_id = folder.children.get(*index)?.clone();
-                              let rect = self
-                                  .folder_layout
-                                  .as_ref()?
-                                  .child_rects
-                                  .get(*index)?
-                                  .clone();
-                              Some((LauncherItem::App(app_id), rect))
-                          }
-                          _ => None,
-                      }
-                  }
-
-                  fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {
-          '''
-          if qa.count(helper_anchor) != 1:
-              raise SystemExit("QA target helper anchor did not match exactly once")
-          qa = qa.replace(helper_anchor, helper, 1)
+          helper_marker = "    fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {\n"
+          if qa.count(helper_marker) != 1:
+              raise SystemExit("QA target helper marker did not match exactly once")
+          helper = (
+              "    fn resolve_qa_context_menu_target(\n"
+              "        &self,\n"
+              "        target: &QaTarget,\n"
+              "    ) -> Option<(LauncherItem, crate::ui_model::geometry::Rect)> {\n"
+              "        match target {\n"
+              "            QaTarget::GridItem { index } | QaTarget::GridItemPoint { index, .. } => {\n"
+              "                let items = self.visible_launcher_items();\n"
+              "                let item = items.get(*index)?.clone();\n"
+              "                let rect = self.launcher_item_rect(&item)?;\n"
+              "                Some((item, rect))\n"
+              "            }\n"
+              "            QaTarget::FolderChild { index } => {\n"
+              "                let folder_id = self.folders.active.as_ref()?;\n"
+              "                let folder = self.launcher_state.folders.get(folder_id)?;\n"
+              "                let app_id = folder.children.get(*index)?.clone();\n"
+              "                let rect = self\n"
+              "                    .folder_layout\n"
+              "                    .as_ref()?\n"
+              "                    .child_rects\n"
+              "                    .get(*index)?\n"
+              "                    .clone();\n"
+              "                Some((LauncherItem::App(app_id), rect))\n"
+              "            }\n"
+              "            _ => None,\n"
+              "        }\n"
+              "    }\n\n"
+          )
+          qa = qa.replace(helper_marker, helper + helper_marker, 1)
           qa_path.write_text(qa, encoding="utf-8")
 
           apps = [
@@ -187,21 +179,25 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
           path = Path("src/app/handler.rs")
           text = path.read_text(encoding="utf-8")
-          anchor = '''        if let Some(deadline) = self.qa_next_deadline() {
-                      event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-                  } else {
-          '''
-          replacement = '''        if self.qa_enabled() {
-                      event_loop.set_control_flow(ControlFlow::Poll);
-                  } else if let Some(deadline) = self.qa_next_deadline() {
-                      event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));
-                  } else {
-          '''
-          if text.count(anchor) != 1:
-              raise SystemExit("hidden-window QA scheduler anchor did not match exactly once")
-          path.write_text(text.replace(anchor, replacement, 1), encoding="utf-8")
+          pattern = re.compile(
+              r'''(?m)^        if let Some\(deadline\) = self\.qa_next_deadline\(\) \{\n'''
+              r'''            event_loop\.set_control_flow\(ControlFlow::WaitUntil\(deadline\.max\(now\)\)\);\n'''
+              r'''        \} else \{\n'''
+          )
+          replacement = (
+              "        if self.qa_enabled() {\n"
+              "            event_loop.set_control_flow(ControlFlow::Poll);\n"
+              "        } else if let Some(deadline) = self.qa_next_deadline() {\n"
+              "            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline.max(now)));\n"
+              "        } else {\n"
+          )
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"hidden-window QA scheduler matches={count}, expected=1")
+          path.write_text(text, encoding="utf-8")
 
       - name: Build debug launcher
         shell: pwsh
