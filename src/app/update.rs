@@ -192,6 +192,30 @@ impl App {
     ) {
         use crate::input_routing::{PhysicalPoint, RouterAction};
 
+        // MouseInput has no position. Refresh it at the button boundary so a
+        // click made immediately after summoning the hidden window does not
+        // reuse the last CursorMoved coordinate from the previous session.
+        // Deterministic QA injects pointer coordinates directly and has no
+        // corresponding OS cursor movement, so it must keep using the
+        // injected point rather than the physical cursor position.
+        if !self.qa_enabled() {
+            #[cfg(windows)]
+            if let Some(point) =
+                crate::platform::windows::cursor_position_in_window(self.native_window_identity())
+            {
+                self.pointer_phys_x = point.x;
+                self.pointer_phys_y = point.y;
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(point) = self.renderer.as_ref().and_then(|renderer| {
+                crate::platform::macos::input_passthrough::cursor_position_in_window(
+                    &renderer.window,
+                )
+            }) {
+                self.pointer_phys_x = point.x;
+                self.pointer_phys_y = point.y;
+            }
+        }
         let point = PhysicalPoint::new(self.pointer_phys_x, self.pointer_phys_y);
         if pressed {
             let region = self.input_region_at(point.x, point.y);

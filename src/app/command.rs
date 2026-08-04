@@ -126,6 +126,11 @@ impl App {
         self.folders = crate::features::folders::FolderFeatureState::default();
         self.folder_layout = None;
         self.folder_scroll_pending_commit = false;
+        // The menu is also transient window state. Reset it synchronously on
+        // hide instead of leaving an Opening/Closing menu to capture input
+        // after the next summon.
+        self.context_menu = crate::features::context_menu::ContextMenuState::default();
+        self.clear_context_menu_presentation();
         self.pending_press = None;
         self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon

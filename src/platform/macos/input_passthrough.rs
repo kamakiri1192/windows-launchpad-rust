@@ -582,6 +582,21 @@ impl Drop for MacInputPassthrough {
     }
 }
 
+/// Read the current cursor position in the launcher's physical client space.
+///
+/// `winit::event::WindowEvent::MouseInput` contains the button and state, but
+/// no position. Normally the preceding `CursorMoved` event keeps the app's
+/// cached cursor position current. That is not guaranteed after a hidden
+/// window is summoned while the pointer is already over it, so button handling
+/// refreshes the position directly from AppKit at the input boundary.
+pub fn cursor_position_in_window(
+    window: &winit::window::Window,
+) -> Option<crate::input_routing::PhysicalPoint> {
+    let ns_window = launcher_ns_window(window)?;
+    let window_point = ns_window.mouseLocationOutsideOfEventStream();
+    physical_point_in_window(&ns_window, window_point)
+}
+
 fn launcher_ns_window(window: &winit::window::Window) -> Option<Retained<NSWindow>> {
     let handle = window.window_handle().ok()?;
     let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
