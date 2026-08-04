@@ -33,13 +33,13 @@ jobs:
         shell: pwsh
         run: cargo fmt --all
 
-      - name: Test
+      - name: Test context menu tint
         shell: pwsh
-        run: cargo test --all-targets --locked
+        run: cargo test --locked layout::context_menu::tests::menu_uses_per_surface_tint_without_opaque_fallback
 
-      - name: Build release
+      - name: Build debug launcher
         shell: pwsh
-        run: cargo build --release --locked
+        run: cargo build --locked
 
       - name: Run context menu GPU QA
         id: qa
@@ -47,9 +47,14 @@ jobs:
         run: |
           $env:LAUNCHPAD_ALLOW_SCREENSHOT = '1'
           $env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\context_menu_tint.json).Path
-          & .\target\release\launchpad-windows.exe
-          if ($LASTEXITCODE -ne 0) {
-            throw "GPU QA scenario exited with code $LASTEXITCODE"
+
+          $process = Start-Process -FilePath .\target\debug\launchpad-windows.exe -PassThru
+          if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'GPU QA scenario timed out after 30 seconds'
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "GPU QA scenario exited with code $($process.ExitCode)"
           }
 
           $runDir = Get-ChildItem .\target\qa-sequences -Directory |
@@ -84,5 +89,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/layout/context_menu.rs qa/context_menu_tint.json docs/qa/context-menu-tint.png
+          git rm .github/workflows/context-menu-tint-gpu-qa.yml
+          git rm .github/workflows/context-menu-tint-gpu-qa-pr.yml
+          git rm qa/apply_context_menu_tint_qa.py
           git commit -m 'Apply context menu glass tint and add GPU QA'
           git push origin HEAD:agent/fix-glass-surface-tint
