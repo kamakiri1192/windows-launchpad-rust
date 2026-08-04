@@ -1,0 +1,90 @@
+replace(
+    "src/renderer/prepare.rs",
+    """        assert_eq!(shape.shape_type, 6);\n        assert_eq!(shape.motion, [240.0, 60.0, 1.75, 1.0]);""",
+    """        assert_eq!(shape.shape_type, 6);\n        assert_eq!(shape.motion, [240.0, 60.0, 1.75, 1.0]);\n        assert_eq!(shape.tint, [0.0, 0.0, 0.0, -1.0]);""",
+)
+
+# ---------------------------------------------------------------------------
+# GPU resources: add a parallel tint render target and bind it in final passes.
+# ---------------------------------------------------------------------------
+replace(
+    "src/liquid_glass/renderer/resources.rs",
+    """use super::{GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT};""",
+    """use super::{\n    GlassShape, GlassUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT, TINT_FORMAT,\n};""",
+)
+replace(
+    "src/liquid_glass/renderer/resources.rs",
+    """pub(super) fn create_backdrop_texture(""",
+    """pub(super) fn create_tint_texture(\n    device: &wgpu::Device,\n    width: u32,\n    height: u32,\n    label: &'static str,\n) -> (wgpu::Texture, wgpu::TextureView) {\n    create_texture(\n        device,\n        label,\n        width,\n        height,\n        TINT_FORMAT,\n        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,\n    )\n}\n\npub(super) fn create_backdrop_texture(""",
+)
+replace(
+    "src/liquid_glass/renderer/resources.rs",
+    """    geometry_view: &wgpu::TextureView,\n    blur_view: &wgpu::TextureView,""",
+    """    geometry_view: &wgpu::TextureView,\n    tint_view: &wgpu::TextureView,\n    blur_view: &wgpu::TextureView,""",
+)
+replace(
+    "src/liquid_glass/renderer/resources.rs",
+    """            wgpu::BindGroupEntry {\n                binding: 4,\n                resource: wgpu::BindingResource::TextureView(blur_view),\n            },\n        ],""",
+    """            wgpu::BindGroupEntry {\n                binding: 4,\n                resource: wgpu::BindingResource::TextureView(blur_view),\n            },\n            wgpu::BindGroupEntry {\n                binding: 5,\n                resource: wgpu::BindingResource::TextureView(tint_view),\n            },\n        ],""",
+)
+
+replace(
+    "src/liquid_glass/renderer.rs",
+    """pub(super) const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;\npub(super) const BACKDROP_FORMAT""",
+    """pub(super) const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;\npub(super) const TINT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;\npub(super) const BACKDROP_FORMAT""",
+)
+replace(
+    "src/liquid_glass/renderer.rs",
+    """    control_geometry_texture: wgpu::Texture,\n    control_geometry_view: wgpu::TextureView,""",
+    """    control_geometry_texture: wgpu::Texture,\n    control_geometry_view: wgpu::TextureView,\n    control_tint_texture: wgpu::Texture,\n    control_tint_view: wgpu::TextureView,""",
+)
+replace(
+    "src/liquid_glass/renderer.rs",
+    """    geometry_texture: wgpu::Texture,\n    geometry_view: wgpu::TextureView,\n    overlay_geometry_texture: wgpu::Texture,\n    overlay_geometry_view: wgpu::TextureView,""",
+    """    geometry_texture: wgpu::Texture,\n    geometry_view: wgpu::TextureView,\n    geometry_tint_texture: wgpu::Texture,\n    geometry_tint_view: wgpu::TextureView,\n    overlay_geometry_texture: wgpu::Texture,\n    overlay_geometry_view: wgpu::TextureView,\n    overlay_tint_texture: wgpu::Texture,\n    overlay_tint_view: wgpu::TextureView,""",
+)
+replace(
+    "src/liquid_glass/renderer.rs",
+    """    if !shape.is_scrolling() {\n        return true;\n    }""",
+    """    if !shape.is_scrolling() || shape.has_tint_override() {\n        return true;\n    }""",
+)
+replace(
+    "src/liquid_glass/renderer.rs",
+    """        let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);\n        let (overlay_geometry_texture, overlay_geometry_view) =\n            create_overlay_geometry_texture(device, width, height);\n        let (control_geometry_texture, control_geometry_view) =\n            create_geometry_texture(device, width, height);""",
+    """        let (geometry_texture, geometry_view) = create_geometry_texture(device, width, height);\n        let (geometry_tint_texture, geometry_tint_view) = create_tint_texture(\n            device,\n            width,\n            height,\n            \"liquid glass geometry tint texture\",\n        );\n        let (overlay_geometry_texture, overlay_geometry_view) =\n            create_overlay_geometry_texture(device, width, height);\n        let (overlay_tint_texture, overlay_tint_view) = create_tint_texture(\n            device,\n            width,\n            height,\n            \"liquid glass overlay tint texture\",\n        );\n        let (control_geometry_texture, control_geometry_view) =\n            create_geometry_texture(device, width, height);\n        let (control_tint_texture, control_tint_view) = create_tint_texture(\n            device,\n            width,\n            height,\n            \"liquid glass control tint texture\",\n        );""",
+    expected=2,
+)
+replace(
+    "src/liquid_glass/renderer.rs",
+    """                    texture_entry(3, false),\n                    texture_entry(4, true),""",
+    """                    texture_entry(3, false),\n                    texture_entry(4, true),\n                    texture_entry(5, true),""",
+)
+
+# Initial and rebuilt final bind groups all follow the same geometry/tint pairing.
+replace_at_least(
+    "src/liquid_glass/renderer.rs",
+    """            &geometry_view,\n            &blur_view,""",
+    """            &geometry_view,\n            &geometry_tint_view,\n            &blur_view,""",
+)
+replace_at_least(
+    "src/liquid_glass/renderer.rs",
+    """            &overlay_geometry_view,\n            &blur_view,""",
+    """            &overlay_geometry_view,\n            &overlay_tint_view,\n            &blur_view,""",
+)
+replace_at_least(
+    "src/liquid_glass/renderer.rs",
+    """            &control_geometry_view,\n            &blur_view,""",
+    """            &control_geometry_view,\n            &control_tint_view,\n            &blur_view,""",
+)
+replace_at_least(
+    "src/liquid_glass/renderer.rs",
+    """            &self.geometry_view,\n            &self.blur_view,""",
+    """            &self.geometry_view,\n            &self.geometry_tint_view,\n            &self.blur_view,""",
+)
+replace_at_least(
+    "src/liquid_glass/renderer.rs",
+    """            &self.overlay_geometry_view,\n            &self.blur_view,""",
+    """            &self.overlay_geometry_view,\n            &self.overlay_tint_view,\n            &self.blur_view,""",
+)
+replace_at_least(
+    "src/liquid_glass/renderer.rs",
