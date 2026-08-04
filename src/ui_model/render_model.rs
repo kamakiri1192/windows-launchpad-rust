@@ -85,9 +85,10 @@ pub struct GlassSurface {
     /// global glass blur setting.
     pub blur_radius: Option<f32>,
     /// How strongly this surface replaces the transparent window backdrop
-    /// with its captured-and-filtered RGB. `0` keeps ordinary translucent
-    /// glass compositing; `1` prevents the real desktop from bleeding back
-    /// through an opaque backdrop material.
+    /// with the filtered RGB selected by its compositing lane. That source
+    /// may be the native desktop capture or a flattened completed scene.
+    /// `0` keeps ordinary translucent glass compositing; `1` prevents the real
+    /// desktop from bleeding back through an opaque backdrop material.
     pub backdrop_replacement: f32,
     /// Optional per-surface tint override applied to the glass color.
     pub tint: Option<Color>,

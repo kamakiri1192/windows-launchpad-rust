@@ -274,7 +274,8 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             clip: None,
             activation: input.activation,
             blur_radius: Some((CONTEXT_MENU_BASE_BLUR + input.content_blur).max(0.0)),
-            // The captured desktop is the material under the menu. Replace
+            // The renderer flattens the completed pre-menu scene over the
+            // desktop and uses that as the material under the menu. Replace
             // the real DWM backdrop while open, then release it with the same
             // reveal channel so the closing seed does not remain opaque.
             backdrop_replacement: content_opacity,

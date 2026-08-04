@@ -153,9 +153,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         interior_rgb = apply_saturation(interior_rgb, u.saturation);
         interior_rgb = clamp(interior_rgb, vec3<f32>(0.0), vec3<f32>(1.45));
         let translucent_alpha = clamp(alpha * (0.64 + glass_tint.a * 0.5), 0.0, 0.92);
-        // At replacement=1 the captured blur becomes the actual pixel under
-        // the menu, so DirectComposition cannot blend the sharp desktop back
-        // through it. Geometry alpha still provides antialiased edge coverage.
+        // At replacement=1 the lane's filtered backdrop becomes the actual
+        // pixel under the surface, so DirectComposition cannot blend the sharp
+        // desktop back through it. Context-menu lanes bind a completed scene;
+        // ordinary lanes bind the captured desktop. Geometry alpha still
+        // provides antialiased edge coverage.
         let interior_alpha = mix(translucent_alpha, alpha, replacement);
         return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
     }
