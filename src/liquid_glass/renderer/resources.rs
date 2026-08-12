@@ -91,7 +91,18 @@ pub(super) fn create_auto_darkness_state_buffer(device: &wgpu::Device) -> wgpu::
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("liquid glass auto darkness state"),
         contents: bytemuck::bytes_of(&AutoDarknessState::default()),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+    })
+}
+
+pub(super) fn create_auto_darkness_readback_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("liquid glass auto darkness debug readback"),
+        size: std::mem::size_of::<AutoDarknessState>() as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     })
 }
 

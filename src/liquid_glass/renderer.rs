@@ -1,3 +1,7 @@
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 mod frame;
@@ -82,6 +86,36 @@ pub(super) struct AutoDarknessState {
     classification_count: u32,
     displayed_darkness: f32,
     probe_samples: [f32; 16],
+}
+
+const AUTO_DARKNESS_READBACK_IDLE: u8 = 0;
+const AUTO_DARKNESS_READBACK_COPY_ENCODED: u8 = 1;
+const AUTO_DARKNESS_READBACK_MAP_PENDING: u8 = 2;
+const AUTO_DARKNESS_READBACK_READY: u8 = 3;
+const AUTO_DARKNESS_READBACK_FAILED: u8 = 4;
+/// Debug HUD refresh rate. This is independent of backdrop capture and the
+/// renderer's presentation cadence.
+const AUTO_DARKNESS_READBACK_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Debug)]
+struct AutoDarknessReadback {
+    buffer: wgpu::Buffer,
+    status: Arc<AtomicU8>,
+    enabled: bool,
+    latest_value: f32,
+    last_copy_at: Option<Instant>,
+}
+
+impl AutoDarknessReadback {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            buffer: create_auto_darkness_readback_buffer(device),
+            status: Arc::new(AtomicU8::new(AUTO_DARKNESS_READBACK_IDLE)),
+            enabled: false,
+            latest_value: 0.0,
+            last_copy_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -349,6 +383,7 @@ pub struct LiquidGlassRenderer {
     last_capture_at: Option<Instant>,
     auto_darkness_uniform_buffer: wgpu::Buffer,
     auto_darkness_state_buffer: wgpu::Buffer,
+    auto_darkness_readback: AutoDarknessReadback,
     auto_darkness_clock_origin: Instant,
     auto_darkness_update_mode: AutoDarknessUpdateMode,
     auto_darkness_reset_state: bool,
@@ -605,6 +640,7 @@ impl LiquidGlassRenderer {
         let auto_darkness_uniform_buffer =
             create_auto_darkness_uniform_buffer(device, &auto_darkness_uniforms);
         let auto_darkness_state_buffer = create_auto_darkness_state_buffer(device);
+        let auto_darkness_readback = AutoDarknessReadback::new(device);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let active_base_shapes = shapes.clone();
@@ -1298,6 +1334,7 @@ impl LiquidGlassRenderer {
             last_capture_at: None,
             auto_darkness_uniform_buffer,
             auto_darkness_state_buffer,
+            auto_darkness_readback,
             auto_darkness_clock_origin: Instant::now(),
             auto_darkness_update_mode,
             auto_darkness_reset_state: true,
@@ -1496,6 +1533,122 @@ impl LiquidGlassRenderer {
             pass.dispatch_workgroups(1, 1, 1);
         }
         self.backdrop_stats_dirty = false;
+    }
+
+    fn encode_auto_darkness_debug_readback(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.auto_darkness_readback.enabled || !self.params.auto_darkness_enabled {
+            return;
+        }
+        if self.auto_darkness_readback.status.load(Ordering::Acquire) != AUTO_DARKNESS_READBACK_IDLE
+        {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .auto_darkness_readback
+            .last_copy_at
+            .is_some_and(|last| now.duration_since(last) < AUTO_DARKNESS_READBACK_INTERVAL)
+        {
+            return;
+        }
+
+        encoder.copy_buffer_to_buffer(
+            &self.auto_darkness_state_buffer,
+            0,
+            &self.auto_darkness_readback.buffer,
+            0,
+            std::mem::size_of::<AutoDarknessState>() as u64,
+        );
+        self.auto_darkness_readback.last_copy_at = Some(now);
+        self.auto_darkness_readback
+            .status
+            .store(AUTO_DARKNESS_READBACK_COPY_ENCODED, Ordering::Release);
+    }
+
+    /// Start mapping a debug copy after the command buffer containing it has
+    /// been submitted. Mapping is asynchronous and never stalls the frame.
+    pub(crate) fn begin_auto_darkness_debug_readback(&mut self) {
+        if self
+            .auto_darkness_readback
+            .status
+            .compare_exchange(
+                AUTO_DARKNESS_READBACK_COPY_ENCODED,
+                AUTO_DARKNESS_READBACK_MAP_PENDING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return;
+        }
+
+        let status = Arc::clone(&self.auto_darkness_readback.status);
+        self.auto_darkness_readback.buffer.slice(..).map_async(
+            wgpu::MapMode::Read,
+            move |result| {
+                status.store(
+                    if result.is_ok() {
+                        AUTO_DARKNESS_READBACK_READY
+                    } else {
+                        AUTO_DARKNESS_READBACK_FAILED
+                    },
+                    Ordering::Release,
+                );
+            },
+        );
+    }
+
+    pub(crate) fn set_auto_darkness_debug_readback_enabled(&mut self, enabled: bool) {
+        self.auto_darkness_readback.enabled = enabled;
+        if !enabled {
+            self.auto_darkness_readback.latest_value = 0.0;
+            self.auto_darkness_readback.last_copy_at = None;
+        }
+    }
+
+    /// Poll an in-flight mapping without waiting and return the latest complete
+    /// value. A one-frame-old value is preferable to blocking the UI thread.
+    pub(crate) fn poll_auto_darkness_debug_value(&mut self, device: &wgpu::Device) -> f32 {
+        if self.auto_darkness_readback.status.load(Ordering::Acquire)
+            == AUTO_DARKNESS_READBACK_MAP_PENDING
+        {
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
+
+        match self.auto_darkness_readback.status.load(Ordering::Acquire) {
+            AUTO_DARKNESS_READBACK_READY => {
+                let mapped = self
+                    .auto_darkness_readback
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range();
+                let state = *bytemuck::from_bytes::<AutoDarknessState>(&mapped);
+                drop(mapped);
+                self.auto_darkness_readback.buffer.unmap();
+                self.auto_darkness_readback.latest_value = if state.displayed_darkness.is_finite() {
+                    state
+                        .displayed_darkness
+                        .clamp(0.0, self.params.auto_darkness_max)
+                } else {
+                    0.0
+                };
+                self.auto_darkness_readback
+                    .status
+                    .store(AUTO_DARKNESS_READBACK_IDLE, Ordering::Release);
+            }
+            AUTO_DARKNESS_READBACK_FAILED => {
+                self.auto_darkness_readback
+                    .status
+                    .store(AUTO_DARKNESS_READBACK_IDLE, Ordering::Release);
+            }
+            _ => {}
+        }
+
+        if self.params.enabled && self.params.auto_darkness_enabled {
+            self.auto_darkness_readback.latest_value
+        } else {
+            0.0
+        }
     }
 
     fn rebuild_final_bind_groups(

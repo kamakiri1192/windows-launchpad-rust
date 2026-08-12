@@ -221,9 +221,9 @@ impl App {
         if self.context_menu.is_active() {
             self.render_context_menu();
         }
-        // Upload the HUD FPS overlay (if enabled). Generated every frame so
-        // the counter keeps updating while the surface is presenting.
-        self.render_fps_overlay();
+        // Upload the debug HUD (if enabled). Generated every frame so FPS and
+        // the latest nonblocking automatic-darkness sample stay current.
+        self.render_debug_overlay();
 
         // Sync the OS IME with the search field (on while focused,
         // parked at the caret) so Japanese / other IME input works.
@@ -317,13 +317,14 @@ impl App {
             || folder_scroller_animating
             || self.editing
             || self.profile_scroll.is_some()
-            // FPS counter drives a continuous redraw, but only while the
+            // Debug HUD drives a continuous redraw, but only while the
             // launcher is actually visible. Without `self.visible` here the
             // loop keeps rendering the hidden window at vsync rate after
             // hide(), which makes the whole machine sluggish and eventually
-            // destabilizes the GPU driver (crash). `show_fps` itself stays
-            // persisted so the counter returns on the next summon.
-            || (self.settings.show_fps && self.visible)
+            // destabilizes the GPU driver (crash). Overlay settings stay
+            // persisted so the HUD returns on the next summon.
+            || ((self.settings.show_fps || self.settings.show_auto_darkness_value)
+                && self.visible)
         {
             self.request_redraw();
         }

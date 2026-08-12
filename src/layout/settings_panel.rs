@@ -164,6 +164,7 @@ pub enum SettingsPanelHit {
     SearchHiddenToggle,
     DebugToggle,
     FpsToggle,
+    AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
     /// Liquid Glass master switch (keyboard `V`).
@@ -310,6 +311,7 @@ impl SettingsPanelHit {
             Self::SearchHiddenToggle => HitTarget::settings_toggle("search-hidden"),
             Self::DebugToggle => HitTarget::settings_toggle("debug"),
             Self::FpsToggle => HitTarget::settings_toggle("show-fps"),
+            Self::AutoDarknessValueToggle => HitTarget::settings_toggle("show-auto-darkness-value"),
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
             Self::LiquidGlassEnabled => HitTarget::settings_toggle("lg-enabled"),
@@ -401,6 +403,7 @@ pub struct SettingsPanelInput {
     pub search_includes_hidden: bool,
     pub debug_keys_enabled: bool,
     pub show_fps: bool,
+    pub show_auto_darkness_value: bool,
     pub hidden_count: usize,
     pub progress: f32,
     /// Vertical scroll offset (in rows) for scrollable categories.
@@ -546,6 +549,8 @@ pub struct SettingsPanelCopy<'a> {
     pub debug_icon_cache_detail: &'a str,
     pub debug_lg_enabled_label: &'a str,
     pub debug_lg_enabled_detail: &'a str,
+    pub debug_lg_auto_darkness_value_label: &'a str,
+    pub debug_lg_auto_darkness_value_detail: &'a str,
     // ----- Darkness-category row labels -----
     pub darkness_auto_label: &'a str,
     pub darkness_auto_detail: &'a str,
@@ -1234,6 +1239,17 @@ pub fn build_with_ui(
                         .hit_target(SettingsPanelHit::LiquidGlassEnabled.target()),
                 );
 
+                // Row 4: effective automatic-darkness debug overlay
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.show_auto_darkness_value)
+                        .id(UiId::settings_row("toggle-show-auto-darkness-value"))
+                        .label(copy.debug_lg_auto_darkness_value_label)
+                        .detail(copy.debug_lg_auto_darkness_value_detail)
+                        .hit_target(SettingsPanelHit::AutoDarknessValueToggle.target()),
+                );
+
                 // Liquid Glass parameter sliders
                 let param_labels: [(LiquidGlassParamId, &str); 5] = [
                     (LiquidGlassParamId::Thickness, copy.debug_lg_thickness_label),
@@ -1453,20 +1469,21 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   1  window decorations (M)
 //   2  icon cache rebuild (R)
 //   3  Liquid Glass enabled (V)
-//   4  thickness slider
-//   5  refractive_index slider
-//   6  saturation slider
-//   7  chromatic_aberration slider
-//   8  blur_radius slider
-//   9  disable chromatic aberration (C)
-//  10  disable edge lighting (E)
-//  11  disable blur (L)
-//  12  "Reset Liquid Glass to defaults" button
-//  13  show backdrop texture (B)
-//  14  show geometry texture (G)
-//  15  show displacement (D)
-//  16  show alpha mask (A)
-//  17  show final glass only (F)
+//   4  show effective automatic-darkness value
+//   5  thickness slider
+//   6  refractive_index slider
+//   7  saturation slider
+//   8  chromatic_aberration slider
+//   9  blur_radius slider
+//  10  disable chromatic aberration (C)
+//  11  disable edge lighting (E)
+//  12  disable blur (L)
+//  13  "Reset Liquid Glass to defaults" button
+//  14  show backdrop texture (B)
+//  15  show geometry texture (G)
+//  16  show displacement (D)
+//  17  show alpha mask (A)
+//  18  show final glass only (F)
 
 // Darkness row index map:
 //   0  automatic darkness enabled
@@ -1479,7 +1496,7 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   7  settings_panel_glass_darkness slider
 
 /// Total number of full-row slots the Debug category uses.
-pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 18;
+pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 19;
 
 /// Total number of full-row slots the Darkness category uses.
 pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 8;
@@ -1608,6 +1625,8 @@ mod tests {
             debug_icon_cache_detail: "Cache detail",
             debug_lg_enabled_label: "Enable Liquid Glass",
             debug_lg_enabled_detail: "LG detail",
+            debug_lg_auto_darkness_value_label: "Show auto darkness value",
+            debug_lg_auto_darkness_value_detail: "Show effective value detail",
             darkness_auto_label: "Auto backdrop darkness",
             darkness_auto_detail: "Enable backdrop-aware glass darkness",
             darkness_update_mode_labels: [
@@ -1650,6 +1669,7 @@ mod tests {
             search_includes_hidden: false,
             debug_keys_enabled: false,
             show_fps: false,
+            show_auto_darkness_value: false,
             hidden_count: 0,
             progress: 1.0,
             scroll_rows: 0,
@@ -2041,6 +2061,16 @@ mod tests {
             .iter()
             .any(|r| r.target == HitTarget::settings_toggle("lg-enabled"));
         assert!(found, "LG enabled toggle should exist");
+    }
+
+    #[test]
+    fn hit_map_debug_auto_darkness_value_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+        let found = hm
+            .regions()
+            .iter()
+            .any(|region| region.target == HitTarget::settings_toggle("show-auto-darkness-value"));
+        assert!(found, "automatic-darkness value toggle should exist");
     }
 
     #[test]

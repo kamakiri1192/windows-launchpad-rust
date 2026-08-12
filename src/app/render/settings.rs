@@ -89,6 +89,7 @@ impl App {
                 search_includes_hidden: self.settings.search_includes_hidden,
                 debug_keys_enabled: self.settings.debug_keys_enabled,
                 show_fps: self.settings.show_fps,
+                show_auto_darkness_value: self.settings.show_auto_darkness_value,
                 hidden_count,
                 progress: self.settings_panel_progress,
                 scroll_rows: self.settings_scroll_rows,
@@ -541,6 +542,8 @@ fn settings_panel_copy<'a>(
         debug_icon_cache_detail: "すべてのアイコンを再抽出します",
         debug_lg_enabled_label: "Liquid Glass を有効化",
         debug_lg_enabled_detail: "ガラス効果のマスタースイッチ",
+        debug_lg_auto_darkness_value_label: "動的darknessの値を表示",
+        debug_lg_auto_darkness_value_detail: "画面右上に現在の実効値を表示します",
         darkness_auto_label: "背景に合わせてガラスを暗くする",
         darkness_auto_detail: "背景が白いときだけガラス全体を自動で暗くします",
         darkness_update_mode_labels: [
@@ -621,6 +624,7 @@ pub(crate) fn settings_press_target_from_hit_target(
             "search-hidden" => SettingsPressTarget::SearchHiddenToggle,
             "debug" => SettingsPressTarget::DebugToggle,
             "show-fps" => SettingsPressTarget::FpsToggle,
+            "show-auto-darkness-value" => SettingsPressTarget::AutoDarknessValueToggle,
             "lg-enabled" => SettingsPressTarget::LiquidGlassEnabled,
             "lg-auto-darkness" => SettingsPressTarget::LiquidGlassAutoDarkness,
             key if key.starts_with("lg-auto-darkness-mode-") => {
@@ -897,6 +901,12 @@ mod tests {
         assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle("show-fps")),
             SettingsPressTarget::FpsToggle
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "show-auto-darkness-value"
+            )),
+            SettingsPressTarget::AutoDarknessValueToggle
         );
         assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-enabled")),

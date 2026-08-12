@@ -38,6 +38,10 @@ pub struct Settings {
     /// `frame.present()` cadence EMA otherwise. Off by default.
     #[serde(default)]
     pub show_fps: bool,
+    /// Shows the effective automatic-darkness value in the top-right debug
+    /// overlay. Off by default; GPU readback is enabled only while visible.
+    #[serde(default)]
+    pub show_auto_darkness_value: bool,
     /// Persisted Liquid Glass parameters (master/automatic switches plus the
     /// nine numeric parameters exposed in the settings panel). Debug-only flags
     /// (the B/G/D/A/F debug views and the C/E/L disable toggles) and the
@@ -60,6 +64,7 @@ impl Default for Settings {
             show_steam_apps: true,
             debug_keys_enabled: false,
             show_fps: false,
+            show_auto_darkness_value: false,
             liquid_glass: LiquidGlassSettings::default(),
         }
     }
@@ -348,6 +353,7 @@ mod tests {
         assert!(s.show_steam_apps);
         assert!(!s.debug_keys_enabled);
         assert!(!s.show_fps);
+        assert!(!s.show_auto_darkness_value);
         assert!(s.liquid_glass.is_default());
     }
 
@@ -360,6 +366,7 @@ mod tests {
             show_steam_apps: false,
             debug_keys_enabled: true,
             show_fps: true,
+            show_auto_darkness_value: true,
             liquid_glass: LiquidGlassSettings {
                 enabled: false,
                 auto_darkness_enabled: true,
@@ -413,6 +420,20 @@ mod tests {
         }"#;
         let decoded: Settings = serde_json::from_slice(json).unwrap();
         assert!(!decoded.show_fps);
+    }
+
+    #[test]
+    fn older_json_defaults_auto_darkness_value_overlay_to_disabled() {
+        let json = br#"{
+            "sort_order":"Name",
+            "frequent_apps_enabled":false,
+            "search_includes_hidden":false,
+            "show_steam_apps":true,
+            "debug_keys_enabled":false,
+            "show_fps":false
+        }"#;
+        let decoded: Settings = serde_json::from_slice(json).unwrap();
+        assert!(!decoded.show_auto_darkness_value);
     }
 
     #[test]

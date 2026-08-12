@@ -219,6 +219,10 @@ impl LiquidGlassRenderer {
             pass.draw(0..3, 0..1);
         }
 
+        // Opt-in debug readback only. The tiny copy is mapped asynchronously
+        // after submission, so displaying the value never waits on the GPU.
+        self.encode_auto_darkness_debug_readback(encoder);
+
         let _ = device;
         self.stats.record(
             captured,

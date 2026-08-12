@@ -90,6 +90,7 @@ pub enum SettingsPressTarget {
     SearchHiddenToggle,
     DebugToggle,
     FpsToggle,
+    AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
     /// Liquid Glass master switch (keyboard equivalent: `V`).

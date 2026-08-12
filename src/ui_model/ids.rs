@@ -101,6 +101,11 @@ impl UiId {
         Self::new("fps-overlay")
     }
 
+    /// The current automatic-darkness value in the top-right debug HUD.
+    pub fn auto_darkness_overlay() -> Self {
+        Self::new("auto-darkness-overlay")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

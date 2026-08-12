@@ -85,12 +85,12 @@ pub struct Renderer {
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
     gpu_profiler: gpu_profile::GpuProfilerState,
-    /// Presentation-rate estimator feeding the FPS overlay. On Windows it
+    /// Presentation-rate estimator feeding the debug HUD. On Windows it
     /// prefers DXGI frame statistics; elsewhere it tracks `present()` cadence.
     pub(crate) fps_tracker: fps::FpsTracker,
     /// Cached reading of [`fps_tracker`](Self::fps_tracker), updated at the
     /// end of each successful `render()` so callers (the app layer building
-    /// overlay glyphs) read a stable value without borrowing the tracker.
+    /// HUD glyphs) read a stable value without borrowing the tracker.
     pub last_fps: u32,
 
     // -- Text rendering -------------------------------------------------
@@ -162,7 +162,7 @@ pub struct Renderer {
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
-    /// FPS overlay glyphs (e.g. "FPS: 60"), drawn in the final overlay pass
+    /// Debug HUD glyphs (e.g. "FPS: 60"), drawn in the final overlay pass
     /// on top of all modal content. Populated by the app layer from
     /// [`Self::last_fps`]; reuses the control-text pipeline + atlas.
     overlay_text_instance_buffer: InstanceBuffer<GlyphQuad>,

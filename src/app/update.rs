@@ -435,6 +435,11 @@ impl App {
                 self.persist_settings();
                 self.request_redraw();
             }
+            SettingsPressTarget::AutoDarknessValueToggle => {
+                self.settings.show_auto_darkness_value = !self.settings.show_auto_darkness_value;
+                self.persist_settings();
+                self.request_redraw();
+            }
             SettingsPressTarget::ResetCache => {
                 self.reset_icons();
                 self.request_redraw();

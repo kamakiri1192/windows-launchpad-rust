@@ -809,6 +809,16 @@ impl Renderer {
         self.liquid_glass.auto_darkness_update_mode()
     }
 
+    pub fn set_auto_darkness_debug_readback_enabled(&mut self, enabled: bool) {
+        self.liquid_glass
+            .set_auto_darkness_debug_readback_enabled(enabled);
+    }
+
+    pub fn poll_auto_darkness_debug_value(&mut self) -> f32 {
+        self.liquid_glass
+            .poll_auto_darkness_debug_value(&self.device)
+    }
+
     pub fn liquid_glass_thickness(&self) -> f32 {
         self.liquid_glass.params().thickness
     }
