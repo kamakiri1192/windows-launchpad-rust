@@ -36,14 +36,20 @@ impl App {
 
         // GPU readback is opt-in and nonblocking. Polling returns the latest
         // completed sample, never waiting for the current frame.
-        let auto_darkness = self
+        let (auto_darkness_enabled, auto_darkness) = self
             .renderer
             .as_mut()
             .map(|renderer| {
-                renderer.set_auto_darkness_debug_readback_enabled(show_auto_darkness);
-                renderer.poll_auto_darkness_debug_value()
+                let enabled = renderer.liquid_glass_auto_darkness_enabled();
+                renderer.set_auto_darkness_debug_readback_enabled(show_auto_darkness && enabled);
+                let value = if enabled {
+                    renderer.poll_auto_darkness_debug_value()
+                } else {
+                    0.0
+                };
+                (enabled, value)
             })
-            .unwrap_or(0.0);
+            .unwrap_or((false, 0.0));
 
         let mut lines = Vec::with_capacity(2);
         if show_fps {
@@ -53,7 +59,7 @@ impl App {
         if show_auto_darkness {
             lines.push((
                 UiId::auto_darkness_overlay(),
-                format_auto_darkness_value(auto_darkness),
+                format_auto_darkness_value(auto_darkness_enabled, auto_darkness),
             ));
         }
 
@@ -114,8 +120,12 @@ impl App {
     }
 }
 
-fn format_auto_darkness_value(value: f32) -> String {
-    format!("Dynamic darkness: {:.3}", value.max(0.0))
+fn format_auto_darkness_value(enabled: bool, value: f32) -> String {
+    if enabled {
+        format!("Dynamic darkness: {:.3}", value.max(0.0))
+    } else {
+        "Dynamic darkness: OFF".to_owned()
+    }
 }
 
 fn overlay_glyph_views(quads: &[text::GlyphQuad], id: &UiId) -> Vec<GlyphView> {
@@ -144,9 +154,20 @@ mod tests {
     #[test]
     fn auto_darkness_overlay_uses_three_decimal_places() {
         assert_eq!(
-            format_auto_darkness_value(0.12345),
+            format_auto_darkness_value(true, 0.12345),
             "Dynamic darkness: 0.123"
         );
-        assert_eq!(format_auto_darkness_value(-0.1), "Dynamic darkness: 0.000");
+        assert_eq!(
+            format_auto_darkness_value(true, -0.1),
+            "Dynamic darkness: 0.000"
+        );
+    }
+
+    #[test]
+    fn auto_darkness_overlay_says_off_when_feature_is_disabled() {
+        assert_eq!(
+            format_auto_darkness_value(false, 0.12345),
+            "Dynamic darkness: OFF"
+        );
     }
 }
