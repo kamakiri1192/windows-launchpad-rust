@@ -14,6 +14,7 @@ fn event(
     RawScrollEvent {
         timestamp_us,
         delta_physical_px: (dx, 0.0),
+        unaccelerated_delta_physical_px: None,
         source: ScrollSource::Precise,
         contact_phase,
         momentum_phase,

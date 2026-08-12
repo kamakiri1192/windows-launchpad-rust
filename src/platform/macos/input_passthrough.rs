@@ -414,10 +414,51 @@ impl MacInputPassthrough {
                     callback_scroll_clock.timestamp_us(timestamp_seconds, Instant::now());
                 let timestamp_valid = timestamp_us.is_some();
                 let timestamp_us = timestamp_us.unwrap_or(0);
+                let precise = event.hasPreciseScrollingDeltas();
+                let delta_scale = if precise {
+                    // Precise AppKit deltas are points. The rest of the app
+                    // lays settings out in physical pixels.
+                    scale_factor
+                } else {
+                    // Apple requires non-precise scrollingDeltaX/Y values to
+                    // be multiplied by a line/row height. row_step is already
+                    // expressed in physical pixels and includes backing scale.
+                    crate::layout::settings_panel::row_step(scale_factor)
+                };
                 let mut delta = (
-                    event.scrollingDeltaX() as f32 * scale_factor,
-                    event.scrollingDeltaY() as f32 * scale_factor,
+                    event.scrollingDeltaX() as f32 * delta_scale,
+                    event.scrollingDeltaY() as f32 * delta_scale,
                 );
+                let unaccelerated_delta = if precise {
+                    event.CGEvent().and_then(|cg_event| {
+                        let raw_x = CGEvent::double_value_field(
+                            Some(&cg_event),
+                            CGEventField::ScrollWheelEventRawDeltaAxis2,
+                        ) as f32;
+                        let raw_y = CGEvent::double_value_field(
+                            Some(&cg_event),
+                            CGEventField::ScrollWheelEventRawDeltaAxis1,
+                        ) as f32;
+                        if raw_x == 0.0 && raw_y == 0.0 {
+                            return None;
+                        }
+                        let align_direction = |raw: f32, accelerated: f32| {
+                            if raw == 0.0 {
+                                accelerated
+                            } else if accelerated == 0.0 {
+                                raw * scale_factor
+                            } else {
+                                raw.abs() * accelerated.signum() * scale_factor
+                            }
+                        };
+                        Some((
+                            align_direction(raw_x, delta.0),
+                            align_direction(raw_y, delta.1),
+                        ))
+                    })
+                } else {
+                    None
+                };
                 if !timestamp_valid {
                     // RawScrollEvent uses an integer timestamp. Preserve an
                     // invalid native timestamp as a malformed packet so the
@@ -427,7 +468,8 @@ impl MacInputPassthrough {
                 let raw = RawScrollEvent {
                     timestamp_us,
                     delta_physical_px: delta,
-                    source: if event.hasPreciseScrollingDeltas() {
+                    unaccelerated_delta_physical_px: unaccelerated_delta,
+                    source: if precise {
                         ScrollSource::Precise
                     } else {
                         ScrollSource::Line
@@ -951,6 +993,7 @@ mod tests {
                 .adapt_native(RawScrollEvent {
                     timestamp_us,
                     delta_physical_px: (dx, 0.0),
+                    unaccelerated_delta_physical_px: None,
                     source: ScrollSource::Precise,
                     contact_phase: phase,
                     momentum_phase: NativeScrollPhase::None,

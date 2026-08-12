@@ -636,14 +636,10 @@ impl App {
         let now = scroll_sample_instant(self.scroll_clock_origin, sample.timestamp_us);
         match routed.route {
             ScrollRoute::Settings => {
-                if sample.canonical_dy != 0.0 {
-                    self.scroll_settings_by_px_at(
-                        crate::input_routing::continuous_scroller_input_from_canonical_y(
-                            sample.canonical_dy,
-                        ),
-                        now,
-                    );
-                }
+                // Zero-delta terminal packets are part of the native contract:
+                // they transfer an edge rubber-band from OS-owned tracking to
+                // the return spring. Never discard them as "no movement".
+                self.handle_settings_scroll_sample(sample, now);
             }
             ScrollRoute::MainPager => {
                 if let Some(scroller) = self.scroller.as_mut() {
@@ -673,16 +669,119 @@ impl App {
     /// updated here: hit testing derives its row offset from the live pixel
     /// position (`settings_scroll.position / row_step`) so the two never drift.
     pub(crate) fn scroll_settings_by_px(&mut self, delta_px: f32) {
-        self.scroll_settings_by_px_at(delta_px, Instant::now());
-    }
-
-    fn scroll_settings_by_px_at(&mut self, delta_px: f32, now: Instant) {
         let max = self.settings_max_scroll_rows();
         if max <= 0 {
             self.settings_scroll_rows = 0;
             return;
         }
-        self.settings_scroll.apply_wheel(delta_px, now);
+        self.settings_scroll
+            .apply_line_wheel(delta_px, Instant::now());
+        self.request_redraw();
+    }
+
+    /// Keep AppKit's physical-contact and momentum phases intact for settings.
+    /// AppKit starts an edge return at physical-contact `Ended`; if momentum
+    /// follows, its first packet takes over the live return position. Momentum
+    /// that reaches an edge starts the return immediately and its remaining
+    /// dissipating packets are ignored until the terminal packet.
+    fn handle_settings_scroll_sample(
+        &mut self,
+        sample: crate::input_routing::ScrollSample,
+        now: Instant,
+    ) {
+        use crate::input_routing::{NativeScrollPhase as NativePhase, ScrollSource};
+
+        if self.settings_max_scroll_rows() <= 0 {
+            self.settings_scroll_rows = 0;
+            return;
+        }
+
+        let delta_px =
+            crate::input_routing::continuous_scroller_input_from_canonical_y(sample.canonical_dy);
+        let unaccelerated_delta_px = sample
+            .canonical_unaccelerated_dy
+            .map(crate::input_routing::continuous_scroller_input_from_canonical_y);
+        if sample.source == ScrollSource::Line {
+            if delta_px != 0.0 {
+                self.settings_scroll.apply_line_wheel(delta_px, now);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        let apply_delta = |scroller: &mut crate::scroll::ContinuousScroller| {
+            if delta_px != 0.0 {
+                scroller.move_precise_wheel_with_unaccelerated(
+                    delta_px,
+                    unaccelerated_delta_px,
+                    now,
+                );
+            }
+        };
+        match sample.contact_phase {
+            NativePhase::Began => {
+                self.settings_scroll.begin_precise_wheel(now);
+                apply_delta(&mut self.settings_scroll);
+            }
+            NativePhase::Changed => apply_delta(&mut self.settings_scroll),
+            NativePhase::Ended => {
+                apply_delta(&mut self.settings_scroll);
+                self.settings_scroll.end_precise_wheel(now, false);
+            }
+            NativePhase::Cancelled => {
+                apply_delta(&mut self.settings_scroll);
+                self.settings_scroll.end_precise_wheel(now, true);
+            }
+            NativePhase::None => match sample.momentum_phase {
+                NativePhase::Began => {
+                    self.settings_scroll.begin_native_momentum(now);
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                }
+                NativePhase::Changed => {
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                }
+                NativePhase::Ended => {
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                    self.settings_scroll.end_native_momentum(now, false);
+                }
+                NativePhase::Cancelled => {
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                    self.settings_scroll.end_native_momentum(now, true);
+                }
+                NativePhase::None if sample.sequence_complete => {
+                    self.settings_scroll.end_native_momentum(now, false);
+                }
+                NativePhase::None => {}
+            },
+        }
         self.request_redraw();
     }
 
@@ -2051,6 +2150,7 @@ mod folder_page_commit_tests {
                 raw_dy: 0.0,
                 canonical_dx: dx,
                 canonical_dy: 0.0,
+                canonical_unaccelerated_dy: None,
                 source: ScrollSource::Precise,
                 contact_phase: phase,
                 momentum_phase: NativeScrollPhase::None,
@@ -2102,6 +2202,7 @@ mod folder_page_commit_tests {
             raw_dy: 0.0,
             canonical_dx: 0.0,
             canonical_dy: -0.0,
+            canonical_unaccelerated_dy: None,
             source: ScrollSource::Precise,
             contact_phase: phase,
             momentum_phase: NativeScrollPhase::None,
@@ -2132,6 +2233,7 @@ mod folder_page_commit_tests {
             raw_dy: 0.0,
             canonical_dx: 0.25,
             canonical_dy: 0.0,
+            canonical_unaccelerated_dy: None,
             source: ScrollSource::Precise,
             contact_phase: NativeScrollPhase::Changed,
             momentum_phase: NativeScrollPhase::None,

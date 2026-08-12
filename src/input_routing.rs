@@ -424,6 +424,9 @@ impl RawScrollEvent {
     pub fn is_valid(self) -> bool {
         self.delta_physical_px.0.is_finite()
             && self.delta_physical_px.1.is_finite()
+            && self
+                .unaccelerated_delta_physical_px
+                .is_none_or(|delta| delta.0.is_finite() && delta.1.is_finite())
             && self.scale_factor.is_finite()
             && self.scale_factor > 0.0
             && !(self.contact_phase != NativeScrollPhase::None
@@ -449,6 +452,10 @@ pub enum ScrollPhaseCapability {
 pub struct RawScrollEvent {
     pub timestamp_us: u64,
     pub delta_physical_px: (f32, f32),
+    /// Unaccelerated device delta when the platform exposes it. AppKit uses
+    /// this while content is already stretched so device acceleration does
+    /// not make the elastic edge flare outward.
+    pub unaccelerated_delta_physical_px: Option<(f32, f32)>,
     pub source: ScrollSource,
     pub contact_phase: NativeScrollPhase,
     pub momentum_phase: NativeScrollPhase,
@@ -470,6 +477,9 @@ pub struct ScrollSample {
     /// Canonical display-space delta. Positive x moves the visible grid right.
     pub canonical_dx: f32,
     pub canonical_dy: f32,
+    /// Canonical unaccelerated vertical delta for edge stretching. `None`
+    /// means the platform did not provide a reliable value.
+    pub canonical_unaccelerated_dy: Option<f32>,
     pub source: ScrollSource,
     pub contact_phase: NativeScrollPhase,
     pub momentum_phase: NativeScrollPhase,
@@ -485,6 +495,7 @@ impl ScrollSample {
             && self.raw_dy.is_finite()
             && self.canonical_dx.is_finite()
             && self.canonical_dy.is_finite()
+            && self.canonical_unaccelerated_dy.is_none_or(f32::is_finite)
             && self.scale_factor.is_finite()
             && self.scale_factor > 0.0
             && (self.source == ScrollSource::Line || self.gesture_id != 0)
@@ -500,6 +511,7 @@ impl ScrollSample {
             raw_dy: 0.0,
             canonical_dx: 0.0,
             canonical_dy: 0.0,
+            canonical_unaccelerated_dy: None,
             source: ScrollSource::Precise,
             contact_phase: NativeScrollPhase::Cancelled,
             momentum_phase: NativeScrollPhase::None,
@@ -705,6 +717,7 @@ impl ScrollSampleAdapter {
             return self.adapt_native(RawScrollEvent {
                 timestamp_us,
                 delta_physical_px,
+                unaccelerated_delta_physical_px: None,
                 source,
                 contact_phase: NativeScrollPhase::None,
                 momentum_phase: NativeScrollPhase::None,
@@ -745,6 +758,7 @@ impl ScrollSampleAdapter {
         self.adapt_native(RawScrollEvent {
             timestamp_us,
             delta_physical_px,
+            unaccelerated_delta_physical_px: None,
             source,
             contact_phase,
             momentum_phase,
@@ -857,6 +871,9 @@ impl ScrollSampleAdapter {
             // pager consumes x directly; do not undo the preference here.
             canonical_dx: event.delta_physical_px.0,
             canonical_dy: event.delta_physical_px.1 * legacy_y_sign,
+            canonical_unaccelerated_dy: event
+                .unaccelerated_delta_physical_px
+                .map(|delta| delta.1 * legacy_y_sign),
             source: event.source,
             contact_phase: event.contact_phase,
             momentum_phase: event.momentum_phase,
@@ -1421,6 +1438,7 @@ mod tests {
         RawScrollEvent {
             timestamp_us,
             delta_physical_px: (dx, 0.0),
+            unaccelerated_delta_physical_px: None,
             source: ScrollSource::Precise,
             contact_phase,
             momentum_phase,
@@ -1909,6 +1927,7 @@ mod tests {
             raw_dy: f32::NAN,
             canonical_dx: 0.0,
             canonical_dy: f32::NAN,
+            canonical_unaccelerated_dy: None,
             source: ScrollSource::Line,
             contact_phase: NativeScrollPhase::None,
             momentum_phase: NativeScrollPhase::None,

@@ -53,6 +53,35 @@ fn is_repeated_escape(repeat: bool, key_code: Option<winit::keyboard::KeyCode>) 
     repeat && key_code == Some(winit::keyboard::KeyCode::Escape)
 }
 
+#[cfg(windows)]
+fn platform_wheel_line_multiplier(viewport_px: f32, row_px: f32) -> f32 {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+
+    let mut lines = 3u32;
+    let result = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWHEELSCROLLLINES,
+            0,
+            Some((&mut lines as *mut u32).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    if result.is_err() {
+        return 3.0;
+    }
+    if lines == u32::MAX {
+        return (viewport_px / row_px.max(1.0)).max(1.0);
+    }
+    lines as f32
+}
+
+#[cfg(not(windows))]
+fn platform_wheel_line_multiplier(_viewport_px: f32, _row_px: f32) -> f32 {
+    1.0
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         let action = match event {
@@ -349,7 +378,14 @@ impl ApplicationHandler<UserEvent> for App {
                     // packet with separate contact/momentum phases.
                     return;
                 }
-                let (px, source) = Self::wheel_delta_to_physical_px(delta, self.scale_factor);
+                let viewport_px = self
+                    .renderer
+                    .as_ref()
+                    .map_or(INITIAL_WINDOW_HEIGHT as f32, |renderer| {
+                        renderer.config.height as f32
+                    });
+                let (px, source) =
+                    Self::wheel_delta_to_physical_px(delta, self.scale_factor, viewport_px);
                 let collapsed_phase = match touch_phase {
                     winit::event::TouchPhase::Started => {
                         crate::input_routing::CollapsedScrollPhase::Started
@@ -461,13 +497,15 @@ impl App {
     fn wheel_delta_to_physical_px(
         delta: winit::event::MouseScrollDelta,
         scale_factor: f32,
+        viewport_px: f32,
     ) -> ((f32, f32), crate::input_routing::ScrollSource) {
         match delta {
             winit::event::MouseScrollDelta::LineDelta(x, y) => {
                 let scale = scale_factor.max(0.1);
                 let px_per_line = crate::layout::settings_panel::row_step(scale);
+                let multiplier = platform_wheel_line_multiplier(viewport_px, px_per_line);
                 (
-                    (x * px_per_line, y * px_per_line),
+                    (x * px_per_line, y * px_per_line * multiplier),
                     crate::input_routing::ScrollSource::Line,
                 )
             }
@@ -574,7 +612,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::is_repeated_escape;
+    use super::{is_repeated_escape, App};
     use winit::keyboard::KeyCode;
 
     #[test]
@@ -583,5 +621,20 @@ mod tests {
         assert!(!is_repeated_escape(false, Some(KeyCode::Escape)));
         assert!(!is_repeated_escape(true, Some(KeyCode::Enter)));
         assert!(!is_repeated_escape(true, None));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn one_line_delta_maps_to_one_physical_settings_row() {
+        let scale_factor = 2.0;
+        let ((x, y), source) = App::wheel_delta_to_physical_px(
+            winit::event::MouseScrollDelta::LineDelta(0.0, 1.0),
+            scale_factor,
+            1200.0,
+        );
+
+        assert_eq!(x, 0.0);
+        assert_eq!(y, crate::layout::settings_panel::row_step(scale_factor));
+        assert_eq!(source, crate::input_routing::ScrollSource::Line);
     }
 }
