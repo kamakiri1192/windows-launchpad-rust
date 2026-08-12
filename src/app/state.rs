@@ -94,7 +94,11 @@ pub enum SettingsPressTarget {
     ResetSettings,
     /// Liquid Glass master switch (keyboard equivalent: `V`).
     LiquidGlassEnabled,
-    /// One of the five numeric Liquid Glass parameters, pressed on the slider
+    /// Automatically add darkness when the captured backdrop is mostly white.
+    LiquidGlassAutoDarkness,
+    /// Session-only automatic-darkness classification cadence.
+    LiquidGlassAutoDarknessMode(crate::liquid_glass::AutoDarknessUpdateMode),
+    /// One of the numeric Liquid Glass parameters, pressed on the slider
     /// track. Starts a drag; the value updates until release.
     LiquidGlassParam(crate::domain::settings::LiquidGlassParamField),
     /// Per-parameter reset arrow on a slider row.

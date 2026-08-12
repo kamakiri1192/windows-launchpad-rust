@@ -95,6 +95,14 @@ impl App {
                 window_decorated,
                 liquid_glass: layout::settings_panel::LiquidGlassValues {
                     enabled: lg.enabled,
+                    auto_darkness_enabled: lg.auto_darkness_enabled,
+                    auto_darkness_max: lg.auto_darkness_max,
+                    auto_darkness_mode: auto_darkness_mode_id(
+                        self.renderer
+                            .as_ref()
+                            .map(|r| r.liquid_glass_auto_darkness_update_mode())
+                            .unwrap_or_default(),
+                    ),
                     thickness: lg.thickness,
                     refractive_index: lg.refractive_index,
                     saturation: lg.saturation,
@@ -433,6 +441,27 @@ pub(crate) fn sort_order_id(order: SortOrder) -> layout::settings_panel::SortOrd
     }
 }
 
+fn auto_darkness_mode_id(
+    mode: crate::liquid_glass::AutoDarknessUpdateMode,
+) -> layout::settings_panel::AutoDarknessModeId {
+    use crate::liquid_glass::AutoDarknessUpdateMode as Source;
+    use layout::settings_panel::AutoDarknessModeId as Target;
+    match mode {
+        Source::FullRate => Target::FullRate,
+        Source::Adaptive => Target::Adaptive,
+        Source::Fixed8Hz => Target::Fixed8Hz,
+    }
+}
+
+fn auto_darkness_mode_from_key(key: &str) -> crate::liquid_glass::AutoDarknessUpdateMode {
+    use crate::liquid_glass::AutoDarknessUpdateMode;
+    match key {
+        "full-rate" => AutoDarknessUpdateMode::FullRate,
+        "fixed-8hz" => AutoDarknessUpdateMode::Fixed8Hz,
+        _ => AutoDarknessUpdateMode::Adaptive,
+    }
+}
+
 fn settings_panel_copy<'a>(
     hidden_count_label: &'a str,
 ) -> layout::settings_panel::SettingsPanelCopy<'a> {
@@ -506,6 +535,14 @@ fn settings_panel_copy<'a>(
         debug_icon_cache_detail: "すべてのアイコンを再抽出します",
         debug_lg_enabled_label: "Liquid Glass を有効化",
         debug_lg_enabled_detail: "ガラス効果のマスタースイッチ",
+        debug_lg_auto_darkness_label: "背景に合わせてガラスを暗くする",
+        debug_lg_auto_darkness_detail: "背景が白いときだけガラス全体を自動で暗くします",
+        debug_lg_auto_darkness_mode_labels: [
+            ("判定: フルレート", "新しい背景フレームごとに判定します"),
+            ("判定: 自動", "変化中は追従し、安定時は最大8Hzに抑えます"),
+            ("判定: 8Hz固定", "性能比較用に判定を常時8Hzへ制限します"),
+        ],
+        debug_lg_auto_darkness_max_label: "動的darknessの上限",
         debug_lg_thickness_label: "厚み (thickness)",
         debug_lg_refractive_index_label: "屈折率 (refractive index)",
         debug_lg_saturation_label: "彩度 (saturation)",
@@ -579,6 +616,11 @@ pub(crate) fn settings_press_target_from_hit_target(
             "debug" => SettingsPressTarget::DebugToggle,
             "show-fps" => SettingsPressTarget::FpsToggle,
             "lg-enabled" => SettingsPressTarget::LiquidGlassEnabled,
+            "lg-auto-darkness" => SettingsPressTarget::LiquidGlassAutoDarkness,
+            key if key.starts_with("lg-auto-darkness-mode-") => {
+                let mode = auto_darkness_mode_from_key(&key["lg-auto-darkness-mode-".len()..]);
+                SettingsPressTarget::LiquidGlassAutoDarknessMode(mode)
+            }
             "window-decorations" => SettingsPressTarget::WindowDecorations,
             key if key.starts_with("lg-param-") => {
                 let field = param_field_from_key(&key["lg-param-".len()..]);
@@ -612,6 +654,7 @@ fn param_field_from_key(key: &str) -> LiquidGlassParamField {
         "thickness" => LiquidGlassParamField::Thickness,
         "refractive-index" => LiquidGlassParamField::RefractiveIndex,
         "saturation" => LiquidGlassParamField::Saturation,
+        "auto-darkness-max" => LiquidGlassParamField::AutoDarknessMax,
         "glass-darkness" => LiquidGlassParamField::GlassDarkness,
         "context-menu-glass-darkness" => LiquidGlassParamField::ContextMenuGlassDarkness,
         "settings-panel-glass-darkness" => LiquidGlassParamField::SettingsPanelGlassDarkness,
@@ -846,6 +889,18 @@ mod tests {
             SettingsPressTarget::LiquidGlassEnabled
         );
         assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-auto-darkness")),
+            SettingsPressTarget::LiquidGlassAutoDarkness
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-mode-fixed-8hz"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(
+                crate::liquid_glass::AutoDarknessUpdateMode::Fixed8Hz
+            )
+        );
+        assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle(
                 "window-decorations"
             )),
@@ -882,6 +937,12 @@ mod tests {
                 "lg-param-reset-thickness"
             )),
             SettingsPressTarget::LiquidGlassParamReset(LiquidGlassParamField::Thickness)
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-param-auto-darkness-max"
+            )),
+            SettingsPressTarget::LiquidGlassParam(LiquidGlassParamField::AutoDarknessMax)
         );
     }
 

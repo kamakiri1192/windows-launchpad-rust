@@ -163,6 +163,11 @@ pub enum SettingsPanelHit {
     ResetSettings,
     /// Liquid Glass master switch (keyboard `V`).
     LiquidGlassEnabled,
+    /// Automatically add glass darkness when the captured backdrop is mostly
+    /// white.
+    LiquidGlassAutoDarkness,
+    /// Session-only automatic-darkness classification cadence.
+    LiquidGlassAutoDarknessMode(AutoDarknessModeId),
     /// One of the numeric Liquid Glass slider rows.
     LiquidGlassParam(LiquidGlassParamId),
     /// Per-parameter reset arrow on a slider row.
@@ -188,6 +193,7 @@ pub enum LiquidGlassParamId {
     Thickness,
     RefractiveIndex,
     Saturation,
+    AutoDarknessMax,
     GlassDarkness,
     ContextMenuGlassDarkness,
     SettingsPanelGlassDarkness,
@@ -196,10 +202,11 @@ pub enum LiquidGlassParamId {
 }
 
 impl LiquidGlassParamId {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Thickness,
         Self::RefractiveIndex,
         Self::Saturation,
+        Self::AutoDarknessMax,
         Self::GlassDarkness,
         Self::ContextMenuGlassDarkness,
         Self::SettingsPanelGlassDarkness,
@@ -212,6 +219,7 @@ impl LiquidGlassParamId {
             Self::Thickness => "thickness",
             Self::RefractiveIndex => "refractive-index",
             Self::Saturation => "saturation",
+            Self::AutoDarknessMax => "auto-darkness-max",
             Self::GlassDarkness => "glass-darkness",
             Self::ContextMenuGlassDarkness => "context-menu-glass-darkness",
             Self::SettingsPanelGlassDarkness => "settings-panel-glass-darkness",
@@ -226,11 +234,32 @@ impl LiquidGlassParamId {
             Self::Thickness => (6.0, 48.0),
             Self::RefractiveIndex => (1.02, 1.75),
             Self::Saturation => (0.5, 2.0),
+            Self::AutoDarknessMax => (0.0, 1.0),
             Self::GlassDarkness => (0.0, 1.0),
             Self::ContextMenuGlassDarkness => (0.0, 1.0),
             Self::SettingsPanelGlassDarkness => (0.0, 1.0),
             Self::ChromaticAberration => (0.0, 0.18),
             Self::BlurRadius => (0.0, 40.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoDarknessModeId {
+    FullRate,
+    #[default]
+    Adaptive,
+    Fixed8Hz,
+}
+
+impl AutoDarknessModeId {
+    pub const ALL: [Self; 3] = [Self::FullRate, Self::Adaptive, Self::Fixed8Hz];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::FullRate => "full-rate",
+            Self::Adaptive => "adaptive",
+            Self::Fixed8Hz => "fixed-8hz",
         }
     }
 }
@@ -279,6 +308,10 @@ impl SettingsPanelHit {
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
             Self::LiquidGlassEnabled => HitTarget::settings_toggle("lg-enabled"),
+            Self::LiquidGlassAutoDarkness => HitTarget::settings_toggle("lg-auto-darkness"),
+            Self::LiquidGlassAutoDarknessMode(mode) => {
+                HitTarget::settings_toggle(format!("lg-auto-darkness-mode-{}", mode.key()))
+            }
             Self::LiquidGlassParam(p) => {
                 HitTarget::settings_toggle(format!("lg-param-{}", p.key()))
             }
@@ -398,6 +431,9 @@ pub struct SettingsPanelInput {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiquidGlassValues {
     pub enabled: bool,
+    pub auto_darkness_enabled: bool,
+    pub auto_darkness_max: f32,
+    pub auto_darkness_mode: AutoDarknessModeId,
     pub thickness: f32,
     pub refractive_index: f32,
     pub saturation: f32,
@@ -412,6 +448,9 @@ impl Default for LiquidGlassValues {
     fn default() -> Self {
         Self {
             enabled: true,
+            auto_darkness_enabled: false,
+            auto_darkness_max: 0.16,
+            auto_darkness_mode: AutoDarknessModeId::Adaptive,
             thickness: 26.0,
             refractive_index: 1.42,
             saturation: 1.34,
@@ -430,6 +469,7 @@ impl LiquidGlassValues {
             LiquidGlassParamId::Thickness => self.thickness,
             LiquidGlassParamId::RefractiveIndex => self.refractive_index,
             LiquidGlassParamId::Saturation => self.saturation,
+            LiquidGlassParamId::AutoDarknessMax => self.auto_darkness_max,
             LiquidGlassParamId::GlassDarkness => self.glass_darkness,
             LiquidGlassParamId::ContextMenuGlassDarkness => self.context_menu_glass_darkness,
             LiquidGlassParamId::SettingsPanelGlassDarkness => self.settings_panel_glass_darkness,
@@ -501,6 +541,10 @@ pub struct SettingsPanelCopy<'a> {
     pub debug_icon_cache_detail: &'a str,
     pub debug_lg_enabled_label: &'a str,
     pub debug_lg_enabled_detail: &'a str,
+    pub debug_lg_auto_darkness_label: &'a str,
+    pub debug_lg_auto_darkness_detail: &'a str,
+    pub debug_lg_auto_darkness_mode_labels: [(&'a str, &'a str); 3],
+    pub debug_lg_auto_darkness_max_label: &'a str,
     pub debug_lg_thickness_label: &'a str,
     pub debug_lg_refractive_index_label: &'a str,
     pub debug_lg_saturation_label: &'a str,
@@ -1107,8 +1151,39 @@ pub fn build_with_ui(
                         .hit_target(SettingsPanelHit::LiquidGlassEnabled.target()),
                 );
 
-                // Rows 4-11: Liquid Glass parameter sliders
-                let param_labels: [(LiquidGlassParamId, &str); 8] = [
+                // Row 4: optional backdrop-aware darkness
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.liquid_glass.auto_darkness_enabled)
+                        .id(UiId::settings_row("toggle-lg-auto-darkness"))
+                        .label(copy.debug_lg_auto_darkness_label)
+                        .detail(copy.debug_lg_auto_darkness_detail)
+                        .hit_target(SettingsPanelHit::LiquidGlassAutoDarkness.target()),
+                );
+
+                for (mode, (label, detail)) in AutoDarknessModeId::ALL
+                    .into_iter()
+                    .zip(copy.debug_lg_auto_darkness_mode_labels)
+                {
+                    ui.begin_absolute_placement();
+                    ui.set_available_width(cw);
+                    ui.toggle(
+                        &Toggle::new(input.liquid_glass.auto_darkness_mode == mode)
+                            .id(UiId::settings_row(format!(
+                                "toggle-lg-auto-darkness-mode-{}",
+                                mode.key()
+                            )))
+                            .label(label)
+                            .detail(detail)
+                            .hit_target(
+                                SettingsPanelHit::LiquidGlassAutoDarknessMode(mode).target(),
+                            ),
+                    );
+                }
+
+                // Liquid Glass parameter sliders
+                let param_labels: [(LiquidGlassParamId, &str); 9] = [
                     (LiquidGlassParamId::Thickness, copy.debug_lg_thickness_label),
                     (
                         LiquidGlassParamId::RefractiveIndex,
@@ -1117,6 +1192,10 @@ pub fn build_with_ui(
                     (
                         LiquidGlassParamId::Saturation,
                         copy.debug_lg_saturation_label,
+                    ),
+                    (
+                        LiquidGlassParamId::AutoDarknessMax,
+                        copy.debug_lg_auto_darkness_max_label,
                     ),
                     (
                         LiquidGlassParamId::GlassDarkness,
@@ -1156,7 +1235,7 @@ pub fn build_with_ui(
                     );
                 }
 
-                // Rows 12-14: Disable-flag toggles
+                // Disable-flag toggles
                 let disable_items = [
                     (
                         LiquidGlassDebugId::DisableChromaticAberration,
@@ -1188,7 +1267,7 @@ pub fn build_with_ui(
                     );
                 }
 
-                // Row 15: Reset-all button
+                // Reset-all button
                 ui.begin_absolute_placement();
                 ui.set_available_width(cw);
                 ui.button(
@@ -1222,7 +1301,7 @@ pub fn build_with_ui(
                 );
                 ui.spacer(2.0 * scale);
 
-                // Rows 16-20: Debug-view toggles
+                // Debug-view toggles
                 let view_items = [
                     (
                         LiquidGlassDebugId::ShowBackdropTexture,
@@ -1338,27 +1417,31 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   1  window decorations (M)
 //   2  icon cache rebuild (R)
 //   3  Liquid Glass enabled (V)
-//   4  thickness slider
-//   5  refractive_index slider
-//   6  saturation slider
-//   7  chromatic_aberration slider
-//   7  glass_darkness slider
-//   8  context_menu_glass_darkness slider
-//   9  settings_panel_glass_darkness slider
-//  10  chromatic_aberration slider
-//  11  blur_radius slider
-//  12  disable chromatic aberration (C)
-//  13  disable edge lighting (E)
-//  14  disable blur (L)
-//  15  "Reset Liquid Glass to defaults" button
-//  16  show backdrop texture (B)
-//  17  show geometry texture (G)
-//  18  show displacement (D)
-//  19  show alpha mask (A)
-//  20  show final glass only (F)
+//   4  automatic darkness enabled
+//   5  automatic darkness: full-rate mode
+//   6  automatic darkness: adaptive mode
+//   7  automatic darkness: fixed-8-Hz mode
+//   8  thickness slider
+//   9  refractive_index slider
+//  10  saturation slider
+//  11  automatic darkness maximum slider
+//  12  glass_darkness slider
+//  13  context_menu_glass_darkness slider
+//  14  settings_panel_glass_darkness slider
+//  15  chromatic_aberration slider
+//  16  blur_radius slider
+//  17  disable chromatic aberration (C)
+//  18  disable edge lighting (E)
+//  19  disable blur (L)
+//  20  "Reset Liquid Glass to defaults" button
+//  21  show backdrop texture (B)
+//  22  show geometry texture (G)
+//  23  show displacement (D)
+//  24  show alpha mask (A)
+//  25  show final glass only (F)
 
 /// Total number of full-row slots the Debug category uses.
-pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 21;
+pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 26;
 
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
@@ -1476,6 +1559,14 @@ mod tests {
             debug_icon_cache_detail: "Cache detail",
             debug_lg_enabled_label: "Enable Liquid Glass",
             debug_lg_enabled_detail: "LG detail",
+            debug_lg_auto_darkness_label: "Auto backdrop darkness",
+            debug_lg_auto_darkness_detail: "Enable backdrop-aware glass darkness",
+            debug_lg_auto_darkness_mode_labels: [
+                ("Full rate", "Classify every capture"),
+                ("Adaptive", "Settle to 8 Hz when stable"),
+                ("Fixed 8 Hz", "Always classify at 8 Hz"),
+            ],
+            debug_lg_auto_darkness_max_label: "Auto darkness maximum",
             debug_lg_thickness_label: "Thickness",
             debug_lg_refractive_index_label: "Refractive index",
             debug_lg_saturation_label: "Saturation",
@@ -2072,7 +2163,7 @@ mod tests {
     }
 
     #[test]
-    fn build_with_ui_debug_has_eight_sliders() {
+    fn build_with_ui_debug_has_nine_sliders() {
         let inp = input(SettingsCategoryId::Debug);
         let c = copy("0");
         let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
@@ -2088,7 +2179,7 @@ mod tests {
             .iter()
             .filter(|v| v.kind == ControlKind::SliderKnob)
             .collect();
-        assert_eq!(knobs.len(), 8, "8 slider knobs");
+        assert_eq!(knobs.len(), 9, "9 slider knobs");
     }
 
     // ------------------------------------------------------------------

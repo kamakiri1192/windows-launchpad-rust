@@ -461,6 +461,21 @@ impl App {
                 self.persist_settings();
                 self.request_redraw();
             }
+            SettingsPressTarget::LiquidGlassAutoDarkness => {
+                let next = !self.settings.liquid_glass.auto_darkness_enabled;
+                self.settings.liquid_glass.auto_darkness_enabled = next;
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_auto_darkness_enabled(next);
+                }
+                self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(mode) => {
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_auto_darkness_update_mode(mode);
+                }
+                self.request_redraw();
+            }
             SettingsPressTarget::LiquidGlassParam(field) => {
                 // Begin a drag. Subsequent pointer moves update the value
                 // via `update_settings_slider_drag`; release commits.
@@ -533,6 +548,9 @@ impl App {
             }
             crate::domain::settings::LiquidGlassParamField::Saturation => {
                 sp::LiquidGlassParamId::Saturation
+            }
+            crate::domain::settings::LiquidGlassParamField::AutoDarknessMax => {
+                sp::LiquidGlassParamId::AutoDarknessMax
             }
             crate::domain::settings::LiquidGlassParamField::GlassDarkness => {
                 sp::LiquidGlassParamId::GlassDarkness
@@ -1980,6 +1998,7 @@ fn apply_param_to_renderer(
         LiquidGlassParamField::Thickness => r.set_liquid_glass_thickness(value),
         LiquidGlassParamField::RefractiveIndex => r.set_liquid_glass_refractive_index(value),
         LiquidGlassParamField::Saturation => r.set_liquid_glass_saturation(value),
+        LiquidGlassParamField::AutoDarknessMax => r.set_liquid_glass_auto_darkness_max(value),
         LiquidGlassParamField::GlassDarkness => r.set_liquid_glass_darkness(value),
         LiquidGlassParamField::ContextMenuGlassDarkness => {
             r.set_liquid_glass_context_menu_darkness(value)

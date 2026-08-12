@@ -96,6 +96,16 @@ impl LiquidGlassRenderer {
             self.capture_status = next_status;
         }
 
+        if self.params.auto_darkness_enabled {
+            self.update_auto_darkness_uniforms(queue);
+            if captured || self.backdrop_stats_dirty {
+                // The 16x16 reduction is encoded into the caller's frame encoder.
+                // This preserves full-rate classification without adding a queue
+                // submission between capture and the visible glass pass.
+                self.encode_backdrop_stats(encoder);
+            }
+        }
+
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
@@ -119,8 +129,6 @@ impl LiquidGlassRenderer {
         // dual-Kawase pyramid feeds each pass's output into the next pass's
         // input (L2 is written by down then read by up), we must split scopes
         // by submitting one encoder per pass.
-        let _ = encoder; // the caller's encoder is used only for geometry/final.
-
         // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
         // backdrop for i==0 else levels[i-1], and writes levels[i].
         let mut blur_commands = Vec::with_capacity(global_blur.level_count * 2);

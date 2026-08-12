@@ -664,6 +664,8 @@ impl App {
                         // flags are session-only and stay out of `settings`.
                         let p = r.liquid_glass_params_snapshot();
                         self.settings.liquid_glass.enabled = p.enabled;
+                        self.settings.liquid_glass.auto_darkness_enabled = p.auto_darkness_enabled;
+                        self.settings.liquid_glass.auto_darkness_max = p.auto_darkness_max;
                         self.settings.liquid_glass.thickness = p.thickness;
                         self.settings.liquid_glass.refractive_index = p.refractive_index;
                         self.settings.liquid_glass.saturation = p.saturation;

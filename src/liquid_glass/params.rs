@@ -1,6 +1,9 @@
 #[derive(Debug, Clone, Copy)]
 pub struct LiquidGlassParams {
     pub enabled: bool,
+    pub auto_darkness_enabled: bool,
+    /// Maximum black tint contributed by backdrop-aware darkness.
+    pub auto_darkness_max: f32,
     pub thickness: f32,
     pub refractive_index: f32,
     pub chromatic_aberration: f32,
@@ -20,6 +23,8 @@ impl Default for LiquidGlassParams {
     fn default() -> Self {
         Self {
             enabled: true,
+            auto_darkness_enabled: false,
+            auto_darkness_max: 0.16,
             thickness: 26.0,
             refractive_index: 1.42,
             chromatic_aberration: 0.075,
@@ -31,6 +36,36 @@ impl Default for LiquidGlassParams {
             light_intensity: 1.25,
             ambient_strength: 0.28,
             blend: 26.0,
+        }
+    }
+}
+
+/// Session-only update policy used to compare automatic-darkness cost from
+/// the settings debug panel without changing persisted visual preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoDarknessUpdateMode {
+    FullRate,
+    #[default]
+    Adaptive,
+    Fixed8Hz,
+}
+
+impl AutoDarknessUpdateMode {
+    pub const ALL: [Self; 3] = [Self::FullRate, Self::Adaptive, Self::Fixed8Hz];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::FullRate => "full-rate",
+            Self::Adaptive => "adaptive",
+            Self::Fixed8Hz => "fixed-8hz",
+        }
+    }
+
+    pub const fn shader_value(self) -> u32 {
+        match self {
+            Self::FullRate => 0,
+            Self::Adaptive => 1,
+            Self::Fixed8Hz => 2,
         }
     }
 }
@@ -68,5 +103,32 @@ fn normalize2(v: [f32; 2]) -> [f32; 2] {
         [1.0, 0.0]
     } else {
         [v[0] / len, v[1] / len]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_darkness_modes_have_stable_shader_values_and_keys() {
+        let expected = [
+            (AutoDarknessUpdateMode::FullRate, 0, "full-rate"),
+            (AutoDarknessUpdateMode::Adaptive, 1, "adaptive"),
+            (AutoDarknessUpdateMode::Fixed8Hz, 2, "fixed-8hz"),
+        ];
+        for (mode, shader_value, key) in expected {
+            assert_eq!(mode.shader_value(), shader_value);
+            assert_eq!(mode.key(), key);
+        }
+        assert_eq!(
+            AutoDarknessUpdateMode::default(),
+            AutoDarknessUpdateMode::Adaptive
+        );
+    }
+
+    #[test]
+    fn auto_darkness_default_max_preserves_existing_appearance() {
+        assert_eq!(LiquidGlassParams::default().auto_darkness_max, 0.16);
     }
 }

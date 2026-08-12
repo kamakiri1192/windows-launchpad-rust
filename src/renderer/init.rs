@@ -799,6 +799,16 @@ impl Renderer {
         self.liquid_glass.params().enabled
     }
 
+    pub fn liquid_glass_auto_darkness_enabled(&self) -> bool {
+        self.liquid_glass.params().auto_darkness_enabled
+    }
+
+    pub fn liquid_glass_auto_darkness_update_mode(
+        &self,
+    ) -> crate::liquid_glass::AutoDarknessUpdateMode {
+        self.liquid_glass.auto_darkness_update_mode()
+    }
+
     pub fn liquid_glass_thickness(&self) -> f32 {
         self.liquid_glass.params().thickness
     }
@@ -848,6 +858,21 @@ impl Renderer {
         self.liquid_glass.set_enabled(enabled);
     }
 
+    pub fn set_liquid_glass_auto_darkness_enabled(&mut self, enabled: bool) {
+        self.liquid_glass.set_auto_darkness_enabled(enabled);
+    }
+
+    pub fn set_liquid_glass_auto_darkness_update_mode(
+        &mut self,
+        mode: crate::liquid_glass::AutoDarknessUpdateMode,
+    ) {
+        self.liquid_glass.set_auto_darkness_update_mode(mode);
+    }
+
+    pub fn set_liquid_glass_auto_darkness_max(&mut self, value: f32) {
+        self.liquid_glass.set_auto_darkness_max(value);
+    }
+
     pub fn set_liquid_glass_thickness(&mut self, value: f32) {
         self.liquid_glass.set_thickness(value);
     }
@@ -888,6 +913,8 @@ impl Renderer {
     pub fn apply_persisted_liquid_glass(
         &mut self,
         enabled: bool,
+        auto_darkness_enabled: bool,
+        auto_darkness_max: f32,
         thickness: f32,
         refractive_index: f32,
         saturation: f32,
@@ -899,6 +926,8 @@ impl Renderer {
     ) {
         self.liquid_glass.apply_persisted_params(
             enabled,
+            auto_darkness_enabled,
+            auto_darkness_max,
             thickness,
             refractive_index,
             saturation,
