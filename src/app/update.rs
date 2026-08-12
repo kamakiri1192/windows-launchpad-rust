@@ -767,10 +767,12 @@ impl App {
     /// How many content rows can be scrolled below the fold for the current
     /// category. Returns 0 for categories that fit without scrolling.
     pub(crate) fn settings_max_scroll_rows(&self) -> i32 {
-        // Debug overflows; the other categories fit. The exact count is
-        // computed in the layout module; expose a stable value here.
-        // (See `layout::settings_panel::debug_category_overflow_rows`.)
+        // Scrollable category extents are computed in the layout module;
+        // expose stable row-based values for the legacy input path here.
         match self.settings_category {
+            crate::domain::settings::SettingsCategory::Darkness => {
+                crate::layout::settings_panel::darkness_category_overflow_rows()
+            }
             crate::domain::settings::SettingsCategory::Debug => {
                 crate::layout::settings_panel::debug_category_overflow_rows()
             }

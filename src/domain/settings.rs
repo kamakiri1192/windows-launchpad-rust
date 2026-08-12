@@ -307,24 +307,28 @@ pub enum SettingsCategory {
     Apps,
     Search,
     System,
+    Darkness,
     About,
     Debug,
 }
 
 impl SettingsCategory {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Apps,
         Self::Search,
         Self::System,
+        Self::Darkness,
         Self::About,
         Self::Debug,
     ];
+    pub const COUNT: usize = Self::ALL.len();
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Apps => "アプリ",
             Self::Search => "表示と検索",
             Self::System => "システム",
+            Self::Darkness => "Darkness",
             Self::About => "このアプリについて",
             Self::Debug => "デバッグ",
         }
