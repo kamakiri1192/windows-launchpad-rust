@@ -89,12 +89,21 @@ impl App {
                 search_includes_hidden: self.settings.search_includes_hidden,
                 debug_keys_enabled: self.settings.debug_keys_enabled,
                 show_fps: self.settings.show_fps,
+                show_auto_darkness_value: self.settings.show_auto_darkness_value,
                 hidden_count,
                 progress: self.settings_panel_progress,
                 scroll_rows: self.settings_scroll_rows,
                 window_decorated,
                 liquid_glass: layout::settings_panel::LiquidGlassValues {
                     enabled: lg.enabled,
+                    auto_darkness_enabled: lg.auto_darkness_enabled,
+                    auto_darkness_max: lg.auto_darkness_max,
+                    auto_darkness_mode: auto_darkness_mode_id(
+                        self.renderer
+                            .as_ref()
+                            .map(|r| r.liquid_glass_auto_darkness_update_mode())
+                            .unwrap_or_default(),
+                    ),
                     thickness: lg.thickness,
                     refractive_index: lg.refractive_index,
                     saturation: lg.saturation,
@@ -398,17 +407,18 @@ impl App {
             })
     }
 
-    pub(crate) fn settings_category_hover_amounts(&self) -> [f32; 5] {
+    pub(crate) fn settings_category_hover_amounts(&self) -> [f32; SettingsCategory::COUNT] {
         std::array::from_fn(|index| self.settings_category_hover[index].current)
     }
 
-    pub(crate) fn settings_category_selection_amounts(&self) -> [f32; 5] {
+    pub(crate) fn settings_category_selection_amounts(&self) -> [f32; SettingsCategory::COUNT] {
         std::array::from_fn(|index| self.settings_category_selection[index].current)
     }
 
     pub(crate) fn reset_settings_category_hover(&mut self) {
-        self.settings_category_hover = [crate::spring_anim::Channel::rest(0.0); 5];
-        self.settings_category_hover_elapsed = [0.0; 5];
+        self.settings_category_hover =
+            [crate::spring_anim::Channel::rest(0.0); SettingsCategory::COUNT];
+        self.settings_category_hover_elapsed = [0.0; SettingsCategory::COUNT];
     }
 }
 
@@ -419,6 +429,7 @@ pub(crate) fn settings_category_id(
         SettingsCategory::Apps => layout::settings_panel::SettingsCategoryId::Apps,
         SettingsCategory::Search => layout::settings_panel::SettingsCategoryId::Search,
         SettingsCategory::System => layout::settings_panel::SettingsCategoryId::System,
+        SettingsCategory::Darkness => layout::settings_panel::SettingsCategoryId::Darkness,
         SettingsCategory::About => layout::settings_panel::SettingsCategoryId::About,
         SettingsCategory::Debug => layout::settings_panel::SettingsCategoryId::Debug,
     }
@@ -430,6 +441,27 @@ pub(crate) fn sort_order_id(order: SortOrder) -> layout::settings_panel::SortOrd
         SortOrder::Manual => layout::settings_panel::SortOrderId::Manual,
         SortOrder::Recent => layout::settings_panel::SortOrderId::Recent,
         SortOrder::Frequent => layout::settings_panel::SortOrderId::Frequent,
+    }
+}
+
+fn auto_darkness_mode_id(
+    mode: crate::liquid_glass::AutoDarknessUpdateMode,
+) -> layout::settings_panel::AutoDarknessModeId {
+    use crate::liquid_glass::AutoDarknessUpdateMode as Source;
+    use layout::settings_panel::AutoDarknessModeId as Target;
+    match mode {
+        Source::FullRate => Target::FullRate,
+        Source::Adaptive => Target::Adaptive,
+        Source::Fixed8Hz => Target::Fixed8Hz,
+    }
+}
+
+fn auto_darkness_mode_from_key(key: &str) -> crate::liquid_glass::AutoDarknessUpdateMode {
+    use crate::liquid_glass::AutoDarknessUpdateMode;
+    match key {
+        "full-rate" => AutoDarknessUpdateMode::FullRate,
+        "fixed-8hz" => AutoDarknessUpdateMode::Fixed8Hz,
+        _ => AutoDarknessUpdateMode::Adaptive,
     }
 }
 
@@ -450,6 +482,10 @@ fn settings_panel_copy<'a>(
             (
                 layout::settings_panel::SettingsCategoryId::System,
                 SettingsCategory::System.label(),
+            ),
+            (
+                layout::settings_panel::SettingsCategoryId::Darkness,
+                SettingsCategory::Darkness.label(),
             ),
             (
                 layout::settings_panel::SettingsCategoryId::About,
@@ -506,13 +542,22 @@ fn settings_panel_copy<'a>(
         debug_icon_cache_detail: "すべてのアイコンを再抽出します",
         debug_lg_enabled_label: "Liquid Glass を有効化",
         debug_lg_enabled_detail: "ガラス効果のマスタースイッチ",
+        debug_lg_auto_darkness_value_label: "動的darknessの値を表示",
+        debug_lg_auto_darkness_value_detail: "画面右上に現在の実効値を表示します",
+        darkness_auto_label: "背景に合わせてガラスを暗くする",
+        darkness_auto_detail: "背景が白いときだけガラス全体を自動で暗くします",
+        darkness_update_mode_labels: [
+            ("判定: フルレート", "新しい背景フレームごとに判定します"),
+            ("判定: 自動", "変化中は追従し、安定時は最大8Hzに抑えます"),
+            ("判定: 8Hz固定", "性能比較用に判定を常時8Hzへ制限します"),
+        ],
+        darkness_max_label: "動的darknessの上限",
+        darkness_glass_label: "ガラス全体の黒さ (glass darkness)",
+        darkness_context_menu_label: "コンテキストメニューの黒さ (context menu darkness)",
+        darkness_settings_panel_label: "設定画面の黒さ (settings panel darkness)",
         debug_lg_thickness_label: "厚み (thickness)",
         debug_lg_refractive_index_label: "屈折率 (refractive index)",
         debug_lg_saturation_label: "彩度 (saturation)",
-        debug_lg_glass_darkness_label: "ガラス全体の黒さ (glass darkness)",
-        debug_lg_context_menu_glass_darkness_label:
-            "コンテキストメニューの黒さ (context menu darkness)",
-        debug_lg_settings_panel_glass_darkness_label: "設定画面の黒さ (settings panel darkness)",
         debug_lg_chromatic_aberration_label: "色収差 (chromatic aberration)",
         debug_lg_blur_radius_label: "ぼかし半径 (blur radius)",
         debug_lg_disable_chromatic_aberration_label: "色収差を無効化",
@@ -552,6 +597,7 @@ pub(crate) fn settings_press_target_from_hit_target(
                 "apps" => crate::domain::settings::SettingsCategory::Apps,
                 "search" => crate::domain::settings::SettingsCategory::Search,
                 "system" => crate::domain::settings::SettingsCategory::System,
+                "darkness" => crate::domain::settings::SettingsCategory::Darkness,
                 "about" => crate::domain::settings::SettingsCategory::About,
                 "debug" => crate::domain::settings::SettingsCategory::Debug,
                 _ => return SettingsPressTarget::Inside,
@@ -578,7 +624,13 @@ pub(crate) fn settings_press_target_from_hit_target(
             "search-hidden" => SettingsPressTarget::SearchHiddenToggle,
             "debug" => SettingsPressTarget::DebugToggle,
             "show-fps" => SettingsPressTarget::FpsToggle,
+            "show-auto-darkness-value" => SettingsPressTarget::AutoDarknessValueToggle,
             "lg-enabled" => SettingsPressTarget::LiquidGlassEnabled,
+            "lg-auto-darkness" => SettingsPressTarget::LiquidGlassAutoDarkness,
+            key if key.starts_with("lg-auto-darkness-mode-") => {
+                let mode = auto_darkness_mode_from_key(&key["lg-auto-darkness-mode-".len()..]);
+                SettingsPressTarget::LiquidGlassAutoDarknessMode(mode)
+            }
             "window-decorations" => SettingsPressTarget::WindowDecorations,
             key if key.starts_with("lg-param-") => {
                 let field = param_field_from_key(&key["lg-param-".len()..]);
@@ -612,6 +664,7 @@ fn param_field_from_key(key: &str) -> LiquidGlassParamField {
         "thickness" => LiquidGlassParamField::Thickness,
         "refractive-index" => LiquidGlassParamField::RefractiveIndex,
         "saturation" => LiquidGlassParamField::Saturation,
+        "auto-darkness-max" => LiquidGlassParamField::AutoDarknessMax,
         "glass-darkness" => LiquidGlassParamField::GlassDarkness,
         "context-menu-glass-darkness" => LiquidGlassParamField::ContextMenuGlassDarkness,
         "settings-panel-glass-darkness" => LiquidGlassParamField::SettingsPanelGlassDarkness,
@@ -820,6 +873,14 @@ mod tests {
     use crate::ui_model::hit::{HitTarget, SettingsTarget};
 
     #[test]
+    fn press_target_from_hit_target_darkness_category() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_category("darkness")),
+            SettingsPressTarget::Category(SettingsCategory::Darkness)
+        );
+    }
+
+    #[test]
     fn press_target_from_hit_target_toggle_keys() {
         assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle("frequent-apps")),
@@ -842,8 +903,26 @@ mod tests {
             SettingsPressTarget::FpsToggle
         );
         assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "show-auto-darkness-value"
+            )),
+            SettingsPressTarget::AutoDarknessValueToggle
+        );
+        assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-enabled")),
             SettingsPressTarget::LiquidGlassEnabled
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-auto-darkness")),
+            SettingsPressTarget::LiquidGlassAutoDarkness
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-mode-fixed-8hz"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(
+                crate::liquid_glass::AutoDarknessUpdateMode::Fixed8Hz
+            )
         );
         assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle(
@@ -882,6 +961,12 @@ mod tests {
                 "lg-param-reset-thickness"
             )),
             SettingsPressTarget::LiquidGlassParamReset(LiquidGlassParamField::Thickness)
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-param-auto-darkness-max"
+            )),
+            SettingsPressTarget::LiquidGlassParam(LiquidGlassParamField::AutoDarknessMax)
         );
     }
 

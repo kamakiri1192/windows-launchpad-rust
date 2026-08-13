@@ -23,10 +23,29 @@ struct GlassUniforms {
     // 0 = translucent glass over the existing target, 1 = replace the real
     // desktop with the captured-and-filtered backdrop inside the shape.
     backdrop_replacement: f32,
-    pad2: f32,
+    auto_darkness_enabled: u32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
     glass_darkness: f32,
+};
+
+struct AutoDarknessUniforms {
+    now: f32,
+    mode: u32,
+    flags: u32,
+    max_darkness: f32,
+};
+
+struct AutoDarknessState {
+    from_darkness: f32,
+    target_darkness: f32,
+    transition_started_at: f32,
+    filtered_coverage: f32,
+    last_full_update_at: f32,
+    initialized: u32,
+    classification_count: u32,
+    displayed_darkness: f32,
+    probe_samples: array<f32, 16>,
 };
 
 @group(0) @binding(0) var<uniform> u: GlassUniforms;
@@ -35,6 +54,8 @@ struct GlassUniforms {
 @group(0) @binding(3) var geometry_texture: texture_2d<f32>;
 @group(0) @binding(4) var blur_texture: texture_2d<f32>;
 @group(0) @binding(5) var tint_texture: texture_2d<f32>;
+@group(0) @binding(6) var<storage, read> auto_darkness: AutoDarknessState;
+@group(0) @binding(7) var<uniform> auto_darkness_uniforms: AutoDarknessUniforms;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -93,8 +114,20 @@ fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
     return mix(vec3<f32>(luma), rgb, saturation);
 }
 
+fn auto_glass_darkness() -> f32 {
+    if u.auto_darkness_enabled == 0u {
+        return 0.0;
+    }
+
+    if auto_darkness.initialized == 0u {
+        return 0.0;
+    }
+
+    return auto_darkness.displayed_darkness;
+}
+
 fn apply_glass_darkness(rgb: vec3<f32>) -> vec3<f32> {
-    let strength = clamp(u.glass_darkness, 0.0, 1.0);
+    let strength = max(clamp(u.glass_darkness, 0.0, 1.0), auto_glass_darkness());
     return mix(rgb, vec3<f32>(0.0), strength);
 }
 

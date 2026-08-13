@@ -275,7 +275,7 @@ pub enum GlyphLane {
     /// Context menu label text. Isolated from `Modal` so it never collides
     /// with folder panel glyphs.
     ContextMenu,
-    /// FPS overlay text, drawn last so it sits above all modal content.
+    /// Debug HUD text, drawn last so it sits above all modal content.
     Overlay,
 }
 

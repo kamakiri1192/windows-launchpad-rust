@@ -90,11 +90,16 @@ pub enum SettingsPressTarget {
     SearchHiddenToggle,
     DebugToggle,
     FpsToggle,
+    AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
     /// Liquid Glass master switch (keyboard equivalent: `V`).
     LiquidGlassEnabled,
-    /// One of the five numeric Liquid Glass parameters, pressed on the slider
+    /// Automatically add darkness when the captured backdrop is mostly white.
+    LiquidGlassAutoDarkness,
+    /// Session-only automatic-darkness classification cadence.
+    LiquidGlassAutoDarknessMode(crate::liquid_glass::AutoDarknessUpdateMode),
+    /// One of the numeric Liquid Glass parameters, pressed on the slider
     /// track. Starts a drag; the value updates until release.
     LiquidGlassParam(crate::domain::settings::LiquidGlassParamField),
     /// Per-parameter reset arrow on a slider row.
@@ -330,19 +335,22 @@ pub struct App {
     /// 0..1 presentation progress for the settings panel open/close animation.
     pub settings_panel_progress: f32,
     /// Per-sidebar-row hover channels using the context-menu focus easing.
-    pub settings_category_hover: [crate::spring_anim::Channel; 5],
-    pub settings_category_hover_elapsed: [f32; 5],
+    pub settings_category_hover:
+        [crate::spring_anim::Channel; crate::domain::settings::SettingsCategory::COUNT],
+    pub settings_category_hover_elapsed: [f32; crate::domain::settings::SettingsCategory::COUNT],
     /// Per-sidebar-row selection channels, used to animate the blue selection
     /// pill when the visible settings category changes.
-    pub settings_category_selection: [crate::spring_anim::Channel; 5],
-    pub settings_category_selection_elapsed: [f32; 5],
+    pub settings_category_selection:
+        [crate::spring_anim::Channel; crate::domain::settings::SettingsCategory::COUNT],
+    pub settings_category_selection_elapsed:
+        [f32; crate::domain::settings::SettingsCategory::COUNT],
     /// Persisted settings edited by the overlay.
     pub settings: Settings,
     /// Sidebar category currently shown by the settings overlay.
     pub settings_category: SettingsCategory,
     /// Vertical content scroll offset (in logical content rows) for the
-    /// settings overlay. Only the `Debug` category overflows today, so this
-    /// is reset to 0 whenever the category changes.
+    /// settings overlay. `Darkness` and `Debug` can overflow, so this is reset
+    /// to 0 whenever the category changes.
     ///
     /// **Deprecated:** Phase 3 introduces `settings_scroll` (ContinuousScroller)
     /// for pixel-level smooth scroll. This field is kept for compatibility with
@@ -476,16 +484,18 @@ impl App {
             pressed_on_settings: None,
             settings_open: false,
             settings_panel_progress: 0.0,
-            settings_category_hover: [crate::spring_anim::Channel::rest(0.0); 5],
-            settings_category_hover_elapsed: [0.0; 5],
+            settings_category_hover: [crate::spring_anim::Channel::rest(0.0);
+                SettingsCategory::COUNT],
+            settings_category_hover_elapsed: [0.0; SettingsCategory::COUNT],
             settings_category_selection: [
                 crate::spring_anim::Channel::rest(1.0),
                 crate::spring_anim::Channel::rest(0.0),
                 crate::spring_anim::Channel::rest(0.0),
                 crate::spring_anim::Channel::rest(0.0),
                 crate::spring_anim::Channel::rest(0.0),
+                crate::spring_anim::Channel::rest(0.0),
             ],
-            settings_category_selection_elapsed: [0.0; 5],
+            settings_category_selection_elapsed: [0.0; SettingsCategory::COUNT],
             settings: Settings::default(),
             settings_category: SettingsCategory::Apps,
             settings_scroll_rows: 0,

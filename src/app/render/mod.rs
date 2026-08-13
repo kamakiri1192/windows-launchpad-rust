@@ -7,7 +7,7 @@
 //! - [`settings`]: settings panel ink, text, and animation.
 //! - [`grid`]: grid relayout, tile springs, edit-mode animation.
 //! - [`icons`]: icon cache integration, worker results, app-list diff.
-//! - [`overlay`]: HUD-style overlays (FPS counter).
+//! - [`overlay`]: HUD-style overlays (FPS and automatic darkness).
 //! - [`helpers`]: shared utilities (color blend, SpringPos trait, animation).
 
 mod context_menu;

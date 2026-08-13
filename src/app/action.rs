@@ -664,6 +664,8 @@ impl App {
                         // flags are session-only and stay out of `settings`.
                         let p = r.liquid_glass_params_snapshot();
                         self.settings.liquid_glass.enabled = p.enabled;
+                        self.settings.liquid_glass.auto_darkness_enabled = p.auto_darkness_enabled;
+                        self.settings.liquid_glass.auto_darkness_max = p.auto_darkness_max;
                         self.settings.liquid_glass.thickness = p.thickness;
                         self.settings.liquid_glass.refractive_index = p.refractive_index;
                         self.settings.liquid_glass.saturation = p.saturation;
@@ -1005,12 +1007,13 @@ impl App {
             || folder_long_press_pending
             || self.qa_capture_due()
             || self.profile_scroll.is_some()
-            // Only keep redrawing for the FPS counter while the window is
+            // Only keep redrawing for the debug HUD while the window is
             // visible. `about_to_wait` ticks keep firing even after hide(),
             // so without `self.visible` the hidden window would be rendered
-            // every tick (sluggish machine + GPU driver crash). `show_fps`
-            // stays persisted; the counter returns on the next summon.
-            || (self.settings.show_fps && self.visible)
+            // every tick (sluggish machine + GPU driver crash). Overlay
+            // settings stay persisted; the HUD returns on the next summon.
+            || ((self.settings.show_fps || self.settings.show_auto_darkness_value)
+                && self.visible)
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening
