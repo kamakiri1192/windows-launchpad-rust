@@ -221,6 +221,14 @@ impl App {
     }
 
     fn context_menu_hit_target(&self, x: f32, y: f32) -> Option<usize> {
+        // While the open/close morph is still scaling the rows, each row's hit
+        // rect is expanded by `content_scale` (2.0 → 1.0). Those expanded rects
+        // reach the cursor that is still over the right-clicked icon and would
+        // focus the middle (panel-center) row on the very first pointer move.
+        // Skip the hit test until the rows have settled at their resting scale.
+        if !self.context_menu.row_hit_test_enabled() {
+            return None;
+        }
         let model = self.context_menu_layout.as_ref()?;
         let p = crate::ui_model::geometry::Point::new(x, y);
         for (index, row) in model.rows.iter().enumerate() {
