@@ -19,4 +19,4 @@ mod icons;
 mod overlay;
 mod settings;
 
-pub(crate) use settings::settings_press_target_from_hit_target;
+pub(crate) use settings::{settings_press_target_from_hit_target, SettingsRenderCache};

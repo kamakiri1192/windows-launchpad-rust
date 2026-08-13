@@ -1,4 +1,4 @@
-use crate::ui_model::geometry::{Point, Rect};
+use crate::ui_model::geometry::{ClipRegion, Point, Rect};
 use crate::ui_model::hit::HitTarget;
 use crate::ui_model::ids::UiId;
 
@@ -55,6 +55,10 @@ pub struct HitRegion {
     pub shape: HitShape,
     pub target: HitTarget,
     pub z: i16,
+    /// Optional viewport clip inherited from a container such as ScrollView.
+    /// Keeping this with the retained hit region lets input follow the same
+    /// clipping contract as the visual primitives.
+    pub clip: Option<ClipRegion>,
 }
 
 impl HitRegion {
@@ -65,6 +69,7 @@ impl HitRegion {
             shape: HitShape::rect(rect),
             target,
             z,
+            clip: None,
         }
     }
 
@@ -75,6 +80,7 @@ impl HitRegion {
             shape: HitShape::rect_inclusive(rect),
             target,
             z,
+            clip: None,
         }
     }
 
@@ -91,11 +97,23 @@ impl HitRegion {
             shape: HitShape::circle(center, radius),
             target,
             z,
+            clip: None,
         }
     }
 
     pub fn contains(&self, point: Point) -> bool {
-        self.shape.contains(point)
+        self.clip.is_none_or(|clip| clip.rect.contains(point)) && self.shape.contains(point)
+    }
+
+    /// Move the interactive geometry while leaving its viewport clip fixed.
+    /// This is used by retained scroll content: the content moves, but the
+    /// ScrollView window does not.
+    pub fn translate_y(&mut self, delta: f32) {
+        self.rect.y += delta;
+        match &mut self.shape {
+            HitShape::Rect { rect, .. } => rect.y += delta,
+            HitShape::Circle { center, .. } => center.y += delta,
+        }
     }
 }
 
@@ -146,7 +164,7 @@ impl HitMap {
 #[cfg(test)]
 mod tests {
     use super::{HitMap, HitRegion};
-    use crate::ui_model::geometry::{Point, Rect};
+    use crate::ui_model::geometry::{ClipRegion, Point, Rect};
     use crate::ui_model::hit::HitTarget;
     use crate::ui_model::ids::UiId;
 
@@ -211,6 +229,30 @@ mod tests {
             Some("launcher-item:calc")
         );
         assert!(map.hit_test(Point::new(29.0, 29.0)).is_none());
+    }
+
+    #[test]
+    fn clipped_region_does_not_hit_outside_viewport() {
+        let mut clipped = region("calc", Rect::new(0.0, 0.0, 20.0, 20.0), 0);
+        clipped.clip = Some(ClipRegion::new(Rect::new(0.0, 10.0, 20.0, 10.0), 0.0));
+        let map = HitMap::with_regions(vec![clipped]);
+
+        assert!(map.hit_test(Point::new(10.0, 5.0)).is_none());
+        assert!(map.hit_test(Point::new(10.0, 15.0)).is_some());
+    }
+
+    #[test]
+    fn translate_y_moves_shape_but_not_clip() {
+        let clip = ClipRegion::new(Rect::new(0.0, 0.0, 100.0, 100.0), 0.0);
+        let mut translated = region("calc", Rect::new(10.0, 20.0, 30.0, 40.0), 0);
+        translated.clip = Some(clip);
+
+        translated.translate_y(-12.0);
+
+        assert_eq!(translated.rect.y, 8.0);
+        assert_eq!(translated.clip, Some(clip));
+        assert!(translated.contains(Point::new(20.0, 10.0)));
+        assert!(!translated.contains(Point::new(20.0, 50.0)));
     }
 
     #[test]
