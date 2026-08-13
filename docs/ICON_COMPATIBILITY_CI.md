@@ -73,11 +73,16 @@ macOS側のデザイン変更を把握するための情報比較なので、差
 
 - `Cargo.toml`
 - `Cargo.lock`
-- `src/icons/**`
-- `src/platform/macos/**`
+- `src/icons/normalize.rs`（アイコン画像の正規化）
+- `src/platform/macos/apps.rs`（macOSアプリのアイコン取得）
 - `examples/macos_icon_capture.rs`
 - `examples/macos_icon_compare.rs`
 - `.github/workflows/macos-icon-compatibility.yml`
+
+`src/platform/macos/scroll.rs`や`src/platform/macos/input_passthrough.rs`など、
+アイコン取得に関係しないmacOS固有処理の変更では実行されません。依存クレートの更新は、
+アイコン取得・画像処理へ影響する可能性があるため、`Cargo.toml`または`Cargo.lock`の変更で
+実行されます。
 
 ### ラベルによる再実行
 

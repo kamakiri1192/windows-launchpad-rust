@@ -6,8 +6,11 @@ on:
     paths:
       - Cargo.toml
       - Cargo.lock
-      - src/icons/**
-      - src/platform/macos/**
+      # Keep this list limited to the production paths used by the capture
+      # example. Unrelated macOS input/window changes should not start three
+      # macOS runners just because they live under the same platform module.
+      - src/icons/normalize.rs
+      - src/platform/macos/apps.rs
       - examples/macos_icon_capture.rs
       - examples/macos_icon_compare.rs
       - .github/workflows/macos-icon-compatibility.yml
