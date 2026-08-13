@@ -20,7 +20,10 @@
 //! axis-generically; swapping to vertical paging later only means renaming
 //! the axis.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+#[cfg(test)]
+use std::time::Duration;
 
 /// Target page the content should rest on. `position` is the *content origin*,
 /// so larger values scroll the viewport to the right. Page `n` rests at
@@ -1241,13 +1244,18 @@ pub struct ContinuousConfig {
     pub spring_omega: f32,
     /// Damping ratio ζ.
     pub spring_zeta: f32,
-    /// AppKit-compatible force-to-stretch divisor used by the public
-    /// Apple-WebKit fallback implementation.
-    pub rubber_stiffness: f32,
-    /// Velocity contribution used by AppKit's rubber-band return curve.
-    pub rubber_amplitude: f32,
-    /// Period divisor used by AppKit's rubber-band return curve.
-    pub rubber_period: f32,
+    /// Rubber-band visible overscroll as a fraction of the viewport, at
+    /// infinite input. Deliberately shallow (~7.5%) so the edge reads as a
+    /// quick nudge instead of a deep pull.
+    pub rubber_max_pages: f32,
+    /// Native momentum packets are scaled by this factor before they move
+    /// the raw accumulator. The OS momentum stream reflects the system's
+    /// scroll-acceleration setting, which on fast settings coasts far past
+    /// where a launchpad-style panel should stop; scaling keeps the coast
+    /// proportional to the flick instead of to the system acceleration.
+    pub momentum_gain: f32,
+    /// Rational rubber curve denominator, in viewport fractions.
+    pub rubber_curve_a: f32,
     /// Below this speed & distance we consider the spring settled.
     pub settle_eps: f32,
     /// Maximum frame dt before we subdivide (s).
@@ -1263,14 +1271,25 @@ impl Default for ContinuousConfig {
             // inertia tail that made a mouse wheel feel difficult to stop.
             line_wheel_decay: 14.0,
             inertia_cutoff: 18.0,
-            // General-purpose settling (keyboard ensure-visible and pointer
-            // drag) remains critically damped. Native wheel rubber-band return
-            // has its own AppKit/WebKit trajectory below.
-            spring_omega: 20.0,
-            spring_zeta: 1.0,
-            rubber_stiffness: 20.0,
-            rubber_amplitude: 0.31,
-            rubber_period: 1.6,
+            // Edge-return spring: ω₀≈2π·f, f≈2.4 Hz, underdamped (ζ=0.75) so
+            // the bounce is soft and yielding — a gentle overshoot that
+            // settles back instead of snapping. (Critical damping felt
+            // abrupt; "slow to reverse" was the momentum tail, handled by the
+            // tail-cut in move_native_momentum.)
+            spring_omega: 15.0,
+            spring_zeta: 0.75,
+            // Shallow edge stretch: the visible overscroll asymptotes at
+            // ~7.5% of the viewport, so the bounce reads as a quick nudge
+            // rather than a deep pull.
+            rubber_max_pages: 0.075,
+            rubber_curve_a: 0.30,
+            // Scale native momentum so a moderate flick coasts ~40% of what
+            // the OS would send. AppKit's momentum carries the user's
+            // scroll-speed setting, which can slam the panel to the far edge
+            // and bounce on every flick; the pager (which ignores native
+            // momentum) does not, so this keeps the panel's coast in the
+            // same range as the pager's.
+            momentum_gain: 0.4,
             settle_eps: 0.35,
             max_dt: 1.0 / 60.0,
         }
@@ -1286,8 +1305,6 @@ pub enum ContinuousPhase {
     /// No frame animation runs until an explicit terminal packet arrives.
     WheelTracking,
     Inertial,
-    /// AppKit-style edge return after contact release or a momentum edge hit.
-    RubberBandReturning,
     Settling,
 }
 
@@ -1314,26 +1331,25 @@ pub struct ContinuousScroller {
     sample_count: usize,
     /// Target position the spring settles toward.
     settle_target: f32,
-    /// Uncompressed force accumulated while a precise stream pushes outward
-    /// at an edge. AppKit converts this force to visible stretch by dividing
-    /// by `rubber_stiffness`.
-    stretch_force: f32,
+    /// Raw (uncompressed) position accumulated from the gesture anchor. The
+    /// displayed position is always `clamp_with_rubber(wheel_raw_position)`,
+    /// so coalesced momentum packets move the display by the same total no
+    /// matter how they are chunked, and the display never reverses while the
+    /// finger keeps pushing outward (mixing the rubbered display position with
+    /// raw deltas did reverse, which read as visible trembling at the edges).
+    wheel_raw_position: f32,
     /// Raw position integrated by custom inertia (pointer drag or line wheel).
     inertia_raw_position: f32,
     /// Whether custom inertia may reveal an elastic edge. Discrete mouse wheel
     /// input sets this false; direct pointer drag inertia sets it true.
     inertia_allows_overscroll: bool,
-    /// Last precise input timestamp and uncompressed input velocity. WebKit
-    /// uses the latest delta and zeros it after a 100 ms gap.
-    precise_velocity_time: Option<Instant>,
-    precise_input_velocity: f32,
-    /// Once native momentum reaches an edge, AppKit starts the return and
-    /// ignores the remaining momentum packets until their terminal packet.
-    ignore_native_momentum: bool,
-    /// Initial conditions and elapsed time for the AppKit rubber-band return.
-    rubber_initial_stretch: f32,
-    rubber_initial_velocity: f32,
-    rubber_elapsed: f32,
+    /// Once momentum pushes past an edge, the crossing packet shows the
+    /// stretch and the return starts; the remaining packets of that momentum
+    /// sequence are ignored (a fresh contact or new momentum sequence clears
+    /// this). Adding the tail to the raw accumulator made the edge keep
+    /// stretching, and the old resume-on-large-packet logic flip-flopped
+    /// between settle and tracking (visible jitter).
+    momentum_tail_cut: bool,
     /// Last clock reading for dt, in seconds.
     last_time: Option<Instant>,
     /// Monotonic clock origin.
@@ -1355,15 +1371,10 @@ impl ContinuousScroller {
             samples: [(0.0, 0.0); VEL_SAMPLES],
             sample_count: 0,
             settle_target: 0.0,
-            stretch_force: 0.0,
+            wheel_raw_position: 0.0,
             inertia_raw_position: 0.0,
             inertia_allows_overscroll: true,
-            precise_velocity_time: None,
-            precise_input_velocity: 0.0,
-            ignore_native_momentum: false,
-            rubber_initial_stretch: 0.0,
-            rubber_initial_velocity: 0.0,
-            rubber_elapsed: 0.0,
+            momentum_tail_cut: false,
             last_time: None,
             clock_origin,
         }
@@ -1375,9 +1386,15 @@ impl ContinuousScroller {
         self.viewport_size = viewport_size;
         let max = self.max_offset();
         if max <= 0.0 {
-            // A non-scrollable viewport must never retain an old stretch or
-            // animation after content/layout changes.
-            self.set_position(0.0);
+            // A non-scrollable viewport must not yank a live gesture: while a
+            // contact/momentum/settle is in flight the position keeps its
+            // rubber stretch, and only resets once idle. (Resetting every
+            // frame here made a short Darkness category shudder: stretch →
+            // reset-to-0 → stretch, because the layout rebuild runs per
+            // frame while scrolling.)
+            if self.phase == ContinuousPhase::Idle {
+                self.set_position(0.0);
+            }
         } else if self.phase == ContinuousPhase::Idle {
             // If idle, clamp position into the new valid range immediately.
             self.position = self.position.clamp(0.0, max);
@@ -1470,58 +1487,66 @@ impl ContinuousScroller {
         self.end_precise_wheel(now, false)
     }
 
+    /// Emit one diagnostic line when `LAUNCHPAD_SCROLL_TRACE` is set, for
+    /// on-device tuning of the edge handoffs. Never shipped as a feature.
+    fn trace(&self, tag: &str, extra: &str) {
+        if std::env::var_os("LAUNCHPAD_SCROLL_TRACE").is_some() {
+            eprintln!(
+                "SCROLL t={:8.1}ms {:9} {:?} pos={:8.2} vel={:8.1} {}",
+                self.clock_origin.elapsed().as_secs_f32() * 1000.0,
+                tag,
+                self.phase,
+                self.position,
+                self.velocity,
+                extra
+            );
+        }
+    }
+
     /// Begin a native precise-scroll sequence from the live displayed state.
     /// A new contact can take over a boundary spring without a position jump.
     pub fn begin_precise_wheel(&mut self, now: Instant) {
-        self.ignore_native_momentum = false;
-        self.take_over_precise_wheel(now);
+        self.velocity = 0.0;
+        self.sample_count = 0;
+        self.phase = ContinuousPhase::WheelTracking;
+        self.last_time = Some(now);
+        // Re-anchor the raw accumulator at the current displayed position's
+        // raw equivalent, so a take-over mid-stretch stays continuous.
+        self.wheel_raw_position = self.raw_equivalent(self.position);
+        self.momentum_tail_cut = false;
+        self.trace("c-began", "");
     }
 
     /// Begin the OS-generated momentum continuation. A contact release may
-    /// already have started an edge return; the first momentum packet can take
-    /// over that live position without jumping.
+    /// already have started an edge settle; the first momentum packet can take
+    /// over that live position without jumping. The velocity history is kept
+    /// (momentum is the continuation of the gesture that just ended) so a fast
+    /// in-content fling that reaches the edge still carries its launch speed
+    /// into the edge settle.
     pub fn begin_native_momentum(&mut self, now: Instant) {
-        if self.ignore_native_momentum {
-            return;
-        }
-
-        // Unlike a new physical contact, momentum is the continuation of the
-        // gesture that just ended. Preserve the contact packet timestamp and
-        // velocity so the first momentum packet has a real launch velocity.
-        // Resetting them here made a fast in-content fling reach the edge with
-        // v0=0, producing a visibly weak rebound.
         self.velocity = 0.0;
-        self.stretch_force = self.force_from_displayed(self.position);
-        self.rubber_elapsed = 0.0;
         self.phase = ContinuousPhase::WheelTracking;
         self.last_time = Some(now);
-    }
-
-    fn take_over_precise_wheel(&mut self, now: Instant) {
-        self.velocity = 0.0;
-        self.stretch_force = self.force_from_displayed(self.position);
-        self.precise_velocity_time = Some(now);
-        self.precise_input_velocity = 0.0;
-        self.rubber_elapsed = 0.0;
-        self.phase = ContinuousPhase::WheelTracking;
-        self.last_time = Some(now);
+        self.wheel_raw_position = self.raw_equivalent(self.position);
+        self.momentum_tail_cut = false;
+        self.trace("m-began", "");
     }
 
     /// Apply one contact or native-momentum packet while the OS owns motion.
-    /// Position follows the packet directly; no custom inertia or spring runs
-    /// concurrently with the native sequence.
+    /// The packet moves the *raw* accumulator; the displayed position is the
+    /// rubber curve of that raw total (same anchored model as the pager), so
+    /// coalesced packets and deep stretches never make the display reverse.
     pub fn move_precise_wheel(&mut self, delta_px: f32, now: Instant) -> f32 {
         self.move_precise_wheel_with_unaccelerated(delta_px, None, now)
     }
 
-    /// Apply a precise packet and, when the content was already stretched,
-    /// prefer its unaccelerated device delta. This matches WebKit's edge path:
-    /// normal scrolling retains system acceleration, while rubber-band force
-    /// stays proportional to the user's physical movement.
+    /// Apply a precise packet. `unaccelerated_delta_px` is accepted for API
+    /// compatibility with the platform passthrough but the rubber operates on
+    /// the accumulated raw position, so the accelerated delta is always used.
     pub fn move_precise_wheel_with_unaccelerated(
         &mut self,
         delta_px: f32,
-        unaccelerated_delta_px: Option<f32>,
+        _unaccelerated_delta_px: Option<f32>,
         now: Instant,
     ) -> f32 {
         if self.phase != ContinuousPhase::WheelTracking {
@@ -1531,20 +1556,24 @@ impl ContinuousScroller {
             return self.end_precise_wheel(now, true);
         }
 
-        let delta_px = self.edge_aware_precise_delta(delta_px, unaccelerated_delta_px);
+        // winit wheel deltas use "scroll content backward (down) = negative y",
+        // but our `position` increases when scrolling down. Flip the sign once
+        // here so callers can pass the raw platform delta.
+        let delta = -delta_px;
         self.last_time = Some(now);
-        if delta_px == 0.0 {
+        if delta == 0.0 {
             return self.position;
         }
 
-        self.record_precise_velocity(delta_px, now);
-        self.apply_precise_delta(delta_px);
+        self.wheel_raw_position += delta;
+        self.position = self.clamp_with_rubber(self.wheel_raw_position);
+        self.push_sample_at(now);
+        self.trace("c-move", &format!("d={delta:.1}"));
         self.position
     }
 
-    /// Apply one OS momentum packet. A packet that first crosses an edge keeps
-    /// its crossing remainder as elastic force; the next outward packet starts
-    /// the AppKit return, after which the dissipating tail is ignored.
+    /// Apply one OS momentum packet. Like contact packets, the delta moves the
+    /// raw accumulator; the edge settle starts only at the terminal packet.
     pub fn move_native_momentum(&mut self, delta_px: f32, now: Instant) -> f32 {
         self.move_native_momentum_with_unaccelerated(delta_px, None, now)
     }
@@ -1552,10 +1581,13 @@ impl ContinuousScroller {
     pub fn move_native_momentum_with_unaccelerated(
         &mut self,
         delta_px: f32,
-        unaccelerated_delta_px: Option<f32>,
+        _unaccelerated_delta_px: Option<f32>,
         now: Instant,
     ) -> f32 {
-        if self.ignore_native_momentum {
+        // After an edge hit the rest of the momentum stream is ignored: the
+        // user asked for the fling to bounce back, not to keep adding to the
+        // stretch. Only a fresh contact (or a new momentum sequence) resumes.
+        if self.momentum_tail_cut {
             return self.position;
         }
         if self.phase != ContinuousPhase::WheelTracking {
@@ -1565,62 +1597,86 @@ impl ContinuousScroller {
             return self.end_native_momentum(now, true);
         }
 
-        let internal_delta = self.edge_aware_precise_delta(delta_px, unaccelerated_delta_px);
-        self.last_time = Some(now);
-        if internal_delta == 0.0 {
-            return self.position;
-        }
-
-        self.record_precise_velocity(internal_delta, now);
-
+        // `momentum_gain` shortens the in-content coast, but it must not
+        // swallow the edge bounce: the packet that first crosses a boundary
+        // is applied at full force (its in-bounds part included), so the
+        // fling still visibly stretches and springs back. Scaling the whole
+        // packet (or only its crossing remainder) shrank the raw overshoot,
+        // so the edge hit read as a dead stop with no stretch at all.
+        let delta = -delta_px;
         let min = self.min_offset();
         let max = self.max_offset();
-        let was_stretched = self.position < min || self.position > max;
-        let was_pinned_outward = (self.position <= min && internal_delta < 0.0)
-            || (self.position >= max && internal_delta > 0.0);
-        let proposed = self.position + internal_delta;
-        if !was_stretched && !was_pinned_outward && (proposed < min || proposed > max) {
-            // WebKit applies this packet with unclamped scrolling, but does
-            // not permit the return animation to start until the next packet
-            // observes an already-pinned edge. Preserve the boundary-crossing
-            // remainder in force space instead of discarding it: a strong
-            // mid-content fling then arrives with a proportionally visible
-            // stretch rather than collapsing to a near-zero bounce.
-            self.set_position_from_unclamped(proposed);
-            self.velocity = self.precise_input_velocity;
+        let raw = self.wheel_raw_position;
+        let room = if delta > 0.0 {
+            (max - raw).max(0.0)
+        } else {
+            (raw - min).max(0.0)
+        };
+        let in_bounds = delta.clamp(-room, room);
+        let crosses_edge = (delta - in_bounds) != 0.0;
+        let applied = if crosses_edge {
+            delta
+        } else {
+            in_bounds * self.cfg.momentum_gain
+        };
+        self.wheel_raw_position = raw + applied;
+        self.last_time = Some(now);
+        if delta == 0.0 {
             return self.position;
         }
 
-        self.apply_precise_delta(internal_delta);
-        let target = self.position.clamp(min, max);
-        let stretch = self.position - target;
-        if stretch != 0.0 && internal_delta.signum() == stretch.signum() {
-            self.begin_rubber_band_return(target, now, self.precise_input_velocity);
-            self.ignore_native_momentum = true;
+        self.position = self.clamp_with_rubber(self.wheel_raw_position);
+        self.push_sample_at(now);
+        self.trace("m-move", &format!("d={delta:.1}"));
+
+        // Edge hit: the first packet that pushes past a boundary shows the
+        // crossing stretch, then the return starts immediately and the
+        // remaining momentum packets are ignored. Adding them to the raw
+        // accumulator kept stretching (and, with the old tail-cut resume,
+        // flip-flopped between settle and tracking — the jitter the user saw).
+        // The spring starts from rest: carrying the raw packet rate into it
+        // made the settle dive far deeper first (e.g. -35 → -149 px in three
+        // frames), which read as a shudder right after the edge hit.
+        let stretched = self.position < min || self.position > max;
+        if stretched {
+            self.momentum_tail_cut = true;
+            self.last_time = Some(Instant::now());
+            self.velocity = 0.0;
+            self.begin_settle_to(self.position.clamp(self.min_offset(), self.max_offset()));
+            self.trace("m-edge->settle", "");
+            return self.position;
         }
         self.position
     }
 
     /// End a native precise-scroll sequence. Only an explicit native terminal
     /// reaches this method; elapsed wall-clock time is never used to infer the
-    /// end of contact or momentum. An out-of-bounds physical-contact terminal
-    /// starts AppKit's rubber-band return immediately, even if native momentum
-    /// may follow.
-    pub fn end_precise_wheel(&mut self, now: Instant, cancelled: bool) -> f32 {
+    /// end of contact or momentum. An out-of-bounds terminal starts the edge
+    /// settle immediately, carrying the visible velocity into the spring.
+    pub fn end_precise_wheel(&mut self, _now: Instant, cancelled: bool) -> f32 {
         if self.phase != ContinuousPhase::WheelTracking {
             return self.position;
         }
 
-        self.last_time = Some(now);
-        let input_velocity = if cancelled {
+        // Anchor the settle to the wall clock, not the terminal event's
+        // timestamp: queued events can lag `Instant::now()` by tens of ms, and
+        // letting that latency leak into the spring's first step makes the
+        // position jump at every contact/momentum handoff.
+        self.last_time = Some(Instant::now());
+        self.velocity = if cancelled {
             0.0
         } else {
-            self.precise_velocity_at(now)
+            // The raw-rate estimate (see `push_sample_at`) carries the fling's
+            // real momentum into the spring. Cap it like the pager's drag
+            // settle so a violent flick cannot blow the first substep away.
+            let max_v = self.viewport_size.max(1.0) * 8.0;
+            self.estimate_velocity().clamp(-max_v, max_v)
         };
         let min = self.min_offset();
         let max = self.max_offset();
         if self.position < min || self.position > max {
-            self.begin_rubber_band_return(self.position.clamp(min, max), now, input_velocity);
+            self.begin_settle_to(self.position.clamp(min, max));
+            self.trace("end->settle", &format!("v={:.1}", self.velocity));
         } else {
             // Native momentum already performed the coast. There is no second
             // app-generated inertia phase for an in-bounds terminal.
@@ -1628,17 +1684,16 @@ impl ContinuousScroller {
             self.phase = ContinuousPhase::Idle;
             self.settle_target = self.position;
             self.sync_wheel_anchors();
+            self.trace("end->idle", "");
         }
         self.position
     }
 
-    /// Finish native momentum, clearing the edge-hit suppression installed by
-    /// [`Self::move_native_momentum`].
+    /// Finish native momentum. An out-of-bounds terminal starts the edge
+    /// settle with the velocity estimated from the displayed motion.
     pub fn end_native_momentum(&mut self, now: Instant, cancelled: bool) -> f32 {
-        if self.ignore_native_momentum {
-            self.ignore_native_momentum = false;
-            return self.position;
-        }
+        // The sequence is over; a future momentum sequence may scroll again.
+        self.momentum_tail_cut = false;
         self.end_precise_wheel(now, cancelled)
     }
 
@@ -1694,6 +1749,14 @@ impl ContinuousScroller {
             return self.phase;
         }
 
+        if self.phase == ContinuousPhase::Settling {
+            let target = self.settle_target;
+            self.trace(
+                "tick",
+                &format!("dt={:.1}ms target={target:.1}", dt * 1000.0),
+            );
+        }
+
         let mut remaining = dt;
         while remaining > 0.0 {
             let step = remaining.min(self.cfg.max_dt);
@@ -1710,9 +1773,7 @@ impl ContinuousScroller {
     pub fn is_animating(&self) -> bool {
         matches!(
             self.phase,
-            ContinuousPhase::Inertial
-                | ContinuousPhase::RubberBandReturning
-                | ContinuousPhase::Settling
+            ContinuousPhase::Inertial | ContinuousPhase::Settling
         )
     }
 
@@ -1724,10 +1785,6 @@ impl ContinuousScroller {
         self.velocity = 0.0;
         self.phase = ContinuousPhase::Idle;
         self.settle_target = self.position;
-        self.precise_velocity_time = None;
-        self.precise_input_velocity = 0.0;
-        self.ignore_native_momentum = false;
-        self.rubber_elapsed = 0.0;
         self.sync_wheel_anchors();
     }
 
@@ -1743,12 +1800,6 @@ impl ContinuousScroller {
         self.sample_count = 0;
         self.settle_target = self.position;
         self.last_time = None;
-        self.precise_velocity_time = None;
-        self.precise_input_velocity = 0.0;
-        self.ignore_native_momentum = false;
-        self.rubber_initial_stretch = 0.0;
-        self.rubber_initial_velocity = 0.0;
-        self.rubber_elapsed = 0.0;
         self.sync_wheel_anchors();
         self.clock_origin = Instant::now();
     }
@@ -1833,31 +1884,6 @@ impl ContinuousScroller {
                     self.begin_settle_to(target);
                 }
             }
-            ContinuousPhase::RubberBandReturning => {
-                self.rubber_elapsed += dt;
-                let elapsed = self.rubber_elapsed;
-                let stiffness = self.cfg.rubber_stiffness.max(f32::EPSILON);
-                let period = self.cfg.rubber_period.max(f32::EPSILON);
-                let amplitude = self.cfg.rubber_amplitude;
-                let decay_rate = stiffness / period;
-                let linear = self.rubber_initial_stretch
-                    + self.rubber_initial_velocity * amplitude * elapsed;
-                let decay = (-decay_rate * elapsed).exp();
-                let stretch = linear * decay;
-                self.position = self.settle_target + stretch;
-                self.velocity =
-                    (self.rubber_initial_velocity * amplitude - decay_rate * linear) * decay;
-
-                // WebKit waits at least 24 ms, then completes when AppKit's
-                // device-pixel-rounded relative offset becomes zero.
-                if elapsed > 0.024 && stretch.abs() < 0.5 {
-                    self.position = self.settle_target;
-                    self.velocity = 0.0;
-                    self.phase = ContinuousPhase::Idle;
-                    self.rubber_elapsed = 0.0;
-                    self.sync_wheel_anchors();
-                }
-            }
             ContinuousPhase::Settling => {
                 let dx = self.position - self.settle_target;
                 if dx.abs() < self.cfg.settle_eps && self.velocity.abs() < self.cfg.settle_eps {
@@ -1874,6 +1900,24 @@ impl ContinuousScroller {
                     let decay = (-omega * dt).exp();
                     self.position = self.settle_target + (dx + c2 * dt) * decay;
                     self.velocity = (c2 - omega * (dx + c2 * dt)) * decay;
+                } else if self.cfg.spring_zeta < 1.0 {
+                    // Exact underdamped update (soft, slightly oscillating
+                    // return). Analytic, so the trajectory is identical at
+                    // 60/120/144 Hz, unlike the semi-implicit Euler fallback.
+                    let omega = self.cfg.spring_omega;
+                    let zeta = self.cfg.spring_zeta;
+                    let omega_d = omega * (1.0 - zeta * zeta).sqrt();
+                    let decay = (-zeta * omega * dt).exp();
+                    let c1 = dx;
+                    let c2 = (self.velocity + zeta * omega * dx) / omega_d;
+                    let cos = (omega_d * dt).cos();
+                    let sin = (omega_d * dt).sin();
+                    let pos = (c1 * cos + c2 * sin) * decay;
+                    let vel = ((c2 * omega_d - zeta * omega * c1) * cos
+                        - (c1 * omega_d + zeta * omega * c2) * sin)
+                        * decay;
+                    self.position = self.settle_target + pos;
+                    self.velocity = vel;
                 } else {
                     // Semi-implicit Euler fallback for custom non-critical
                     // configurations.
@@ -1888,105 +1932,7 @@ impl ContinuousScroller {
 
     fn begin_settle_to(&mut self, target: f32) {
         self.settle_target = target;
-        self.rubber_elapsed = 0.0;
         self.phase = ContinuousPhase::Settling;
-    }
-
-    fn begin_rubber_band_return(&mut self, target: f32, now: Instant, input_velocity: f32) {
-        self.settle_target = target;
-        self.rubber_initial_stretch = self.position - target;
-        self.rubber_initial_velocity = input_velocity;
-        self.rubber_elapsed = 0.0;
-        self.velocity = input_velocity;
-        self.last_time = Some(now);
-        self.phase = ContinuousPhase::RubberBandReturning;
-    }
-
-    /// Apply an already sign-normalized precise delta. AppKit accumulates
-    /// outward input in force space, but lets a delta opposing the current
-    /// stretch pass through to the displayed position 1:1.
-    fn apply_precise_delta(&mut self, delta: f32) {
-        let min = self.min_offset();
-        let max = self.max_offset();
-        let target = self.position.clamp(min, max);
-        let stretch = self.position - target;
-
-        if stretch != 0.0 {
-            let opposes_stretch = delta != 0.0 && delta.signum() != stretch.signum();
-            if opposes_stretch {
-                self.stretch_force = 0.0;
-                let proposed = self.position + delta;
-                let remains_on_same_side =
-                    (stretch < 0.0 && proposed <= min) || (stretch > 0.0 && proposed >= max);
-                if remains_on_same_side {
-                    self.position = proposed;
-                } else {
-                    self.set_position_from_unclamped(proposed);
-                }
-            } else {
-                self.stretch_force += delta;
-                let stiffness = self.cfg.rubber_stiffness.max(1.0);
-                self.position = target + self.stretch_force / stiffness;
-            }
-        } else {
-            self.set_position_from_unclamped(self.position + delta);
-        }
-        self.velocity = self.precise_input_velocity;
-    }
-
-    fn set_position_from_unclamped(&mut self, proposed: f32) {
-        let min = self.min_offset();
-        let max = self.max_offset();
-        let stiffness = self.cfg.rubber_stiffness.max(1.0);
-        if proposed < min {
-            self.stretch_force = proposed - min;
-            self.position = min + self.stretch_force / stiffness;
-        } else if proposed > max {
-            self.stretch_force = proposed - max;
-            self.position = max + self.stretch_force / stiffness;
-        } else {
-            self.stretch_force = 0.0;
-            self.position = proposed;
-        }
-    }
-
-    fn record_precise_velocity(&mut self, delta: f32, now: Instant) {
-        self.precise_input_velocity = self
-            .precise_velocity_time
-            .and_then(|previous| now.checked_duration_since(previous))
-            .filter(|elapsed| !elapsed.is_zero() && *elapsed < Duration::from_millis(100))
-            .map_or(0.0, |elapsed| delta / elapsed.as_secs_f32());
-        self.precise_velocity_time = Some(now);
-    }
-
-    fn edge_aware_precise_delta(
-        &self,
-        accelerated_delta_px: f32,
-        unaccelerated_delta_px: Option<f32>,
-    ) -> f32 {
-        let is_stretched = self.position < self.min_offset() || self.position > self.max_offset();
-        let selected = if is_stretched {
-            unaccelerated_delta_px
-                .filter(|delta| delta.is_finite())
-                .unwrap_or(accelerated_delta_px)
-        } else {
-            accelerated_delta_px
-        };
-        -selected
-    }
-
-    fn precise_velocity_at(&self, now: Instant) -> f32 {
-        let Some(last) = self.precise_velocity_time else {
-            return 0.0;
-        };
-        let Some(stationary) = now.checked_duration_since(last) else {
-            return 0.0;
-        };
-        if stationary >= Duration::from_millis(100) {
-            0.0
-        } else {
-            self.precise_input_velocity
-        }
     }
 
     /// Clamp `raw` to [min, max] with rubber-band past the ends.
@@ -2004,33 +1950,44 @@ impl ContinuousScroller {
         }
     }
 
-    /// AppKit/WebKit force-to-stretch mapping used before the newer private
-    /// hyperbolic SPI: visible stretch is input force divided by 20.
+    /// Rational rubber curve identical to the pager's `wheel_rubber`, with the
+    /// viewport as the dimension, so the settings panel stretches to exactly
+    /// the same depth as a launchpad page. A 100 px pull past the edge shows
+    /// ~36 px of stretch (vs 5 px for the AppKit x/20 model), so the
+    /// momentum's force is visible instead of being eaten by the compression.
     #[inline]
-    fn rubber(&self, x: f32) -> f32 {
-        x / self.cfg.rubber_stiffness.max(1.0)
+    fn rubber(&self, overscroll: f32) -> f32 {
+        let d = self.viewport_size.max(1.0);
+        let u = (overscroll.max(0.0) / d).min(f32::MAX.sqrt());
+        d * self.cfg.rubber_max_pages * u / (self.cfg.rubber_curve_a + u)
     }
 
+    /// Inverse of [`Self::rubber`]: the raw overscroll that displays as
+    /// `stretch`. Used to re-anchor the raw accumulator when a new contact or
+    /// momentum stream takes over a live stretched position.
     #[inline]
-    fn inverse_rubber(&self, displayed_overscroll: f32) -> f32 {
-        displayed_overscroll * self.cfg.rubber_stiffness.max(1.0)
+    fn inverse_rubber(&self, stretch: f32) -> f32 {
+        let d = self.viewport_size.max(1.0);
+        let denom = (self.cfg.rubber_max_pages * d - stretch).max(f32::EPSILON);
+        stretch * self.cfg.rubber_curve_a * d / denom
     }
 
-    fn force_from_displayed(&self, displayed: f32) -> f32 {
+    /// The raw (uncompressed) position whose rubber display equals `displayed`.
+    fn raw_equivalent(&self, displayed: f32) -> f32 {
         let min = self.min_offset();
         let max = self.max_offset();
         if displayed < min {
-            -self.inverse_rubber(min - displayed)
+            min - self.inverse_rubber(min - displayed)
         } else if displayed > max {
-            self.inverse_rubber(displayed - max)
+            max + self.inverse_rubber(displayed - max)
         } else {
-            0.0
+            displayed
         }
     }
 
     fn sync_wheel_anchors(&mut self) {
-        self.stretch_force = self.force_from_displayed(self.position);
         self.inertia_raw_position = self.position;
+        self.wheel_raw_position = self.position;
     }
 
     fn push_sample(&mut self, pos: f32, _prev: f32) {
@@ -2044,18 +2001,43 @@ impl ContinuousScroller {
         }
     }
 
+    /// Record a position sample with the native event's timestamp (mirrors the
+    /// pager's `push_wheel_sample`), so the release velocity is estimated from
+    /// event time rather than wall-clock time between frames.
+    fn push_sample_at(&mut self, now: Instant) {
+        let t = now
+            .checked_duration_since(self.clock_origin)
+            .unwrap_or_default()
+            .as_secs_f32();
+        for i in 0..(VEL_SAMPLES - 1) {
+            self.samples[i] = self.samples[i + 1];
+        }
+        // Sample the *raw* (uncompressed) position. Deep in the rubber the
+        // displayed position barely moves, so a displayed-velocity estimate
+        // would lose the fling's momentum at the edge; carrying the raw rate
+        // into the spring is what makes the bounce force scale with how hard
+        // the user pulled (same idea as the pager's flick velocity).
+        self.samples[VEL_SAMPLES - 1] = (t, self.wheel_raw_position);
+        if self.sample_count < VEL_SAMPLES {
+            self.sample_count += 1;
+        }
+    }
+
     /// Estimate current velocity from the last ~80ms of samples.
     fn estimate_velocity(&self) -> f32 {
         if self.sample_count < 2 {
             return 0.0;
         }
         let last = self.samples[VEL_SAMPLES - 1];
+        // Walk back to find a sample roughly one 60 Hz frame older but within
+        // ~120 ms. The threshold carries a small margin because the timestamps
+        // are f32 seconds: a synthetic 16 ms gap can round just below 0.016.
         let mut chosen = last;
         let first_valid = VEL_SAMPLES - self.sample_count;
         for i in (first_valid..VEL_SAMPLES - 1).rev() {
             let s = self.samples[i];
             let dt = last.0 - s.0;
-            if dt >= 0.016 {
+            if dt >= 0.0155 {
                 chosen = s;
                 if dt <= 0.12 {
                     break;
@@ -2983,7 +2965,10 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_precise_overscroll_accumulates_in_force_space() {
+    fn continuous_scroller_precise_overscroll_deepens_with_rubber_curve() {
+        // The pager-style rational rubber: 100 px past the edge shows ~36 px
+        // of stretch (not the AppKit x/20 model's 5 px), and successive
+        // packets deepen it.
         let mut s = ContinuousScroller::new(default_cfg());
         s.set_sizes(1000.0, 400.0);
         let now = Instant::now();
@@ -2993,33 +2978,16 @@ mod tests {
         let first = s.position;
         s.move_precise_wheel(100.0, now + Duration::from_millis(16));
 
-        assert!((first + 5.0).abs() < 0.01);
-        assert!((s.position + 10.0).abs() < 0.01);
+        assert!((first + 13.64).abs() < 0.01);
+        assert!((s.position + 18.75).abs() < 0.01);
         assert!(s.position < first);
     }
 
     #[test]
-    fn continuous_scroller_uses_unaccelerated_delta_only_after_edge_is_stretched() {
-        let mut s = ContinuousScroller::new(default_cfg());
-        s.set_sizes(1000.0, 400.0);
-        let now = Instant::now();
-
-        s.begin_precise_wheel(now);
-        s.move_precise_wheel_with_unaccelerated(100.0, Some(4.0), now + Duration::from_millis(8));
-        assert!(
-            (s.position + 5.0).abs() < 0.01,
-            "the first edge-crossing packet must retain OS acceleration"
-        );
-
-        s.move_precise_wheel_with_unaccelerated(100.0, Some(4.0), now + Duration::from_millis(16));
-        assert!(
-            (s.position + 5.2).abs() < 0.01,
-            "once stretched, raw movement should add only 4 / 20 px"
-        );
-    }
-
-    #[test]
-    fn continuous_scroller_precise_edge_reversal_is_one_to_one() {
+    fn continuous_scroller_precise_edge_pull_back_returns_toward_boundary() {
+        // The rubber curve compresses while the raw position stays past the
+        // edge (same as the pager); once the raw re-enters bounds, motion is
+        // 1:1 again.
         let mut s = ContinuousScroller::new(default_cfg());
         s.set_sizes(1000.0, 400.0);
         let now = Instant::now();
@@ -3027,10 +2995,26 @@ mod tests {
         s.begin_precise_wheel(now);
         s.move_precise_wheel(100.0, now + Duration::from_millis(8));
         let stretched = s.position;
-        s.move_precise_wheel(-2.0, now + Duration::from_millis(16));
+        assert!((stretched + 13.64).abs() < 0.01);
 
-        assert!((stretched + 5.0).abs() < 0.01);
-        assert!((s.position - (stretched + 2.0)).abs() < 0.01);
+        // Pull back past the edge: displayed position heads toward 0.
+        s.move_precise_wheel(-2.0, now + Duration::from_millis(16));
+        assert!(
+            s.position > stretched,
+            "pull-back must move toward the boundary"
+        );
+        assert!(s.position < 0.0, "still stretched until the raw re-enters");
+
+        // Once the raw is back in bounds, further pull-back is exactly 1:1.
+        for _ in 0..60 {
+            s.move_precise_wheel(-2.0, now + Duration::from_millis(17));
+            if s.position >= 0.0 {
+                break;
+            }
+        }
+        let inside = s.position;
+        s.move_precise_wheel(-2.0, now + Duration::from_millis(18));
+        assert!((s.position - (inside + 2.0)).abs() < 0.001);
     }
 
     #[test]
@@ -3051,21 +3035,65 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_contact_terminal_starts_appkit_return_immediately() {
+    fn continuous_scroller_contact_terminal_starts_settle_immediately() {
         let mut s = ContinuousScroller::new(default_cfg());
         s.set_sizes(1000.0, 400.0);
         let now = Instant::now();
 
         s.begin_precise_wheel(now);
-        s.move_precise_wheel(40.0, now + Duration::from_millis(16));
-        s.move_precise_wheel(40.0, now + Duration::from_millis(32));
-        let velocity_before_terminal = s.precise_velocity_at(now + Duration::from_millis(32));
+        s.move_precise_wheel(40.0, now + Duration::from_millis(16)); // -20
+        s.move_precise_wheel(40.0, now + Duration::from_millis(32)); // -32
         s.end_precise_wheel(now + Duration::from_millis(32), false);
 
-        assert_eq!(s.phase, ContinuousPhase::RubberBandReturning);
-        assert!(velocity_before_terminal < 0.0);
-        assert!((s.velocity - velocity_before_terminal).abs() < 0.01);
+        // The edge settle starts in the terminal's own frame, carrying the
+        // visible (rubber-compressed) velocity into the spring.
+        assert_eq!(s.phase, ContinuousPhase::Settling);
         assert_eq!(s.settle_target, 0.0);
+        assert!(
+            s.velocity < 0.0,
+            "release velocity must survive into the spring"
+        );
+        assert!((s.position + 12.00).abs() < 0.01);
+    }
+
+    #[test]
+    fn continuous_scroller_momentum_takes_over_contact_settle_then_edge_hit() {
+        // The real-device flow: drag past the edge, release (settle starts),
+        // then native momentum takes over the live position without a jump;
+        // its first outward packet crosses the edge and settles again.
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 1.0,
+            ..default_cfg()
+        });
+        s.set_sizes(1000.0, 400.0);
+        s.set_position(550.0);
+        let now = Instant::now();
+
+        s.begin_precise_wheel(now);
+        s.move_precise_wheel(-40.0, now + Duration::from_millis(16)); // 590
+        s.move_precise_wheel(-40.0, now + Duration::from_millis(32)); // 606
+        s.end_precise_wheel(now + Duration::from_millis(32), false);
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+
+        // Momentum takes over the live position without a jump.
+        s.begin_native_momentum(now + Duration::from_millis(48));
+        assert_eq!(s.phase, ContinuousPhase::WheelTracking);
+        assert!((s.position - 606.0).abs() < 0.01);
+
+        // Its first packet stretches to rubber(70) = 11.05 and settles
+        // from rest (the fling bounces straight back).
+        s.move_native_momentum(-40.0, now + Duration::from_millis(64));
+        assert!((s.position - 611.05).abs() < 0.01);
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+        assert_eq!(s.velocity, 0.0);
+
+        // The remaining momentum packets are ignored.
+        let held = s.position;
+        s.move_native_momentum(-40.0, now + Duration::from_millis(80));
+        assert_eq!(s.position.to_bits(), held.to_bits());
+        assert_eq!(s.phase, ContinuousPhase::Settling);
     }
 
     #[test]
@@ -3090,28 +3118,76 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_momentum_edge_hit_starts_return_and_ignores_tail() {
-        let mut s = ContinuousScroller::new(default_cfg());
+    fn continuous_scroller_momentum_edge_hit_settles_from_rest() {
+        // The crossing packet settles immediately; the spring starts from
+        // rest so the return does not dive deeper first (the shudder the
+        // user saw when the raw packet rate was carried into the spring).
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 1.0,
+            ..default_cfg()
+        });
         s.set_sizes(1000.0, 400.0);
+        s.set_position(540.0);
         let now = Instant::now();
 
         s.begin_native_momentum(now);
-        s.move_native_momentum(100.0, now + Duration::from_millis(16));
-        let edge_position = s.position;
+        s.move_native_momentum(-60.0, now + Duration::from_millis(16)); // lands on the edge
+        assert_eq!(s.position, 600.0);
+        assert_eq!(s.phase, ContinuousPhase::WheelTracking);
 
-        assert_eq!(s.phase, ContinuousPhase::RubberBandReturning);
-        assert!(edge_position < 0.0);
-
-        s.move_native_momentum(100.0, now + Duration::from_millis(32));
-        assert_eq!(s.position.to_bits(), edge_position.to_bits());
+        s.move_native_momentum(-60.0, now + Duration::from_millis(32)); // cross → settle
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+        assert!((s.position - 610.0).abs() < 0.01);
+        assert_eq!(s.velocity, 0.0, "the return must start from rest");
 
         s.end_native_momentum(now + Duration::from_millis(48), false);
-        assert_eq!(s.phase, ContinuousPhase::RubberBandReturning);
+        assert_eq!(s.phase, ContinuousPhase::Settling);
     }
 
     #[test]
-    fn continuous_scroller_mid_content_fling_preserves_crossing_force_before_return() {
-        let mut s = ContinuousScroller::new(default_cfg());
+    fn continuous_scroller_momentum_edge_hit_settles_and_ignores_tail() {
+        // The first momentum packet that pushes past an edge shows the
+        // crossing stretch, then the return starts immediately and the rest
+        // of the momentum stream is ignored ("fling → bounce back").
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 1.0,
+            ..default_cfg()
+        });
+        s.set_sizes(1000.0, 400.0);
+        s.set_position(540.0);
+        let now = Instant::now();
+
+        s.begin_native_momentum(now);
+        s.move_native_momentum(-60.0, now + Duration::from_millis(16)); // lands on the edge
+        assert_eq!(s.phase, ContinuousPhase::WheelTracking);
+        assert_eq!(s.position, 600.0);
+
+        // Crossing packet: stretch rubber(60) = 10 px, then settle.
+        s.move_native_momentum(-60.0, now + Duration::from_millis(32));
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+        assert!((s.position - 610.0).abs() < 0.01);
+
+        // The remaining momentum packets are ignored entirely.
+        let held = s.position;
+        s.move_native_momentum(-60.0, now + Duration::from_millis(48));
+        assert_eq!(s.position.to_bits(), held.to_bits());
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        s.move_native_momentum(-100.0, now + Duration::from_millis(64));
+        assert_eq!(s.position.to_bits(), held.to_bits());
+
+        // The terminal packet clears the suppression for the next sequence.
+        s.end_native_momentum(now + Duration::from_millis(80), false);
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+    }
+
+    #[test]
+    fn continuous_scroller_mid_content_fling_edge_hit_settles_immediately() {
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 1.0,
+            ..default_cfg()
+        });
         s.set_sizes(1000.0, 400.0);
         s.set_position(500.0);
         let now = Instant::now();
@@ -3121,36 +3197,119 @@ mod tests {
         s.end_precise_wheel(now + Duration::from_millis(20), false);
         s.begin_native_momentum(now + Duration::from_millis(24));
 
+        // The first crossing packet shows rubber(40) = 7.5 px and settles.
         s.move_native_momentum(-100.0, now + Duration::from_millis(32));
-        assert_eq!(s.position, 602.0);
-        assert_eq!(s.phase, ContinuousPhase::WheelTracking);
+        assert!((s.position - 607.5).abs() < 0.01);
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
 
+        // Remaining momentum packets are ignored.
+        let held = s.position;
         s.move_native_momentum(-80.0, now + Duration::from_millis(40));
-        assert_eq!(s.phase, ContinuousPhase::RubberBandReturning);
-        assert!(
-            (s.position - 606.0).abs() < 0.01,
-            "the crossing remainder and first outward packet must both contribute elastic force"
-        );
-        assert!(s.velocity > 0.0, "momentum launch velocity must survive");
+        assert_eq!(s.position.to_bits(), held.to_bits());
+        assert_eq!(s.phase, ContinuousPhase::Settling);
     }
 
     #[test]
     fn continuous_scroller_native_momentum_preserves_contact_velocity_history() {
-        let mut s = ContinuousScroller::new(default_cfg());
+        // The settle velocity at the terminal must be timed from the preceding
+        // contact packet, so a fast in-content flick that reaches the edge
+        // still carries its launch speed into the spring.
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 1.0,
+            ..default_cfg()
+        });
         s.set_sizes(1000.0, 400.0);
         s.set_position(500.0);
         let now = Instant::now();
 
         s.begin_precise_wheel(now);
-        s.move_precise_wheel(-20.0, now + Duration::from_millis(16));
+        s.move_precise_wheel(-20.0, now + Duration::from_millis(16)); // 520
         s.end_precise_wheel(now + Duration::from_millis(20), false);
         s.begin_native_momentum(now + Duration::from_millis(24));
-        s.move_native_momentum(-60.0, now + Duration::from_millis(32));
+        s.move_native_momentum(-100.0, now + Duration::from_millis(32)); // 611.43
+        s.end_native_momentum(now + Duration::from_millis(32), false);
 
-        assert!(
-            s.precise_input_velocity > 0.0,
-            "the first momentum packet must be timed from the preceding contact packet"
-        );
+        // The momentum packet crosses the edge and the fling settles from
+        // rest (momentum edge hits bounce straight back).
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+        assert_eq!(s.velocity, 0.0);
+    }
+
+    #[test]
+    fn continuous_scroller_momentum_gain_scales_in_bounds_coast() {
+        // The OS momentum stream carries the system scroll-acceleration
+        // setting; the gain keeps the panel's coast proportional to the flick
+        // instead of to that setting. The same packet sequence must move the
+        // raw accumulator by gain× while still crossing edges when it would.
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 0.4,
+            ..default_cfg()
+        });
+        s.set_sizes(1000.0, 400.0);
+        s.set_position(200.0);
+        let now = Instant::now();
+
+        s.begin_native_momentum(now);
+        s.move_native_momentum(-100.0, now + Duration::from_millis(16)); // +40 raw
+        s.move_native_momentum(-100.0, now + Duration::from_millis(32)); // +40 raw
+                                                                         // 200 + 200 raw × 0.4 gain = 280 (was 400 before the gain existed).
+        assert!((s.position - 280.0).abs() < 0.01);
+        assert_eq!(s.phase, ContinuousPhase::WheelTracking);
+
+        // A strong-enough fling still reaches the far edge (600) and settles.
+        s.move_native_momentum(-1000.0, now + Duration::from_millis(48)); // +400 raw
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+    }
+
+    #[test]
+    fn continuous_scroller_momentum_gain_one_keeps_legacy_coast() {
+        // gain = 1.0 reproduces the pre-gain behavior exactly: raw packet
+        // distance is applied 1:1 for in-bounds coasting.
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 1.0,
+            ..default_cfg()
+        });
+        s.set_sizes(1000.0, 400.0);
+        s.set_position(200.0);
+        let now = Instant::now();
+
+        s.begin_native_momentum(now);
+        s.move_native_momentum(-100.0, now + Duration::from_millis(16));
+        s.move_native_momentum(-100.0, now + Duration::from_millis(32));
+        assert!((s.position - 400.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn continuous_scroller_momentum_gain_preserves_edge_bounce() {
+        // The gain must scale only the in-content coast. A packet whose
+        // crossing remainder would reach the edge keeps full force, so a
+        // fast fling at the boundary still visibly stretches and springs
+        // back instead of stopping dead at the edge.
+        let mut s = ContinuousScroller::new(ContinuousConfig {
+            momentum_gain: 0.4,
+            ..default_cfg()
+        });
+        s.set_sizes(1000.0, 400.0);
+        s.set_position(540.0);
+        let now = Instant::now();
+
+        s.begin_native_momentum(now);
+        // delta +100: the packet crosses the edge (room was 60), so it is
+        // applied at full force → raw 640 → rubber(40) = 7.5 px stretch.
+        s.move_native_momentum(-100.0, now + Duration::from_millis(16));
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 600.0);
+        assert!(s.position > 600.0, "crossing packet must still stretch");
+        assert!((s.position - 607.5).abs() < 0.01, "pos={}", s.position);
+
+        // The crossing packet keeps full force; the tail is ignored as usual.
+        let held = s.position;
+        s.move_native_momentum(-100.0, now + Duration::from_millis(32));
+        assert_eq!(s.position.to_bits(), held.to_bits());
+        assert_eq!(s.phase, ContinuousPhase::Settling);
     }
 
     #[test]
@@ -3258,7 +3417,7 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_content_that_fits_cancels_existing_stretch() {
+    fn continuous_scroller_content_that_fits_keeps_live_stretch_until_idle() {
         let mut s = ContinuousScroller::new(default_cfg());
         s.set_sizes(1000.0, 400.0);
         let now = Instant::now();
@@ -3266,11 +3425,15 @@ mod tests {
         s.move_precise_wheel(100.0, now + Duration::from_millis(16));
         assert!(s.position < 0.0);
 
+        // A layout that no longer scrolls must not yank a live gesture:
+        // the stretch survives while tracking, then resets once idle.
         s.set_sizes(300.0, 400.0);
+        assert!(s.position < 0.0);
+        assert_eq!(s.phase, ContinuousPhase::WheelTracking);
 
-        assert_eq!(s.position, 0.0);
-        assert_eq!(s.phase, ContinuousPhase::Idle);
-        assert!(!s.is_animating());
+        s.end_precise_wheel(now + Duration::from_millis(32), false);
+        assert_eq!(s.phase, ContinuousPhase::Settling);
+        assert_eq!(s.settle_target, 0.0);
     }
 
     #[test]
@@ -3289,11 +3452,30 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_rubber_uses_appkit_stiffness() {
+    fn continuous_scroller_rubber_is_shallow() {
         let mut s = ContinuousScroller::new(default_cfg());
-        s.set_sizes(1000.0, 400.0); // max=600
-        assert!((s.rubber(100.0) - 5.0).abs() < 0.001);
-        assert!((s.inverse_rubber(5.0) - 100.0).abs() < 0.001);
+        s.set_sizes(1000.0, 400.0); // viewport=400
+                                    // 100 px past the edge shows ~13.6 px of
+                                    // stretch (7.5% asymptote), a quick nudge
+                                    // rather than a deep pull.
+        assert!((s.rubber(100.0) - 13.64).abs() < 0.01);
+        assert!(s.rubber(100.0) < 100.0);
+    }
+
+    #[test]
+    fn continuous_scroller_rubber_asymptote_is_shallow() {
+        // The edge stretch asymptotes at ~7.5% of the viewport, so even a
+        // very hard fling reads as a quick nudge.
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0); // viewport=400 → asymptote 30 px
+        let deep = s.rubber(4000.0);
+        assert!(
+            (deep - 29.13).abs() < 0.01,
+            "deep fling must approach the asymptote"
+        );
+        assert!(s.rubber(4000.0) > s.rubber(1000.0));
+        // The inverse re-anchor round-trips through the deep section.
+        assert!((s.inverse_rubber(deep) - 4000.0).abs() < 5.0);
     }
 
     #[test]
@@ -3334,30 +3516,18 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_appkit_return_matches_webkit_formula() {
-        let mut s = ContinuousScroller::new(default_cfg());
-        s.set_sizes(1000.0, 400.0);
-        let now = Instant::now();
-        s.position = 700.0;
-        s.begin_rubber_band_return(600.0, now, 0.0);
-
-        s.step_once(0.1, now + Duration::from_millis(100));
-
-        let expected_stretch = 100.0 * (-1.25_f32).exp();
-        assert_eq!(s.phase, ContinuousPhase::RubberBandReturning);
-        assert!((s.position - (600.0 + expected_stretch)).abs() < 0.001);
-    }
-
-    #[test]
-    fn continuous_scroller_appkit_return_is_refresh_rate_independent() {
+    fn continuous_scroller_settle_is_refresh_rate_independent() {
+        // The edge settle uses the exact critically-damped update, so the
+        // overscroll return is identical at 60/120/144 Hz.
         let run = |hz: usize| {
             let mut s = ContinuousScroller::new(default_cfg());
             s.set_sizes(1000.0, 400.0);
             let now = Instant::now();
-            s.position = -20.0;
-            s.begin_rubber_band_return(0.0, now, -600.0);
+            s.position = 630.0; // 30 px past the edge
+            s.velocity = 400.0; // outward momentum carried into the settle
+            s.begin_settle_to(600.0);
             let frame_dt = 1.0 / hz as f32;
-            let mut remaining = 0.2;
+            let mut remaining = 0.3;
             while remaining > 0.0 {
                 let dt = frame_dt.min(remaining);
                 s.step_once(dt, now);
@@ -3491,7 +3661,6 @@ mod tests {
         assert_eq!(s.velocity, 0.0);
         assert_eq!(s.phase, ContinuousPhase::Idle);
         assert_eq!(s.sample_count, 0);
-        assert!(s.precise_velocity_time.is_none());
         assert!(s.last_time.is_none());
     }
 
@@ -3504,7 +3673,7 @@ mod tests {
         s.apply_wheel(100.0, future);
         let event_position = s.position;
 
-        assert_eq!(s.tick(now), ContinuousPhase::RubberBandReturning);
+        assert_eq!(s.tick(now), ContinuousPhase::Settling);
         assert_eq!(s.position.to_bits(), event_position.to_bits());
         assert!(s.position.is_finite());
         assert!(s.velocity.is_finite());

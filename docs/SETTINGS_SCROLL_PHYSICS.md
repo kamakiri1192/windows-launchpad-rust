@@ -5,8 +5,12 @@
 
 ## 1. 目的
 
-設定画面のスクロールを、単に「滑らかな補間」にするのではなく、macOSの
-`NSScrollView`に近い入力単位、端の伸び、反転、反発開始タイミングにする。
+設定画面のスクロールの物理を、**アプリ一覧（ページャー）と同じモデル**にする。
+ページャーは`Scroller`（有理rubber曲線 + 可視速度を引き継ぐspring）を使い、
+実機で「端のbounceが自然」と確認されている。設定画面だけ`ContinuousScroller`で
+別の物理（PR #185で採用したAppKit準拠モデル）に置き換えたところ、
+「bounceが弱い／スローモーションになる／勢いが反映されない」という実機フィードバックが
+出たため、両者を同じ物理に統一する。
 
 既存の`docs/TRACKPAD_PAGING_SPEC.md`はLaunchpadページ切り替え用の横方向
 ページング仕様である。設定画面はページスナップを持たない連続縦スクロールなので、
@@ -41,43 +45,49 @@ physical_delta = detents * system_scroll_lines * settings_row_height_physical
 
 `WHEEL_PAGESCROLL`の場合は1 viewport相当を使う。設定値が0なら移動しない。
 
-### 2.2 トラックパッドの端の挙動がAppKitと異なる
+### 2.2 AppKit準拠モデル（PR #185）が実機で弱く感じる
 
-旧実装には次の差があった。
+PR #185では「macOSのNSScrollViewに近づける」目的で、次のモデルを採用した。
 
-- 指を離した`phase == Ended`では反発を始めず、後続momentumの終了まで待っていた。
-- momentumが端へ到達しても、momentumの全packetを受け終えるまで反発しなかった。
-- 端の伸びに、iOS向けとして広く紹介される`c = 0.55`の有理式を使用していた。
-- 反発に一般的なcritical springを使用していた。
-- 端から逆向きへ動かしたときも、圧縮前の累積座標へ入力を足していた。
+- 端の伸び: 入力forceを`stiffness = 20`で割る線形圧縮 `stretch = force / 20`
+- 反発: WebKit由来の指数曲線 `x(t) = (x0 + v0 * 0.31 * t) * exp(-12.5 * t)`
+- momentumが端に達したら即反発開始（WebKit `ScrollingEffectsController`準拠）
 
-WebKitのmacOS実装は異なる。
+調査probe（macOS 15.7.7）ではこの前提は確認できた。
 
-- 物理接触の`Ended`で、伸びがあれば直ちにrubber-band animationを始める。
-- native momentumが端に達して反発を開始できる状態になったら、その後のmomentumを
-  無視してrubber-band animationへ移る。
-- 伸びている間はunaccelerated deltaを使う。
-- 現在の伸びと逆向きのdeltaは減衰せず1:1で通し、stretch forceをリセットする。
-- 反発にはAppKitの`_NSElasticDeltaForTimeDelta`と同じ軌道を使う。
+- `_NSElasticDeltaForReboundDelta(x) = x / 20`
+- `_NSElasticDeltaForTimeDelta(100, 0, 0.1) = 28.65`、`(0, -1000, t)`の最大値
+  ≈ 9.1px など、多点サンプリングで指数曲線と完全一致
+- `_NSHyperbolicElasticDeltaForReboundDelta`等の双曲線関数はmacOS 15には存在しない
 
-状態遷移の差が大きいため、ばね係数だけを調整してもmacOSらしくならない。
+しかし実機レビューでは「強く払った時のbounceが弱く、コンテンツがスクロールされ
+切る」「bounceが常にスローモーション」「タッチパッドの勢いが反映されない」と
+なった。原因はモデルの数字そのものではなく、**圧縮率と戻り速度の組み合わせ**にある。
 
-実機レビュー後、さらに2点が判明した。
+- 60pxのmomentum packetが端を越えても表示は3pxしか動かない（force/20）。
+  勢いが視覚的に消える。
+- 反発のピークは`v0 * 0.31 / (12.5 * e)`程度で、v0=3750px/sでも~35px。
+  減衰`exp(-12.5t)`のため戻りに0.5秒かかり、スローモーションに見える。
 
-- 非精密マウスホイールの補間にpointer inertiaと同じ`3.2/s`を使っていたため、
-  指定距離へ到達するまで約1秒の尾を引いていた。
-- momentumが境界をまたいだpacketの余剰量を捨てて境界へclampしていたため、
-  途中から強く払うほど本来bounceへ渡るべきforceを失っていた。また、WebKitが
-  使用するAppKit private selectorのunaccelerated deltaを、意味の異なる
-  `CGEvent` raw wheel整数値で近似していたため、端でのforceが過度に小さくなった。
+また、実NSScrollViewに合成momentum eventを送る比較計測（2026-08-13）では、
+NSScrollViewはmomentum中ずっとforceを累積し続け（60px packetごとに表示伸びが
+ちょうど3px成長）、terminalで反発することを確認した。これはWebKitの
+`ScrollingEffectsController`（端到達で即反発+残り無視）とも異なる。
+
+一方、アプリ一覧のページャー（`Scroller`）は表示空間で動く有理rubber曲線と
+fast springを使い、実機で自然なbounceとして受け入れられている。
+
+**結論: 設定画面もページャーと同じ物理（表示空間の有理rubber + 可視速度を
+引き継ぐspring）に統一する。** NSScrollViewの`x/20`圧縮は「勢いが見えない」、
+WebKitの指数反発は「戻りが遅い」ため、どちらも採用しない。
 
 ## 3. 情報源の優先順位
 
-1. Apple公開ドキュメント: 入力単位、contact/momentum phase、elasticityの意味
-2. Appleが保守するWebKit: `NSScrollView`へ合わせるための状態遷移と式
+1. アプリ内の既存実装（ページャー`Scroller`）の物理と実機での受け入れ状況
+2. Apple公開ドキュメント: 入力単位、contact/momentum phaseの意味
 3. winit 0.30.13 source: 各OSから`MouseScrollDelta`への変換契約
 4. Microsoft Win32 documentation: wheel detentとユーザー設定行数
-5. ローカル比較計測: 公開資料に値がない箇所の検算（製品コードからprivate SPIは呼ばない）
+5. AppKit private関数の調査probe（検算のみ。製品コードからは呼ばない）
 
 ブログ等の二次情報だけを根拠に「Appleの係数」と断定しない。
 
@@ -96,95 +106,115 @@ deltaをもう一度反転しない。
 
 ## 5. トラックパッド物理モデル
 
+ページャー（`Scroller`）と同じ構造。`ContinuousConfig`のパラメータも
+ページャーの`WheelConfig`と同じ値を使う。
+
 ### 5.1 境界内
 
-contactおよびnative momentum packetは1:1でpositionへ適用する。OSがすでに
-momentum packetを生成しているため、momentum終了後にアプリ独自の惰性を追加しない。
+contact packetは1:1でpositionへ適用する。native momentum packetは
+**端に届かないパケットだけ`momentum_gain`（既定 0.4）を掛け**、端を越える
+パケットは**境界内成分も含めてフルフォース**でrawへ累積する。OSがすでに
+momentum packet を生成しているため、momentum終了後にアプリ独自の惰性を
+追加しない。
+
+```text
+in_bounds = delta.clamp(-room, room)      （room = 現在のrawから境界までの余裕）
+crosses   = (delta - in_bounds) != 0
+applied   = crosses ? delta : in_bounds * momentum_gain
+raw      += applied
+position  = rubber(raw)
+```
+
+`momentum_gain`の理由: AppKitのmomentumはシステムのスクロール加速設定を
+反映するため、設定が速いと中程度のフリックでも内容が端まで飛んでbounceする
+（実機トレース 2026-08-13: 130pxのフリックが972px coast、-362pxのフリックが
+750px coast）。ページャー（`Scroller`）はnative momentumをrouterで隔離して
+自前の減衰を使うため環境に依存しない。設定パネルも同じ感覚のcoastに揃える
+ため、境界内の移動距離を約40%にスケールする。
+
+**端を越えるパケットにはゲインを掛けない。** ゲインを全体に掛けると、端まで
+到達したmomentumが境界を越えられず「ピタッと止まる」見た目になる（stretch
+も反発も発生しない）。境界を越えるパケットはその全体をフルフォースにすることで、
+十分強いフリックは従来どおり端でストレッチして反発する。
 
 ### 5.2 境界外への伸び
 
-macOS 15系でWebKitが使用してきたAppKit互換モデルは、入力force `F`を
-stiffness 20で割る。
+**アンカー型**。ジェスチャ開始時にraw座標をアンカーし、各packetのdeltaをrawへ
+累積してからrubberを適用する。**伸びは浅く**、漸近は viewport の約7.5%で、
+bounce は「深い引っ張り」ではなく「素早いひと押し」として見える。
 
 ```text
-stretch(F) = F / 20
-force(stretch) = stretch * 20
+raw   = アンカー + Σ delta        （アンカー = 表示位置のraw相当）
+position = rubber(raw)
+
+rubber: u = |raw - boundary| / viewport
+        stretch = viewport * rubber_max_pages * u / (rubber_curve_a + u)
+
+rubber_max_pages = 0.075
+rubber_curve_a    = 0.30
 ```
 
-これはApple WebKit由来の公開実装にある`rubberbandStiffness = 20`と一致する。
-調査機のmacOS 15.7.7でも、AppKitの関数を一時的な調査probeから読むと
-`_NSElasticDeltaForReboundDelta(x) = x / 20`で一致した。private SPIは調査時の
-検算にだけ使い、製品からは呼ばない。
+100pxの入力で約14px（viewport 400px時）、漸近は約30px（viewport 400px時）。
+実機レビューで「ページャーと同じ深さ（20%）は深すぎる」と判断され、5〜10%の
+範囲の7.5%に調整した。
 
-同じ向きのdeltaは`F`へ累積する。逆向きのdeltaはWebKitと同様に減衰せず、表示
-positionへ1:1で適用する。これにより、端から戻す指の動きが「圧縮された入力空間」へ
-吸収される粘りを防ぐ。
+有理曲線の漸近近くでは表示の動きが小さくなるため、長いmomentumの終盤は
+**momentum尻尾の打ち切り**（§5.4）で早めに反発へ移り、伸びたまま止まって見える
+時間を短くする。
 
-WebKitのunaccelerated deltaはAppKit private selector
-`_unacceleratedScrollingDeltaX/Y`から得ている。対応する公開APIはないため、本アプリは
-private APIを製品から呼ばず、macOS native経路では公開`scrollingDeltaX/Y`へ
-fallbackする。`CGEvent` raw wheel整数値は同じ物理量ではないため代用しない。
+**「表示位置にdeltaを足してからrubber」という増分方式は使わない。** 実機トレース
+（2026-08-13）で、深い伸びの状態でcoalescedな大きいpacket（例: 33ms間隔・
+-180px）が来ると、圧縮済みの表示位置をrawと誤って足すため、外側へ押しているのに
+表示が内側へ跳ね返る（例: -83.13 → -65.89）「ビクビク」が発生した。アンカー型なら
+表示は常に`rubber(累積raw)`なので単調に深くなり、coalescingの影響も受けない。
 
-### 5.3 反発軌道
+逆向きの入力も同じraw空間に足すため、rawが境界内へ戻ればそのまま1:1になる
+（ページャーと同じ挙動）。
 
-Apple WebKit由来の公開実装にある定数を使用する。
+### 5.3 反発
+
+接触の終了（contact `Ended`）またはmomentumの終了（`Momentum Ended` /
+`Cancelled` / `sequence_complete`）で、境界外ならSettlingへ移る。
 
 ```text
-stiffness = 20
-amplitude = 0.31
-period    = 1.6
-lambda    = stiffness / period = 12.5
-
-x(t) = (x0 + v0 * amplitude * t) * exp(-lambda * t)
+spring_omega = 15  (rad/s, ≈ 2.4 Hz)
+spring_zeta  = 0.75 (underdamped → soft, gently oscillating return)
 ```
 
-`x0`は境界からの表示上の伸び、`v0`は最後の有効な入力deltaから得る入力速度で
-ある。WebKitは100ms以上packet間隔が空いた速度を0とみなす。
+初速は**表示位置のサンプルから推定した可視速度**をそのままspringへ渡す
+（ページャーの`begin_wheel_settle`と同じ）。サンプルの時刻はネイティブeventの
+timestampを使い、フレーム間の壁時計に依存しない。contact→momentumの境界で
+サンプル履歴を消さないため、途中から強く払って端へ到達したflingの速度が
+反発に残る。
 
-終了条件は、開始後24msを超え、境界からの距離が0.5 physical px未満になった時と
-する。計算はelapsed timeから直接行い、60/120/144Hzで軌道を変えない。
+critical damping（ζ=1.0）は「カチッと」戻る硬い印象だったため、ζ=0.75の
+不足減衰にしてオーバーシュートしながら柔らかく戻るようにした。ωは
+`2π·f` で f≈2.4 Hz。60/120/144Hzで軌道が一致するよう、Settling は厳密解
+（critical damping は `(x0 + (v0 + ω*x0)*t) * exp(-ω*t)`、underdamped は
+減衰振動の解析解）で更新する。
 
 ### 5.4 phase遷移
 
 ```text
-Contact Began   -> Tracking（進行中の反発を中断して現在位置を引き継ぐ）
+Contact Began   -> Tracking（進行中のsettleを中断して現在位置を引き継ぐ）
 Contact Changed -> 1:1 scroll / edge stretch
-Contact Ended   -> edge外なら直ちにRebound、範囲内ならIdle
-Contact Cancel  -> edge外なら速度0でRebound
+Contact Ended   -> edge外ならSettling（可視速度を継承）、範囲内ならIdle
+Contact Cancel  -> edge外なら速度0でSettling
 
 Momentum Began/Changed
-                -> native deltaを適用
-                -> 境界内から端をまたぐpacketは、境界までの移動と余剰forceを適用し
-                   Trackingを継続
-                -> 既に端を越えた状態で次の外向きpacketを受けたらstretchしてRebound
-                -> 残りのmomentum packetをterminalまで無視
-Momentum Ended  -> edge外ならRebound、範囲内ならIdle
+                -> 端に届かないパケットは境界内成分 × momentum_gain、
+                   端を越えるパケットは全体をフルフォースでrawへ累積
+                   （表示は有理rubberで圧縮）
+                -> Trackingのまま。Reboundは開始しない
+Momentum Ended  -> edge外ならSettling（累積した伸びと可視速度で反発）、
+                   範囲内ならIdle
 ```
 
-Momentumは直前のcontactの継続なので、`Momentum Began`で入力速度のtimestampを
-初期化しない。指を離す直前のpacketから最初のmomentum packetまでの実時間で速度を
-求め、途中から強く払って端へ到達した場合も、そのlaunch velocityを反発へ渡す。
+Momentumは直前のcontactの継続なので、`Momentum Began`で速度サンプルを初期化
+しない。指を離す直前のpacketから最初のmomentum packetまでの実時間で速度を求め、
+途中から強く払って端へ到達した場合も、そのlaunch velocityを反発へ渡す。
 
-新しいcontactは進行中の反発と「momentum無視」状態を解除し、表示中の位置から
-連続して操作を引き継ぐ。
-
-### 5.5 将来のAppKit双曲線モデルについて
-
-2026年7月のWebKit変更は、対応OSで次のAppKit private SPIを使用する。
-
-```text
-_NSHyperbolicElasticDeltaForReboundDelta(force, coefficient, viewport)
-_NSHyperbolicReboundDeltaForElasticDelta(stretch, coefficient, viewport)
-```
-
-形はviewport依存の双曲線だが、実トラックパッド用`coefficient`の取得処理は
-`WebKitAdditions/ScrollingEffectsControllerAdditions.mm`（Apple内部）にあり、公開
-sourceだけでは値を確定できない。またprivate SPIを製品から呼ぶべきではない。
-
-よって今回の基準実装は、公開WebKit sourceとmacOS 15.7.7で一致を確認できる
-stiffness 20モデルとする。対応対象のmacOSが新しい双曲線モデルへ移行した場合は、
-実機trace fixtureを採取して公開式へfitする。`c = 0.55`を根拠なくAppleの現行値と
-みなして置き換えない。
+新しいcontactは進行中のsettleを中断し、表示中の位置から連続して操作を引き継ぐ。
 
 ## 6. マウスホイール物理モデル
 
@@ -206,15 +236,18 @@ track外へthumbを移動しない。反発中もcontentと同じフレームで
 
 ### トラックパッド
 
-- top/bottomで100px相当の外向き入力を与えたとき、表示伸びは約5pxになる。
-- 同じ外向き入力はforce空間で累積する。
-- 伸びと逆向きの入力は表示位置へ1:1で効く。
-- contact `Ended`の同じframeでRebound状態へ入る。
-- 境界内から端をまたぐmomentum packetの余剰forceがbounceへ残り、次の外向きpacketで
-  Reboundへ入り、残りのmomentumで再び引き伸ばされない。
+- top/bottomで100px相当の外向き入力を与えたとき、表示伸びは約36pxになる
+  （viewport 400px時。ページャーと同じ有理曲線）。
+- momentum packetが端を越えた後も、外向きpacketは表示伸びを深くしていく。
+  60px packetなら毎回約3px増（AppKit x/20時）ではなく曲線に従って増える。
+- 端を越えた状態から境界方向へ戻すと、rawが境界内に入った時点から1:1で効く。
+- contact `Ended`の同じframeでSettlingへ入り、可視速度がspringに引き継がれる。
+- momentumの終端までRebound（Settling）を開始せず、終端で累積した伸びと
+  可視速度から反発する。
 - contactからmomentumへの切り替えで速度履歴を失わず、途中から強く払ったときも
   反発の初速が0にならない。
-- `x0 = 100, v0 = 0`の反発は100ms後に約28.65pxとなる。
+- 端から100px、速度0でsettleを開始した場合、約0.3秒で境界へ収束する
+  （critical damping、ω=20）。スローモーションにならない。
 - 60/120/144Hzで同じelapsed timeの位置が一致する。
 
 ### マウス
@@ -242,16 +275,15 @@ track外へthumbを移動しない。反発中もcontentと同じフレームで
 - [Handling Trackpad Events](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html)
 - [NSScrollView.verticalScrollElasticity](https://developer.apple.com/documentation/appkit/nsscrollview/verticalscrollelasticity)
 
-### WebKit / Chromium（公開source）
+### 調査に使用した実装・計測（2026-08-13）
 
-- [WebKit ScrollingEffectsController.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/mac/ScrollingEffectsController.mm)
-- [WebKit NSEventSPI.h](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/PAL/pal/spi/mac/NSEventSPI.h)
-- [WebKit WebEventFactory.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/Shared/mac/WebEventFactory.mm)
-- [WebKit ScrollAnimationRubberBand.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/mac/ScrollAnimationRubberBand.mm)
-- [WebKit NSScrollViewSPI.h](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/PAL/pal/spi/mac/NSScrollViewSPI.h)
-- [2026 WebKit: Scroll stretch behavior should more closely match NSScrollView](https://github.com/WebKit/WebKit/commit/ce76e2b79384d3b751287f8c8da007d3c7fd9fc4)
-- [Apple WebKit由来の旧rubber-band実装](https://alioth-lists-archive.debian.net/pipermail/pkg-webkit-commits/2011-February/033152.html)
-- [Chromium InputScrollElasticityController](https://chromium.googlesource.com/chromium/src/+/73c2ef2bee31adf9d44827e6ef071a6b8d653bcc/ui/events/blink/input_scroll_elasticity_controller.cc)
+- WebKit `ScrollingEffectsController.mm`（現行。端到達で即反発+残りmomentum無視。
+  本モデルとは意図的に異なる）
+- AppKit private関数の調査probe（`_NSElasticDeltaForReboundDelta` = x/20、
+  `_NSElasticDeltaForTimeDelta` = 指数曲線。macOS 15.7.7で多点サンプリング確認。
+  製品コードからは呼ばない）
+- 実NSScrollViewへの合成momentum event送信（端を越えてもmomentum中は伸びが
+  累積し、terminalで反発することを確認）
 
 ### 入力backend / Windows
 
