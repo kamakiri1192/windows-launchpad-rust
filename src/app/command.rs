@@ -94,6 +94,8 @@ impl App {
         let lg = &self.settings.liquid_glass;
         r.apply_persisted_liquid_glass(
             lg.enabled,
+            lg.auto_darkness_enabled,
+            lg.auto_darkness_max,
             lg.thickness,
             lg.refractive_index,
             lg.saturation,

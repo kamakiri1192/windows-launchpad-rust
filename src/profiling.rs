@@ -93,13 +93,13 @@ pub struct FrameProfiler {
     frame_start: Option<Instant>,
     /// `tick_frame` body (scroller to before render).
     tick_body_start: Option<Instant>,
-    /// `render_settings_panel` (build_with_ui + transform).
+    /// Cache-miss path in `render_settings_panel` (layout + text shaping).
     settings_build_start: Option<Instant>,
 
     // Accumulated phase stats.
     tick_body: PhaseStats,
     settings_build: PhaseStats,
-    hitmap_clone: PhaseStats,
+    settings_apply: PhaseStats,
     tick_scroller: PhaseStats,
     prepare: PhaseStats,
     gpu_render: PhaseStats,
@@ -115,6 +115,8 @@ pub struct FrameProfiler {
     ink_views: CountStats,
     glyph_views: CountStats,
     text_views: CountStats,
+    settings_cache_hits: u64,
+    settings_cache_misses: u64,
 
     // Report pacing.
     last_report_at: Instant,
@@ -131,7 +133,7 @@ impl FrameProfiler {
 
             tick_body: PhaseStats::default(),
             settings_build: PhaseStats::default(),
-            hitmap_clone: PhaseStats::default(),
+            settings_apply: PhaseStats::default(),
             tick_scroller: PhaseStats::default(),
             prepare: PhaseStats::default(),
             gpu_render: PhaseStats::default(),
@@ -146,6 +148,8 @@ impl FrameProfiler {
             ink_views: CountStats::default(),
             glyph_views: CountStats::default(),
             text_views: CountStats::default(),
+            settings_cache_hits: 0,
+            settings_cache_misses: 0,
 
             last_report_at: Instant::now(),
             total_frames: 0,
@@ -171,22 +175,30 @@ impl FrameProfiler {
         self.tick_scroller.record(dur);
     }
 
-    /// Call just before `build_with_ui` inside `render_settings_panel`.
+    /// Call just before the retained settings cache is rebuilt.
     pub fn begin_settings_build(&mut self) {
         self.settings_build_start = Some(Instant::now());
     }
 
-    /// Call after `build_with_ui` + transform + merge completes inside
-    /// `render_settings_panel`.
+    /// Call after layout, shaping, and cache construction complete.
     pub fn end_settings_build(&mut self) {
         if let Some(start) = self.settings_build_start.take() {
             self.settings_build.record(start.elapsed());
         }
     }
 
-    /// Call after `HitMap::clone()`.
-    pub fn record_hitmap_clone(&mut self, dur: Duration) {
-        self.hitmap_clone.record(dur);
+    /// Record retained settings model materialization and HitMap translation.
+    pub fn record_settings_apply(&mut self, dur: Duration) {
+        self.settings_apply.record(dur);
+    }
+
+    /// Record whether this frame reused the retained settings UI model.
+    pub fn record_settings_cache(&mut self, hit: bool) {
+        if hit {
+            self.settings_cache_hits += 1;
+        } else {
+            self.settings_cache_misses += 1;
+        }
     }
 
     /// Call after `prepare()`.
@@ -267,9 +279,9 @@ impl FrameProfiler {
             self.settings_build.max_ms(),
         );
         eprintln!(
-            "    hitmap_clone     {:7.3} / {:7.3} ms",
-            self.hitmap_clone.avg_ms(),
-            self.hitmap_clone.max_ms(),
+            "    settings_apply   {:7.3} / {:7.3} ms",
+            self.settings_apply.avg_ms(),
+            self.settings_apply.max_ms(),
         );
         eprintln!(
             "    prepare          {:7.3} / {:7.3} ms",
@@ -323,6 +335,16 @@ impl FrameProfiler {
             self.text_views.avg(),
             self.text_views.max,
         );
+        let settings_cache_total = self.settings_cache_hits + self.settings_cache_misses;
+        let settings_cache_rate = if settings_cache_total == 0 {
+            0.0
+        } else {
+            self.settings_cache_hits as f64 * 100.0 / settings_cache_total as f64
+        };
+        eprintln!(
+            "  Settings cache: {} hit / {} miss ({settings_cache_rate:.1}% hit)",
+            self.settings_cache_hits, self.settings_cache_misses,
+        );
         eprintln!("  Total frames: {}", self.total_frames,);
 
         self.reset();
@@ -332,7 +354,7 @@ impl FrameProfiler {
         self.tick_scroller.reset();
         self.tick_body.reset();
         self.settings_build.reset();
-        self.hitmap_clone.reset();
+        self.settings_apply.reset();
         self.prepare.reset();
         self.gpu_render.reset();
 
@@ -344,6 +366,8 @@ impl FrameProfiler {
         self.ink_views.reset();
         self.glyph_views.reset();
         self.text_views.reset();
+        self.settings_cache_hits = 0;
+        self.settings_cache_misses = 0;
 
         self.last_report_at = Instant::now();
     }
@@ -366,7 +390,8 @@ impl FrameProfiler {
     pub fn record_scroller_tick(&mut self, _dur: Duration) {}
     pub fn begin_settings_build(&mut self) {}
     pub fn end_settings_build(&mut self) {}
-    pub fn record_hitmap_clone(&mut self, _dur: Duration) {}
+    pub fn record_settings_apply(&mut self, _dur: Duration) {}
+    pub fn record_settings_cache(&mut self, _hit: bool) {}
     pub fn record_prepare(&mut self, _dur: Duration) {}
     pub fn record_render(&mut self, _dur: Duration) {}
     pub fn end_frame(&mut self) {}

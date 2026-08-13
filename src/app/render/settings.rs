@@ -4,18 +4,204 @@ use crate::domain::settings::{
     LiquidGlassDebugFlag, LiquidGlassParamField, SettingsCategory, SortOrder,
 };
 use crate::layout;
+use crate::layout::hit_map::HitMap;
 use crate::renderer::text_engine as text;
 use crate::ui_model;
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::ids::UiId;
-use crate::ui_model::render_model::{Color, GlassLayer, GlyphLane, GlyphView, InkLane, InkView};
+use crate::ui_model::render_model::{
+    Color, GlassLayer, GlassSurface, GlyphLane, GlyphView, InkLane, InkView,
+};
 
 use super::helpers::advance_unit_toward;
 use crate::app::state::App;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SettingsRenderCacheKey {
+    input: layout::settings_panel::SettingsPanelInput,
+    atlas_dimensions: (u32, u32),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SettingsRenderCounts {
+    overlay_glass: u64,
+    settings_glass: u64,
+    regions: u64,
+    ink: u64,
+    glyphs: u64,
+    text: u64,
+}
+
+/// CPU-retained settings presentation.
+///
+/// This deliberately contains only UI geometry, shaped glyphs, and hit-test
+/// data. The completed scene, desktop capture, and full-resolution blur remain
+/// dynamic renderer inputs and are produced every frame.
+#[derive(Debug, Clone)]
+pub(crate) struct SettingsRenderCache {
+    key: SettingsRenderCacheKey,
+    source_scroll_position: f32,
+    applied_scroll_position: Option<f32>,
+    /// Set after applying a scroll-only translation. Once the offset stops
+    /// changing, rebuild once so pointer-hover visuals are evaluated against
+    /// the newly settled row positions.
+    needs_post_scroll_refresh: bool,
+    visual_scale: f32,
+    settings_glass: Vec<GlassSurface>,
+    backdrop: Vec<InkView>,
+    overlay: Vec<GlassSurface>,
+    ink: Vec<InkView>,
+    glyphs: Vec<GlyphView>,
+    hits: HitMap,
+    counts: SettingsRenderCounts,
+}
+
+impl SettingsRenderCache {
+    fn from_model(
+        key: SettingsRenderCacheKey,
+        source_scroll_position: f32,
+        scale: f32,
+        model: layout::settings_panel::SettingsPanelModel,
+        text: Option<&mut text::TextRenderer>,
+    ) -> Self {
+        let panel = model.layout;
+        let visual_scale = model.visual_scale;
+        let visual_alpha = model.visual_alpha;
+        let mut ink: Vec<InkView> = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .map(|batch| batch.views.clone())
+            .unwrap_or_default();
+        let mut quads = Vec::new();
+        if let Some(text) = text {
+            build_settings_panel_text_views(text, &model.result.render.text, scale, &mut quads);
+        }
+        transform_settings_instances(&mut ink, [panel.cx, panel.cy], visual_scale, visual_alpha);
+        transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
+        let glyphs = glyph_views(&quads);
+        let settings_glass = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Settings)
+            .map(|batch| batch.surfaces.clone())
+            .unwrap_or_default();
+        let backdrop = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Backdrop)
+            .map(|batch| batch.views.clone())
+            .unwrap_or_default();
+        let overlay = model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Overlay)
+            .map(|batch| batch.surfaces.clone())
+            .unwrap_or_default();
+        let counts = SettingsRenderCounts {
+            overlay_glass: overlay.len() as u64,
+            settings_glass: settings_glass.len() as u64,
+            regions: model.result.hits.len() as u64,
+            ink: model
+                .result
+                .render
+                .ink
+                .iter()
+                .map(|batch| batch.views.len() as u64)
+                .sum(),
+            glyphs: glyphs.len() as u64,
+            text: model.result.render.text.len() as u64,
+        };
+
+        Self {
+            key,
+            source_scroll_position,
+            applied_scroll_position: None,
+            needs_post_scroll_refresh: false,
+            visual_scale,
+            settings_glass,
+            backdrop,
+            overlay,
+            ink,
+            glyphs,
+            hits: model.result.hits,
+            counts,
+        }
+    }
+
+    fn scroll_delta(&self, target_scroll_position: f32) -> f32 {
+        self.source_scroll_position - target_scroll_position
+    }
+
+    fn materialize_ink(&self, target_scroll_position: f32) -> Vec<InkView> {
+        let delta = self.scroll_delta(target_scroll_position) * self.visual_scale;
+        let mut views = self.ink.clone();
+        for view in &mut views {
+            if view.clip.is_some() {
+                view.center.y += delta;
+            }
+        }
+        views
+    }
+
+    fn materialize_glyphs(&self, target_scroll_position: f32) -> Vec<GlyphView> {
+        let delta = self.scroll_delta(target_scroll_position) * self.visual_scale;
+        let mut views = self.glyphs.clone();
+        for view in &mut views {
+            if view.clip.is_some() {
+                view.rect.y += delta;
+            }
+        }
+        views
+    }
+
+    fn materialize_overlay(&self, target_scroll_position: f32) -> Vec<GlassSurface> {
+        let delta = self.scroll_delta(target_scroll_position);
+        let mut surfaces = self.overlay.clone();
+        for surface in &mut surfaces {
+            if surface.clip.is_some() {
+                surface.rect.y += delta;
+            }
+        }
+        surfaces
+    }
+
+    fn materialize_hits(&self, target_scroll_position: f32) -> HitMap {
+        let delta = self.scroll_delta(target_scroll_position);
+        let regions = self
+            .hits
+            .regions()
+            .iter()
+            .cloned()
+            .map(|mut region| {
+                if region.clip.is_some() {
+                    region.translate_y(delta);
+                }
+                region
+            })
+            .collect();
+        HitMap::with_regions(regions)
+    }
+
+    fn is_applied_at(&self, scroll_position: f32) -> bool {
+        self.applied_scroll_position
+            .is_some_and(|applied| applied.to_bits() == scroll_position.to_bits())
+    }
+}
+
 impl App {
     pub(crate) fn render_settings_panel(&mut self) {
         if !self.settings_panel_active() {
+            self.settings_render_cache = None;
+            self.cached_settings_hit_map = None;
             self.render_model
                 .set_glass_batch(GlassLayer::Settings, Vec::new());
             self.render_model
@@ -29,8 +215,6 @@ impl App {
 
         let scale = self.scale_factor;
         let hidden_count = self.launcher_state.hidden_apps.len();
-        let hidden_count_label = format!("{hidden_count} 件");
-        let copy = settings_panel_copy(&hidden_count_label);
         // Snapshot the renderer-only session state (window decorations + the
         // eight B/G/D/A/F and C/E/L debug flags) so the layout layer can draw
         // the toggles without depending on the renderer.
@@ -74,90 +258,136 @@ impl App {
         let pointer_pressed = self.pressed_on_settings.is_some()
             || self.pending_press.is_some()
             || self.settings_slider_drag.is_some();
-        // Capture the settings_scroll into a local ref for the builder.
-        // We use a trick: split borrow of settings_scroll while we still need
-        // other fields of self. Build the input first, then pass &mut scroll.
-        self.profiler.begin_settings_build();
-        let model = {
-            let input = layout::settings_panel::SettingsPanelInput {
-                viewport,
-                scale_factor: scale,
-                category: settings_category_id(self.settings_category),
-                sort_order: sort_order_id(self.settings.sort_order),
-                frequent_apps_enabled: self.settings.frequent_apps_enabled,
-                show_steam_apps: self.settings.show_steam_apps,
-                search_includes_hidden: self.settings.search_includes_hidden,
-                debug_keys_enabled: self.settings.debug_keys_enabled,
-                show_fps: self.settings.show_fps,
-                hidden_count,
-                progress: self.settings_panel_progress,
-                scroll_rows: self.settings_scroll_rows,
-                window_decorated,
-                liquid_glass: layout::settings_panel::LiquidGlassValues {
-                    enabled: lg.enabled,
-                    thickness: lg.thickness,
-                    refractive_index: lg.refractive_index,
-                    saturation: lg.saturation,
-                    glass_darkness: lg.glass_darkness,
-                    context_menu_glass_darkness: lg.context_menu_glass_darkness,
-                    settings_panel_glass_darkness: lg.settings_panel_glass_darkness,
-                    chromatic_aberration: lg.chromatic_aberration,
-                    blur_radius: lg.blur_radius,
-                },
-                liquid_glass_debug: lg_debug_state,
-                pointer_pos: pointer_logical,
-                pointer_pressed,
-                page_frame_rect: Rect::new(
-                    frame_cx - frame_w * 0.5,
-                    frame_cy - frame_h * 0.5,
-                    frame_w,
-                    frame_h,
+        let input = layout::settings_panel::SettingsPanelInput {
+            viewport,
+            scale_factor: scale,
+            category: settings_category_id(self.settings_category),
+            sort_order: sort_order_id(self.settings.sort_order),
+            frequent_apps_enabled: self.settings.frequent_apps_enabled,
+            show_steam_apps: self.settings.show_steam_apps,
+            search_includes_hidden: self.settings.search_includes_hidden,
+            debug_keys_enabled: self.settings.debug_keys_enabled,
+            show_fps: self.settings.show_fps,
+            show_auto_darkness_value: self.settings.show_auto_darkness_value,
+            hidden_count,
+            progress: self.settings_panel_progress,
+            scroll_rows: self.settings_scroll_rows,
+            window_decorated,
+            liquid_glass: layout::settings_panel::LiquidGlassValues {
+                enabled: lg.enabled,
+                auto_darkness_enabled: lg.auto_darkness_enabled,
+                auto_darkness_max: lg.auto_darkness_max,
+                auto_darkness_mode: auto_darkness_mode_id(
+                    self.renderer
+                        .as_ref()
+                        .map(|renderer| renderer.liquid_glass_auto_darkness_update_mode())
+                        .unwrap_or_default(),
                 ),
-                page_frame_radius: self.layout.scaled(layout::grid::FRAME_CORNER_RADIUS),
-                category_hover_amounts: self.settings_category_hover_amounts(),
-                category_selection_amounts: self.settings_category_selection_amounts(),
-            };
-            layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll)
+                thickness: lg.thickness,
+                refractive_index: lg.refractive_index,
+                saturation: lg.saturation,
+                glass_darkness: lg.glass_darkness,
+                context_menu_glass_darkness: lg.context_menu_glass_darkness,
+                settings_panel_glass_darkness: lg.settings_panel_glass_darkness,
+                chromatic_aberration: lg.chromatic_aberration,
+                blur_radius: lg.blur_radius,
+            },
+            liquid_glass_debug: lg_debug_state,
+            pointer_pos: pointer_logical,
+            pointer_pressed,
+            page_frame_rect: Rect::new(
+                frame_cx - frame_w * 0.5,
+                frame_cy - frame_h * 0.5,
+                frame_w,
+                frame_h,
+            ),
+            page_frame_radius: self.layout.scaled(layout::grid::FRAME_CORNER_RADIUS),
+            category_hover_amounts: self.settings_category_hover_amounts(),
+            category_selection_amounts: self.settings_category_selection_amounts(),
         };
-        self.profiler.end_settings_build();
 
-        // Cache the HitMap for next frame's input processing (1-frame delay).
-        let clone_start = std::time::Instant::now();
-        self.cached_settings_hit_map = Some(model.result.hits.clone());
-        self.profiler.record_hitmap_clone(clone_start.elapsed());
+        let cache_key = SettingsRenderCacheKey {
+            input,
+            // Atlas growth changes normalized UVs. A cache built just before a
+            // growth intentionally retains the old dimensions in its key so
+            // the next frame rebuilds it with the final atlas geometry.
+            atlas_dimensions: self
+                .text
+                .as_ref()
+                .map(|text| text.atlas_dimensions())
+                .unwrap_or_default(),
+        };
+        let cache_hit = self.settings_render_cache.as_ref().is_some_and(|cache| {
+            cache.key == cache_key
+                && !(cache.needs_post_scroll_refresh
+                    && cache.is_applied_at(self.settings_scroll.position))
+        });
+        self.profiler.record_settings_cache(cache_hit);
 
-        // Record shape/model counts for profiling.
-        let overlay_glass = model
-            .result
-            .render
-            .glass
-            .iter()
-            .find(|b| b.layer == GlassLayer::Overlay)
-            .map(|b| b.surfaces.len() as u64)
-            .unwrap_or(0);
-        let modal_glass = model
-            .result
-            .render
-            .glass
-            .iter()
-            .find(|b| b.layer == GlassLayer::Settings)
-            .map(|b| b.surfaces.len() as u64)
-            .unwrap_or(0);
-        let ink_count = model
-            .result
-            .render
-            .ink
-            .iter()
-            .map(|b| b.views.len() as u64)
-            .sum::<u64>();
-        let glyph_count = model
-            .result
-            .render
-            .glyphs
-            .iter()
-            .map(|b| b.views.len() as u64)
-            .sum::<u64>();
-        let text_count = model.result.render.text.len() as u64;
+        if !cache_hit {
+            self.profiler.begin_settings_build();
+            let hidden_count_label = format!("{hidden_count} 件");
+            let copy = settings_panel_copy(&hidden_count_label);
+            // This is the exact offset used to lay out the retained source.
+            // `build_with_ui` may clamp the live scroller after measuring new
+            // content; materialization below accounts for that difference.
+            let source_scroll_position = self.settings_scroll.position;
+            let model =
+                layout::settings_panel::build_with_ui(input, &copy, &mut self.settings_scroll);
+            self.settings_render_cache = Some(SettingsRenderCache::from_model(
+                cache_key,
+                source_scroll_position,
+                scale,
+                model,
+                self.text.as_mut(),
+            ));
+            self.profiler.end_settings_build();
+        }
+
+        let scroll_position = self.settings_scroll.position;
+        let needs_apply = self
+            .settings_render_cache
+            .as_ref()
+            .is_some_and(|cache| !cache.is_applied_at(scroll_position));
+        if needs_apply {
+            let clone_start = std::time::Instant::now();
+            let (settings_glass, backdrop, ink, glyphs, hits) = {
+                let cache = self
+                    .settings_render_cache
+                    .as_ref()
+                    .expect("settings cache must exist after build");
+                (
+                    cache.settings_glass.clone(),
+                    cache.backdrop.clone(),
+                    cache.materialize_ink(scroll_position),
+                    cache.materialize_glyphs(scroll_position),
+                    cache.materialize_hits(scroll_position),
+                )
+            };
+            self.render_model
+                .set_glass_batch(GlassLayer::Settings, settings_glass);
+            self.render_model.set_ink_batch(InkLane::Backdrop, backdrop);
+            self.render_model.set_ink_batch(InkLane::Settings, ink);
+            self.render_model
+                .set_glyph_batch(GlyphLane::Settings, glyphs);
+            self.cached_settings_hit_map = Some(hits);
+            if let Some(cache) = self.settings_render_cache.as_mut() {
+                cache.applied_scroll_position = Some(scroll_position);
+                cache.needs_post_scroll_refresh =
+                    cache.source_scroll_position.to_bits() != scroll_position.to_bits();
+            }
+            self.profiler.record_settings_apply(clone_start.elapsed());
+        }
+
+        // `render_gear` refreshes the shared Overlay lane every frame, so
+        // retained settings toggle lenses are merged back each frame. No
+        // panel-AABB culling is used: every settings surface remains available
+        // to the renderer and its own clip contract controls visibility.
+        let settings_overlay = self
+            .settings_render_cache
+            .as_ref()
+            .map(|cache| cache.materialize_overlay(scroll_position))
+            .unwrap_or_default();
         // Count existing overlay glass that's merged in (from bottom control etc.)
         let existing_overlay = self
             .render_model
@@ -181,110 +411,36 @@ impl App {
             .find(|batch| batch.layer == GlassLayer::Base)
             .map(|batch| batch.surfaces.len() as u64)
             .unwrap_or(0);
-        let control_overlay = existing_overlay; // Overlay = control + settings glass
-        let region_count = model.result.hits.len() as u64;
+        let counts = self
+            .settings_render_cache
+            .as_ref()
+            .expect("settings cache must exist after build")
+            .counts;
+        let control_overlay = existing_overlay;
         self.profiler.record_counts(
-            overlay_glass + existing_overlay,
-            modal_glass + existing_modal,
+            counts.overlay_glass + existing_overlay,
+            counts.settings_glass + existing_modal,
             control_overlay,
             base_count,
-            region_count,
-            ink_count,
-            glyph_count,
-            text_count,
+            counts.regions,
+            counts.ink,
+            counts.glyphs,
+            counts.text,
         );
-
-        let panel = model.layout;
-        let visual_scale = model.visual_scale;
-        let visual_alpha = model.visual_alpha;
-
-        // Extract ink instances from the builder's output.
-        let mut instances: Vec<InkView> = model
-            .result
-            .render
-            .ink
-            .iter()
-            .find(|b| b.lane == InkLane::Settings)
-            .map(|b| b.views.clone())
-            .unwrap_or_default();
-
-        // Text views from the builder → glyph quads.
-        let mut quads = Vec::new();
-        if let Some(text) = self.text.as_mut() {
-            build_settings_panel_text_views(text, &model.result.render.text, scale, &mut quads);
-        }
-
-        // Transform for pop animation.
-        transform_settings_instances(
-            &mut instances,
-            [panel.cx, panel.cy],
-            visual_scale,
-            visual_alpha,
-        );
-        transform_settings_quads(&mut quads, [panel.cx, panel.cy], visual_scale, visual_alpha);
-
-        // Glass from the builder's output. The panel background lives on the
-        // Settings layer; the Liquid Glass toggle thumbs live on the Overlay
-        // layer (so they render as independent glass lenses, not a union with
-        // the panel capsule). Overlay is merged with whatever the rest of the
-        // frame already pushed there (e.g. the bottom control capsule) because
-        // `set_glass_batch` replaces per-layer.
-        let settings_glass = model
-            .result
-            .render
-            .glass
-            .iter()
-            .find(|batch| batch.layer == GlassLayer::Settings)
-            .map(|batch| batch.surfaces.clone())
-            .unwrap_or_default();
-        self.render_model
-            .set_glass_batch(GlassLayer::Settings, settings_glass);
-
-        let backdrop = model
-            .result
-            .render
-            .ink
-            .iter()
-            .find(|batch| batch.lane == InkLane::Backdrop)
-            .map(|batch| batch.views.clone())
-            .unwrap_or_default();
-        self.render_model.set_ink_batch(InkLane::Backdrop, backdrop);
-
-        let ui_overlay = model
-            .result
-            .render
-            .glass
-            .iter()
-            .find(|batch| batch.layer == GlassLayer::Overlay)
-            .map(|batch| batch.surfaces.clone())
-            .unwrap_or_default();
-        if !ui_overlay.is_empty() {
-            let existing_overlay = self
+        if !settings_overlay.is_empty() {
+            let merged: Vec<_> = self
                 .render_model
                 .glass
                 .iter()
                 .find(|batch| batch.layer == GlassLayer::Overlay)
                 .map(|batch| batch.surfaces.clone())
-                .unwrap_or_default();
-            // Cull only the settings-panel glass (toggle thumbs) that has
-            // scrolled fully past the panel AABB. The existing_overlay
-            // (bottom control capsule, gear, etc.) is left untouched —
-            // the list-virtualization idea applies to our own scrollable
-            // content, not to ambient UI that happens to share the Overlay
-            // lane.
-            let panel_rect = model.layout.rect();
-            let ui_overlay: Vec<_> = ui_overlay
+                .unwrap_or_default()
                 .into_iter()
-                .filter(|s| s.rect.intersects(panel_rect))
+                .chain(settings_overlay)
                 .collect();
-            let merged: Vec<_> = existing_overlay.into_iter().chain(ui_overlay).collect();
             self.render_model
                 .set_glass_batch(GlassLayer::Overlay, merged);
         }
-        self.render_model
-            .set_ink_batch(InkLane::Settings, instances);
-        self.render_model
-            .set_glyph_batch(GlyphLane::Settings, glyph_views(&quads));
 
         if let (Some(renderer), Some(text)) = (self.renderer.as_mut(), self.text.as_ref()) {
             if text.atlas_dirty {
@@ -398,17 +554,18 @@ impl App {
             })
     }
 
-    pub(crate) fn settings_category_hover_amounts(&self) -> [f32; 5] {
+    pub(crate) fn settings_category_hover_amounts(&self) -> [f32; SettingsCategory::COUNT] {
         std::array::from_fn(|index| self.settings_category_hover[index].current)
     }
 
-    pub(crate) fn settings_category_selection_amounts(&self) -> [f32; 5] {
+    pub(crate) fn settings_category_selection_amounts(&self) -> [f32; SettingsCategory::COUNT] {
         std::array::from_fn(|index| self.settings_category_selection[index].current)
     }
 
     pub(crate) fn reset_settings_category_hover(&mut self) {
-        self.settings_category_hover = [crate::spring_anim::Channel::rest(0.0); 5];
-        self.settings_category_hover_elapsed = [0.0; 5];
+        self.settings_category_hover =
+            [crate::spring_anim::Channel::rest(0.0); SettingsCategory::COUNT];
+        self.settings_category_hover_elapsed = [0.0; SettingsCategory::COUNT];
     }
 }
 
@@ -419,6 +576,7 @@ pub(crate) fn settings_category_id(
         SettingsCategory::Apps => layout::settings_panel::SettingsCategoryId::Apps,
         SettingsCategory::Search => layout::settings_panel::SettingsCategoryId::Search,
         SettingsCategory::System => layout::settings_panel::SettingsCategoryId::System,
+        SettingsCategory::Darkness => layout::settings_panel::SettingsCategoryId::Darkness,
         SettingsCategory::About => layout::settings_panel::SettingsCategoryId::About,
         SettingsCategory::Debug => layout::settings_panel::SettingsCategoryId::Debug,
     }
@@ -430,6 +588,27 @@ pub(crate) fn sort_order_id(order: SortOrder) -> layout::settings_panel::SortOrd
         SortOrder::Manual => layout::settings_panel::SortOrderId::Manual,
         SortOrder::Recent => layout::settings_panel::SortOrderId::Recent,
         SortOrder::Frequent => layout::settings_panel::SortOrderId::Frequent,
+    }
+}
+
+fn auto_darkness_mode_id(
+    mode: crate::liquid_glass::AutoDarknessUpdateMode,
+) -> layout::settings_panel::AutoDarknessModeId {
+    use crate::liquid_glass::AutoDarknessUpdateMode as Source;
+    use layout::settings_panel::AutoDarknessModeId as Target;
+    match mode {
+        Source::FullRate => Target::FullRate,
+        Source::Adaptive => Target::Adaptive,
+        Source::Fixed8Hz => Target::Fixed8Hz,
+    }
+}
+
+fn auto_darkness_mode_from_key(key: &str) -> crate::liquid_glass::AutoDarknessUpdateMode {
+    use crate::liquid_glass::AutoDarknessUpdateMode;
+    match key {
+        "full-rate" => AutoDarknessUpdateMode::FullRate,
+        "fixed-8hz" => AutoDarknessUpdateMode::Fixed8Hz,
+        _ => AutoDarknessUpdateMode::Adaptive,
     }
 }
 
@@ -450,6 +629,10 @@ fn settings_panel_copy<'a>(
             (
                 layout::settings_panel::SettingsCategoryId::System,
                 SettingsCategory::System.label(),
+            ),
+            (
+                layout::settings_panel::SettingsCategoryId::Darkness,
+                SettingsCategory::Darkness.label(),
             ),
             (
                 layout::settings_panel::SettingsCategoryId::About,
@@ -506,13 +689,22 @@ fn settings_panel_copy<'a>(
         debug_icon_cache_detail: "すべてのアイコンを再抽出します",
         debug_lg_enabled_label: "Liquid Glass を有効化",
         debug_lg_enabled_detail: "ガラス効果のマスタースイッチ",
+        debug_lg_auto_darkness_value_label: "動的darknessの値を表示",
+        debug_lg_auto_darkness_value_detail: "画面右上に現在の実効値を表示します",
+        darkness_auto_label: "背景に合わせてガラスを暗くする",
+        darkness_auto_detail: "背景が白いときだけガラス全体を自動で暗くします",
+        darkness_update_mode_labels: [
+            ("判定: フルレート", "新しい背景フレームごとに判定します"),
+            ("判定: 自動", "変化中は追従し、安定時は最大8Hzに抑えます"),
+            ("判定: 8Hz固定", "性能比較用に判定を常時8Hzへ制限します"),
+        ],
+        darkness_max_label: "動的darknessの上限",
+        darkness_glass_label: "ガラス全体の黒さ (glass darkness)",
+        darkness_context_menu_label: "コンテキストメニューの黒さ (context menu darkness)",
+        darkness_settings_panel_label: "設定画面の黒さ (settings panel darkness)",
         debug_lg_thickness_label: "厚み (thickness)",
         debug_lg_refractive_index_label: "屈折率 (refractive index)",
         debug_lg_saturation_label: "彩度 (saturation)",
-        debug_lg_glass_darkness_label: "ガラス全体の黒さ (glass darkness)",
-        debug_lg_context_menu_glass_darkness_label:
-            "コンテキストメニューの黒さ (context menu darkness)",
-        debug_lg_settings_panel_glass_darkness_label: "設定画面の黒さ (settings panel darkness)",
         debug_lg_chromatic_aberration_label: "色収差 (chromatic aberration)",
         debug_lg_blur_radius_label: "ぼかし半径 (blur radius)",
         debug_lg_disable_chromatic_aberration_label: "色収差を無効化",
@@ -552,6 +744,7 @@ pub(crate) fn settings_press_target_from_hit_target(
                 "apps" => crate::domain::settings::SettingsCategory::Apps,
                 "search" => crate::domain::settings::SettingsCategory::Search,
                 "system" => crate::domain::settings::SettingsCategory::System,
+                "darkness" => crate::domain::settings::SettingsCategory::Darkness,
                 "about" => crate::domain::settings::SettingsCategory::About,
                 "debug" => crate::domain::settings::SettingsCategory::Debug,
                 _ => return SettingsPressTarget::Inside,
@@ -578,7 +771,13 @@ pub(crate) fn settings_press_target_from_hit_target(
             "search-hidden" => SettingsPressTarget::SearchHiddenToggle,
             "debug" => SettingsPressTarget::DebugToggle,
             "show-fps" => SettingsPressTarget::FpsToggle,
+            "show-auto-darkness-value" => SettingsPressTarget::AutoDarknessValueToggle,
             "lg-enabled" => SettingsPressTarget::LiquidGlassEnabled,
+            "lg-auto-darkness" => SettingsPressTarget::LiquidGlassAutoDarkness,
+            key if key.starts_with("lg-auto-darkness-mode-") => {
+                let mode = auto_darkness_mode_from_key(&key["lg-auto-darkness-mode-".len()..]);
+                SettingsPressTarget::LiquidGlassAutoDarknessMode(mode)
+            }
             "window-decorations" => SettingsPressTarget::WindowDecorations,
             key if key.starts_with("lg-param-") => {
                 let field = param_field_from_key(&key["lg-param-".len()..]);
@@ -612,6 +811,7 @@ fn param_field_from_key(key: &str) -> LiquidGlassParamField {
         "thickness" => LiquidGlassParamField::Thickness,
         "refractive-index" => LiquidGlassParamField::RefractiveIndex,
         "saturation" => LiquidGlassParamField::Saturation,
+        "auto-darkness-max" => LiquidGlassParamField::AutoDarknessMax,
         "glass-darkness" => LiquidGlassParamField::GlassDarkness,
         "context-menu-glass-darkness" => LiquidGlassParamField::ContextMenuGlassDarkness,
         "settings-panel-glass-darkness" => LiquidGlassParamField::SettingsPanelGlassDarkness,
@@ -685,7 +885,17 @@ fn glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
             },
             color: Color::rgba(quad.color[0], quad.color[1], quad.color[2], quad.color[3]),
             z: 0,
-            clip: None,
+            clip: (quad.clip_rect[2] > 0.0 && quad.clip_rect[3] > 0.0).then(|| {
+                ui_model::geometry::ClipRegion::new(
+                    Rect::new(
+                        quad.clip_rect[0],
+                        quad.clip_rect[1],
+                        quad.clip_rect[2],
+                        quad.clip_rect[3],
+                    ),
+                    quad.clip_radius[0],
+                )
+            }),
         })
         .collect()
 }
@@ -702,6 +912,7 @@ fn build_settings_panel_text_views(
         1.0
     };
     for view in views {
+        let first_quad = quads.len();
         let color = [
             view.style.color.r,
             view.style.color.g,
@@ -743,6 +954,12 @@ fn build_settings_panel_text_views(
                     center: (view.rect.center().x, center_y),
                     scale_factor: scale,
                 }));
+            }
+        }
+        if let Some(clip) = view.clip {
+            for quad in &mut quads[first_quad..] {
+                quad.clip_rect = [clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height];
+                quad.clip_radius = [clip.radius, 0.0, 0.0, 0.0];
             }
         }
     }
@@ -817,7 +1034,258 @@ mod tests {
     use super::*;
     use crate::app::state::SettingsPressTarget;
     use crate::domain::settings::{LiquidGlassDebugFlag, LiquidGlassParamField};
+    use crate::layout::hit_map::HitRegion;
+    use crate::ui_model::geometry::{ClipRegion, Point};
     use crate::ui_model::hit::{HitTarget, SettingsTarget};
+    use crate::ui_model::render_model::{ControlKind, GlassBehavior, GlassMaterial};
+
+    fn test_input() -> layout::settings_panel::SettingsPanelInput {
+        let category = layout::settings_panel::SettingsCategoryId::Debug;
+        let mut category_selection_amounts =
+            [0.0; layout::settings_panel::SettingsCategoryId::COUNT];
+        category_selection_amounts[category.index()] = 1.0;
+        layout::settings_panel::SettingsPanelInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            category,
+            sort_order: layout::settings_panel::SortOrderId::Name,
+            frequent_apps_enabled: false,
+            show_steam_apps: true,
+            search_includes_hidden: false,
+            debug_keys_enabled: false,
+            show_fps: false,
+            show_auto_darkness_value: false,
+            hidden_count: 0,
+            progress: 1.0,
+            scroll_rows: 0,
+            window_decorated: false,
+            liquid_glass: layout::settings_panel::LiquidGlassValues::default(),
+            liquid_glass_debug: layout::settings_panel::LiquidGlassDebugState::default(),
+            pointer_pos: None,
+            pointer_pressed: false,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0,
+            category_hover_amounts: [0.0; layout::settings_panel::SettingsCategoryId::COUNT],
+            category_selection_amounts,
+        }
+    }
+
+    fn test_cache() -> SettingsRenderCache {
+        let clip = Some(ClipRegion::new(Rect::new(0.0, 0.0, 200.0, 200.0), 0.0));
+        let ink = |id: &str, y: f32, clip| InkView {
+            id: UiId::named(id),
+            center: Point::new(10.0, y),
+            extent: 4.0,
+            opacity: 1.0,
+            scene_blur: 0.0,
+            stroke: 0.0,
+            corner_radius: 0.0,
+            color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+            kind: ControlKind::Dot,
+            z: 0,
+            clip,
+        };
+        let glass = |id: &str, y: f32, clip| GlassSurface {
+            id: UiId::named(id),
+            rect: Rect::new(0.0, y, 20.0, 20.0),
+            radius: 10.0,
+            material: GlassMaterial::Regular,
+            behavior: GlassBehavior::Control,
+            z: 0,
+            clip,
+            activation: 0.0,
+            blur_radius: None,
+            backdrop_replacement: 0.0,
+            tint: None,
+        };
+        let glyph = |id: &str, y: f32, clip| GlyphView {
+            id: UiId::named(id),
+            rect: Rect::new(0.0, y, 10.0, 10.0),
+            uv: UvRect::default(),
+            color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+            z: 0,
+            clip,
+        };
+        let mut fixed_hit = HitRegion::new(
+            UiId::named("fixed-hit"),
+            Rect::new(0.0, 20.0, 10.0, 10.0),
+            HitTarget::settings_action("fixed"),
+            0,
+        );
+        fixed_hit.clip = None;
+        let mut scrolling_hit = HitRegion::new(
+            UiId::named("scroll-hit"),
+            Rect::new(0.0, 30.0, 10.0, 10.0),
+            HitTarget::settings_action("scroll"),
+            0,
+        );
+        scrolling_hit.clip = clip;
+
+        SettingsRenderCache {
+            key: SettingsRenderCacheKey {
+                input: test_input(),
+                atlas_dimensions: (512, 512),
+            },
+            source_scroll_position: 100.0,
+            applied_scroll_position: None,
+            needs_post_scroll_refresh: false,
+            visual_scale: 0.9,
+            settings_glass: Vec::new(),
+            backdrop: Vec::new(),
+            overlay: vec![
+                glass("fixed-glass", 20.0, None),
+                glass("scroll-glass", 30.0, clip),
+            ],
+            ink: vec![ink("fixed-ink", 20.0, None), ink("scroll-ink", 30.0, clip)],
+            glyphs: vec![
+                glyph("fixed-glyph", 20.0, None),
+                glyph("scroll-glyph", 30.0, clip),
+            ],
+            hits: HitMap::with_regions(vec![fixed_hit, scrolling_hit]),
+            counts: SettingsRenderCounts {
+                overlay_glass: 2,
+                settings_glass: 0,
+                regions: 2,
+                ink: 2,
+                glyphs: 2,
+                text: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn retained_scroll_moves_only_clipped_content() {
+        let cache = test_cache();
+
+        let ink = cache.materialize_ink(135.0);
+        let glyphs = cache.materialize_glyphs(135.0);
+        let overlay = cache.materialize_overlay(135.0);
+        let hits = cache.materialize_hits(135.0);
+
+        assert_eq!(ink[0].center.y, 20.0);
+        assert_eq!(ink[1].center.y, -1.5);
+        assert_eq!(glyphs[0].rect.y, 20.0);
+        assert_eq!(glyphs[1].rect.y, -1.5);
+        assert_eq!(overlay[0].rect.y, 20.0);
+        assert_eq!(overlay[1].rect.y, -5.0);
+        assert_eq!(hits.regions()[0].rect.y, 20.0);
+        assert_eq!(hits.regions()[1].rect.y, -5.0);
+        assert_eq!(hits.regions()[1].clip, cache.hits.regions()[1].clip);
+    }
+
+    #[test]
+    fn glyph_views_preserve_scroll_view_clip() {
+        let quad = text::GlyphQuad {
+            x: 1.0,
+            y: 2.0,
+            w: 3.0,
+            h: 4.0,
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            color: [1.0; 4],
+            clip_rect: [10.0, 20.0, 30.0, 40.0],
+            clip_radius: [5.0, 0.0, 0.0, 0.0],
+        };
+
+        let views = glyph_views(&[quad]);
+
+        assert_eq!(
+            views[0].clip,
+            Some(ClipRegion::new(Rect::new(10.0, 20.0, 30.0, 40.0), 5.0))
+        );
+    }
+
+    /// Informational release-profile comparison for the former immediate
+    /// frame path versus retained scroll materialization. Timings vary by
+    /// machine, so correctness assertions remain structural only.
+    #[test]
+    fn profile_retained_settings_scroll() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let input = test_input();
+        let hidden_count_label = "0 件";
+        let copy = settings_panel_copy(hidden_count_label);
+        let mut text = text::TextRenderer::new();
+
+        // Warm font lookup, shaping, and glyph rasterization before timing.
+        let mut warm_scroll =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        let warm_model = layout::settings_panel::build_with_ui(input, &copy, &mut warm_scroll);
+        let warm_key = SettingsRenderCacheKey {
+            input,
+            atlas_dimensions: text.atlas_dimensions(),
+        };
+        let _warm = SettingsRenderCache::from_model(
+            warm_key,
+            warm_scroll.position,
+            input.scale_factor,
+            warm_model,
+            Some(&mut text),
+        );
+
+        const REBUILD_RUNS: usize = 50;
+        let rebuild_start = Instant::now();
+        let mut last_cache = None;
+        for _ in 0..REBUILD_RUNS {
+            let mut scroll =
+                crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+            let source_scroll = scroll.position;
+            let model = layout::settings_panel::build_with_ui(input, &copy, &mut scroll);
+            let key = SettingsRenderCacheKey {
+                input,
+                atlas_dimensions: text.atlas_dimensions(),
+            };
+            last_cache = Some(SettingsRenderCache::from_model(
+                key,
+                source_scroll,
+                input.scale_factor,
+                model,
+                Some(&mut text),
+            ));
+        }
+        let rebuild_elapsed = rebuild_start.elapsed();
+        let cache = last_cache.expect("profile must produce a cache");
+        assert!(!cache.glyphs.is_empty());
+        assert!(cache
+            .hits
+            .regions()
+            .iter()
+            .any(|region| region.clip.is_some()));
+
+        const RETAINED_RUNS: usize = 1000;
+        let retained_start = Instant::now();
+        for index in 0..RETAINED_RUNS {
+            let position = 80.0 + index as f32 * 0.01;
+            black_box(cache.materialize_ink(position));
+            black_box(cache.materialize_glyphs(position));
+            black_box(cache.materialize_overlay(position));
+            black_box(cache.materialize_hits(position));
+        }
+        let retained_elapsed = retained_start.elapsed();
+
+        eprintln!();
+        eprintln!("=== PROFILE: retained settings scroll ===");
+        eprintln!(
+            "  Immediate rebuild: {:.3} us/frame",
+            rebuild_elapsed.as_secs_f64() * 1_000_000.0 / REBUILD_RUNS as f64
+        );
+        eprintln!(
+            "  Retained materialize: {:.3} us/frame",
+            retained_elapsed.as_secs_f64() * 1_000_000.0 / RETAINED_RUNS as f64
+        );
+        eprintln!();
+    }
+
+    #[test]
+    fn press_target_from_hit_target_darkness_category() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_category("darkness")),
+            SettingsPressTarget::Category(SettingsCategory::Darkness)
+        );
+    }
 
     #[test]
     fn press_target_from_hit_target_toggle_keys() {
@@ -842,8 +1310,26 @@ mod tests {
             SettingsPressTarget::FpsToggle
         );
         assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "show-auto-darkness-value"
+            )),
+            SettingsPressTarget::AutoDarknessValueToggle
+        );
+        assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-enabled")),
             SettingsPressTarget::LiquidGlassEnabled
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle("lg-auto-darkness")),
+            SettingsPressTarget::LiquidGlassAutoDarkness
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-mode-fixed-8hz"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(
+                crate::liquid_glass::AutoDarknessUpdateMode::Fixed8Hz
+            )
         );
         assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle(
@@ -882,6 +1368,12 @@ mod tests {
                 "lg-param-reset-thickness"
             )),
             SettingsPressTarget::LiquidGlassParamReset(LiquidGlassParamField::Thickness)
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-param-auto-darkness-max"
+            )),
+            SettingsPressTarget::LiquidGlassParam(LiquidGlassParamField::AutoDarknessMax)
         );
     }
 

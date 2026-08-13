@@ -435,6 +435,11 @@ impl App {
                 self.persist_settings();
                 self.request_redraw();
             }
+            SettingsPressTarget::AutoDarknessValueToggle => {
+                self.settings.show_auto_darkness_value = !self.settings.show_auto_darkness_value;
+                self.persist_settings();
+                self.request_redraw();
+            }
             SettingsPressTarget::ResetCache => {
                 self.reset_icons();
                 self.request_redraw();
@@ -459,6 +464,21 @@ impl App {
                     r.set_liquid_glass_enabled(next);
                 }
                 self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassAutoDarkness => {
+                let next = !self.settings.liquid_glass.auto_darkness_enabled;
+                self.settings.liquid_glass.auto_darkness_enabled = next;
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_auto_darkness_enabled(next);
+                }
+                self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(mode) => {
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_auto_darkness_update_mode(mode);
+                }
                 self.request_redraw();
             }
             SettingsPressTarget::LiquidGlassParam(field) => {
@@ -533,6 +553,9 @@ impl App {
             }
             crate::domain::settings::LiquidGlassParamField::Saturation => {
                 sp::LiquidGlassParamId::Saturation
+            }
+            crate::domain::settings::LiquidGlassParamField::AutoDarknessMax => {
+                sp::LiquidGlassParamId::AutoDarknessMax
             }
             crate::domain::settings::LiquidGlassParamField::GlassDarkness => {
                 sp::LiquidGlassParamId::GlassDarkness
@@ -848,10 +871,12 @@ impl App {
     /// How many content rows can be scrolled below the fold for the current
     /// category. Returns 0 for categories that fit without scrolling.
     pub(crate) fn settings_max_scroll_rows(&self) -> i32 {
-        // Debug overflows; the other categories fit. The exact count is
-        // computed in the layout module; expose a stable value here.
-        // (See `layout::settings_panel::debug_category_overflow_rows`.)
+        // Scrollable category extents are computed in the layout module;
+        // expose stable row-based values for the legacy input path here.
         match self.settings_category {
+            crate::domain::settings::SettingsCategory::Darkness => {
+                crate::layout::settings_panel::darkness_category_overflow_rows()
+            }
             crate::domain::settings::SettingsCategory::Debug => {
                 crate::layout::settings_panel::debug_category_overflow_rows()
             }
@@ -2079,6 +2104,7 @@ fn apply_param_to_renderer(
         LiquidGlassParamField::Thickness => r.set_liquid_glass_thickness(value),
         LiquidGlassParamField::RefractiveIndex => r.set_liquid_glass_refractive_index(value),
         LiquidGlassParamField::Saturation => r.set_liquid_glass_saturation(value),
+        LiquidGlassParamField::AutoDarknessMax => r.set_liquid_glass_auto_darkness_max(value),
         LiquidGlassParamField::GlassDarkness => r.set_liquid_glass_darkness(value),
         LiquidGlassParamField::ContextMenuGlassDarkness => {
             r.set_liquid_glass_context_menu_darkness(value)

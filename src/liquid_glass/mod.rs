@@ -17,5 +17,5 @@ pub mod macos_capture;
 pub mod windows_capture;
 
 #[allow(unused_imports)] // re-exported for callers outside this module
-pub use params::{DebugOptions, LiquidGlassParams};
+pub use params::{AutoDarknessUpdateMode, DebugOptions, LiquidGlassParams};
 pub use renderer::{LiquidGlassRenderer, SettingsDebugFlag};

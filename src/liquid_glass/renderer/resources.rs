@@ -5,8 +5,8 @@ use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
 use super::{
-    BlurUniforms, GlassShape, GlassUniforms, SceneFlattenUniforms, BACKDROP_FORMAT, BLUR_FORMAT,
-    GEOMETRY_FORMAT, TINT_FORMAT,
+    AutoDarknessState, AutoDarknessUniforms, BlurUniforms, GlassShape, GlassUniforms,
+    SceneFlattenUniforms, BACKDROP_FORMAT, BLUR_FORMAT, GEOMETRY_FORMAT, TINT_FORMAT,
 };
 
 pub(super) fn create_shape_buffer(device: &wgpu::Device, shapes: &[GlassShape]) -> wgpu::Buffer {
@@ -73,6 +73,36 @@ pub(super) fn create_scene_flatten_uniform_buffer(
         label: Some("liquid glass context menu scene flatten uniforms"),
         contents: bytemuck::bytes_of(uniforms),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+pub(super) fn create_auto_darkness_uniform_buffer(
+    device: &wgpu::Device,
+    uniforms: &AutoDarknessUniforms,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("liquid glass auto darkness uniforms"),
+        contents: bytemuck::bytes_of(uniforms),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+pub(super) fn create_auto_darkness_state_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("liquid glass auto darkness state"),
+        contents: bytemuck::bytes_of(&AutoDarknessState::default()),
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+    })
+}
+
+pub(super) fn create_auto_darkness_readback_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("liquid glass auto darkness debug readback"),
+        size: std::mem::size_of::<AutoDarknessState>() as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     })
 }
 
@@ -267,9 +297,17 @@ pub(super) fn uniform_entry(
 }
 
 pub(super) fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
+    texture_entry_for(binding, filterable, wgpu::ShaderStages::FRAGMENT)
+}
+
+pub(super) fn texture_entry_for(
+    binding: u32,
+    filterable: bool,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable },
             view_dimension: wgpu::TextureViewDimension::D2,
@@ -280,10 +318,50 @@ pub(super) fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLa
 }
 
 pub(super) fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    sampler_entry_for(binding, wgpu::ShaderStages::FRAGMENT)
+}
+
+pub(super) fn sampler_entry_for(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+pub(super) fn auto_darkness_state_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    read_only: bool,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<AutoDarknessState>() as u64),
+        },
+        count: None,
+    }
+}
+
+pub(super) fn auto_darkness_uniform_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<AutoDarknessUniforms>() as u64),
+        },
         count: None,
     }
 }
@@ -320,6 +398,8 @@ pub(super) fn create_final_bind_group(
     geometry_view: &wgpu::TextureView,
     tint_view: &wgpu::TextureView,
     blur_view: &wgpu::TextureView,
+    auto_darkness_state: &wgpu::Buffer,
+    auto_darkness_uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("liquid glass final bg"),
@@ -348,6 +428,46 @@ pub(super) fn create_final_bind_group(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(tint_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: auto_darkness_state.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: auto_darkness_uniforms.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+pub(super) fn create_backdrop_stats_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    backdrop_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
+    state: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("liquid glass backdrop stats bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(backdrop_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: state.as_entire_binding(),
             },
         ],
     })

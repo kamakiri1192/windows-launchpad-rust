@@ -796,10 +796,11 @@ impl Renderer {
 
         self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.liquid_glass.begin_auto_darkness_debug_readback();
         self.gpu_profiler.finish_frame(&self.queue);
 
-        // FPS overlay pass: drawn last, directly on the final surface view, so
-        // the counter sits above every glass/modal layer. Reuses the
+        // Debug HUD pass: drawn last, directly on the final surface view, so
+        // diagnostics sit above every glass/modal layer. Reuses the
         // control-text pipeline (screen-fixed, no page-frame clip). It runs in
         // its own command buffer after the scene submit so it can `Load` the
         // presented image without disturbing the profiler's second submit.
@@ -812,7 +813,7 @@ impl Renderer {
                         });
                 {
                     let mut pass = overlay_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("fps overlay pass"),
+                        label: Some("debug overlay pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
                             depth_slice: None,
