@@ -429,36 +429,14 @@ impl MacInputPassthrough {
                     event.scrollingDeltaX() as f32 * delta_scale,
                     event.scrollingDeltaY() as f32 * delta_scale,
                 );
-                let unaccelerated_delta = if precise {
-                    event.CGEvent().and_then(|cg_event| {
-                        let raw_x = CGEvent::double_value_field(
-                            Some(&cg_event),
-                            CGEventField::ScrollWheelEventRawDeltaAxis2,
-                        ) as f32;
-                        let raw_y = CGEvent::double_value_field(
-                            Some(&cg_event),
-                            CGEventField::ScrollWheelEventRawDeltaAxis1,
-                        ) as f32;
-                        if raw_x == 0.0 && raw_y == 0.0 {
-                            return None;
-                        }
-                        let align_direction = |raw: f32, accelerated: f32| {
-                            if raw == 0.0 {
-                                accelerated
-                            } else if accelerated == 0.0 {
-                                raw * scale_factor
-                            } else {
-                                raw.abs() * accelerated.signum() * scale_factor
-                            }
-                        };
-                        Some((
-                            align_direction(raw_x, delta.0),
-                            align_direction(raw_y, delta.1),
-                        ))
-                    })
-                } else {
-                    None
-                };
+                // WebKit gets its edge-only unaccelerated delta from AppKit's
+                // private `_unacceleratedScrollingDeltaX/Y` selectors. The
+                // public CGEvent RawDelta fields are coarse wheel integers,
+                // not an equivalent value; treating them as physical pixels
+                // made a strong trackpad fling almost lose its edge force.
+                // Keep this `None` until a supported source is available so
+                // the physics falls back to AppKit's public precise delta.
+                let unaccelerated_delta = None;
                 if !timestamp_valid {
                     // RawScrollEvent uses an integer timestamp. Preserve an
                     // invalid native timestamp as a malformed packet so the

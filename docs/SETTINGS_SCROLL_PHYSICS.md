@@ -62,6 +62,15 @@ WebKitのmacOS実装は異なる。
 
 状態遷移の差が大きいため、ばね係数だけを調整してもmacOSらしくならない。
 
+実機レビュー後、さらに2点が判明した。
+
+- 非精密マウスホイールの補間にpointer inertiaと同じ`3.2/s`を使っていたため、
+  指定距離へ到達するまで約1秒の尾を引いていた。
+- momentumが境界をまたいだpacketの余剰量を捨てて境界へclampしていたため、
+  途中から強く払うほど本来bounceへ渡るべきforceを失っていた。また、WebKitが
+  使用するAppKit private selectorのunaccelerated deltaを、意味の異なる
+  `CGEvent` raw wheel整数値で近似していたため、端でのforceが過度に小さくなった。
+
 ## 3. 情報源の優先順位
 
 1. Apple公開ドキュメント: 入力単位、contact/momentum phase、elasticityの意味
@@ -111,6 +120,11 @@ force(stretch) = stretch * 20
 positionへ1:1で適用する。これにより、端から戻す指の動きが「圧縮された入力空間」へ
 吸収される粘りを防ぐ。
 
+WebKitのunaccelerated deltaはAppKit private selector
+`_unacceleratedScrollingDeltaX/Y`から得ている。対応する公開APIはないため、本アプリは
+private APIを製品から呼ばず、macOS native経路では公開`scrollingDeltaX/Y`へ
+fallbackする。`CGEvent` raw wheel整数値は同じ物理量ではないため代用しない。
+
 ### 5.3 反発軌道
 
 Apple WebKit由来の公開実装にある定数を使用する。
@@ -140,8 +154,9 @@ Contact Cancel  -> edge外なら速度0でRebound
 
 Momentum Began/Changed
                 -> native deltaを適用
-                -> 境界内から端をまたぐpacketは、まず端へclampしてTrackingを継続
-                -> 端にpinされた状態で次の外向きpacketを受けたらstretchしてRebound
+                -> 境界内から端をまたぐpacketは、境界までの移動と余剰forceを適用し
+                   Trackingを継続
+                -> 既に端を越えた状態で次の外向きpacketを受けたらstretchしてRebound
                 -> 残りのmomentum packetをterminalまで無視
 Momentum Ended  -> edge外ならRebound、範囲内ならIdle
 ```
@@ -178,6 +193,9 @@ stiffness 20モデルとする。対応対象のmacOSが新しい双曲線モデ
 - 近接したノッチはvelocityへ加算し、連続した操作として見せる。
 - 離散ホイールは端を越えてrubber-bandさせず、境界で停止する。
 - macOSでは`scrollingDeltaY * row_height`、WindowsではOS設定行数も掛ける。
+- pointer fling用の`3.2/s`とは分離し、離散ホイールは`14/s`で減衰する。これにより
+  1 stepの90%を約165msで表示し、総移動量は変えずに長い慣性だけを除く。この値は
+  Apple非公開定数とは主張せず、実機レビューに基づくアプリ側の補間時間である。
 
 ## 7. スクロールバー
 
@@ -192,7 +210,7 @@ track外へthumbを移動しない。反発中もcontentと同じフレームで
 - 同じ外向き入力はforce空間で累積する。
 - 伸びと逆向きの入力は表示位置へ1:1で効く。
 - contact `Ended`の同じframeでRebound状態へ入る。
-- 境界内から端をまたぐmomentum packetは端へpinされ、次の外向きpacketで伸びて
+- 境界内から端をまたぐmomentum packetの余剰forceがbounceへ残り、次の外向きpacketで
   Reboundへ入り、残りのmomentumで再び引き伸ばされない。
 - contactからmomentumへの切り替えで速度履歴を失わず、途中から強く払ったときも
   反発の初速が0にならない。
@@ -204,6 +222,7 @@ track外へthumbを移動しない。反発中もcontentと同じフレームで
 - macOSの非精密1 lineは1 settings row相当へ変換される。
 - Windowsの1 detentはOS設定が既定値3なら3 settings rows相当になる。
 - 同じ総入力の最終移動距離はフレームレートに依存しない。
+- 1 stepの90%以上が180ms以内に表示される。
 - 境界でoverscrollしない。
 
 ### 共通
@@ -226,6 +245,8 @@ track外へthumbを移動しない。反発中もcontentと同じフレームで
 ### WebKit / Chromium（公開source）
 
 - [WebKit ScrollingEffectsController.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/mac/ScrollingEffectsController.mm)
+- [WebKit NSEventSPI.h](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/PAL/pal/spi/mac/NSEventSPI.h)
+- [WebKit WebEventFactory.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/Shared/mac/WebEventFactory.mm)
 - [WebKit ScrollAnimationRubberBand.mm](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/mac/ScrollAnimationRubberBand.mm)
 - [WebKit NSScrollViewSPI.h](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/PAL/pal/spi/mac/NSScrollViewSPI.h)
 - [2026 WebKit: Scroll stretch behavior should more closely match NSScrollView](https://github.com/WebKit/WebKit/commit/ce76e2b79384d3b751287f8c8da007d3c7fd9fc4)

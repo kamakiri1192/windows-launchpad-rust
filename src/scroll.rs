@@ -1231,6 +1231,10 @@ impl Spring2 {
 pub struct ContinuousConfig {
     /// Exponential decay factor per second for inertial coasting.
     pub inertia_decay: f32,
+    /// Exponential decay factor for a discrete mouse-wheel impulse. A line
+    /// wheel needs a much shorter tail than a pointer fling; the impulse is
+    /// scaled by the same factor so its integrated travel remains unchanged.
+    pub line_wheel_decay: f32,
     /// Inertial velocity below which we cut to spring settling (px/s).
     pub inertia_cutoff: f32,
     /// Spring angular frequency ω₀ (rad/s).
@@ -1254,6 +1258,10 @@ impl Default for ContinuousConfig {
     fn default() -> Self {
         Self {
             inertia_decay: 3.2,
+            // 90% of a line-wheel step is visible after about 165 ms. Keep
+            // the requested row distance while avoiding the long pointer-
+            // inertia tail that made a mouse wheel feel difficult to stop.
+            line_wheel_decay: 14.0,
             inertia_cutoff: 18.0,
             // General-purpose settling (keyboard ensure-visible and pointer
             // drag) remains critically damped. Native wheel rubber-band return
@@ -1534,9 +1542,9 @@ impl ContinuousScroller {
         self.position
     }
 
-    /// Apply one OS momentum packet. A packet that first crosses an edge pins
-    /// at the boundary; the next outward packet stretches from that pin and
-    /// starts the AppKit return, after which the dissipating tail is ignored.
+    /// Apply one OS momentum packet. A packet that first crosses an edge keeps
+    /// its crossing remainder as elastic force; the next outward packet starts
+    /// the AppKit return, after which the dissipating tail is ignored.
     pub fn move_native_momentum(&mut self, delta_px: f32, now: Instant) -> f32 {
         self.move_native_momentum_with_unaccelerated(delta_px, None, now)
     }
@@ -1572,13 +1580,13 @@ impl ContinuousScroller {
             || (self.position >= max && internal_delta > 0.0);
         let proposed = self.position + internal_delta;
         if !was_stretched && !was_pinned_outward && (proposed < min || proposed > max) {
-            // WebKit first applies an in-bounds momentum packet normally and
-            // lets it pin at the boundary. Only a following outward packet,
-            // observed while already pinned, creates stretch and starts the
-            // rubber-band return. Compressing only this packet's tiny crossing
-            // remainder made mid-page flings barely bounce.
-            self.position = proposed.clamp(min, max);
-            self.stretch_force = 0.0;
+            // WebKit applies this packet with unclamped scrolling, but does
+            // not permit the return animation to start until the next packet
+            // observes an already-pinned edge. Preserve the boundary-crossing
+            // remainder in force space instead of discarding it: a strong
+            // mid-content fling then arrives with a proportionally visible
+            // stretch rather than collapsing to a near-zero bounce.
+            self.set_position_from_unclamped(proposed);
             self.velocity = self.precise_input_velocity;
             return self.position;
         }
@@ -1657,7 +1665,7 @@ impl ContinuousScroller {
             self.inertia_raw_position = self.position.clamp(min, max);
             self.velocity = 0.0;
         }
-        let decay = self.cfg.inertia_decay.max(f32::EPSILON);
+        let decay = self.cfg.line_wheel_decay.max(f32::EPSILON);
         self.velocity += delta_px * decay;
         self.inertia_allows_overscroll = false;
         self.phase = ContinuousPhase::Inertial;
@@ -1784,7 +1792,12 @@ impl ContinuousScroller {
                 // Exact exponential coast. Integrating displacement from the
                 // old and new velocities keeps travel invariant across refresh
                 // rates: integral(v0 * exp(-k*t)) = (v0 - v1) / k.
-                let k = self.cfg.inertia_decay.max(f32::EPSILON);
+                let k = if self.inertia_allows_overscroll {
+                    self.cfg.inertia_decay
+                } else {
+                    self.cfg.line_wheel_decay
+                }
+                .max(f32::EPSILON);
                 let old_velocity = self.velocity;
                 let decay = (-k * dt).exp();
                 self.velocity = old_velocity * decay;
@@ -3097,7 +3110,7 @@ mod tests {
     }
 
     #[test]
-    fn continuous_scroller_mid_content_fling_pins_before_starting_edge_return() {
+    fn continuous_scroller_mid_content_fling_preserves_crossing_force_before_return() {
         let mut s = ContinuousScroller::new(default_cfg());
         s.set_sizes(1000.0, 400.0);
         s.set_position(500.0);
@@ -3108,23 +3121,15 @@ mod tests {
         s.end_precise_wheel(now + Duration::from_millis(20), false);
         s.begin_native_momentum(now + Duration::from_millis(24));
 
-        s.move_native_momentum_with_unaccelerated(
-            -100.0,
-            Some(-4.0),
-            now + Duration::from_millis(32),
-        );
-        assert_eq!(s.position, 600.0);
+        s.move_native_momentum(-100.0, now + Duration::from_millis(32));
+        assert_eq!(s.position, 602.0);
         assert_eq!(s.phase, ContinuousPhase::WheelTracking);
 
-        s.move_native_momentum_with_unaccelerated(
-            -80.0,
-            Some(-3.0),
-            now + Duration::from_millis(40),
-        );
+        s.move_native_momentum(-80.0, now + Duration::from_millis(40));
         assert_eq!(s.phase, ContinuousPhase::RubberBandReturning);
         assert!(
-            (s.position - 604.0).abs() < 0.01,
-            "the first packet while pinned should contribute its full accelerated force"
+            (s.position - 606.0).abs() < 0.01,
+            "the crossing remainder and first outward packet must both contribute elastic force"
         );
         assert!(s.velocity > 0.0, "momentum launch velocity must survive");
     }
@@ -3207,6 +3212,30 @@ mod tests {
         }
         assert_eq!(s.phase, ContinuousPhase::Idle);
         assert!((s.position - 124.0).abs() < s.cfg.settle_eps);
+    }
+
+    #[test]
+    fn continuous_scroller_line_wheel_has_a_short_tail_without_losing_distance() {
+        let mut s = ContinuousScroller::new(default_cfg());
+        s.set_sizes(1000.0, 400.0);
+        let now = Instant::now();
+
+        s.apply_line_wheel(-62.0, now);
+        s.tick(now + Duration::from_millis(90));
+        s.tick(now + Duration::from_millis(180));
+        assert!(
+            s.position >= 62.0 * 0.9,
+            "a mouse-wheel step should expose at least 90% of its travel within 180 ms"
+        );
+
+        for frame in 24..300 {
+            s.tick(now + Duration::from_millis(frame * 8));
+            if s.phase == ContinuousPhase::Idle {
+                break;
+            }
+        }
+        assert_eq!(s.phase, ContinuousPhase::Idle);
+        assert!((s.position - 62.0).abs() < s.cfg.settle_eps);
     }
 
     #[test]
