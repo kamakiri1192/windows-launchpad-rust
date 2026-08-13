@@ -123,6 +123,15 @@ const T_CLOSE_CONTENT_OPACITY: Transition = Transition::Easing {
 /// wait for an invisible position-spring tail makes Escape/dismissal feel
 /// stuck.
 pub const CONTENT_VISIBILITY_THRESHOLD: f32 = 0.02;
+
+/// Row hit-testing stays disabled while the open/close morph is still visibly
+/// scaling the rows. During the open animation each row's hit rect is scaled by
+/// `content_scale` (2.0 → 1.0), so above this threshold the expanded rects
+/// swallow a cursor that is still sitting over the right-clicked icon and
+/// wrongly focus the panel-center (middle) row — the "middle row gets
+/// selected on open" bug. Once the content has settled to nearly its resting
+/// scale, hit testing turns back on.
+pub const ROW_HIT_SCALE_THRESHOLD: f32 = 1.02;
 /// Preserve a few closing frames even when dismissal happens immediately
 /// after open, while avoiding the ~1 second invisible spring tail.
 const MIN_CLOSE_LIFETIME: f32 = 0.08;
@@ -364,6 +373,16 @@ impl ContextMenuState {
 
     pub fn is_open(&self) -> bool {
         self.phase == ContextMenuPhase::Open
+    }
+
+    /// Whether row hit-testing should respond to the pointer yet. While the
+    /// content morph is scaling the rows (`content_scale` above
+    /// [`ROW_HIT_SCALE_THRESHOLD`]), the scaled hit rects extend well beyond
+    /// the visible rows and would catch a cursor still sitting on the
+    /// right-clicked icon — focusing the middle row. Disable hit testing until
+    /// the rows have nearly settled at their resting scale.
+    pub fn row_hit_test_enabled(&self) -> bool {
+        self.content_scale() <= ROW_HIT_SCALE_THRESHOLD
     }
 
     // --- Resolved property accessors (physical px) ----------------------------
@@ -612,5 +631,29 @@ mod tests {
         assert_eq!(state.phase, ContextMenuPhase::Closed);
         assert!(!state.is_active());
         assert!(state.content_opacity() <= CONTENT_VISIBILITY_THRESHOLD);
+    }
+
+    #[test]
+    fn row_hit_test_is_disabled_while_the_open_morph_still_scales_rows() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        // Seed state: content_scale starts at 2.0, so hit testing is disabled.
+        // The scaled row rects would otherwise swallow a cursor still on the
+        // right-clicked icon and focus the middle row on the first pointer move.
+        assert!(!state.row_hit_test_enabled());
+        assert!(state.content_scale() > ROW_HIT_SCALE_THRESHOLD);
+
+        // Tick until the content scale settles to ~1.0.
+        let mut guard = 0;
+        while state.tick(1.0 / 60.0) && guard < 5_000 {
+            guard += 1;
+        }
+        assert!(state.row_hit_test_enabled());
+        assert!(state.content_scale() <= ROW_HIT_SCALE_THRESHOLD);
     }
 }
