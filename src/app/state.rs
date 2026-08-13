@@ -365,6 +365,9 @@ pub struct App {
     /// Cached HitMap from the previous frame's `build_with_ui` call, used for
     /// hit testing in the current frame's input processing (1-frame delay).
     pub cached_settings_hit_map: Option<crate::layout::hit_map::HitMap>,
+    /// Retained settings UI geometry/text. Dynamic scene pixels and the
+    /// full-screen settings blur deliberately do not live in this cache.
+    pub(crate) settings_render_cache: Option<crate::app::render::SettingsRenderCache>,
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     pub last_redraw: Option<Instant>,
@@ -502,6 +505,7 @@ impl App {
             settings_scroll: ContinuousScroller::new(ContinuousConfig::default()),
             settings_slider_drag: None,
             cached_settings_hit_map: None,
+            settings_render_cache: None,
             last_redraw: None,
             last_frame_dt_ms: 0.0,
             visible: true,
