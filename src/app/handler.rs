@@ -612,7 +612,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_repeated_escape, App};
+    use super::is_repeated_escape;
+    #[cfg(not(windows))]
+    use super::App;
     use winit::keyboard::KeyCode;
 
     #[test]
