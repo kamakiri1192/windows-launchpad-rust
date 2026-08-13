@@ -131,19 +131,22 @@ impl Ui {
             };
 
             // Rubber-band compression when overscrolling.
-            let thumb_y = if position < 0.0 {
+            let (thumb_y, visible_thumb_len) = if position < 0.0 {
                 // Overscrolling past top: shrink thumb toward top.
                 let compression: f32 = 1.0 - (-position / viewport_h).min(0.5);
-                let _shrunk_len = thumb_len * compression.max(0.3);
-                viewport_top
+                let shrunk_len = thumb_len * compression.max(0.3);
+                (viewport_top, shrunk_len)
             } else if position > max && max > 0.0 {
                 // Overscrolling past bottom: shrink thumb toward bottom.
                 let overscroll = position - max;
                 let compression: f32 = 1.0 - (overscroll / viewport_h).min(0.5);
                 let shrunk_len = thumb_len * compression.max(0.3);
-                viewport_top + viewport_h - shrunk_len
+                (viewport_top + viewport_h - shrunk_len, shrunk_len)
             } else {
-                thumb_y_top.clamp(viewport_top, viewport_top + viewport_h - thumb_len)
+                (
+                    thumb_y_top.clamp(viewport_top, viewport_top + viewport_h - thumb_len),
+                    thumb_len,
+                )
             };
 
             // Get or init scrollbar state.
@@ -188,11 +191,11 @@ impl Ui {
 
                 // Draw thumb.
                 let thumb_alpha = thumb_opacity * 0.7;
-                if thumb_alpha > 0.001 && thumb_len > 0.0 {
+                if thumb_alpha > 0.001 && visible_thumb_len > 0.0 {
                     let thumb_view = InkView {
                         id: id.clone(),
-                        center: Point::new(bar_x + width * 0.5, thumb_y + thumb_len * 0.5),
-                        extent: thumb_len * 0.5,
+                        center: Point::new(bar_x + width * 0.5, thumb_y + visible_thumb_len * 0.5),
+                        extent: visible_thumb_len * 0.5,
                         opacity: thumb_alpha,
                         scene_blur: 0.0,
                         stroke: 0.0,

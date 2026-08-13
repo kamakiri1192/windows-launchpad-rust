@@ -1605,6 +1605,7 @@ impl App {
                         raw_dy: canonical_dy,
                         canonical_dx,
                         canonical_dy,
+                        canonical_unaccelerated_dy: None,
                         source: match source {
                             QaScrollSource::Precise => crate::input_routing::ScrollSource::Precise,
                             QaScrollSource::Line => crate::input_routing::ScrollSource::Line,
@@ -1668,6 +1669,7 @@ impl App {
                         .adapt_native(crate::input_routing::RawScrollEvent {
                             timestamp_us: dispatch_timestamp_us,
                             delta_physical_px: (raw_dx, raw_dy),
+                            unaccelerated_delta_physical_px: None,
                             source: match source {
                                 QaScrollSource::Precise => {
                                     crate::input_routing::ScrollSource::Precise
