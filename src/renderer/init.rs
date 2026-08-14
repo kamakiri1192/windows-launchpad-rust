@@ -528,6 +528,27 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // Dedicated Steam-logo texture (binding 5) + sampler (binding 6),
+                // sampled by kind 20 of shader_control.wgsl. Same rationale as
+                // the ChatGPT-logo pair at bindings 3+4: the shared glyph atlas
+                // cannot carry an arbitrary RGBA logo, so each brand logo gets
+                // its own single-texel-isotropic texture.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         // Decode the embedded ChatGPT-logo PNG (rasterized from the source SVG
@@ -536,6 +557,7 @@ impl Renderer {
         // keeps the texture tiny.
         let (chatgpt_texture, chatgpt_view, chatgpt_sampler) =
             create_chatgpt_logo_texture(&device, &queue);
+        let (steam_texture, steam_view, steam_sampler) = create_steam_logo_texture(&device, &queue);
         let control_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("control bg"),
             layout: &control_bgl,
@@ -559,6 +581,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&chatgpt_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&steam_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&steam_sampler),
                 },
             ],
         });
@@ -693,6 +723,9 @@ impl Renderer {
             chatgpt_logo_texture: chatgpt_texture,
             chatgpt_logo_view: chatgpt_view,
             chatgpt_logo_sampler: chatgpt_sampler,
+            steam_logo_texture: steam_texture,
+            steam_logo_view: steam_view,
+            steam_logo_sampler: steam_sampler,
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
             backdrop_instance_buffer: InstanceBuffer::new("backdrop instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
@@ -1158,6 +1191,79 @@ fn create_chatgpt_logo_texture(
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("ChatGPT logo sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        lod_min_clamp: 0.0,
+        lod_max_clamp: 0.0,
+        ..Default::default()
+    });
+    (texture, view, sampler)
+}
+
+/// The embedded Steam-logo PNG (rasterized from the source SVG at the
+/// near-black menu label color `#1C1C1E`). Declared here so the bytes are
+/// baked into the binary exactly once.
+const STEAM_LOGO_PNG: &[u8] = include_bytes!("../../assets/icons/steam-logo.png");
+
+/// Decode the embedded Steam-logo PNG and upload it to a small dedicated
+/// RGBA texture with a linear sampler. Drawn by kind 20 of the control shader.
+/// Returns `(texture, view, sampler)`. Falls back to a 1×1 transparent texel
+/// if decoding fails, so the pipeline still binds a valid resource.
+fn create_steam_logo_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    let (rgba, width, height) = match image::load_from_memory(STEAM_LOGO_PNG) {
+        Ok(image) => {
+            let rgba = image.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            (rgba.into_raw(), w, h)
+        }
+        Err(err) => {
+            eprintln!("steam logo: failed to decode embedded PNG: {err}");
+            (vec![0u8; 4], 1, 1)
+        }
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Steam logo texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("Steam logo sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,

@@ -22,6 +22,19 @@ use crate::ui_model::render_model::{GlassLayer, GlyphLane, InkLane};
 const MENU_FONT_SIZE: f32 = 14.0;
 const MENU_LINE_HEIGHT: f32 = 18.0;
 
+/// Derive the `(is_folder, is_steam)` row-set flags the pure layout layer
+/// needs from the menu's target. Every call site that picks menu rows (open,
+/// release, per-frame render) funnels through here, so the rendered rows and
+/// the release-time row resolution always pass the same flags. A folder is
+/// never a Steam app; a Steam app is never a folder.
+fn menu_target_flags(target: Option<&LauncherItem>) -> (bool, bool) {
+    match target {
+        Some(LauncherItem::Folder(_)) => (true, false),
+        Some(LauncherItem::App(id)) => (false, id.is_steam()),
+        None => (false, false),
+    }
+}
+
 impl App {
     /// Open the context menu for `target` (an app or folder), attached to the
     /// right-clicked icon's `icon_rect` (physical on-screen px). The menu
@@ -53,9 +66,13 @@ impl App {
         // Measure the longest label once at open time so the open-animation
         // target and the per-frame layout agree on the same panel width. The
         // measured set is the rows this target will display: a folder menu
-        // omits "アプリを非表示", so its panel is one row shorter.
-        let (items, _labels) = context_menu::menu_rows(matches!(target, LauncherItem::Folder(_)));
-        let max_label_w = self.measure_menu_max_label_width_logical(scale, items);
+        // omits four rows, a non-Steam app omits the Steam row. This is built
+        // here only to size the panel; `ContextMenuState::open` rebuilds and
+        // caches the same list (same target → same flags), which the render and
+        // release paths then read.
+        let (is_folder, is_steam) = menu_target_flags(Some(&target));
+        let items = context_menu::menu_rows(is_folder, is_steam);
+        let max_label_w = self.measure_menu_max_label_width_logical(scale, &items);
         self.context_menu_open_width_logical = max_label_w;
         let (lw, lh) = open_panel_size_logical(items.len(), max_label_w);
         let size_phys = (lw * scale, lh * scale);
@@ -171,10 +188,10 @@ impl App {
         if !self.context_menu.is_active() {
             return;
         }
-        let (items, _labels) = context_menu::menu_rows(matches!(
-            self.context_menu.active_target,
-            Some(LauncherItem::Folder(_))
-        ));
+        // Read the cached row list (built at open time) so the release path
+        // resolves the same rows the renderer laid out — never rebuild per
+        // release.
+        let items: &[context_menu::ContextMenuItem] = &self.context_menu.items;
         let selection = resolve_context_menu_selection(
             items,
             self.context_menu_hit_target(x, y),
@@ -201,6 +218,12 @@ impl App {
                 if let Some(info) = self.registry.launch_info(&id) {
                     self.execute_command(AppCommand::AskChatGpt(info));
                 }
+            }
+            ContextMenuSelection::OpenInSteam(id) => {
+                // The Steam row runs through the app command boundary like a
+                // launch: the executor hides the window first, then opens the
+                // app's Steam library page via the steam:// protocol handler.
+                self.execute_command(AppCommand::OpenInSteam { app_id: id });
             }
             // Mock actions (and folder targets of hide/reveal): just close.
             ContextMenuSelection::CloseOnly => {}
@@ -249,13 +272,11 @@ impl App {
         }
 
         let scale = self.scale_factor.max(0.01);
-        // The row set is fixed at open time by the target kind (folder menus
-        // omit "アプリを非表示"), so the laid-out rows always match the rows
-        // the release path resolves against.
-        let (items, labels) = context_menu::menu_rows(matches!(
-            self.context_menu.active_target,
-            Some(LauncherItem::Folder(_))
-        ));
+        // The row set is cached on the state at open time; read it directly so
+        // the per-frame render path never calls `menu_rows` (zero allocation)
+        // and the laid-out rows always match the rows the release path resolves
+        // against.
+        let items: &[context_menu::ContextMenuItem] = &self.context_menu.items;
 
         // The fully-open panel size is fixed at open time and stays constant
         // through the animation; the live (animated) size is separate. We reuse
@@ -282,7 +303,6 @@ impl App {
             activation: self.context_menu.activation(),
             focus_amounts: self.context_menu.focus_amounts(),
             items,
-            labels,
         };
         let model = context_menu::build(&input);
 
@@ -308,7 +328,7 @@ impl App {
         // has meaningfully revealed to avoid wasted raster work mid-collapse.
         // Pre-size for the menu's ~6 short CJK labels (a handful of glyphs each)
         // so the loop doesn't trigger reallocations.
-        let mut glyphs: Vec<GlyphQuad> = Vec::with_capacity(labels.len() * 8);
+        let mut glyphs: Vec<GlyphQuad> = Vec::with_capacity(items.len() * 8);
         let opacity = self.context_menu.content_opacity();
         let content_scale = self.context_menu.content_scale().max(0.0);
         if opacity > crate::features::context_menu::CONTENT_VISIBILITY_THRESHOLD {
@@ -318,16 +338,18 @@ impl App {
                 // a physical-pixel-quantized scale to keep repeated open/close
                 // animations from manufacturing unbounded glyph variants.
                 let text_scale = quantize_menu_text_scale(content_scale, scale);
-                for ((item, row), label) in items.iter().zip(model.rows.iter()).zip(labels.iter()) {
+                for (item, row) in items.iter().zip(model.rows.iter()) {
                     let left = row.label_rect.x;
                     let center_y = row.label_rect.y;
                     let color = menu_text_color(*item, opacity);
                     // Scale the font with content_scale so the text shrinks/grows
                     // in sync with the glass + ink during open/close morph.
+                    // Labels are derived from the cached items via `label()`
+                    // rather than carried as a parallel slice.
                     push_menu_text(
                         text,
                         &mut glyphs,
-                        label,
+                        item.label(),
                         left,
                         center_y,
                         MENU_FONT_SIZE * text_scale,
@@ -489,6 +511,11 @@ enum ContextMenuSelection {
     /// ChatGPTで使い方を調べる: open ChatGPT with a how-to-use prompt built
     /// from the target app's name + version (via `AppCommand::AskChatGpt`).
     ChatGptHelp(AppId),
+    /// Steamで開く: open the target app's Steam library page via the
+    /// `steam://` protocol handler (via `AppCommand::OpenInSteam`). Only the
+    /// Steam-app menu shows this row, and it only resolves when the target is
+    /// a Steam app.
+    OpenInSteam(AppId),
     /// Mock action (or a folder target of hide/reveal, which have no file on
     /// disk to act on): just close the menu.
     CloseOnly,
@@ -498,7 +525,9 @@ enum ContextMenuSelection {
 /// row set the menu is actually displaying (folder menus omit the hide-app
 /// row, so its row indices never land on [`ContextMenuSelection::HideApp`]).
 /// An outside release (no row hit) and every mock row resolve to
-/// [`ContextMenuSelection::CloseOnly`].
+/// [`ContextMenuSelection::CloseOnly`]. The Steam row resolves to
+/// [`ContextMenuSelection::OpenInSteam`] only when the target is a Steam app;
+/// on any other target (or no target) it falls back to close-only.
 fn resolve_context_menu_selection(
     items: &[context_menu::ContextMenuItem],
     row: Option<usize>,
@@ -519,6 +548,12 @@ fn resolve_context_menu_selection(
         },
         Some(context_menu::ContextMenuItem::ChatGptHelp) => match target {
             Some(LauncherItem::App(id)) => ContextMenuSelection::ChatGptHelp(id.clone()),
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        Some(context_menu::ContextMenuItem::OpenInSteam) => match target {
+            Some(LauncherItem::App(id)) if id.is_steam() => {
+                ContextMenuSelection::OpenInSteam(id.clone())
+            }
             _ => ContextMenuSelection::CloseOnly,
         },
         _ => ContextMenuSelection::CloseOnly,
@@ -606,27 +641,31 @@ mod tests {
     }
 
     #[test]
-    fn folder_menu_rows_omit_hide_app_reveal_and_chatgpt_rows() {
-        let (items, labels) = context_menu::menu_rows(true);
-        assert_eq!(items, &context_menu::ContextMenuItem::FOLDER_ITEMS[..]);
-        assert_eq!(
-            labels,
-            &context_menu::ContextMenuItem::FOLDER_ITEMS_LABELS[..]
-        );
-        // A folder has no hide action, no file to reveal, and no app metadata
-        // for a ChatGPT lookup, so the folder menu omits all three rows —
-        // three shorter than the app menu.
-        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 3);
+    fn folder_menu_rows_omit_hide_app_reveal_chatgpt_and_steam_rows() {
+        let items = context_menu::menu_rows(true, false);
+        assert_eq!(items, context_menu::ContextMenuItem::FOLDER_ITEMS);
+        // A folder has no hide action, no file to reveal, no app metadata for a
+        // ChatGPT lookup, and is never a Steam app, so the folder menu omits all
+        // four rows — four shorter than the Steam-app superset menu.
+        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 4);
         assert!(!items.contains(&context_menu::ContextMenuItem::HideApp));
         assert!(!items.contains(&context_menu::ContextMenuItem::RevealInFinder));
         assert!(!items.contains(&context_menu::ContextMenuItem::ChatGptHelp));
+        assert!(!items.contains(&context_menu::ContextMenuItem::OpenInSteam));
     }
 
     #[test]
-    fn app_menu_rows_show_all_seven_items() {
-        let (items, labels) = context_menu::menu_rows(false);
-        assert_eq!(items, &context_menu::ContextMenuItem::ALL[..]);
-        assert_eq!(labels, &context_menu::ContextMenuItem::ALL_LABELS[..]);
+    fn non_steam_app_menu_rows_show_seven_items_without_the_steam_row() {
+        let items = context_menu::menu_rows(false, false);
+        assert_eq!(items, context_menu::ContextMenuItem::APP_ITEMS);
+        assert!(!items.contains(&context_menu::ContextMenuItem::OpenInSteam));
+    }
+
+    #[test]
+    fn steam_app_menu_rows_show_all_eight_items() {
+        let items = context_menu::menu_rows(false, true);
+        assert_eq!(items, context_menu::ContextMenuItem::ALL);
+        assert!(items.contains(&context_menu::ContextMenuItem::OpenInSteam));
     }
 
     #[test]
@@ -634,9 +673,10 @@ mod tests {
         let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
             "folder-a",
         ));
-        let (items, _labels) = context_menu::menu_rows(true);
-        // A folder menu has no hide-app, reveal, or ChatGPT-help row; every row
-        // resolves to close-only (or edit-home for row 0). Walk every row.
+        let items = context_menu::menu_rows(true, false);
+        // A folder menu has no hide-app, reveal, ChatGPT-help, or Steam row;
+        // every row resolves to close-only (or edit-home for row 0). Walk every
+        // row.
         for row in 0..items.len() {
             let expected = if row == 0 {
                 ContextMenuSelection::EditHome
@@ -644,7 +684,7 @@ mod tests {
                 ContextMenuSelection::CloseOnly
             };
             assert_eq!(
-                resolve_context_menu_selection(items, Some(row), Some(&target)),
+                resolve_context_menu_selection(&items, Some(row), Some(&target)),
                 expected
             );
         }
@@ -714,8 +754,9 @@ mod tests {
             ),
             ContextMenuSelection::CloseOnly
         );
-        // The remaining mock rows (IconLarger, IconSmaller, AppInfo) start at
-        // row 4 now that ChatGptHelp occupies row 3.
+        // OpenInSteam (row 4) on a *non-Steam* target resolves to close-only,
+        // and the trailing mock rows (IconLarger, IconSmaller, AppInfo) at rows
+        // 5..8 are always close-only.
         for row in 4..context_menu::ContextMenuItem::ALL.len() {
             assert_eq!(
                 resolve_context_menu_selection(
@@ -726,6 +767,53 @@ mod tests {
                 ContextMenuSelection::CloseOnly
             );
         }
+    }
+
+    #[test]
+    fn steam_row_resolves_to_open_in_steam_for_a_steam_app_target() {
+        let target = LauncherItem::app(AppId::from_normalized("steam:620"));
+        // OpenInSteam is row 4 in the Steam-app menu (EditHome, HideApp,
+        // RevealInFinder, ChatGptHelp, …).
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(4),
+                Some(&target)
+            ),
+            ContextMenuSelection::OpenInSteam(AppId::from_normalized("steam:620"))
+        );
+    }
+
+    #[test]
+    fn steam_row_is_close_only_for_a_non_steam_target() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(4),
+                Some(&target)
+            ),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
+    fn steam_row_with_no_target_is_close_only() {
+        assert_eq!(
+            resolve_context_menu_selection(&context_menu::ContextMenuItem::ALL, Some(4), None),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
+    fn menu_target_flags_distinguish_folder_steam_and_plain_app() {
+        let folder = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized("f"));
+        let steam = LauncherItem::app(AppId::from_normalized("steam:620"));
+        let app = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(menu_target_flags(Some(&folder)), (true, false));
+        assert_eq!(menu_target_flags(Some(&steam)), (false, true));
+        assert_eq!(menu_target_flags(Some(&app)), (false, false));
+        assert_eq!(menu_target_flags(None), (false, false));
     }
 
     #[test]

@@ -102,6 +102,11 @@ pub enum AppCommand {
     /// dismiss the menu / keep working. Carries the app name + version so the
     /// prompt is specific.
     AskChatGpt(AppLaunchInfo),
+    /// Open `app_id`'s Steam library page (`steam://nav/games/details/<appid>`).
+    /// The launcher is hidden first, mirroring the launch/reveal ordering so
+    /// Steam arrives on top. Carries the Steam app id directly (not the launch
+    /// info snapshot) because only the numeric id is needed to build the URL.
+    OpenInSteam { app_id: AppId },
     /// Persist the current settings blob.
     PersistSettings,
     /// Persist the current display order (`registry.order()`).
@@ -183,6 +188,22 @@ mod tests {
         assert!(matches!(reveal, AppCommand::RevealApp(_)));
         assert!(!matches!(reveal, AppCommand::LaunchApp(_)));
         assert!(!matches!(reveal, AppCommand::HideWindow));
+    }
+
+    /// The open-in-Steam path is a distinct command from launch, reveal, and
+    /// plain hide: it carries only the Steam app id (not the launch-info
+    /// snapshot the launch/reveal rows carry), so the executor builds the
+    /// `steam://` URL from that id alone. The Steam row and the launch row are
+    /// separate menu actions.
+    #[test]
+    fn open_in_steam_command_is_distinct_from_launch_reveal_and_hide() {
+        let steam = AppCommand::OpenInSteam {
+            app_id: AppId::from_normalized("steam:620"),
+        };
+        assert!(matches!(steam, AppCommand::OpenInSteam { .. }));
+        assert!(!matches!(steam, AppCommand::LaunchApp(_)));
+        assert!(!matches!(steam, AppCommand::RevealApp(_)));
+        assert!(!matches!(steam, AppCommand::HideWindow));
     }
 
     /// A modal dismiss (settings overlay outside click) must hide the overlay

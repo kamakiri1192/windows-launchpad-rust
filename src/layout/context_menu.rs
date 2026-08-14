@@ -36,12 +36,14 @@ const MAX_MENU_WIDTH: f32 = 320.0;
 pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 200.0;
 /// Number of rows currently emitted by the context menu. Kept public so the
 /// feature animation and renderer-neutral input model share one array size.
-pub const CONTEXT_MENU_ITEM_COUNT: usize = 7;
+/// This is the *superset* row count (the Steam-app menu); a non-Steam app
+/// menu omits the Steam row and a folder menu omits four rows.
+pub const CONTEXT_MENU_ITEM_COUNT: usize = 8;
 /// Number of rows omitted when the menu targets a folder. A folder cannot be
-/// hidden (no hide-app row), has no file to reveal (no reveal row), and has no
-/// app metadata for a ChatGPT lookup (no chatgpt-help row), so three rows are
-/// omitted from the app menu.
-pub const FOLDER_OMITTED_ITEM_COUNT: usize = 3;
+/// hidden (no hide-app row), has no file to reveal (no reveal row), has no app
+/// metadata for a ChatGPT lookup (no chatgpt-help row), and is never a Steam
+/// app (no open-in-Steam row), so four rows are omitted from the app menu.
+pub const FOLDER_OMITTED_ITEM_COUNT: usize = 4;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
@@ -83,6 +85,8 @@ pub enum ContextMenuItem {
     RevealInFinder,
     /// ChatGPTで使い方を調べる
     ChatGptHelp,
+    /// Steamで開く / Open in Steam
+    OpenInSteam,
     /// アイコンを大きくする
     IconLarger,
     /// アイコンを小さくする
@@ -92,8 +96,33 @@ pub enum ContextMenuItem {
 }
 
 impl ContextMenuItem {
-    /// All items in display order.
+    /// All items in display order. This is the *superset* shown when the menu
+    /// targets a Steam app: it includes the "Steamで開く" row. A non-Steam app
+    /// omits that row (see [`APP_ITEMS`]); a folder omits four rows (see
+    /// [`FOLDER_ITEMS`]).
+    ///
+    /// [`APP_ITEMS`]: ContextMenuItem::APP_ITEMS
+    /// [`FOLDER_ITEMS`]: ContextMenuItem::FOLDER_ITEMS
     pub const ALL: [Self; CONTEXT_MENU_ITEM_COUNT] = [
+        Self::EditHome,
+        Self::HideApp,
+        Self::RevealInFinder,
+        Self::ChatGptHelp,
+        Self::OpenInSteam,
+        Self::IconLarger,
+        Self::IconSmaller,
+        Self::AppInfo,
+    ];
+
+    /// Number of rows shown when the menu targets a non-Steam app. A non-Steam
+    /// app has no Steam library page to open, so the "Steamで開く" row is
+    /// omitted — one row shorter than the Steam-app [`ALL`] superset.
+    pub const APP_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - 1;
+
+    /// Items shown when the menu targets a non-Steam app. See
+    /// [`APP_ITEM_COUNT`]: a non-Steam app has no Steam page, so "Steamで開く"
+    /// is omitted. (A Steam app shows the full [`ALL`] superset instead.)
+    pub const APP_ITEMS: [Self; Self::APP_ITEM_COUNT] = [
         Self::EditHome,
         Self::HideApp,
         Self::RevealInFinder,
@@ -105,15 +134,17 @@ impl ContextMenuItem {
 
     /// Number of rows shown when the menu targets a folder. A folder has no
     /// hide action (it cannot be hidden), no file to reveal (it is a virtual
-    /// launcher group with no file on disk to open), and no app metadata for a
-    /// ChatGPT lookup, so [`FOLDER_OMITTED_ITEM_COUNT`] rows are omitted — the
-    /// folder menu is that many rows shorter than the app menu.
+    /// launcher group with no file on disk to open), no app metadata for a
+    /// ChatGPT lookup, and is never a Steam app, so [`FOLDER_OMITTED_ITEM_COUNT`]
+    /// rows are omitted — the folder menu is that many rows shorter than the
+    /// app menu.
     pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - FOLDER_OMITTED_ITEM_COUNT;
 
     /// Items shown when the menu targets a folder. See [`FOLDER_ITEM_COUNT`]:
-    /// a folder has no hide action, no file to reveal, and no app metadata for
-    /// a ChatGPT lookup, so "アプリを非表示", "Finderで開く", and "ChatGPTで
-    /// 使い方を調べる" are all omitted.
+    /// a folder has no hide action, no file to reveal, no app metadata for a
+    /// ChatGPT lookup, and is never a Steam app, so "アプリを非表示",
+    /// "Finderで開く", "ChatGPTで使い方を調べる", and "Steamで開く" are all
+    /// omitted.
     pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
         Self::EditHome,
         Self::IconLarger,
@@ -134,34 +165,12 @@ impl ContextMenuItem {
                 }
             }
             Self::ChatGptHelp => "ChatGPTで使い方を調べる",
+            Self::OpenInSteam => "Steamで開く",
             Self::IconLarger => "アイコンを大きくする",
             Self::IconSmaller => "アイコンを小さくする",
             Self::AppInfo => "アプリの概要",
         }
     }
-
-    /// Display labels for [`ALL`], in the same order. Precomputed at compile
-    /// time so callers (the context-menu renderer, which runs every frame)
-    /// can borrow a static slice instead of reallocating a `Vec` each frame.
-    ///
-    /// [`ALL`]: ContextMenuItem::ALL
-    pub const ALL_LABELS: [&'static str; CONTEXT_MENU_ITEM_COUNT] = [
-        Self::EditHome.label(),
-        Self::HideApp.label(),
-        Self::RevealInFinder.label(),
-        Self::ChatGptHelp.label(),
-        Self::IconLarger.label(),
-        Self::IconSmaller.label(),
-        Self::AppInfo.label(),
-    ];
-
-    /// Display labels for [`FOLDER_ITEMS`], in the same order.
-    pub const FOLDER_ITEMS_LABELS: [&'static str; Self::FOLDER_ITEM_COUNT] = [
-        Self::EditHome.label(),
-        Self::IconLarger.label(),
-        Self::IconSmaller.label(),
-        Self::AppInfo.label(),
-    ];
 
     /// Foreground color for this menu action, shared by its label and icon.
     pub const fn foreground_rgb(self) -> [f32; 3] {
@@ -172,21 +181,39 @@ impl ContextMenuItem {
     }
 }
 
-/// The `(items, labels)` pair to display for a menu target, in display order.
-/// Folder targets omit both the hide-app row (a folder cannot be hidden) and
-/// the reveal row (a folder is a virtual group with no file on disk); app
-/// targets show all six rows. The app shell picks this once at open time and
-/// reuses it every frame, so the rendered rows and the release-time row
-/// resolution always agree.
-pub fn menu_rows(is_folder_target: bool) -> (&'static [ContextMenuItem], &'static [&'static str]) {
-    if is_folder_target {
-        (
-            &ContextMenuItem::FOLDER_ITEMS[..],
-            &ContextMenuItem::FOLDER_ITEMS_LABELS[..],
-        )
-    } else {
-        (&ContextMenuItem::ALL[..], &ContextMenuItem::ALL_LABELS[..])
+/// Build the row list to display for a menu target, in display order, selected
+/// at runtime from the target's kind. The list is *constructed* (not selected
+/// from a static slice) so future per-app menu customization can compose rows
+/// without a combinatorial explosion of static arrays. Folder targets omit four
+/// rows (hide-app / reveal / ChatGPT-help / open-in-Steam — none apply to a
+/// virtual launcher group); a non-Steam app omits the Steam row; a Steam app
+/// shows the full superset.
+///
+/// Labels are *not* returned here: callers derive them on demand via
+/// [`ContextMenuItem::label`], so the row list carries no duplicate label
+/// storage. The app shell builds this once at open time and caches it on the
+/// [`ContextMenuState`](crate::features::context_menu::ContextMenuState), so the
+/// per-frame render path and the release-time row resolution read the same
+/// cached list (zero per-frame allocation, and open/release always agree).
+pub fn menu_rows(is_folder_target: bool, is_steam: bool) -> Vec<ContextMenuItem> {
+    let mut items = Vec::with_capacity(CONTEXT_MENU_ITEM_COUNT);
+    // "ホーム画面を編集" is always available.
+    items.push(ContextMenuItem::EditHome);
+    if !is_folder_target {
+        // App-only actions: hide, reveal, ChatGPT help.
+        items.push(ContextMenuItem::HideApp);
+        items.push(ContextMenuItem::RevealInFinder);
+        items.push(ContextMenuItem::ChatGptHelp);
+        // The Steam row appears only for a Steam app.
+        if is_steam {
+            items.push(ContextMenuItem::OpenInSteam);
+        }
     }
+    // Icon-size and app-info are always available.
+    items.push(ContextMenuItem::IconLarger);
+    items.push(ContextMenuItem::IconSmaller);
+    items.push(ContextMenuItem::AppInfo);
+    items
 }
 
 /// Inputs resolved by the app shell from the live [`ContextMenuState`].
@@ -219,8 +246,6 @@ pub struct ContextMenuInput<'a> {
     /// opacity and scale to the focused pill.
     pub focus_amounts: [f32; CONTEXT_MENU_ITEM_COUNT],
     pub items: &'a [ContextMenuItem],
-    /// Localized label for each item, in display order.
-    pub labels: &'a [&'a str],
 }
 
 /// Per-item layout geometry, kept for hit-test resolution by the app shell.
@@ -388,7 +413,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     let mut text_views: Vec<TextView> = Vec::new();
     let mut rows: Vec<ContextMenuItemRow> = Vec::new();
 
-    for (index, (item, label)) in input.items.iter().zip(input.labels.iter()).enumerate() {
+    for (index, item) in input.items.iter().enumerate() {
         // Position in fully-open panel space.
         let open_row_y = pad_y + index as f32 * row_h;
         let open_icon_x = pad_x;
@@ -469,7 +494,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         let label_width = (open_w - open_label_x - pad_x).max(1.0);
         text_views.push(TextView {
             id: UiId::context_menu_item(input.target, index),
-            text: (*label).to_string(),
+            text: item.label().to_string(),
             rect: Rect::new(
                 label_cx,
                 label_cy - font_size * 0.5 * content_scale,
@@ -542,6 +567,7 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
         ContextMenuItem::HideApp => ControlKind::EyeOff,
         ContextMenuItem::RevealInFinder => ControlKind::FolderIcon,
         ContextMenuItem::ChatGptHelp => ControlKind::ChatGptLogo,
+        ContextMenuItem::OpenInSteam => ControlKind::SteamLogo,
         ContextMenuItem::IconLarger => ControlKind::Plus,
         ContextMenuItem::IconSmaller => ControlKind::Minus,
         ContextMenuItem::AppInfo => ControlKind::Info,
@@ -557,23 +583,33 @@ mod tests {
     };
     use crate::ui_model::render_model::ControlKind;
 
-    /// A folder target has no hide action, no file to reveal, and no app
-    /// metadata for a ChatGPT lookup, so its menu omits all three rows (three
-    /// rows shorter than the app menu).
+    /// `menu_rows` builds the row list at runtime from `(is_folder, is_steam)`.
+    /// A folder omits four rows; a non-Steam app omits the Steam row; a Steam
+    /// app shows the full superset. The built `Vec`s match the canonical static
+    /// arrays (`FOLDER_ITEMS` / `APP_ITEMS` / `ALL`) kept for test reference.
     #[test]
-    fn folder_menu_omits_the_hide_reveal_and_chatgpt_rows() {
-        let (items, labels) = menu_rows(true);
-        assert_eq!(items, &ContextMenuItem::FOLDER_ITEMS[..]);
-        assert_eq!(labels, &ContextMenuItem::FOLDER_ITEMS_LABELS[..]);
-        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 3);
+    fn folder_menu_omits_the_hide_reveal_chatgpt_and_steam_rows() {
+        let items = menu_rows(true, false);
+        assert_eq!(items, ContextMenuItem::FOLDER_ITEMS);
+        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 4);
         assert!(!items.contains(&ContextMenuItem::HideApp));
         assert!(!items.contains(&ContextMenuItem::RevealInFinder));
         assert!(!items.contains(&ContextMenuItem::ChatGptHelp));
+        assert!(!items.contains(&ContextMenuItem::OpenInSteam));
 
-        // App targets keep all seven rows, in the same order as `ALL`.
-        let (app_items, app_labels) = menu_rows(false);
-        assert_eq!(app_items, &ContextMenuItem::ALL[..]);
-        assert_eq!(app_labels, &ContextMenuItem::ALL_LABELS[..]);
+        // A non-Steam app keeps the seven non-Steam rows (no Steam row), in the
+        // same order as `APP_ITEMS`.
+        let app_items = menu_rows(false, false);
+        assert_eq!(app_items, ContextMenuItem::APP_ITEMS);
+        assert!(!app_items.contains(&ContextMenuItem::OpenInSteam));
+
+        // A Steam app shows the full eight-row superset, in `ALL` order.
+        let steam_items = menu_rows(false, true);
+        assert_eq!(steam_items, ContextMenuItem::ALL);
+        assert!(steam_items.contains(&ContextMenuItem::OpenInSteam));
+
+        // The built rows carry no label storage; labels derive on demand.
+        assert_eq!(items[0].label(), ContextMenuItem::EditHome.label());
     }
 
     /// Icon near the right of the viewport so the menu cannot fit on its right
@@ -640,7 +676,6 @@ mod tests {
             activation: 0.0,
             focus_amounts: [0.0; CONTEXT_MENU_ITEM_COUNT],
             items: &ContextMenuItem::ALL,
-            labels: &ContextMenuItem::ALL_LABELS,
         };
 
         let model = build(&input);
@@ -710,9 +745,8 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
-            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             items: &ContextMenuItem::ALL,
-            labels: &ContextMenuItem::ALL_LABELS,
         };
 
         let model = build(&input);
@@ -761,7 +795,6 @@ mod tests {
             activation: 0.0,
             focus_amounts: [0.0; CONTEXT_MENU_ITEM_COUNT],
             items: &ContextMenuItem::ALL,
-            labels: &ContextMenuItem::ALL_LABELS,
         };
 
         let model = build(&input);
@@ -783,6 +816,7 @@ mod tests {
                 ControlKind::EyeOff,
                 ControlKind::FolderIcon,
                 ControlKind::ChatGptLogo,
+                ControlKind::SteamLogo,
                 ControlKind::Plus,
                 ControlKind::Minus,
                 ControlKind::Info,

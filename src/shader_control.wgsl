@@ -21,9 +21,12 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 // binding 1 + 2 are the shared glyph atlas + sampler (used by the control-text
 // pipeline, unused by this shader). binding 3 + 4 are the dedicated ChatGPT
-// logo texture + sampler sampled by kind 19.
+// logo texture + sampler sampled by kind 19; binding 5 + 6 are the dedicated
+// Steam logo texture + sampler sampled by kind 20.
 @group(0) @binding(3) var chatgpt_logo: texture_2d<f32>;
 @group(0) @binding(4) var chatgpt_sampler: sampler;
+@group(0) @binding(5) var steam_logo: texture_2d<f32>;
+@group(0) @binding(6) var steam_sampler: sampler;
 
 // kind values:
 //   0 = magnifier (ring + handle)
@@ -47,6 +50,8 @@ struct Uniforms {
 //  18 = info (context menu: app info) — params: (size, alpha, stroke, _)
 //  19 = ChatGPT logo (context menu: ChatGPT help) — texture-sampled, not an SDF.
 //       params: (size, alpha, _, _); samples the dedicated texture at binding 3.
+//  20 = Steam logo (context menu: open in Steam) — texture-sampled, not an SDF.
+//       params: (size, alpha, _, _); samples the dedicated texture at binding 5.
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -164,7 +169,8 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         return size * 1.6;
     }
     if kind > 12.5 {
-        // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
+        // Context-menu glyphs (kinds 13–20, including the texture-sampled
+        // ChatGPT/Steam logos): `size` is the full icon extent.
         return size * 1.2;
     }
     if kind > 11.5 && kind < 12.5 {
@@ -478,7 +484,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             1.0 - smoothstep(-1.0, 1.0, dot),
             1.0 - smoothstep(-1.0, 1.0, stem),
         );
-    } else {
+    } else if kind < 19.5 {
         // ChatGPT logo (kind 19): sample the dedicated rasterized SVG texture
         // (binding 3). The vertex shader sized this kind's quad to a half-extent
         // of `size * 1.2` (the context-menu glyph bbox, see element_extent), so
@@ -492,6 +498,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
         if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
             let sampled = textureSample(chatgpt_logo, chatgpt_sampler, uv);
+            coverage = sampled.a;
+        } else {
+            coverage = 0.0;
+        }
+    } else {
+        // Steam logo (kind 20): sample the dedicated rasterized SVG texture
+        // (binding 5). Identical quad/UV mapping to the ChatGPT logo above
+        // (kind 19) — only the sampled texture differs. The vertex shader
+        // likewise sized this quad to a half-extent of `size * 1.2`, so map the
+        // full quad to [0,1]² UVs. The PNG is recolored to the menu label
+        // near-black, so the instance tint is a pass-through and the texture's
+        // alpha is the coverage.
+        let half_extent = max(in.params.x * 1.2, 1.0);
+        let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
+        if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+            let sampled = textureSample(steam_logo, steam_sampler, uv);
             coverage = sampled.a;
         } else {
             coverage = 0.0;
