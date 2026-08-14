@@ -507,17 +507,20 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Dedicated ChatGPT-logo texture (binding 3) + sampler (binding 4),
-                // sampled by kind 19 of shader_control.wgsl. The shared glyph
-                // atlas lives at bindings 1+2 and cannot carry an arbitrary
-                // RGBA logo, so the logo gets its own single-texel-isotropic
-                // texture.
+                // Brand-logo SDF atlas (binding 3) + sampler (binding 4). The
+                // atlas is a 2D array texture whose layer 0 is the ChatGPT logo
+                // and layer 1 is the Steam logo, each a single-channel signed
+                // distance field. Kinds 19 and 20 of shader_control.wgsl sample
+                // the right layer and reconstruct a crisp, resolution-
+                // independent edge, so both logos stay sharp at any DPI from a
+                // compact 64×64 source (see examples/generate_logo_sdf.rs and
+                // https://jobtalle.com/distance_field_transparency.html).
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -528,36 +531,14 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Dedicated Steam-logo texture (binding 5) + sampler (binding 6),
-                // sampled by kind 20 of shader_control.wgsl. Same rationale as
-                // the ChatGPT-logo pair at bindings 3+4: the shared glyph atlas
-                // cannot carry an arbitrary RGBA logo, so each brand logo gets
-                // its own single-texel-isotropic texture.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
             ],
         });
-        // Decode the embedded ChatGPT-logo PNG (rasterized from the source SVG
-        // at build time) into a small dedicated texture. The logo is drawn at
-        // ~20 logical px in the menu, so a 256² source is more than enough and
-        // keeps the texture tiny.
-        let (chatgpt_texture, chatgpt_view, chatgpt_sampler) =
-            create_chatgpt_logo_texture(&device, &queue);
-        let (steam_texture, steam_view, steam_sampler) = create_steam_logo_texture(&device, &queue);
+        // Decode the embedded ChatGPT and Steam SDF textures and pack them as
+        // the two layers of a small 2D array texture. The menu draws the logos
+        // at ~20 logical px, and the distance field reconstructs the edge, so a
+        // 64² source per layer is ample and keeps the atlas tiny.
+        let (logo_atlas_texture, logo_atlas_view, logo_atlas_sampler) =
+            create_logo_sdf_atlas(&device, &queue);
         let control_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("control bg"),
             layout: &control_bgl,
@@ -576,19 +557,11 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&chatgpt_view),
+                    resource: wgpu::BindingResource::TextureView(&logo_atlas_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&chatgpt_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&steam_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&steam_sampler),
+                    resource: wgpu::BindingResource::Sampler(&logo_atlas_sampler),
                 },
             ],
         });
@@ -720,12 +693,9 @@ impl Renderer {
             control_uniform_buffer,
             control_bind_group: control_bind_group.clone(),
             control_bgl,
-            chatgpt_logo_texture: chatgpt_texture,
-            chatgpt_logo_view: chatgpt_view,
-            chatgpt_logo_sampler: chatgpt_sampler,
-            steam_logo_texture: steam_texture,
-            steam_logo_view: steam_view,
-            steam_logo_sampler: steam_sampler,
+            logo_sdf_atlas_texture: logo_atlas_texture,
+            logo_sdf_atlas_view: logo_atlas_view,
+            logo_sdf_atlas_sampler: logo_atlas_sampler,
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
             backdrop_instance_buffer: InstanceBuffer::new("backdrop instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
@@ -1134,63 +1104,81 @@ fn create_qa_offscreen_texture(
 /// The embedded ChatGPT-logo PNG (rasterized from the source SVG at the
 /// near-black menu label color `#1C1C1E`). Declared here so the bytes are
 /// baked into the binary exactly once.
-const CHATGPT_LOGO_PNG: &[u8] = include_bytes!("../../assets/icons/chatgpt-logo.png");
+/// The embedded ChatGPT-logo SDF texture (64×64 grayscale). Generated from
+/// `assets/icons/chatgpt-logo.png` by `examples/generate_logo_sdf.rs` (JFA +
+/// 1+JFA, see https://jobtalle.com/distance_field_transparency.html). Layer 0
+/// of the brand-logo atlas; the shader reconstructs a crisp edge from it.
+const CHATGPT_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/chatgpt-logo-sdf.png");
 
-/// Decode the embedded ChatGPT-logo PNG and upload it to a small dedicated
-/// RGBA texture with a linear sampler. Drawn by kind 19 of the control shader.
-/// Returns `(texture, view, sampler)`. Falls back to a 1×1 transparent texel
-/// if decoding fails, so the pipeline still binds a valid resource.
-fn create_chatgpt_logo_texture(
+/// The embedded Steam-logo SDF texture (64×64 grayscale). Generated from
+/// `assets/icons/steam-logo.png` by `examples/generate_logo_sdf.rs`. Layer 1 of
+/// the brand-logo atlas.
+const STEAM_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/steam-logo-sdf.png");
+
+/// Decode the embedded brand-logo SDF textures and pack them as the two layers
+/// of a small 2D array texture. Layer 0 is the ChatGPT logo (kind 19), layer 1
+/// is the Steam logo (kind 20). Each layer is a single-channel signed distance
+/// field (0.5 at the silhouette edge, values above 0.5 inside) from which the
+/// shader reconstructs a crisp, resolution-independent edge. Returns
+/// `(texture, view, sampler)`. On decode failure each layer falls back to a
+/// 1×1 fully-inside texel (0xFF) so the logo renders as a solid block instead
+/// of vanishing, keeping a valid resource bound.
+fn create_logo_sdf_atlas(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
-    let (rgba, width, height) = match image::load_from_memory(CHATGPT_LOGO_PNG) {
-        Ok(image) => {
-            let rgba = image.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            (rgba.into_raw(), w, h)
-        }
-        Err(err) => {
-            eprintln!("chatgpt logo: failed to decode embedded PNG: {err}");
-            (vec![0u8; 4], 1, 1)
-        }
-    };
+    let chatgpt = decode_logo_sdf(CHATGPT_LOGO_SDF_PNG, "chatgpt");
+    let steam = decode_logo_sdf(STEAM_LOGO_SDF_PNG, "steam");
+    let size = chatgpt.0.max(steam.0).max(1);
+    let layers = 2u32;
+
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("ChatGPT logo texture"),
+        label: Some("brand logo SDF atlas"),
         size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
+            width: size,
+            height: size,
+            depth_or_array_layers: layers,
         },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format: wgpu::TextureFormat::R8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(width * 4),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    for (layer, (_, pixels)) in [chatgpt, steam].iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("ChatGPT logo sampler"),
+        label: Some("brand logo SDF sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -1204,77 +1192,21 @@ fn create_chatgpt_logo_texture(
     (texture, view, sampler)
 }
 
-/// The embedded Steam-logo PNG (rasterized from the source SVG at the
-/// near-black menu label color `#1C1C1E`). Declared here so the bytes are
-/// baked into the binary exactly once.
-const STEAM_LOGO_PNG: &[u8] = include_bytes!("../../assets/icons/steam-logo.png");
-
-/// Decode the embedded Steam-logo PNG and upload it to a small dedicated
-/// RGBA texture with a linear sampler. Drawn by kind 20 of the control shader.
-/// Returns `(texture, view, sampler)`. Falls back to a 1×1 transparent texel
-/// if decoding fails, so the pipeline still binds a valid resource.
-fn create_steam_logo_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
-    let (rgba, width, height) = match image::load_from_memory(STEAM_LOGO_PNG) {
+/// Decode an embedded 8-bit grayscale SDF PNG into `(side, pixels)`. Returns
+/// the larger of width/height as the per-layer side so non-square sources still
+/// upload cleanly; both current logos are square 64×64.
+fn decode_logo_sdf(bytes: &[u8], name: &str) -> (u32, Vec<u8>) {
+    match image::load_from_memory(bytes) {
         Ok(image) => {
-            let rgba = image.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            (rgba.into_raw(), w, h)
+            let gray = image.to_luma8();
+            let (w, h) = gray.dimensions();
+            (w.max(h), gray.into_raw())
         }
         Err(err) => {
-            eprintln!("steam logo: failed to decode embedded PNG: {err}");
-            (vec![0u8; 4], 1, 1)
+            eprintln!("{name} logo SDF: failed to decode embedded PNG: {err}");
+            (1, vec![0xFF])
         }
-    };
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Steam logo texture"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(width * 4),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("Steam logo sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        lod_min_clamp: 0.0,
-        lod_max_clamp: 0.0,
-        ..Default::default()
-    });
-    (texture, view, sampler)
+    }
 }
 
 #[cfg(test)]

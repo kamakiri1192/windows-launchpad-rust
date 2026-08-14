@@ -20,13 +20,16 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 // binding 1 + 2 are the shared glyph atlas + sampler (used by the control-text
-// pipeline, unused by this shader). binding 3 + 4 are the dedicated ChatGPT
-// logo texture + sampler sampled by kind 19; binding 5 + 6 are the dedicated
-// Steam logo texture + sampler sampled by kind 20.
-@group(0) @binding(3) var chatgpt_logo: texture_2d<f32>;
-@group(0) @binding(4) var chatgpt_sampler: sampler;
-@group(0) @binding(5) var steam_logo: texture_2d<f32>;
-@group(0) @binding(6) var steam_sampler: sampler;
+// pipeline, unused by this shader). binding 3 is the brand-logo SDF atlas — a
+// 2D array texture whose layer 0 is the ChatGPT logo and layer 1 is the Steam
+// logo, each stored as a single-channel signed distance field (0.5 at the
+// silhouette edge, >0.5 inside). binding 4 is its linear sampler. Kinds 19 and
+// 20 reconstruct a crisp, resolution-independent edge from the field, so the
+// logos stay sharp at any DPI from a tiny 64×64 source. See
+// examples/generate_logo_sdf.rs and
+// https://jobtalle.com/distance_field_transparency.html.
+@group(0) @binding(3) var logo_sdf_atlas: texture_2d_array<f32>;
+@group(0) @binding(4) var logo_sampler: sampler;
 
 // kind values:
 //   0 = magnifier (ring + handle)
@@ -48,10 +51,10 @@ struct Uniforms {
 //  16 = plus (context menu: larger icon) — params: (size, alpha, stroke, _)
 //  17 = minus (context menu: smaller icon) — params: (size, alpha, stroke, _)
 //  18 = info (context menu: app info) — params: (size, alpha, stroke, _)
-//  19 = ChatGPT logo (context menu: ChatGPT help) — texture-sampled, not an SDF.
-//       params: (size, alpha, _, _); samples the dedicated texture at binding 3.
-//  20 = Steam logo (context menu: open in Steam) — texture-sampled, not an SDF.
-//       params: (size, alpha, _, _); samples the dedicated texture at binding 5.
+//  19 = ChatGPT logo (context menu: ChatGPT help) — SDF atlas layer 0.
+//       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
+//  20 = Steam logo (context menu: open in Steam) — SDF atlas layer 1.
+//       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -484,37 +487,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             1.0 - smoothstep(-1.0, 1.0, dot),
             1.0 - smoothstep(-1.0, 1.0, stem),
         );
-    } else if kind < 19.5 {
-        // ChatGPT logo (kind 19): sample the dedicated rasterized SVG texture
-        // (binding 3). The vertex shader sized this kind's quad to a half-extent
-        // of `size * 1.2` (the context-menu glyph bbox, see element_extent), so
-        // `local` ranges over ±(size * 1.2). Map that full quad to [0,1]² UVs
-        // so the logo fills the same visual footprint as the SDF glyphs.
-        // (`size` alone would only cover the central ~83%, making the logo look
-        // noticeably smaller than its neighbours.) The texture is straight-alpha
-        // RGBA; we use its alpha as coverage. The PNG is already recolored to
-        // the menu label near-black, so the instance tint is a pass-through.
-        let half_extent = max(in.params.x * 1.2, 1.0);
-        let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
-        if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-            let sampled = textureSample(chatgpt_logo, chatgpt_sampler, uv);
-            coverage = sampled.a;
-        } else {
-            coverage = 0.0;
-        }
     } else {
-        // Steam logo (kind 20): sample the dedicated rasterized SVG texture
-        // (binding 5). Identical quad/UV mapping to the ChatGPT logo above
-        // (kind 19) — only the sampled texture differs. The vertex shader
-        // likewise sized this quad to a half-extent of `size * 1.2`, so map the
-        // full quad to [0,1]² UVs. The PNG is recolored to the menu label
-        // near-black, so the instance tint is a pass-through and the texture's
-        // alpha is the coverage.
+        // Brand logos (kind 19 ChatGPT / kind 20 Steam): reconstruct a crisp,
+        // resolution-independent edge from the SDF atlas. The vertex shader
+        // sized this kind's quad to a half-extent of `size * 1.2` (the
+        // context-menu glyph bbox, see element_extent), so `local` ranges over
+        // ±(size * 1.2); map that full quad to [0,1]² UVs so the logo fills the
+        // same visual footprint as the SDF glyphs. The atlas layer is 0 for the
+        // ChatGPT logo (kind 19) and 1 for the Steam logo (kind 20). The
+        // texel's red channel is the distance field — 0.5 at the silhouette
+        // edge, >0.5 inside — and the edge is rebuilt over a single pixel using
+        // `fwidth`, so it never blurs however large the logo is drawn.
+        let layer = select(0, 1, kind > 19.5);
         let half_extent = max(in.params.x * 1.2, 1.0);
         let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
         if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-            let sampled = textureSample(steam_logo, steam_sampler, uv);
-            coverage = sampled.a;
+            let sampled = textureSample(logo_sdf_atlas, logo_sampler, uv, layer);
+            let d = sampled.r;
+            // Ramp from 0 (outside) to 1 (inside) across one pixel at the edge,
+            // matching https://jobtalle.com/distance_field_transparency.html.
+            let aa = fwidth(d);
+            coverage = clamp((d - 0.5) * 2.0 / max(aa, 0.0001), 0.0, 1.0);
         } else {
             coverage = 0.0;
         }

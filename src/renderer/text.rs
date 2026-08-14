@@ -94,13 +94,13 @@ impl Renderer {
             ],
         });
         // Control overlay passes share one bind group (control uniforms +
-        // atlas + sampler + the dedicated ChatGPT-logo texture + sampler +
-        // the dedicated Steam-logo texture + sampler). The shape pipeline
-        // binds only [0] but the text pipeline samples the atlas; kind 19 of
-        // the shape pipeline samples the ChatGPT logo, kind 20 the Steam logo.
-        // IMPORTANT: the layout declares seven bindings, so every rebuild must
-        // supply all seven — omitting 5/6 here would panic in
-        // create_bind_group validation when the glyph atlas first grows.
+        // atlas + sampler + the brand-logo SDF atlas + sampler). The shape
+        // pipeline binds only [0] but the text pipeline samples the atlas; kind
+        // 19 of the shape pipeline samples the SDF atlas layer 0 (ChatGPT),
+        // kind 20 layer 1 (Steam). IMPORTANT: the layout declares five
+        // bindings, so every rebuild must supply all five — omitting 3/4 here
+        // would panic in create_bind_group validation when the glyph atlas
+        // first grows.
         let control_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("control bg"),
             layout: &self.control_bgl,
@@ -119,19 +119,11 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.chatgpt_logo_view),
+                    resource: wgpu::BindingResource::TextureView(&self.logo_sdf_atlas_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&self.chatgpt_logo_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&self.steam_logo_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&self.steam_logo_sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.logo_sdf_atlas_sampler),
                 },
             ],
         });
