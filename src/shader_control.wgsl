@@ -173,11 +173,11 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
     }
     if kind > 18.5 {
         // Brand logos (kinds 19 ChatGPT / 20 Steam): drawn a bit larger than
-        // the procedural context-menu glyphs so the logos carry similar visual
+        // the procedural glyphs' `size * 1.2` so the logos carry similar visual
         // weight to the pencil/folder/etc. icons next to them. Both the vertex
         // shader (here) and the fragment shader's UV mapping must use the same
         // factor or the logo stretches.
-        return size * 1.4;
+        return size * 1.5;
     }
     if kind > 12.5 {
         // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
@@ -497,17 +497,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     } else {
         // Brand logos (kind 19 ChatGPT / kind 20 Steam): reconstruct a crisp,
         // resolution-independent edge from the SDF atlas. The vertex shader
-        // sized this kind's quad to a half-extent of `size * 1.4` (larger than
+        // sized this kind's quad to a half-extent of `size * 1.5` (larger than
         // the procedural glyphs' `size * 1.2` so the logos read with similar
         // visual weight; see element_extent), so `local` ranges over
-        // ±(size * 1.4); map that full quad to [0,1]² UVs. The atlas layer is 0
+        // ±(size * 1.5); map that full quad to [0,1]² UVs. The atlas layer is 0
         // for the ChatGPT logo (kind 19) and 1 for the Steam logo (kind 20).
         // The texel's red channel is the distance field — 0.5 at the silhouette
         // edge, values above 0.5 inside — and the edge is rebuilt over a single
         // pixel using `fwidth`, so it never blurs however large the logo is
         // drawn.
         let layer = select(0, 1, kind > 19.5);
-        let half_extent = max(in.params.x * 1.4, 1.0);
+        let half_extent = max(in.params.x * 1.5, 1.0);
         let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
         if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
             let sampled = textureSample(logo_sdf_atlas, logo_sampler, uv, layer);
