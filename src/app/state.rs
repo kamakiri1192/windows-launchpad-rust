@@ -411,7 +411,7 @@ pub struct App {
     pub profiler: crate::profiling::FrameProfiler,
 }
 
-use crate::domain::app_registry::AppLaunchInfo;
+use crate::domain::app_registry::{AppLaunchInfo, AppRecord};
 
 impl App {
     pub fn new(
@@ -717,16 +717,68 @@ impl App {
     }
 
     pub(crate) fn matches_search(name: &str, query: &str) -> bool {
+        Self::search_rank(name, query).is_some()
+    }
+
+    /// Search match rank for `name` against `query`. `None` means the name does
+    /// not match (excluded from results); otherwise a lower rank sorts earlier:
+    ///   - `0` — a query token matches at the start of the name (prefix),
+    ///   - `1` — a token matches at a word boundary inside the name
+    ///     (e.g. "ill" in "Adobe Illustrator"),
+    ///   - `2` — a token is contained elsewhere (plain substring).
+    ///
+    /// Multi-token queries still require every token to match (AND, matching the
+    /// legacy `contains`-based filter), and the result rank is the *worst* token
+    /// rank, so names where all tokens match well sort before names where any
+    /// token only substring-matches. An empty query matches everything at rank 0.
+    fn search_rank(name: &str, query: &str) -> Option<u8> {
         let query = query.trim();
         if query.is_empty() {
-            return true;
+            return Some(0);
         }
-
         let haystack = name.to_lowercase();
-        query
-            .split_whitespace()
-            .map(str::to_lowercase)
-            .all(|needle| haystack.contains(&needle))
+        let mut worst: u8 = 0;
+        for needle in query.split_whitespace() {
+            let needle = needle.to_lowercase();
+            match Self::token_rank(&haystack, &needle) {
+                Some(rank) => worst = worst.max(rank),
+                None => return None,
+            }
+        }
+        Some(worst)
+    }
+
+    /// Rank a single (already-lowercased) `needle` within `haystack`. See
+    /// [`search_rank`][Self::search_rank] for the rank meaning. Uses
+    /// `char_indices` so non-ASCII (Japanese) names are byte-boundary safe.
+    fn token_rank(haystack: &str, needle: &str) -> Option<u8> {
+        if needle.is_empty() {
+            // Should not happen (split_whitespace drops empty tokens), but keep
+            // a non-matching answer to stay defensive.
+            return None;
+        }
+        if haystack.starts_with(needle) {
+            return Some(0);
+        }
+        // Look for a match beginning right after a word boundary: the preceding
+        // char is non-alphanumeric (space, punctuation, or any non-ASCII char
+        // such as a Japanese glyph).
+        let nlen = needle.len();
+        let mut prev: Option<char> = None;
+        for (i, c) in haystack.char_indices() {
+            let at_word_boundary = !matches!(prev, Some(p) if p.is_ascii_alphanumeric());
+            if i != 0 && at_word_boundary && haystack[i..].starts_with(needle) {
+                return Some(1);
+            }
+            prev = Some(c);
+            if i + nlen > haystack.len() {
+                break;
+            }
+        }
+        if haystack.contains(needle) {
+            return Some(2);
+        }
+        None
     }
 
     /// Build the ordered list of app ids that should be considered for the
@@ -798,6 +850,29 @@ impl App {
             .collect()
     }
 
+    /// Apps matching the (non-empty) search `query`, ordered by match rank
+    /// (prefix > word-boundary > substring) and then by display name, so the
+    /// grid and the click-resolution list stay consistent. Used by both
+    /// [`grid_items_owned`][Self::grid_items_owned] and
+    /// [`visible_app_ids`][Self::visible_app_ids] when a query is active.
+    fn ranked_search_records(&self, query: &str) -> Vec<&AppRecord> {
+        let launcher_state = self.presentation_launcher_state();
+        let include_hidden = self.settings.search_includes_hidden;
+        let mut ranked: Vec<(u8, &AppRecord)> = self
+            .registry
+            .apps()
+            .iter()
+            .filter(|record| include_hidden || !launcher_state.is_hidden(&record.app_id))
+            .filter(|record| self.settings.shows_app(&record.app_id))
+            .filter_map(|record| Self::search_rank(&record.name, query).map(|rank| (rank, record)))
+            .collect();
+        ranked.sort_by(|(ra, a), (rb, b)| {
+            ra.cmp(rb)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        ranked.into_iter().map(|(_, record)| record).collect()
+    }
+
     /// Build the production top-level item projection. With an empty search it
     /// preserves the exact app/folder interleave from `LauncherState.items`;
     /// with a query it intentionally returns flat discovered app results.
@@ -805,14 +880,9 @@ impl App {
         let query = self.visible_search_query();
         let launcher_state = self.presentation_launcher_state();
         if !query.trim().is_empty() {
-            let include_hidden = self.settings.search_includes_hidden;
             return self
-                .registry
-                .apps()
-                .iter()
-                .filter(|record| include_hidden || !launcher_state.is_hidden(&record.app_id))
-                .filter(|record| self.settings.shows_app(&record.app_id))
-                .filter(|record| Self::matches_search(&record.name, &query))
+                .ranked_search_records(&query)
+                .into_iter()
                 .map(|record| {
                     let item = LauncherItem::App(record.app_id.clone());
                     OwnedGridItem {
@@ -892,8 +962,16 @@ impl App {
 
     pub(crate) fn visible_app_ids(&self) -> Vec<AppId> {
         let query = self.visible_search_query();
-        let include_hidden = self.settings.search_includes_hidden && !query.trim().is_empty();
-        self.ordered_visible_candidate_ids(include_hidden)
+        if !query.trim().is_empty() {
+            // Match the ranked order used by `grid_items_owned` so the tile a
+            // click lands on resolves to the app that is actually drawn there.
+            return self
+                .ranked_search_records(&query)
+                .into_iter()
+                .map(|record| record.app_id.clone())
+                .collect();
+        }
+        self.ordered_visible_candidate_ids(false)
             .into_iter()
             .filter(|id| {
                 self.registry
@@ -1065,5 +1143,93 @@ mod pending_press_tests {
                 .abs()
                 < 0.01
         );
+    }
+}
+
+#[cfg(test)]
+mod search_rank_tests {
+    use super::App;
+
+    #[test]
+    fn token_rank_orders_prefix_word_boundary_substring() {
+        // `token_rank` compares already-lowercased strings; `search_rank`
+        // lowercases both sides before calling it.
+        assert_eq!(App::token_rank("illusion", "ill"), Some(0));
+        assert_eq!(App::token_rank("adobe illustrator", "ill"), Some(1));
+        assert_eq!(App::token_rank("vanilla tool", "ill"), Some(2));
+        assert_eq!(App::token_rank("gimp", "ill"), None);
+    }
+
+    #[test]
+    fn token_rank_treats_punctuation_as_word_boundary() {
+        assert_eq!(App::token_rank("photo-editor", "edit"), Some(1));
+        assert_eq!(App::token_rank("photo_editor", "edit"), Some(1));
+        // no boundary inside "photoeditor" → only substring match
+        assert_eq!(App::token_rank("photoeditor", "edit"), Some(2));
+    }
+
+    #[test]
+    fn search_rank_is_case_insensitive() {
+        assert_eq!(App::search_rank("Adobe Illustrator", "ILL"), Some(1));
+        assert_eq!(App::search_rank("Illusion", "iLl"), Some(0));
+    }
+
+    #[test]
+    fn search_rank_single_token_prefers_prefix() {
+        assert_eq!(App::search_rank("Illusion", "ill"), Some(0));
+        assert_eq!(App::search_rank("Adobe Illustrator", "ill"), Some(1));
+        assert_eq!(App::search_rank("Vanilla Tool", "ill"), Some(2));
+        assert_eq!(App::search_rank("GIMP", "ill"), None);
+    }
+
+    #[test]
+    fn search_rank_multi_token_takes_worst_rank() {
+        // "adobe" prefix(0) + "ill" word-boundary(1) → worst(1)
+        assert_eq!(App::search_rank("Adobe Illustrator", "adobe ill"), Some(1));
+        // one token absent → no match
+        assert_eq!(App::search_rank("Adobe Illustrator", "adobe nope"), None);
+    }
+
+    #[test]
+    fn search_rank_empty_query_is_zero() {
+        assert_eq!(App::search_rank("Anything", ""), Some(0));
+        assert_eq!(App::search_rank("Anything", "   "), Some(0));
+    }
+
+    #[test]
+    fn search_rank_japanese_prefix() {
+        assert_eq!(App::search_rank("メモ帳", "メモ"), Some(0));
+        assert_eq!(App::search_rank("アプリ設定", "アプリ"), Some(0));
+        assert_eq!(App::search_rank("メモ帳", "アプリ"), None);
+    }
+
+    #[test]
+    fn ranked_order_prefix_then_word_boundary_then_substring() {
+        // Reproduce the sort used by `ranked_search_records` via the pure rank
+        // fn, so the "ill" result order is verified without building an App.
+        let mut apps = vec![
+            ("Adobe Illustrator", "app-adobe"),
+            ("Illusion", "app-illusion"),
+            ("Vanilla Tool", "app-vanilla"),
+        ];
+        let query = "ill";
+        apps.sort_by(|(na, _), (nb, _)| {
+            let ra = App::search_rank(na, query).unwrap_or(u8::MAX);
+            let rb = App::search_rank(nb, query).unwrap_or(u8::MAX);
+            ra.cmp(&rb)
+                .then_with(|| na.to_lowercase().cmp(&nb.to_lowercase()))
+        });
+        let names: Vec<&str> = apps.into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["Illusion", "Adobe Illustrator", "Vanilla Tool"]);
+    }
+
+    #[test]
+    fn matches_search_preserves_legacy_contract() {
+        assert!(App::matches_search("Windows Terminal", "terminal"));
+        assert!(App::matches_search("Windows Terminal", "WIN term"));
+        assert!(!App::matches_search("Windows Terminal", "memo"));
+        assert!(App::matches_search("メモ帳", "メモ"));
+        assert!(App::matches_search("アプリ設定", "アプリ"));
+        assert!(!App::matches_search("メモ帳", "アプリ"));
     }
 }
