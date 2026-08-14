@@ -26,9 +26,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Default edge length (texels) of the generated SDF texture. The SDF stores a
-/// higher-resolution shape in a small texture, so 64×64 is ample for a logo
-/// drawn at ~24 logical px and keeps the atlas tiny.
-const DEFAULT_OUTPUT_SIZE: u32 = 64;
+/// higher-resolution shape in a small texture, so 128×128 keeps the atlas
+/// compact while preserving thin strokes (Steam's pipes) that 64×64 crushed.
+const DEFAULT_OUTPUT_SIZE: u32 = 128;
 /// Rasterization resolution for SVG sources (and the resolution JFA runs at
 /// before downscaling). Must be well above the output size so the silhouette
 /// is sampled densely enough for an accurate distance field.
@@ -67,8 +67,14 @@ fn main() {
     // Signed distance field: inside = negative, outside = positive.
     let sdf = compute_signed_distance(&alpha, &opaque_voronoi, &transparent_voronoi, w, h);
 
-    // Normalize to [0,1] with 0.5 at the edge, >0.5 inside.
-    let normalized = normalize_to_alpha(&sdf);
+    // Normalize to [0,1] with 0.5 at the edge, values above 0.5 inside. The
+    // spread (distance over which the field ramps from fully outside to fully
+    // inside) is a *small* fraction of the source size: using the whole-field
+    // max distance made 1px edges nearly flat in alpha and crushed thin
+    // strokes. A spread of ~source/8 keeps the gradient steep at the edge so
+    // thin lines survive, and makes strokes read slightly heavier (inside
+    // saturates to 1 quickly), matching the "icons look a bit bigger" intent.
+    let normalized = normalize_to_alpha(&sdf, w.max(h));
 
     // Downscale the high-resolution field to the compact output size.
     let downscaled = downsample_box(&normalized, w, h, output_size, output_size);
@@ -259,14 +265,18 @@ fn compute_signed_distance(
     sdf
 }
 
-/// Map signed distances (px) to [0,1] alpha where 0.5 is the edge, >0.5 inside.
+/// Map signed distances (px) to [0,1] alpha where 0.5 is the edge, values
+/// above 0.5 inside.
 ///
 /// `spread` is the distance over which the field ramps from fully inside to
-/// fully outside; we use half the field's max magnitude so the whole gradient
-/// is preserved. The shader divides by `fwidth` of this value for 1 px AA.
-fn normalize_to_alpha(sdf: &[f32]) -> Vec<f32> {
-    let max_abs = sdf.iter().map(|d| d.abs()).fold(0.0f32, f32::max).max(1.0);
-    let spread = max_abs;
+/// fully outside. It must be small (a fraction of the source size), not the
+/// whole-field max distance: a huge spread flattens 1px edges in alpha and
+/// crushes thin strokes. With `source_size/8` the gradient stays steep at the
+/// edge so thin lines survive and strokes read slightly heavier (inside
+/// saturates to 1 quickly). The shader divides by `fwidth` of this value for
+/// 1 px AA.
+fn normalize_to_alpha(sdf: &[f32], source_size: u32) -> Vec<f32> {
+    let spread = (source_size as f32 / 8.0).max(4.0);
     sdf.iter()
         .map(|&d| (0.5 - d / (2.0 * spread)).clamp(0.0, 1.0))
         .collect()
