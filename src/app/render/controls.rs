@@ -21,39 +21,40 @@ impl App {
         // as drawing), so the caret and IME anchor line up with the glyphs
         // regardless of ASCII/CJK widths. Cached for the frame so
         // `measure_query_width` can read it back under `&self`.
+        // The widths are retained in `control_text_cache` and re-measured only
+        // when the text or DPI scale changes; the shaped quads themselves are
+        // reused verbatim while the anchors are unchanged.
         if let Some(m) = self.text.as_mut() {
-            self.cached_query_width = {
-                let mut measure = |s: &str| -> f32 {
-                    if s.is_empty() {
-                        return 0.0;
-                    }
-                    let spec = text::CenteredLineSpec {
-                        text: s,
-                        font_size: QUERY_LABEL_SIZE,
-                        line_height: QUERY_LABEL_LINE,
-                        family: QUERY_LABEL_FONT,
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        center: (0.0, 0.0),
-                        scale_factor: scale,
-                    };
-                    m.measure_text(&spec)
+            let mut measure = |s: &str| -> f32 {
+                if s.is_empty() {
+                    return 0.0;
+                }
+                let spec = text::CenteredLineSpec {
+                    text: s,
+                    font_size: QUERY_LABEL_SIZE,
+                    line_height: QUERY_LABEL_LINE,
+                    family: QUERY_LABEL_FONT,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    center: (0.0, 0.0),
+                    scale_factor: scale,
                 };
+                m.measure_text(&spec)
+            };
+            let cache = self
+                .control_text_cache
+                .get_or_insert_with(ControlTextCache::new);
+            if cache.texts_changed(scale, &self.control) {
                 // The caret sits after *all visible text*: the committed query
                 // plus the in-flight IME preedit. Without the preedit width,
                 // the caret stays put while the user types Japanese.
-                let w = measure(&self.control.query) + measure(&self.control.preedit);
-                Some(w)
-            };
-            let spec = text::CenteredLineSpec {
-                text: DONE_LABEL,
-                font_size: QUERY_LABEL_SIZE,
-                line_height: QUERY_LABEL_LINE,
-                family: QUERY_LABEL_FONT,
-                color: [1.0, 1.0, 1.0, 1.0],
-                center: (0.0, 0.0),
-                scale_factor: scale,
-            };
-            self.cached_done_width = Some(m.measure_text(&spec));
+                let query_w = measure(&self.control.query);
+                let preedit_w = measure(&self.control.preedit);
+                let done_w = measure(DONE_LABEL);
+                cache.set_widths(query_w, preedit_w, done_w);
+                cache.note_texts_measured(scale, &self.control);
+            }
+            self.cached_query_width = Some(cache.query_width + cache.preedit_width);
+            self.cached_done_width = Some(cache.done_width);
         }
         let (geom, layers) = self.resolve_control()?;
         let query_width = self.measure_query_width();
@@ -70,10 +71,17 @@ impl App {
         };
 
         // 2) Text glyphs (label / query / placeholder). Built via the shared
-        // text renderer so they share the glyph atlas. Done before touching the
-        // renderer so the atlas upload + dirty clear happen in one place.
+        // text renderer so they share the glyph atlas. The shaping is retained
+        // in `control_text_cache`; per frame only the alpha recolors the small
+        // quad set unless the text/anchors actually changed. Done before
+        // touching the renderer so the atlas upload + dirty clear happen in
+        // one place.
         let (quads, atlas_dirty) = if let Some(t) = self.text.as_mut() {
-            let q = self_layout_control_text(
+            let cache = self
+                .control_text_cache
+                .get_or_insert_with(ControlTextCache::new);
+            let q = control_text_quads(
+                cache,
                 t,
                 &geom,
                 &layers,
@@ -426,7 +434,82 @@ const DONE_LABEL: &str = "完了";
 
 // ---- settings overlay (placeholder panel) ----------------------------------
 
-fn self_layout_control_text(
+/// Retained shaping for the bottom-control text lines.
+///
+/// The bottom control is rendered every frame (the caret blinks and the
+/// edit morph animates), but the text content and its on-screen anchors only
+/// change on input, DPI scale, or window-resize. Re-shaping the same short
+/// strings with cosmic-text on every frame is the dominant CPU cost of the
+/// control; this cache stores the shaped quads keyed by every value they
+/// depend on, so steady-state frames only recolor the small quad set.
+#[derive(Debug)]
+pub(crate) struct ControlTextCache {
+    key: ControlTextCacheKey,
+    done_width: f32,
+    query_width: f32,
+    preedit_width: f32,
+    done: Vec<text::GlyphQuad>,
+    pill: Vec<text::GlyphQuad>,
+    placeholder: Vec<text::GlyphQuad>,
+    query: Vec<text::GlyphQuad>,
+    preedit: Vec<text::GlyphQuad>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ControlTextCacheKey {
+    scale_bits: u32,
+    query: String,
+    preedit: String,
+    /// `edit_visual_progress > 0` → only the Done label is drawn.
+    edit_morph: bool,
+    done_center: (f32, f32),
+    pill_center: (f32, f32),
+    placeholder_center: (f32, f32),
+    query_center: (f32, f32),
+    preedit_center: (f32, f32),
+}
+
+impl ControlTextCache {
+    fn new() -> Self {
+        Self {
+            key: ControlTextCacheKey {
+                scale_bits: 0,
+                query: String::new(),
+                preedit: String::new(),
+                edit_morph: false,
+                done_center: (0.0, 0.0),
+                pill_center: (0.0, 0.0),
+                placeholder_center: (0.0, 0.0),
+                query_center: (0.0, 0.0),
+                preedit_center: (0.0, 0.0),
+            },
+            done_width: 0.0,
+            query_width: 0.0,
+            preedit_width: 0.0,
+            done: Vec::new(),
+            pill: Vec::new(),
+            placeholder: Vec::new(),
+            query: Vec::new(),
+            preedit: Vec::new(),
+        }
+    }
+
+    /// Whether the measured widths are stale (text content or DPI scale
+    /// changed since the last shaping pass).
+    fn texts_changed(&self, scale: f32, control: &bottom_control::BottomControl) -> bool {
+        self.key.scale_bits != scale.to_bits()
+            || self.key.query != control.query
+            || self.key.preedit != control.preedit
+    }
+}
+
+/// Shape or reuse the control's text pieces for one frame, returning the
+/// glyph quads in draw order. On a cache hit only the quad colors are
+/// refreshed (the layer/opacity animations are per-frame); the shaping is
+/// re-run only when the text, scale, or on-screen anchors changed.
+#[allow(clippy::too_many_arguments)]
+fn control_text_quads(
+    cache: &mut ControlTextCache,
     t: &mut text::TextRenderer,
     geom: &bottom_control::ControlGeometry,
     layers: &[bottom_control::ControlLayer],
@@ -434,26 +517,67 @@ fn self_layout_control_text(
     control: &bottom_control::BottomControl,
     edit_visual_progress: f32,
 ) -> Vec<text::GlyphQuad> {
-    let mut quads = Vec::new();
     const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
     const PLACEHOLDER: [f32; 4] = [1.0, 1.0, 1.0, 0.45];
     /// Preedit (in-flight IME composition) is shown slightly dimmer to hint
     /// it isn't committed yet.
     const PREEDIT_INK: [f32; 4] = [0.85, 0.92, 1.0, 0.88];
 
-    // While edit-mode width is morphing, keep the Done label centered and skip
-    // normal pill/indicator/field content so it cannot overflow the capsule.
-    if edit_visual_progress > 0.0 {
-        let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-            text: DONE_LABEL,
-            font_size: QUERY_LABEL_SIZE,
-            line_height: QUERY_LABEL_LINE,
-            family: QUERY_LABEL_FONT,
-            color: mul_alpha(INK, edit_visual_progress.clamp(0.0, 1.0)),
-            center: (geom.center.0, geom.center.1),
-            scale_factor: scale,
-        });
-        quads.append(&mut q);
+    let edit_morph = edit_visual_progress > 0.0;
+    let cy = geom.center.1;
+    let origin_x = bottom_control::field_text_origin_x(geom);
+    let (_, pill_label_x) = bottom_control::search_pill_content_centers(geom);
+    let query_w = cache.query_width;
+    let preedit_w = cache.preedit_width;
+    let done_center = geom.center;
+    let pill_center = (pill_label_x, cy);
+    let placeholder_center = (origin_x + 14.0 * scale, cy);
+    let query_center = (origin_x + query_w * 0.5, cy);
+    let preedit_center = (origin_x + query_w + preedit_w * 0.5, cy);
+
+    let hit = cache.key.scale_bits == scale.to_bits()
+        && cache.key.query == control.query
+        && cache.key.preedit == control.preedit
+        && cache.key.edit_morph == edit_morph
+        && cache.key.done_center == done_center
+        && cache.key.pill_center == pill_center
+        && cache.key.placeholder_center == placeholder_center
+        && cache.key.query_center == query_center
+        && cache.key.preedit_center == preedit_center;
+
+    let mut quads = Vec::new();
+    if edit_morph {
+        // While edit-mode width is morphing, keep the Done label centered and
+        // skip normal pill/indicator/field content so it cannot overflow the
+        // narrower capsule.
+        let color = mul_alpha(INK, edit_visual_progress.clamp(0.0, 1.0));
+        if hit {
+            recolor_quads(&mut cache.done, color);
+            quads.extend_from_slice(&cache.done);
+        } else {
+            let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                text: DONE_LABEL,
+                font_size: QUERY_LABEL_SIZE,
+                line_height: QUERY_LABEL_LINE,
+                family: QUERY_LABEL_FONT,
+                color,
+                center: done_center,
+                scale_factor: scale,
+            });
+            cache.done = q.clone();
+            quads.append(&mut q);
+        }
+        cache.key = ControlTextCacheKey {
+            scale_bits: scale.to_bits(),
+            query: control.query.clone(),
+            preedit: control.preedit.clone(),
+            edit_morph,
+            done_center,
+            pill_center,
+            placeholder_center,
+            query_center,
+            preedit_center,
+        };
         return quads;
     }
 
@@ -465,99 +589,136 @@ fn self_layout_control_text(
         match layer.visual {
             bottom_control::Visual::SearchPill => {
                 // "検索" label to the right of the magnifier.
-                let (_, label_center_x) = bottom_control::search_pill_content_centers(geom);
-                let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-                    text: "検索",
-                    font_size: QUERY_LABEL_SIZE,
-                    line_height: QUERY_LABEL_LINE,
-                    family: QUERY_LABEL_FONT,
-                    color: mul_alpha(INK, a),
-                    center: (label_center_x, geom.center.1),
-                    scale_factor: scale,
-                });
-                quads.append(&mut q);
-            }
-            bottom_control::Visual::PageIndicator => {
-                // No text.
-            }
-            bottom_control::Visual::SearchField => {
-                let origin_x = bottom_control::field_text_origin_x(geom);
-                if control.query.is_empty() && control.preedit.is_empty() {
+                let color = mul_alpha(INK, a);
+                if hit {
+                    recolor_quads(&mut cache.pill, color);
+                    quads.extend_from_slice(&cache.pill);
+                } else {
                     let mut q = t.layout_centered_line(&text::CenteredLineSpec {
                         text: "検索",
                         font_size: QUERY_LABEL_SIZE,
                         line_height: QUERY_LABEL_LINE,
                         family: QUERY_LABEL_FONT,
-                        color: mul_alpha(PLACEHOLDER, a),
-                        center: (origin_x + 14.0 * scale, geom.center.1),
+                        color,
+                        center: pill_center,
                         scale_factor: scale,
                     });
+                    cache.pill = q.clone();
                     quads.append(&mut q);
-                } else {
-                    // Render the committed query plus the in-flight IME
-                    // preedit inline. The preedit is shown with an
-                    // underline tint so the user can tell it's not yet
-                    // committed. Widths are measured exactly (same shaping as
-                    // drawing) so the caret / preedit line up with the glyphs.
-                    let query_w = if control.query.is_empty() {
-                        0.0
+                }
+            }
+            bottom_control::Visual::PageIndicator => {
+                // No text.
+            }
+            bottom_control::Visual::SearchField => {
+                if control.query.is_empty() && control.preedit.is_empty() {
+                    let color = mul_alpha(PLACEHOLDER, a);
+                    if hit {
+                        recolor_quads(&mut cache.placeholder, color);
+                        quads.extend_from_slice(&cache.placeholder);
                     } else {
-                        t.measure_text(&text::CenteredLineSpec {
-                            text: &control.query,
-                            font_size: QUERY_LABEL_SIZE,
-                            line_height: QUERY_LABEL_LINE,
-                            family: QUERY_LABEL_FONT,
-                            color: INK,
-                            center: (0.0, 0.0),
-                            scale_factor: scale,
-                        })
-                    };
-                    let preedit_w = if control.preedit.is_empty() {
-                        0.0
-                    } else {
-                        t.measure_text(&text::CenteredLineSpec {
-                            text: &control.preedit,
-                            font_size: QUERY_LABEL_SIZE,
-                            line_height: QUERY_LABEL_LINE,
-                            family: QUERY_LABEL_FONT,
-                            color: PREEDIT_INK,
-                            center: (0.0, 0.0),
-                            scale_factor: scale,
-                        })
-                    };
-                    // Committed text: left-anchored at origin_x, so center on
-                    // its own half-width.
-                    if query_w > 0.0 {
                         let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-                            text: &control.query,
+                            text: "検索",
                             font_size: QUERY_LABEL_SIZE,
                             line_height: QUERY_LABEL_LINE,
                             family: QUERY_LABEL_FONT,
-                            color: mul_alpha(INK, a),
-                            center: (origin_x + query_w * 0.5, geom.center.1),
+                            color,
+                            center: placeholder_center,
                             scale_factor: scale,
                         });
+                        cache.placeholder = q.clone();
                         quads.append(&mut q);
                     }
-                    // Preedit, starting right after the committed query.
+                } else {
+                    // Committed text: left-anchored at origin_x, so center on
+                    // its own half-width. The preedit starts right after the
+                    // committed query.
+                    if query_w > 0.0 {
+                        let color = mul_alpha(INK, a);
+                        if hit {
+                            recolor_quads(&mut cache.query, color);
+                            quads.extend_from_slice(&cache.query);
+                        } else {
+                            let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                                text: &control.query,
+                                font_size: QUERY_LABEL_SIZE,
+                                line_height: QUERY_LABEL_LINE,
+                                family: QUERY_LABEL_FONT,
+                                color,
+                                center: query_center,
+                                scale_factor: scale,
+                            });
+                            cache.query = q.clone();
+                            quads.append(&mut q);
+                        }
+                    }
                     if preedit_w > 0.0 {
-                        let preedit_origin = origin_x + query_w;
-                        let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-                            text: &control.preedit,
-                            font_size: QUERY_LABEL_SIZE,
-                            line_height: QUERY_LABEL_LINE,
-                            family: QUERY_LABEL_FONT,
-                            color: mul_alpha(PREEDIT_INK, a),
-                            center: (preedit_origin + preedit_w * 0.5, geom.center.1),
-                            scale_factor: scale,
-                        });
-                        quads.append(&mut q);
+                        let color = mul_alpha(PREEDIT_INK, a);
+                        if hit {
+                            recolor_quads(&mut cache.preedit, color);
+                            quads.extend_from_slice(&cache.preedit);
+                        } else {
+                            let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                                text: &control.preedit,
+                                font_size: QUERY_LABEL_SIZE,
+                                line_height: QUERY_LABEL_LINE,
+                                family: QUERY_LABEL_FONT,
+                                color,
+                                center: preedit_center,
+                                scale_factor: scale,
+                            });
+                            cache.preedit = q.clone();
+                            quads.append(&mut q);
+                        }
                     }
                 }
             }
         }
     }
+
+    if !hit {
+        cache.key = ControlTextCacheKey {
+            scale_bits: scale.to_bits(),
+            query: control.query.clone(),
+            preedit: control.preedit.clone(),
+            edit_morph,
+            done_center,
+            pill_center,
+            placeholder_center,
+            query_center,
+            preedit_center,
+        };
+    }
     quads
+}
+
+/// Overwrite the alpha channel of every quad (the RGB channels are already
+/// the piece's base color from shaping time).
+fn recolor_quads(quads: &mut [text::GlyphQuad], color: [f32; 4]) {
+    for quad in quads {
+        quad.color[0] = color[0];
+        quad.color[1] = color[1];
+        quad.color[2] = color[2];
+        quad.color[3] = color[3];
+    }
+}
+
+impl ControlTextCache {
+    /// Store freshly measured line widths (physical px). Called only when the
+    /// text or scale changed; the quads are re-shaped on the same transition.
+    fn set_widths(&mut self, query_width: f32, preedit_width: f32, done_width: f32) {
+        self.query_width = query_width;
+        self.preedit_width = preedit_width;
+        self.done_width = done_width;
+    }
+
+    /// Record the text inputs the widths were measured for so
+    /// [`texts_changed`](Self::texts_changed) reports them current.
+    fn note_texts_measured(&mut self, scale: f32, control: &bottom_control::BottomControl) {
+        self.key.scale_bits = scale.to_bits();
+        self.key.query = control.query.clone();
+        self.key.preedit = control.preedit.clone();
+    }
 }
 
 fn caret_visibility(control: &bottom_control::BottomControl) -> f32 {
@@ -566,4 +727,185 @@ fn caret_visibility(control: &bottom_control::BottomControl) -> f32 {
         return 1.0;
     }
     crate::layout::control_geometry::caret_blink_opacity(control.caret_phase)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_geom(center: (f32, f32)) -> bottom_control::ControlGeometry {
+        bottom_control::ControlGeometry {
+            center,
+            half_size: (160.0, 24.0),
+            radius: 24.0,
+            expand: 1.0,
+            indicator: 0.0,
+            page: 0,
+            page_count: 1,
+        }
+    }
+
+    fn quads_eq(a: &[text::GlyphQuad], b: &[text::GlyphQuad]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b.iter()).all(|(x, y)| {
+                x.x == y.x
+                    && x.y == y.y
+                    && x.w == y.w
+                    && x.h == y.h
+                    && x.u0 == y.u0
+                    && x.v0 == y.v0
+                    && x.u1 == y.u1
+                    && x.v1 == y.v1
+                    && x.color == y.color
+                    && x.clip_rect == y.clip_rect
+                    && x.clip_radius == y.clip_radius
+            })
+    }
+
+    fn field_layers() -> Vec<bottom_control::ControlLayer> {
+        vec![bottom_control::ControlLayer {
+            visual: bottom_control::Visual::SearchField,
+            alpha: 1.0,
+        }]
+    }
+
+    #[test]
+    fn control_text_cache_reuses_quads_while_inputs_are_unchanged() {
+        let mut t = text::TextRenderer::new();
+        let mut cache = ControlTextCache::new();
+        let g = test_geom((640.0, 700.0));
+        let layers = field_layers();
+        let mut control = bottom_control::BottomControl::new();
+        control.query = "テスト".to_string();
+
+        // Mirror the real flow: widths are measured and retained before the
+        // quads are shaped.
+        let measure = |t: &mut text::TextRenderer, s: &str| -> f32 {
+            t.measure_text(&text::CenteredLineSpec {
+                text: s,
+                font_size: QUERY_LABEL_SIZE,
+                line_height: QUERY_LABEL_LINE,
+                family: QUERY_LABEL_FONT,
+                color: [1.0; 4],
+                center: (0.0, 0.0),
+                scale_factor: 1.0,
+            })
+        };
+        cache.set_widths(measure(&mut t, "テスト"), 0.0, measure(&mut t, DONE_LABEL));
+        cache.note_texts_measured(1.0, &control);
+
+        let first = control_text_quads(&mut cache, &mut t, &g, &layers, 1.0, &control, 0.0);
+        assert!(!first.is_empty(), "a non-empty query must shape glyphs");
+
+        // Identical inputs: the retained quads are reused verbatim (no
+        // re-shaping, no atlas growth on the hit).
+        let atlas_after_first = t.atlas_dimensions();
+        let second = control_text_quads(&mut cache, &mut t, &g, &layers, 1.0, &control, 0.0);
+        assert!(
+            quads_eq(&first, &second),
+            "same inputs must reuse the same quads"
+        );
+        assert_eq!(
+            t.atlas_dimensions(),
+            atlas_after_first,
+            "hit must not rasterize"
+        );
+
+        // Changing the query re-shapes (different text, different quads).
+        control.query = "別のクエリ".to_string();
+        let changed = control_text_quads(&mut cache, &mut t, &g, &layers, 1.0, &control, 0.0);
+        assert!(!quads_eq(&first, &changed), "query change must re-shape");
+        let unchanged = control_text_quads(&mut cache, &mut t, &g, &layers, 1.0, &control, 0.0);
+        assert!(quads_eq(&changed, &unchanged));
+
+        // Changing the DPI scale re-shapes (new physical font size).
+        let scaled = control_text_quads(&mut cache, &mut t, &g, &layers, 1.25, &control, 0.0);
+        assert!(!quads_eq(&changed, &scaled), "scale change must re-shape");
+
+        // Moving the control anchor re-shapes (positions embed the anchor).
+        let moved = control_text_quads(
+            &mut cache,
+            &mut t,
+            &test_geom((700.0, 700.0)),
+            &layers,
+            1.25,
+            &control,
+            0.0,
+        );
+        assert!(!quads_eq(&scaled, &moved), "anchor change must re-shape");
+    }
+
+    #[test]
+    fn control_text_cache_recolors_alpha_without_reshaping() {
+        let mut t = text::TextRenderer::new();
+        let mut cache = ControlTextCache::new();
+        let g = test_geom((640.0, 700.0));
+        let control = bottom_control::BottomControl::new();
+        let layers = field_layers();
+
+        let first = control_text_quads(&mut cache, &mut t, &g, &layers, 1.0, &control, 0.0);
+        assert!(!first.is_empty(), "empty query draws the placeholder");
+
+        // A lower layer alpha (cross-fade) recolors the cached quads without
+        // changing their positions or UVs.
+        let faded = control_text_quads(
+            &mut cache,
+            &mut t,
+            &g,
+            &[bottom_control::ControlLayer {
+                visual: bottom_control::Visual::SearchField,
+                alpha: 0.5,
+            }],
+            1.0,
+            &control,
+            0.0,
+        );
+        assert_eq!(first.len(), faded.len());
+        for (a, b) in first.iter().zip(faded.iter()) {
+            assert_eq!(a.x, b.x);
+            assert_eq!(a.y, b.y);
+            assert_eq!(a.u0, b.u0);
+            assert_eq!(a.color[0..3], b.color[0..3]);
+            assert!((b.color[3] - a.color[3] * 0.5).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn control_text_cache_widths_follow_text_and_scale() {
+        let mut t = text::TextRenderer::new();
+        let mut cache = ControlTextCache::new();
+        let mut control = bottom_control::BottomControl::new();
+        control.query = "abc".to_string();
+
+        assert!(cache.texts_changed(1.0, &control));
+        let measure = |t: &mut text::TextRenderer, s: &str| -> f32 {
+            t.measure_text(&text::CenteredLineSpec {
+                text: s,
+                font_size: QUERY_LABEL_SIZE,
+                line_height: QUERY_LABEL_LINE,
+                family: QUERY_LABEL_FONT,
+                color: [1.0; 4],
+                center: (0.0, 0.0),
+                scale_factor: 1.0,
+            })
+        };
+        let qw = measure(&mut t, "abc");
+        let dw = measure(&mut t, DONE_LABEL);
+        cache.set_widths(qw, 0.0, dw);
+        cache.note_texts_measured(1.0, &control);
+        assert!(
+            !cache.texts_changed(1.0, &control),
+            "texts unchanged after set"
+        );
+
+        control.query = "abcdef".to_string();
+        assert!(
+            cache.texts_changed(1.0, &control),
+            "query change must invalidate"
+        );
+        assert!(
+            cache.texts_changed(2.0, &control),
+            "scale change must invalidate"
+        );
+    }
 }
