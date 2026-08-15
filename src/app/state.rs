@@ -99,6 +99,8 @@ pub enum SettingsPressTarget {
     LiquidGlassAutoDarkness,
     /// Session-only automatic-darkness classification cadence.
     LiquidGlassAutoDarknessMode(crate::liquid_glass::AutoDarknessUpdateMode),
+    /// Session-only automatic-darkness classification formula (issue #186).
+    LiquidGlassAutoDarknessStrategy(crate::liquid_glass::AutoDarknessStrategy),
     /// One of the numeric Liquid Glass parameters, pressed on the slider
     /// track. Starts a drag; the value updates until release.
     LiquidGlassParam(crate::domain::settings::LiquidGlassParamField),

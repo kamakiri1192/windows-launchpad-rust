@@ -174,6 +174,8 @@ pub enum SettingsPanelHit {
     LiquidGlassAutoDarkness,
     /// Session-only automatic-darkness classification cadence.
     LiquidGlassAutoDarknessMode(AutoDarknessModeId),
+    /// Session-only automatic-darkness classification formula (issue #186).
+    LiquidGlassAutoDarknessStrategy(AutoDarknessStrategyId),
     /// One of the numeric Liquid Glass slider rows.
     LiquidGlassParam(LiquidGlassParamId),
     /// Per-parameter reset arrow on a slider row.
@@ -270,6 +272,29 @@ impl AutoDarknessModeId {
     }
 }
 
+/// Layout-side mirror of `liquid_glass::AutoDarknessStrategy`. Kept separate
+/// so this module stays free of the `liquid_glass` layer; the App converts
+/// between the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoDarknessStrategyId {
+    #[default]
+    Current,
+    CoverageTuned,
+    ContrastPerceptual,
+}
+
+impl AutoDarknessStrategyId {
+    pub const ALL: [Self; 3] = [Self::Current, Self::CoverageTuned, Self::ContrastPerceptual];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::CoverageTuned => "coverage-tuned",
+            Self::ContrastPerceptual => "contrast-perceptual",
+        }
+    }
+}
+
 /// Layout-side mirror of `domain::settings::LiquidGlassDebugFlag`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiquidGlassDebugId {
@@ -318,6 +343,9 @@ impl SettingsPanelHit {
             Self::LiquidGlassAutoDarkness => HitTarget::settings_toggle("lg-auto-darkness"),
             Self::LiquidGlassAutoDarknessMode(mode) => {
                 HitTarget::settings_toggle(format!("lg-auto-darkness-mode-{}", mode.key()))
+            }
+            Self::LiquidGlassAutoDarknessStrategy(strategy) => {
+                HitTarget::settings_toggle(format!("lg-auto-darkness-strategy-{}", strategy.key()))
             }
             Self::LiquidGlassParam(p) => {
                 HitTarget::settings_toggle(format!("lg-param-{}", p.key()))
@@ -442,6 +470,9 @@ pub struct LiquidGlassValues {
     pub auto_darkness_enabled: bool,
     pub auto_darkness_max: f32,
     pub auto_darkness_mode: AutoDarknessModeId,
+    /// Session-only classification formula (issue #186); lives on the
+    /// renderer, not in the persisted settings snapshot.
+    pub auto_darkness_strategy: AutoDarknessStrategyId,
     pub thickness: f32,
     pub refractive_index: f32,
     pub saturation: f32,
@@ -459,6 +490,7 @@ impl Default for LiquidGlassValues {
             auto_darkness_enabled: false,
             auto_darkness_max: 0.16,
             auto_darkness_mode: AutoDarknessModeId::Adaptive,
+            auto_darkness_strategy: AutoDarknessStrategyId::Current,
             thickness: 26.0,
             refractive_index: 1.42,
             saturation: 1.34,
@@ -555,6 +587,7 @@ pub struct SettingsPanelCopy<'a> {
     pub darkness_auto_label: &'a str,
     pub darkness_auto_detail: &'a str,
     pub darkness_update_mode_labels: [(&'a str, &'a str); 3],
+    pub darkness_strategy_labels: [(&'a str, &'a str); 3],
     pub darkness_max_label: &'a str,
     pub darkness_glass_label: &'a str,
     pub darkness_context_menu_label: &'a str,
@@ -1103,6 +1136,27 @@ pub fn build_with_ui(
                     );
                 }
 
+                for (strategy, (label, detail)) in AutoDarknessStrategyId::ALL
+                    .into_iter()
+                    .zip(copy.darkness_strategy_labels)
+                {
+                    ui.begin_absolute_placement();
+                    ui.set_available_width(cw);
+                    ui.toggle(
+                        &Toggle::new(input.liquid_glass.auto_darkness_strategy == strategy)
+                            .id(UiId::settings_row(format!(
+                                "toggle-lg-auto-darkness-strategy-{}",
+                                strategy.key()
+                            )))
+                            .label(label)
+                            .detail(detail)
+                            .hit_target(
+                                SettingsPanelHit::LiquidGlassAutoDarknessStrategy(strategy)
+                                    .target(),
+                            ),
+                    );
+                }
+
                 let param_labels: [(LiquidGlassParamId, &str); 4] = [
                     (LiquidGlassParamId::AutoDarknessMax, copy.darkness_max_label),
                     (LiquidGlassParamId::GlassDarkness, copy.darkness_glass_label),
@@ -1490,16 +1544,19 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   1  automatic darkness: full-rate mode
 //   2  automatic darkness: adaptive mode
 //   3  automatic darkness: fixed-8-Hz mode
-//   4  automatic darkness maximum slider
-//   5  glass_darkness slider
-//   6  context_menu_glass_darkness slider
-//   7  settings_panel_glass_darkness slider
+//   4  automatic darkness: current strategy
+//   5  automatic darkness: coverage-tuned strategy
+//   6  automatic darkness: contrast-perceptual strategy
+//   7  automatic darkness maximum slider
+//   8  glass_darkness slider
+//   9  context_menu_glass_darkness slider
+//  10  settings_panel_glass_darkness slider
 
 /// Total number of full-row slots the Debug category uses.
 pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 19;
 
 /// Total number of full-row slots the Darkness category uses.
-pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 8;
+pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 11;
 
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
@@ -1633,6 +1690,11 @@ mod tests {
                 ("Full rate", "Classify every capture"),
                 ("Adaptive", "Settle to 8 Hz when stable"),
                 ("Fixed 8 Hz", "Always classify at 8 Hz"),
+            ],
+            darkness_strategy_labels: [
+                ("Current", "PR #184 white-coverage baseline"),
+                ("Coverage tuned", "Recalibrated coverage constants"),
+                ("Contrast", "Perceptual-luminance contrast"),
             ],
             darkness_max_label: "Auto darkness maximum",
             darkness_glass_label: "Glass darkness",
@@ -2080,6 +2142,9 @@ mod tests {
         let targets = [
             HitTarget::settings_toggle("lg-auto-darkness"),
             HitTarget::settings_toggle("lg-auto-darkness-mode-fixed-8hz"),
+            HitTarget::settings_toggle("lg-auto-darkness-strategy-current"),
+            HitTarget::settings_toggle("lg-auto-darkness-strategy-coverage-tuned"),
+            HitTarget::settings_toggle("lg-auto-darkness-strategy-contrast-perceptual"),
             HitTarget::settings_toggle("lg-param-auto-darkness-max"),
             HitTarget::settings_action("lg-param-reset-auto-darkness-max"),
             HitTarget::settings_toggle("lg-param-glass-darkness"),
@@ -2100,6 +2165,79 @@ mod tests {
                 "Debug category should not contain {target:?}"
             );
         }
+    }
+
+    #[test]
+    fn hit_map_darkness_strategy_rows_follow_mode_rows() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Darkness);
+        let first_top = layout.first_row_top(1.0);
+        let row_center_y = |row: i32| first_top + row as f32 * ROW_H + ROW_H * 0.5;
+
+        // The strategy selector rows sit directly below the three mode rows
+        // (rows 4-6), in cycle order Current -> CoverageTuned -> Contrast.
+        let strategies = [
+            ("current", 4),
+            ("coverage-tuned", 5),
+            ("contrast-perceptual", 6),
+        ];
+        for (key, row) in strategies {
+            let target = HitTarget::settings_toggle(format!("lg-auto-darkness-strategy-{key}"));
+            let region = hm
+                .regions()
+                .iter()
+                .find(|region| region.target == target)
+                .unwrap_or_else(|| panic!("missing {key} strategy row"));
+            let center_y = region.rect.y + region.rect.height * 0.5;
+            assert!(
+                (center_y - row_center_y(row)).abs() < 1e-3,
+                "{key} strategy row should sit at row {row}, got y {center_y}"
+            );
+        }
+
+        // The last mode row (fixed-8hz) stays above the first strategy row.
+        let last_mode = hm
+            .regions()
+            .iter()
+            .find(|region| {
+                region.target == HitTarget::settings_toggle("lg-auto-darkness-mode-fixed-8hz")
+            })
+            .expect("fixed-8hz mode row");
+        let first_strategy = hm
+            .regions()
+            .iter()
+            .find(|region| {
+                region.target == HitTarget::settings_toggle("lg-auto-darkness-strategy-current")
+            })
+            .expect("current strategy row");
+        assert!(last_mode.rect.max_y() <= first_strategy.rect.min_y());
+    }
+
+    #[test]
+    fn auto_darkness_strategy_all_order_matches_cycle() {
+        // Segmented rows enumerate the same order a click-to-cycle selector
+        // would step through: Current -> CoverageTuned -> ContrastPerceptual.
+        assert_eq!(
+            AutoDarknessStrategyId::ALL,
+            [
+                AutoDarknessStrategyId::Current,
+                AutoDarknessStrategyId::CoverageTuned,
+                AutoDarknessStrategyId::ContrastPerceptual,
+            ]
+        );
+        assert_eq!(
+            AutoDarknessStrategyId::default(),
+            AutoDarknessStrategyId::Current
+        );
+        assert_eq!(AutoDarknessStrategyId::Current.key(), "current");
+        assert_eq!(
+            AutoDarknessStrategyId::CoverageTuned.key(),
+            "coverage-tuned"
+        );
+        assert_eq!(
+            AutoDarknessStrategyId::ContrastPerceptual.key(),
+            "contrast-perceptual"
+        );
     }
 
     #[test]

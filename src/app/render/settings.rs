@@ -283,6 +283,12 @@ impl App {
                         .map(|renderer| renderer.liquid_glass_auto_darkness_update_mode())
                         .unwrap_or_default(),
                 ),
+                auto_darkness_strategy: auto_darkness_strategy_id(
+                    self.renderer
+                        .as_ref()
+                        .map(|renderer| renderer.liquid_glass_auto_darkness_strategy())
+                        .unwrap_or_default(),
+                ),
                 thickness: lg.thickness,
                 refractive_index: lg.refractive_index,
                 saturation: lg.saturation,
@@ -612,6 +618,27 @@ fn auto_darkness_mode_from_key(key: &str) -> crate::liquid_glass::AutoDarknessUp
     }
 }
 
+fn auto_darkness_strategy_id(
+    strategy: crate::liquid_glass::AutoDarknessStrategy,
+) -> layout::settings_panel::AutoDarknessStrategyId {
+    use crate::liquid_glass::AutoDarknessStrategy as Source;
+    use layout::settings_panel::AutoDarknessStrategyId as Target;
+    match strategy {
+        Source::Current => Target::Current,
+        Source::CoverageTuned => Target::CoverageTuned,
+        Source::ContrastPerceptual => Target::ContrastPerceptual,
+    }
+}
+
+fn auto_darkness_strategy_from_key(key: &str) -> crate::liquid_glass::AutoDarknessStrategy {
+    use crate::liquid_glass::AutoDarknessStrategy;
+    match key {
+        "coverage-tuned" => AutoDarknessStrategy::CoverageTuned,
+        "contrast-perceptual" => AutoDarknessStrategy::ContrastPerceptual,
+        _ => AutoDarknessStrategy::Current,
+    }
+}
+
 fn settings_panel_copy<'a>(
     hidden_count_label: &'a str,
 ) -> layout::settings_panel::SettingsPanelCopy<'a> {
@@ -698,6 +725,20 @@ fn settings_panel_copy<'a>(
             ("判定: 自動", "変化中は追従し、安定時は最大8Hzに抑えます"),
             ("判定: 8Hz固定", "性能比較用に判定を常時8Hzへ制限します"),
         ],
+        darkness_strategy_labels: [
+            (
+                "判定方式: Current",
+                "既存の白被覆ヒューリスティック (PR #184)",
+            ),
+            (
+                "判定方式: Coverage tuned",
+                "被覆パイプラインの定数を再調整した版",
+            ),
+            (
+                "判定方式: Contrast",
+                "知覚輝度のパーセンタイルからコントラストを導出",
+            ),
+        ],
         darkness_max_label: "動的darknessの上限",
         darkness_glass_label: "ガラス全体の黒さ (glass darkness)",
         darkness_context_menu_label: "コンテキストメニューの黒さ (context menu darkness)",
@@ -777,6 +818,11 @@ pub(crate) fn settings_press_target_from_hit_target(
             key if key.starts_with("lg-auto-darkness-mode-") => {
                 let mode = auto_darkness_mode_from_key(&key["lg-auto-darkness-mode-".len()..]);
                 SettingsPressTarget::LiquidGlassAutoDarknessMode(mode)
+            }
+            key if key.starts_with("lg-auto-darkness-strategy-") => {
+                let strategy =
+                    auto_darkness_strategy_from_key(&key["lg-auto-darkness-strategy-".len()..]);
+                SettingsPressTarget::LiquidGlassAutoDarknessStrategy(strategy)
             }
             "window-decorations" => SettingsPressTarget::WindowDecorations,
             key if key.starts_with("lg-param-") => {
@@ -1333,9 +1379,51 @@ mod tests {
         );
         assert_eq!(
             settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-strategy-coverage-tuned"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessStrategy(
+                crate::liquid_glass::AutoDarknessStrategy::CoverageTuned
+            )
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
                 "window-decorations"
             )),
             SettingsPressTarget::WindowDecorations
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_auto_darkness_strategy_keys() {
+        use crate::liquid_glass::AutoDarknessStrategy;
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-strategy-current"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessStrategy(AutoDarknessStrategy::Current)
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-strategy-coverage-tuned"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessStrategy(
+                AutoDarknessStrategy::CoverageTuned
+            )
+        );
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-strategy-contrast-perceptual"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessStrategy(
+                AutoDarknessStrategy::ContrastPerceptual
+            )
+        );
+        // Unknown strategy keys fall back to the baseline.
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-strategy-unknown"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessStrategy(AutoDarknessStrategy::Current)
         );
     }
 
