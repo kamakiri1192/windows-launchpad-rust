@@ -176,6 +176,9 @@ pub enum SettingsPanelHit {
     LiquidGlassAutoDarknessMode(AutoDarknessModeId),
     /// Session-only automatic-darkness classification formula (issue #186).
     LiquidGlassAutoDarknessStrategy(AutoDarknessStrategyId),
+    /// Session-only modal-local darkness judgment (戦略D): classify only the
+    /// modal surface rect and drive the modal lanes from that local state.
+    LiquidGlassAutoDarknessModalLocal,
     /// One of the numeric Liquid Glass slider rows.
     LiquidGlassParam(LiquidGlassParamId),
     /// Per-parameter reset arrow on a slider row.
@@ -347,6 +350,9 @@ impl SettingsPanelHit {
             Self::LiquidGlassAutoDarknessStrategy(strategy) => {
                 HitTarget::settings_toggle(format!("lg-auto-darkness-strategy-{}", strategy.key()))
             }
+            Self::LiquidGlassAutoDarknessModalLocal => {
+                HitTarget::settings_toggle("lg-auto-darkness-modal-local")
+            }
             Self::LiquidGlassParam(p) => {
                 HitTarget::settings_toggle(format!("lg-param-{}", p.key()))
             }
@@ -473,6 +479,8 @@ pub struct LiquidGlassValues {
     /// Session-only classification formula (issue #186); lives on the
     /// renderer, not in the persisted settings snapshot.
     pub auto_darkness_strategy: AutoDarknessStrategyId,
+    /// Session-only modal-local judgment (戦略D); lives on the renderer.
+    pub auto_darkness_modal_local: bool,
     pub thickness: f32,
     pub refractive_index: f32,
     pub saturation: f32,
@@ -491,6 +499,7 @@ impl Default for LiquidGlassValues {
             auto_darkness_max: 0.16,
             auto_darkness_mode: AutoDarknessModeId::Adaptive,
             auto_darkness_strategy: AutoDarknessStrategyId::Current,
+            auto_darkness_modal_local: false,
             thickness: 26.0,
             refractive_index: 1.42,
             saturation: 1.34,
@@ -588,6 +597,8 @@ pub struct SettingsPanelCopy<'a> {
     pub darkness_auto_detail: &'a str,
     pub darkness_update_mode_labels: [(&'a str, &'a str); 3],
     pub darkness_strategy_labels: [(&'a str, &'a str); 3],
+    pub darkness_modal_local_label: &'a str,
+    pub darkness_modal_local_detail: &'a str,
     pub darkness_max_label: &'a str,
     pub darkness_glass_label: &'a str,
     pub darkness_context_menu_label: &'a str,
@@ -1157,6 +1168,18 @@ pub fn build_with_ui(
                     );
                 }
 
+                // 戦略D: modal-local judgment, session-only like the strategy
+                // selector above it.
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.liquid_glass.auto_darkness_modal_local)
+                        .id(UiId::settings_row("toggle-lg-auto-darkness-modal-local"))
+                        .label(copy.darkness_modal_local_label)
+                        .detail(copy.darkness_modal_local_detail)
+                        .hit_target(SettingsPanelHit::LiquidGlassAutoDarknessModalLocal.target()),
+                );
+
                 let param_labels: [(LiquidGlassParamId, &str); 4] = [
                     (LiquidGlassParamId::AutoDarknessMax, copy.darkness_max_label),
                     (LiquidGlassParamId::GlassDarkness, copy.darkness_glass_label),
@@ -1547,16 +1570,17 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   4  automatic darkness: current strategy
 //   5  automatic darkness: coverage-tuned strategy
 //   6  automatic darkness: contrast-perceptual strategy
-//   7  automatic darkness maximum slider
-//   8  glass_darkness slider
-//   9  context_menu_glass_darkness slider
-//  10  settings_panel_glass_darkness slider
+//   7  automatic darkness: modal-local judgment (戦略D)
+//   8  automatic darkness maximum slider
+//   9  glass_darkness slider
+//  10  context_menu_glass_darkness slider
+//  11  settings_panel_glass_darkness slider
 
 /// Total number of full-row slots the Debug category uses.
 pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 19;
 
 /// Total number of full-row slots the Darkness category uses.
-pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 11;
+pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 12;
 
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
@@ -1696,6 +1720,8 @@ mod tests {
                 ("Coverage tuned", "Recalibrated coverage constants"),
                 ("Contrast", "Perceptual-luminance contrast"),
             ],
+            darkness_modal_local_label: "Modal local",
+            darkness_modal_local_detail: "Classify inside the modal surface rect",
             darkness_max_label: "Auto darkness maximum",
             darkness_glass_label: "Glass darkness",
             darkness_context_menu_label: "Context menu darkness",
@@ -2145,6 +2171,7 @@ mod tests {
             HitTarget::settings_toggle("lg-auto-darkness-strategy-current"),
             HitTarget::settings_toggle("lg-auto-darkness-strategy-coverage-tuned"),
             HitTarget::settings_toggle("lg-auto-darkness-strategy-contrast-perceptual"),
+            HitTarget::settings_toggle("lg-auto-darkness-modal-local"),
             HitTarget::settings_toggle("lg-param-auto-darkness-max"),
             HitTarget::settings_action("lg-param-reset-auto-darkness-max"),
             HitTarget::settings_toggle("lg-param-glass-darkness"),
@@ -2211,6 +2238,46 @@ mod tests {
             })
             .expect("current strategy row");
         assert!(last_mode.rect.max_y() <= first_strategy.rect.min_y());
+    }
+
+    #[test]
+    fn hit_map_darkness_modal_local_row_sits_below_strategy_rows() {
+        let layout = layout();
+        let hm = hit_map_for_category(SettingsCategoryId::Darkness);
+        let first_top = layout.first_row_top(1.0);
+        let row_center_y = |row: i32| first_top + row as f32 * ROW_H + ROW_H * 0.5;
+
+        // 戦略D: the modal-local toggle is row 7 — directly below the three
+        // strategy rows (4-6) and above the first slider row (8).
+        let target = HitTarget::settings_toggle("lg-auto-darkness-modal-local");
+        let region = hm
+            .regions()
+            .iter()
+            .find(|region| region.target == target)
+            .expect("modal-local toggle row");
+        let center_y = region.rect.y + region.rect.height * 0.5;
+        assert!(
+            (center_y - row_center_y(7)).abs() < 1e-3,
+            "modal-local row should sit at row 7, got y {center_y}"
+        );
+
+        let last_strategy = hm
+            .regions()
+            .iter()
+            .find(|region| {
+                region.target
+                    == HitTarget::settings_toggle("lg-auto-darkness-strategy-contrast-perceptual")
+            })
+            .expect("contrast-perceptual strategy row");
+        let first_slider = hm
+            .regions()
+            .iter()
+            .find(|region| {
+                region.target == HitTarget::settings_toggle("lg-param-auto-darkness-max")
+            })
+            .expect("auto-darkness-max slider row");
+        assert!(last_strategy.rect.max_y() <= region.rect.min_y());
+        assert!(region.rect.max_y() <= first_slider.rect.min_y());
     }
 
     #[test]

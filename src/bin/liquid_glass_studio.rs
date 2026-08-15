@@ -58,6 +58,11 @@ struct AutoDarknessUniforms {
     flags: u32,
     max_darkness: f32,
     strategy: u32,
+    // 戦略D local-region judgment fields; the studio always keeps
+    // use_region = 0 so the global path is unchanged.
+    use_region: u32,
+    region_origin: [f32; 2],
+    region_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -599,6 +604,9 @@ impl StudioRenderer {
                     flags: 0,
                     max_darkness: 0.0,
                     strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
@@ -1292,6 +1300,9 @@ impl StudioRenderer {
                 flags: 0,
                 max_darkness: 0.0,
                 strategy: self.auto_darkness_strategy,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             }),
         );
     }

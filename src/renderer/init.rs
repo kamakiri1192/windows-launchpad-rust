@@ -816,6 +816,10 @@ impl Renderer {
         self.liquid_glass.auto_darkness_strategy()
     }
 
+    pub fn liquid_glass_auto_darkness_modal_local(&self) -> bool {
+        self.liquid_glass.modal_auto_darkness_local()
+    }
+
     pub fn set_auto_darkness_debug_readback_enabled(&mut self, enabled: bool) {
         self.liquid_glass
             .set_auto_darkness_debug_readback_enabled(enabled);
@@ -891,6 +895,10 @@ impl Renderer {
         strategy: crate::liquid_glass::AutoDarknessStrategy,
     ) {
         self.liquid_glass.set_auto_darkness_strategy(strategy);
+    }
+
+    pub fn set_liquid_glass_auto_darkness_modal_local(&mut self, enabled: bool) {
+        self.liquid_glass.set_modal_auto_darkness_local(enabled);
     }
 
     pub fn set_liquid_glass_auto_darkness_max(&mut self, value: f32) {

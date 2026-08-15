@@ -36,6 +36,12 @@ struct AutoDarknessUniforms {
     max_darkness: f32,
     // Mirror of the stats-shader uniform; the final pass does not branch on it.
     strategy: u32,
+    // Local-region fields mirror the stats shader (戦略D). The final pass
+    // never reads them — the modal lane's local bind group points binding 7
+    // at the modal uniforms only to keep the layout identical.
+    use_region: u32,
+    region_origin: vec2<f32>,
+    region_extent: vec2<f32>,
 };
 
 struct AutoDarknessState {

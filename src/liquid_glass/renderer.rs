@@ -75,6 +75,13 @@ pub(super) struct AutoDarknessUniforms {
     flags: u32,
     max_darkness: f32,
     strategy: u32,
+    /// 1 = sample only inside `region_origin..region_origin+region_extent`
+    /// (modal-local judgment, 戦略D). The fields are normalized UV
+    /// coordinates derived from the app-layer modal pixel rect divided by the
+    /// backdrop texture size; see `region_uv_from_pixel_rect`.
+    use_region: u32,
+    region_origin: [f32; 2],
+    region_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -392,6 +399,34 @@ pub struct LiquidGlassRenderer {
     auto_darkness_strategy: AutoDarknessStrategy,
     auto_darkness_reset_state: bool,
     backdrop_stats_dirty: bool,
+    /// Second auto-darkness resource set for the modal-local judgment
+    /// (戦略D). The modal stats dispatch binds `modal_backdrop_stats_bind_group`
+    /// with `use_region=1`; the modal lane's final bind groups below swap
+    /// binding 6 to `modal_auto_darkness_state_buffer` while the toggle is on
+    /// and a modal rect is present.
+    modal_auto_darkness_uniform_buffer: wgpu::Buffer,
+    modal_auto_darkness_state_buffer: wgpu::Buffer,
+    modal_backdrop_stats_bind_group: wgpu::BindGroup,
+    /// Local variants of the three modal final bind groups; binding 6 points
+    /// at the modal state buffer (binding 7 keeps the modal uniforms so the
+    /// layout mirrors the ordinary lanes).
+    modal_final_bind_group_local: wgpu::BindGroup,
+    settings_panel_final_bind_group_local: wgpu::BindGroup,
+    context_menu_final_bind_group_local: wgpu::BindGroup,
+    /// Session-only master switch for the modal-local judgment (settings ->
+    /// Darkness -> "局所判定: モーダル"). Defaults off, keeping the global
+    /// judgment byte-for-byte unchanged.
+    modal_auto_darkness_local: bool,
+    /// Active modal surface rect in texture pixels
+    /// `[min_x, min_y, width, height]`, provided by the app layer each
+    /// `prepare`. `None` (or zero extent) disables the modal dispatch and the
+    /// modal lanes fall back to the global state.
+    modal_darkness_region: Option<[f32; 4]>,
+    /// Set when the toggle flips or the region appears/moves/disappears; the
+    /// next uniform update zeroes the modal state buffer so the local
+    /// judgment starts from a clean EMA/transition instead of inheriting the
+    /// previous region's history.
+    modal_darkness_reset_state: bool,
     /// The blur pyramid depends on the captured backdrop, not on foreground
     /// animation. Rebuild it only when that backdrop (or blur parameters)
     /// changes instead of re-blurring identical pixels every render frame.
@@ -425,6 +460,26 @@ fn intersect_bounds(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
         a[3].min(b[3]),
     ];
     (intersection[0] < intersection[2] && intersection[1] < intersection[3]).then_some(intersection)
+}
+
+/// Convert a modal surface rect in texture pixels
+/// `[min_x, min_y, width, height]` into the normalized UV
+/// `(origin, extent)` the stats shader consumes (戦略D). The backdrop texture
+/// and the full-viewport completed-scene textures share `texture_size`, so
+/// this mapping is identical whether the modal lane composites the desktop
+/// capture or a flattened scene. The extent is clamped so the region never
+/// samples outside [0, 1].
+fn region_uv_from_pixel_rect(rect: [f32; 4], texture_size: (u32, u32)) -> ([f32; 2], [f32; 2]) {
+    let (width, height) = (texture_size.0.max(1) as f32, texture_size.1.max(1) as f32);
+    let origin = [
+        (rect[0] / width).clamp(0.0, 1.0),
+        (rect[1] / height).clamp(0.0, 1.0),
+    ];
+    let extent = [
+        (rect[2] / width).clamp(0.0, 1.0 - origin[0]),
+        (rect[3] / height).clamp(0.0, 1.0 - origin[1]),
+    ];
+    (origin, extent)
 }
 
 fn base_shape_may_affect_frame(
@@ -641,11 +696,21 @@ impl LiquidGlassRenderer {
             flags: 1,
             max_darkness: params.auto_darkness_max,
             strategy: AutoDarknessStrategy::default().shader_value(),
+            use_region: 0,
+            region_origin: [0.0; 2],
+            region_extent: [1.0; 2],
         };
         let auto_darkness_uniform_buffer =
             create_auto_darkness_uniform_buffer(device, &auto_darkness_uniforms);
         let auto_darkness_state_buffer = create_auto_darkness_state_buffer(device);
         let auto_darkness_readback = AutoDarknessReadback::new(device);
+        // Modal-local judgment resource set (戦略D). Buffers are separate so
+        // the modal dispatch runs with its own EMA/transition state; the
+        // initial uniform has use_region=0 so an unused modal path can never
+        // produce a stale region readback.
+        let modal_auto_darkness_uniform_buffer =
+            create_auto_darkness_uniform_buffer(device, &auto_darkness_uniforms);
+        let modal_auto_darkness_state_buffer = create_auto_darkness_state_buffer(device);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let active_base_shapes = shapes.clone();
@@ -951,6 +1016,47 @@ impl LiquidGlassRenderer {
             &auto_darkness_state_buffer,
             &auto_darkness_uniform_buffer,
         );
+        // Local variants: identical resources except binding 6 reads the
+        // modal state (and binding 7 the modal uniforms, mirroring the layout
+        // even though the final shader never reads binding 7). Selected by
+        // the modal-lane draw calls whenever the modal-local toggle is on and
+        // a modal rect is active.
+        let modal_final_bind_group_local = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_panel_uniform_buffer,
+            &backdrop_view,
+            &sampler,
+            &overlay_geometry_view,
+            &overlay_tint_view,
+            &blur_view,
+            &modal_auto_darkness_state_buffer,
+            &modal_auto_darkness_uniform_buffer,
+        );
+        let settings_panel_final_bind_group_local = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_panel_uniform_buffer,
+            &context_menu_source_view,
+            &sampler,
+            &overlay_geometry_view,
+            &overlay_tint_view,
+            &context_menu_blur_view,
+            &modal_auto_darkness_state_buffer,
+            &modal_auto_darkness_uniform_buffer,
+        );
+        let context_menu_final_bind_group_local = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &context_menu_uniform_buffer,
+            &context_menu_source_view,
+            &sampler,
+            &overlay_geometry_view,
+            &overlay_tint_view,
+            &context_menu_blur_view,
+            &modal_auto_darkness_state_buffer,
+            &modal_auto_darkness_uniform_buffer,
+        );
         let backdrop_stats_bind_group = create_backdrop_stats_bind_group(
             device,
             &backdrop_stats_bind_group_layout,
@@ -958,6 +1064,21 @@ impl LiquidGlassRenderer {
             &sampler,
             &auto_darkness_uniform_buffer,
             &auto_darkness_state_buffer,
+        );
+        // The modal stats bind group samples the same backdrop view as the
+        // global dispatch: the region rect is expressed in desktop texture
+        // coordinates, which map 1:1 onto the full-viewport completed-scene
+        // textures the settings/context-menu lanes composite. Judging the
+        // desktop (rather than the scene, which already contains the modal's
+        // own ink) keeps the panel's local darkness driven by what is under
+        // the glass, not by the panel content on top of it.
+        let modal_backdrop_stats_bind_group = create_backdrop_stats_bind_group(
+            device,
+            &backdrop_stats_bind_group_layout,
+            &backdrop_view,
+            &sampler,
+            &modal_auto_darkness_uniform_buffer,
+            &modal_auto_darkness_state_buffer,
         );
         let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
             device,
@@ -1345,6 +1466,15 @@ impl LiquidGlassRenderer {
             auto_darkness_strategy: AutoDarknessStrategy::default(),
             auto_darkness_reset_state: true,
             backdrop_stats_dirty: true,
+            modal_auto_darkness_uniform_buffer,
+            modal_auto_darkness_state_buffer,
+            modal_backdrop_stats_bind_group,
+            modal_final_bind_group_local,
+            settings_panel_final_bind_group_local,
+            context_menu_final_bind_group_local,
+            modal_auto_darkness_local: false,
+            modal_darkness_region: None,
+            modal_darkness_reset_state: false,
             blur_dirty: true,
             last_geometry_key: None,
             stats: RenderStats::new(),
@@ -1459,6 +1589,14 @@ impl LiquidGlassRenderer {
             &self.auto_darkness_uniform_buffer,
             &self.auto_darkness_state_buffer,
         );
+        self.modal_backdrop_stats_bind_group = create_backdrop_stats_bind_group(
+            device,
+            &self.backdrop_stats_bind_group_layout,
+            &self.backdrop_view,
+            &self.sampler,
+            &self.modal_auto_darkness_uniform_buffer,
+            &self.modal_auto_darkness_state_buffer,
+        );
         let backdrop_view = self.backdrop_view.clone();
         self.rebuild_final_bind_groups(device, &backdrop_view);
     }
@@ -1502,6 +1640,14 @@ impl LiquidGlassRenderer {
             &self.auto_darkness_uniform_buffer,
             &self.auto_darkness_state_buffer,
         );
+        self.modal_backdrop_stats_bind_group = create_backdrop_stats_bind_group(
+            device,
+            &self.backdrop_stats_bind_group_layout,
+            view,
+            &self.sampler,
+            &self.modal_auto_darkness_uniform_buffer,
+            &self.modal_auto_darkness_state_buffer,
+        );
         self.backdrop_stats_dirty = true;
         self.rebuild_final_bind_groups(device, view);
     }
@@ -1515,18 +1661,61 @@ impl LiquidGlassRenderer {
             );
             self.auto_darkness_reset_state = false;
         }
+        let now = self.auto_darkness_clock_origin.elapsed().as_secs_f32();
         let uniforms = AutoDarknessUniforms {
-            now: self.auto_darkness_clock_origin.elapsed().as_secs_f32(),
+            now,
             mode: self.auto_darkness_update_mode.shader_value(),
             flags: u32::from(self.backdrop_stats_dirty),
             max_darkness: self.params.auto_darkness_max,
             strategy: self.auto_darkness_strategy.shader_value(),
+            use_region: 0,
+            region_origin: [0.0; 2],
+            region_extent: [1.0; 2],
         };
         queue.write_buffer(
             &self.auto_darkness_uniform_buffer,
             0,
             bytemuck::bytes_of(&uniforms),
         );
+
+        if self.modal_darkness_reset_state {
+            queue.write_buffer(
+                &self.modal_auto_darkness_state_buffer,
+                0,
+                bytemuck::bytes_of(&AutoDarknessState::default()),
+            );
+            self.modal_darkness_reset_state = false;
+        }
+        let (region_origin, region_extent) = self
+            .modal_darkness_region
+            .map(|rect| region_uv_from_pixel_rect(rect, self.texture_size))
+            .unwrap_or(([0.0; 2], [1.0; 2]));
+        let modal_uniforms = AutoDarknessUniforms {
+            now,
+            mode: uniforms.mode,
+            flags: uniforms.flags,
+            max_darkness: uniforms.max_darkness,
+            strategy: uniforms.strategy,
+            use_region: u32::from(self.modal_stats_active()),
+            region_origin,
+            region_extent,
+        };
+        queue.write_buffer(
+            &self.modal_auto_darkness_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&modal_uniforms),
+        );
+    }
+
+    /// True when the modal-local judgment is armed: the session toggle is on
+    /// and a non-empty modal rect is present. When false, no modal dispatch
+    /// is encoded and every lane (modal lanes included) reads the global
+    /// auto-darkness state.
+    fn modal_stats_active(&self) -> bool {
+        self.modal_auto_darkness_local
+            && self
+                .modal_darkness_region
+                .is_some_and(|rect| rect[2] > 0.0 && rect[3] > 0.0)
     }
 
     fn encode_backdrop_stats(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -1537,6 +1726,18 @@ impl LiquidGlassRenderer {
             });
             pass.set_pipeline(&self.backdrop_stats_pipeline);
             pass.set_bind_group(0, &self.backdrop_stats_bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        if self.modal_stats_active() {
+            // Second dispatch: the modal-local judgment (戦略D). Runs at the
+            // same cadence/flags as the global pass but samples only the
+            // modal rect (use_region=1) and writes the modal state buffer.
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("liquid glass modal backdrop stats pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.backdrop_stats_pipeline);
+            pass.set_bind_group(0, &self.modal_backdrop_stats_bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
         self.backdrop_stats_dirty = false;
@@ -1770,6 +1971,42 @@ impl LiquidGlassRenderer {
             &self.context_menu_blur_view,
             &self.auto_darkness_state_buffer,
             &self.auto_darkness_uniform_buffer,
+        );
+        self.modal_final_bind_group_local = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_panel_uniform_buffer,
+            backdrop_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.overlay_tint_view,
+            &self.blur_view,
+            &self.modal_auto_darkness_state_buffer,
+            &self.modal_auto_darkness_uniform_buffer,
+        );
+        self.settings_panel_final_bind_group_local = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_panel_uniform_buffer,
+            &self.context_menu_source_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.overlay_tint_view,
+            &self.context_menu_blur_view,
+            &self.modal_auto_darkness_state_buffer,
+            &self.modal_auto_darkness_uniform_buffer,
+        );
+        self.context_menu_final_bind_group_local = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.context_menu_uniform_buffer,
+            &self.context_menu_source_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.overlay_tint_view,
+            &self.context_menu_blur_view,
+            &self.modal_auto_darkness_state_buffer,
+            &self.modal_auto_darkness_uniform_buffer,
         );
     }
 
@@ -2617,6 +2854,51 @@ impl LiquidGlassRenderer {
         }
     }
 
+    /// Session-only switch for the modal-local judgment (戦略D): when on, an
+    /// open modal's glass lane is driven by a second classification restricted
+    /// to the modal surface rect instead of the whole-window judgment.
+    pub fn modal_auto_darkness_local(&self) -> bool {
+        self.modal_auto_darkness_local
+    }
+
+    pub fn set_modal_auto_darkness_local(&mut self, enabled: bool) {
+        if self.modal_auto_darkness_local != enabled {
+            self.modal_auto_darkness_local = enabled;
+            // The modal state starts from a clean transition either way so
+            // flipping the switch never interpolates between judgment modes.
+            self.modal_darkness_reset_state = true;
+            self.backdrop_stats_dirty = true;
+        }
+    }
+
+    /// Update the active modal surface rect used by the local judgment
+    /// (戦略D). The app layer provides the highest-z surface rect of the
+    /// active modal (context menu > settings panel > folder panel) in texture
+    /// pixels each `prepare`. `None` or a zero-extent rect disables the modal
+    /// dispatch; the modal lanes then fall back to the global state. A rect
+    /// change (modal open/close/move) restarts the modal state so the
+    /// filtered statistic does not inherit the previous region's history.
+    pub fn set_modal_darkness_region(&mut self, rect: Option<[f32; 4]>) {
+        let rect =
+            rect.filter(|r| r[2] > 0.0 && r[3] > 0.0 && r.iter().all(|value| value.is_finite()));
+        const REGION_CHANGE_EPSILON: f32 = 2.0;
+        let changed = match (self.modal_darkness_region, rect) {
+            (None, None) => false,
+            (None, Some(_)) | (Some(_), None) => true,
+            (Some(a), Some(b)) => {
+                (a[0] - b[0]).abs() > REGION_CHANGE_EPSILON
+                    || (a[1] - b[1]).abs() > REGION_CHANGE_EPSILON
+                    || (a[2] - b[2]).abs() > REGION_CHANGE_EPSILON
+                    || (a[3] - b[3]).abs() > REGION_CHANGE_EPSILON
+            }
+        };
+        if changed {
+            self.modal_darkness_region = rect;
+            self.modal_darkness_reset_state = true;
+            self.backdrop_stats_dirty = true;
+        }
+    }
+
     pub fn set_auto_darkness_max(&mut self, value: f32) {
         let value = value.clamp(0.0, 1.0);
         if self.params.auto_darkness_max != value {
@@ -2878,6 +3160,36 @@ mod shape_capacity_tests {
         assert_eq!(std::mem::size_of::<GlassUniforms>(), 128);
         assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
         assert_eq!(std::mem::size_of::<SceneFlattenUniforms>(), 32);
+        // now(4) mode(4) flags(4) max(4) strategy(4) use_region(4) +
+        // region_origin(8) + region_extent(8) = 40 bytes, matching the WGSL
+        // uniform struct (vec2 members need no extra padding at offset 24).
+        assert_eq!(std::mem::size_of::<super::AutoDarknessUniforms>(), 40);
+    }
+
+    #[test]
+    fn region_uv_maps_pixel_rect_into_normalized_uv() {
+        // Top-left quadrant of a 1000x800 texture.
+        let (origin, extent) =
+            super::region_uv_from_pixel_rect([0.0, 0.0, 500.0, 400.0], (1000, 800));
+        assert_eq!(origin, [0.0, 0.0]);
+        assert_eq!(extent, [0.5, 0.5]);
+
+        // Bottom-right quadrant.
+        let (origin, extent) =
+            super::region_uv_from_pixel_rect([500.0, 400.0, 500.0, 400.0], (1000, 800));
+        assert_eq!(origin, [0.5, 0.5]);
+        assert_eq!(extent, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn region_uv_clamps_out_of_bounds_extent_to_unit_square() {
+        // A rect hanging past the right/bottom edge must not sample outside
+        // [0, 1] once remapped.
+        let (origin, extent) =
+            super::region_uv_from_pixel_rect([800.0, 600.0, 500.0, 400.0], (1000, 800));
+        assert_eq!(origin, [0.8, 0.75]);
+        assert!((extent[0] - 0.2).abs() < 1e-6, "extent x {}", extent[0]);
+        assert!((extent[1] - 0.25).abs() < 1e-6, "extent y {}", extent[1]);
     }
 
     #[test]

@@ -781,7 +781,16 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            let final_bind_group = if self.settings_panel_completed_scene_enabled {
+            let final_bind_group = if self.modal_stats_active() {
+                // 戦略D: the modal lane reads the modal-local judgment state
+                // (binding 6) instead of the global one. The lane's backdrop
+                // bindings are unchanged; only the state buffer is swapped.
+                if self.settings_panel_completed_scene_enabled {
+                    &self.settings_panel_final_bind_group_local
+                } else {
+                    &self.modal_final_bind_group_local
+                }
+            } else if self.settings_panel_completed_scene_enabled {
                 &self.settings_panel_final_bind_group
             } else {
                 &self.modal_final_bind_group
@@ -1034,7 +1043,15 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.context_menu_final_bind_group, &[]);
+            let final_bind_group = if self.modal_stats_active() {
+                // 戦略D: the context-menu lane reads the modal-local judgment
+                // state (binding 6) while the toggle is on and the menu's
+                // rect is the active modal region.
+                &self.context_menu_final_bind_group_local
+            } else {
+                &self.context_menu_final_bind_group
+            };
+            pass.set_bind_group(0, final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }

@@ -11,7 +11,7 @@ const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 20;
+const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 40;
 const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
 
 #[repr(C)]
@@ -22,6 +22,11 @@ struct TestAutoDarknessUniforms {
     flags: u32,
     max_darkness: f32,
     strategy: u32,
+    // 戦略D local-region fields; existing tests keep use_region = 0 (the
+    // global path) exactly as before.
+    use_region: u32,
+    region_origin: [f32; 2],
+    region_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -83,6 +88,9 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                 flags: 1,
                 max_darkness: 0.42,
                 strategy: 0,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
         let initial = read_test_auto_darkness_state(&device, &queue, &resources.state);
@@ -104,6 +112,9 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                     flags: 0,
                     max_darkness: 0.42,
                     strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
@@ -125,6 +136,9 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                 flags: 0,
                 max_darkness: 0.42,
                 strategy: 0,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
         let changed = read_test_auto_darkness_state(&device, &queue, &resources.state);
@@ -146,6 +160,9 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                     flags: u32::from(index == 0),
                     max_darkness: 0.42,
                     strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
@@ -168,6 +185,9 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                     flags: u32::from(index == 0),
                     max_darkness: 0.42,
                     strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
@@ -330,6 +350,9 @@ fn auto_darkness_strategies_map_white_black_and_gray_backdrops() {
                         flags: 1,
                         max_darkness: 0.42,
                         strategy,
+                        use_region: 0,
+                        region_origin: [0.0; 2],
+                        region_extent: [1.0; 2],
                     },
                 );
                 let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
@@ -370,6 +393,9 @@ fn auto_darkness_strategy_2_probe_wakes_adaptive_classification() {
                 flags: 1,
                 max_darkness: 0.42,
                 strategy: 2,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
         let initial = read_test_auto_darkness_state(&device, &queue, &resources.state);
@@ -388,6 +414,9 @@ fn auto_darkness_strategy_2_probe_wakes_adaptive_classification() {
                 flags: 0,
                 max_darkness: 0.42,
                 strategy: 2,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
         let stable = read_test_auto_darkness_state(&device, &queue, &resources.state);
@@ -407,6 +436,9 @@ fn auto_darkness_strategy_2_probe_wakes_adaptive_classification() {
                 flags: 0,
                 max_darkness: 0.42,
                 strategy: 2,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
         let woken = read_test_auto_darkness_state(&device, &queue, &resources.state);
@@ -439,6 +471,9 @@ fn auto_darkness_strategy_switches_dispatch_cleanly() {
                     flags: 1,
                     max_darkness: 0.42,
                     strategy,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
@@ -446,6 +481,112 @@ fn auto_darkness_strategy_switches_dispatch_cleanly() {
         assert_eq!(result.classification_count, 3);
         assert!((0.0..=0.42).contains(&result.target_darkness));
         assert!(result.displayed_darkness.is_finite());
+    });
+}
+
+#[test]
+fn auto_darkness_region_restricts_classification_to_modal_rect() {
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let (pipeline, bind_group_layout) = create_auto_darkness_test_pipeline(&device).await;
+        let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
+
+        // Four-quadrant backdrop: top-left quadrant white, the other three
+        // black (16x16 texture, 8x8 per quadrant; the 16x16 grid samples
+        // texel centers so exactly 64 cells land in the white quadrant).
+        write_quadrant_test_backdrop(&queue, &resources.texture);
+
+        // 戦略D: use_region=1 over the top-left quadrant -> every sampled
+        // texel is white. Strategy 0: coverage 1.0 -> smoothstep(0.55, 0.82,
+        // 1.0) = 1.0 -> max_darkness. Strategy 2: 64 samples all in the top
+        // luminance bin (center 0.9375) -> clamp(1 - 0.20/0.9375) > max.
+        for strategy in [0u32, 2] {
+            reset_test_auto_darkness_state(&queue, &resources.state);
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 1,
+                    region_origin: [0.0, 0.0],
+                    region_extent: [0.5, 0.5],
+                },
+            );
+            let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+            assert!(
+                (result.target_darkness - 0.42).abs() < 0.005,
+                "strategy {strategy} white-quadrant region: target {} expected 0.42",
+                result.target_darkness
+            );
+        }
+
+        // use_region=1 over the black bottom-right quadrant -> all samples
+        // black; both strategies stay clear.
+        for strategy in [0u32, 2] {
+            reset_test_auto_darkness_state(&queue, &resources.state);
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 1,
+                    region_origin: [0.5, 0.5],
+                    region_extent: [0.5, 0.5],
+                },
+            );
+            let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+            assert!(
+                result.target_darkness.abs() < 0.005,
+                "strategy {strategy} black-quadrant region: target {} expected 0.0",
+                result.target_darkness
+            );
+        }
+
+        // use_region=0 on the same texture: the global judgment dilutes the
+        // 25% white quadrant away. Strategy 0: coverage 0.25 ->
+        // smoothstep(0.55, 0.82, 0.25) = 0 -> target 0. Strategy 2: the
+        // 192 black samples fill bin 0, so the 0.75 quantile lands at
+        // luminance 0.0625 < L_TARGET -> target 0.
+        for strategy in [0u32, 2] {
+            reset_test_auto_darkness_state(&queue, &resources.state);
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 0,
+                    region_origin: [0.0, 0.0],
+                    region_extent: [1.0, 1.0],
+                },
+            );
+            let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+            assert!(
+                result.target_darkness.abs() < 0.005,
+                "strategy {strategy} global four-quadrant: target {} expected 0.0 (diluted)",
+                result.target_darkness
+            );
+        }
     });
 }
 
@@ -514,6 +655,39 @@ fn read_test_auto_darkness_state(
 
 fn write_test_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, value: u8) {
     let pixels = vec![value; 16 * 16 * 4];
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(16 * 4),
+            rows_per_image: Some(16),
+        },
+        wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// 16x16 backdrop with the top-left 8x8 quadrant white (255) and the other
+/// three quadrants black. Used by the 戦略D region tests: the 16x16 grid's
+/// texel-center samples put exactly 64 cells in the white quadrant.
+fn write_quadrant_test_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture) {
+    let mut pixels = vec![0u8; 16 * 16 * 4];
+    for y in 0..8u32 {
+        for x in 0..8u32 {
+            let index = ((y * 16 + x) * 4) as usize;
+            pixels[index..index + 3].fill(255);
+            pixels[index + 3] = 255;
+        }
+    }
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,

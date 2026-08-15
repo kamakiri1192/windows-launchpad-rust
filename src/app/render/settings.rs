@@ -289,6 +289,11 @@ impl App {
                         .map(|renderer| renderer.liquid_glass_auto_darkness_strategy())
                         .unwrap_or_default(),
                 ),
+                auto_darkness_modal_local: self
+                    .renderer
+                    .as_ref()
+                    .map(|renderer| renderer.liquid_glass_auto_darkness_modal_local())
+                    .unwrap_or_default(),
                 thickness: lg.thickness,
                 refractive_index: lg.refractive_index,
                 saturation: lg.saturation,
@@ -739,6 +744,8 @@ fn settings_panel_copy<'a>(
                 "知覚輝度のパーセンタイルからコントラストを導出",
             ),
         ],
+        darkness_modal_local_label: "局所判定: モーダル",
+        darkness_modal_local_detail: "モーダル面の直下の背景だけで暗さを判定します",
         darkness_max_label: "動的darknessの上限",
         darkness_glass_label: "ガラス全体の黒さ (glass darkness)",
         darkness_context_menu_label: "コンテキストメニューの黒さ (context menu darkness)",
@@ -823,6 +830,9 @@ pub(crate) fn settings_press_target_from_hit_target(
                 let strategy =
                     auto_darkness_strategy_from_key(&key["lg-auto-darkness-strategy-".len()..]);
                 SettingsPressTarget::LiquidGlassAutoDarknessStrategy(strategy)
+            }
+            "lg-auto-darkness-modal-local" => {
+                SettingsPressTarget::LiquidGlassAutoDarknessModalLocal
             }
             "window-decorations" => SettingsPressTarget::WindowDecorations,
             key if key.starts_with("lg-param-") => {
@@ -1424,6 +1434,16 @@ mod tests {
                 "lg-auto-darkness-strategy-unknown"
             )),
             SettingsPressTarget::LiquidGlassAutoDarknessStrategy(AutoDarknessStrategy::Current)
+        );
+    }
+
+    #[test]
+    fn press_target_from_hit_target_modal_local_key() {
+        assert_eq!(
+            settings_press_target_from_hit_target(&HitTarget::settings_toggle(
+                "lg-auto-darkness-modal-local"
+            )),
+            SettingsPressTarget::LiquidGlassAutoDarknessModalLocal
         );
     }
 

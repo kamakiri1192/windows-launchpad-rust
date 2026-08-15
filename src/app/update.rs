@@ -487,6 +487,13 @@ impl App {
                 }
                 self.request_redraw();
             }
+            SettingsPressTarget::LiquidGlassAutoDarknessModalLocal => {
+                if let Some(r) = self.renderer.as_mut() {
+                    let next = !r.liquid_glass_auto_darkness_modal_local();
+                    r.set_liquid_glass_auto_darkness_modal_local(next);
+                }
+                self.request_redraw();
+            }
             SettingsPressTarget::LiquidGlassParam(field) => {
                 // Begin a drag. Subsequent pointer moves update the value
                 // via `update_settings_slider_drag`; release commits.

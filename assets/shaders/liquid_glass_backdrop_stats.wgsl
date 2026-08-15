@@ -35,6 +35,17 @@ struct AutoDarknessUniforms {
     // 0 = PR #184 white-coverage baseline, 1 = recalibrated coverage,
     // 2 = perceptual-luminance contrast inversion. See issue #186.
     strategy: u32,
+    // Local-region judgment (戦略D): when 1, the 16x16 classification and the
+    // 4x4 adaptive probe sample only inside [region_origin,
+    // region_origin + region_extent] instead of the full texture. Offsets and
+    // extents are in normalized UV space; the renderer derives them from the
+    // app-layer modal pixel rect divided by the backdrop texture size. A
+    // second dispatch with use_region=1 feeds the modal lane's own state
+    // buffer so an open modal judges the desktop directly beneath it while
+    // the rest of the UI keeps the global judgment.
+    use_region: u32,
+    region_origin: vec2<f32>,
+    region_extent: vec2<f32>,
 };
 
 struct AutoDarknessState {
@@ -144,8 +155,19 @@ fn interpolated_darkness(now: f32) -> f32 {
 }
 
 fn sample_grid(grid_size: u32, x: u32, y: u32) -> vec3<f32> {
+    // Full-grid UV in [0, 1] over the bound backdrop texture.
     let uv = vec2<f32>(f32(x) + 0.5, f32(y) + 0.5) / f32(grid_size);
-    return textureSampleLevel(backdrop_texture, backdrop_sampler, uv, 0.0).rgb;
+    // Local-region judgment (戦略D): remap the lattice into the modal
+    // rectangle. Both the full 16x16 classification and the 4x4 probe use
+    // this path, so probe wake-ups stay correlated with the classified
+    // region. `region_origin`/`region_extent` are normalized UV coordinates
+    // of the modal surface rect (see the uniform struct comment).
+    let region_uv = select(
+        uv,
+        u.region_origin + uv * u.region_extent,
+        u.use_region == 1u,
+    );
+    return textureSampleLevel(backdrop_texture, backdrop_sampler, region_uv, 0.0).rgb;
 }
 
 @compute @workgroup_size(16, 16, 1)

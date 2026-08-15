@@ -732,7 +732,7 @@ struct GpuParity {
     current_failed: bool,
 }
 
-const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 20;
+const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 40;
 const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
 
 #[repr(C)]
@@ -743,6 +743,12 @@ struct GpuUniforms {
     flags: u32,
     max_darkness: f32,
     strategy: u32,
+    // 戦略D local-region fields. The parity harness always dispatches the
+    // global path (use_region = 0) so the CPU mirror comparison is
+    // byte-for-byte unchanged.
+    use_region: u32,
+    region_origin: [f32; 2],
+    region_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -917,6 +923,9 @@ async fn gpu_parity_async(
                     flags: 1, // force classification
                     max_darkness: MAX_DARKNESS,
                     strategy,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 }),
             );
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
