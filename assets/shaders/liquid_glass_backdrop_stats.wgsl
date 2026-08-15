@@ -1,3 +1,32 @@
+// Automatic-darkness backdrop classification (issue #186).
+//
+// One 16x16 workgroup samples the backdrop, derives a single scalar
+// "target darkness", and keeps it in `state` where the final glass pass
+// interpolates it per frame. The scalar is produced by one of three
+// strategies selected with `u.strategy`:
+//
+//   strategy 0 (Current): PR #184 white-coverage heuristic, unchanged
+//     baseline. bright = smoothstep(0.68, 0.90, luma), neutral =
+//     1 - smoothstep(0.10, 0.26, chroma); coverage = mean(bright*neutral);
+//     target = smoothstep(0.55, 0.82, filtered_coverage) * max_darkness.
+//
+//   strategy 1 (CoverageTuned): identical pipeline, but every tunable
+//     constant is lifted into the named consts below (TUNED_*) so the
+//     calibration harness can sweep them. Initial values reproduce
+//     strategy 0 exactly.
+//
+//   strategy 2 (ContrastPerceptual): sRGB-decode each sample to relative
+//     luminance, build an 8-bin histogram over [0, 1], take the p90
+//     quantile (0.90 * 256 ~= 231 samples), and invert the p90 luminance
+//     into a target darkness so that the glass keeps an approximately
+//     constant target luminance L_TARGET under the backdrop:
+//     target = clamp(1 - L_TARGET / p90_luma, 0, max_darkness).
+//     Dark backdrops (p90 < L_TARGET) stay clear; bright backdrops push
+//     toward max_darkness.
+//
+// The EMA smoothing (0.12 s filter constant), transition easing, hysteresis
+// and the 8 Hz throttling are shared by all three strategies.
+
 struct AutoDarknessUniforms {
     now: f32,
     mode: u32,
@@ -20,6 +49,26 @@ struct AutoDarknessState {
     probe_samples: array<f32, 16>,
 };
 
+// --- Strategy 1 (CoverageTuned): named constants, initial values equal to
+// the strategy 0 literals. The verification harness rewrites these.
+const TUNED_LUMA_LO: f32 = 0.68;
+const TUNED_LUMA_HI: f32 = 0.90;
+const TUNED_CHROMA_LO: f32 = 0.10;
+const TUNED_CHROMA_HI: f32 = 0.26;
+const TUNED_COVERAGE_LO: f32 = 0.55;
+const TUNED_COVERAGE_HI: f32 = 0.82;
+
+// --- Strategy 2 (ContrastPerceptual): constants.
+// Target backdrop-relative luminance the glass tries to hold. Below this
+// the backdrop is dark enough that no tint is needed. Issue #186.
+const L_TARGET: f32 = 0.28;
+// p90 quantile: 90 % of backdrop pixels are at or below this luminance.
+const QUANTILE: f32 = 0.90;
+// 0.90 * 256 samples ~= 231: cumulative count that defines the p90 bin.
+const QUANTILE_TARGET: f32 = QUANTILE * 256.0;
+const HISTOGRAM_BIN_COUNT: u32 = 8u;
+const HISTOGRAM_BIN_WIDTH: f32 = 1.0 / 8.0;
+
 @group(0) @binding(0) var backdrop_texture: texture_2d<f32>;
 @group(0) @binding(1) var backdrop_sampler: sampler;
 @group(0) @binding(2) var<uniform> u: AutoDarknessUniforms;
@@ -28,6 +77,10 @@ struct AutoDarknessState {
 var<workgroup> coverage_values: array<f32, 256>;
 var<workgroup> probe_values: array<f32, 16>;
 var<workgroup> run_full_classification: u32;
+// Strategy 2 histogram: 8 atomic bins (zeroed per classification) plus the
+// 6-entry reduction tree (4 level-1 partial sums, then 2 level-2 sums).
+var<workgroup> histogram_bins: array<atomic<u32>, 8>;
+var<workgroup> histogram_partials: array<f32, 6>;
 
 fn luma(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
@@ -37,10 +90,48 @@ fn chroma(rgb: vec3<f32>) -> f32 {
     return max(rgb.r, max(rgb.g, rgb.b)) - min(rgb.r, min(rgb.g, rgb.b));
 }
 
+// Strategy 0 baseline; literals intentionally stay inline so the regression
+// baseline is byte-for-byte the PR #184 behavior.
 fn white_score(rgb: vec3<f32>) -> f32 {
     let bright = smoothstep(0.68, 0.90, luma(rgb));
     let neutral = 1.0 - smoothstep(0.10, 0.26, chroma(rgb));
     return bright * neutral;
+}
+
+// Strategy 1: same white-coverage formula, constants hoisted for tuning.
+fn tuned_white_score(rgb: vec3<f32>) -> f32 {
+    let bright = smoothstep(TUNED_LUMA_LO, TUNED_LUMA_HI, luma(rgb));
+    let neutral = 1.0 - smoothstep(TUNED_CHROMA_LO, TUNED_CHROMA_HI, chroma(rgb));
+    return bright * neutral;
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    // sRGB transfer function (IEC 61966-2-1). select(f, t, cond) yields t
+    // when cond is true, so the low-end branch must be the second argument.
+    return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
+}
+
+// Strategy 2: CIE relative luminance (Rec. 709 primaries).
+fn relative_luminance(rgb: vec3<f32>) -> f32 {
+    let lin = vec3<f32>(
+        srgb_to_linear(rgb.r),
+        srgb_to_linear(rgb.g),
+        srgb_to_linear(rgb.b),
+    );
+    return dot(lin, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Statistic per strategy: white-coverage for 0/1, relative luminance for 2.
+// Both the 4x4 probe and the full 16x16 classification use this so probe
+// wake-ups stay correlated with the classified quantity.
+fn strategy_stat(rgb: vec3<f32>) -> f32 {
+    if u.strategy == 1u {
+        return tuned_white_score(rgb);
+    }
+    if u.strategy == 2u {
+        return relative_luminance(rgb);
+    }
+    return white_score(rgb);
 }
 
 fn interpolated_darkness(now: f32) -> f32 {
@@ -66,7 +157,7 @@ fn cs_main(
     if u.mode == 1u && index < 16u {
         let probe_x = index % 4u;
         let probe_y = index / 4u;
-        probe_values[index] = white_score(sample_grid(4u, probe_x, probe_y));
+        probe_values[index] = strategy_stat(sample_grid(4u, probe_x, probe_y));
     }
     workgroupBarrier();
 
@@ -104,31 +195,107 @@ fn cs_main(
     }
 
     let rgb = sample_grid(16u, local_id.x, local_id.y);
-    coverage_values[index] = white_score(rgb);
+    if u.strategy == 2u {
+        // Workgroup memory is not zero-initialized, so clear the 8 bins
+        // before this classification.
+        if index < 8u {
+            atomicStore(&histogram_bins[index], 0u);
+        }
+    } else {
+        coverage_values[index] = strategy_stat(rgb);
+    }
     workgroupBarrier();
 
-    var stride = 128u;
-    loop {
-        if index < stride {
-            coverage_values[index] += coverage_values[index + stride];
+    if u.strategy == 2u {
+        let bin = min(
+            u32(relative_luminance(rgb) * f32(HISTOGRAM_BIN_COUNT)),
+            HISTOGRAM_BIN_COUNT - 1u,
+        );
+        atomicAdd(&histogram_bins[bin], 1u);
+    }
+    workgroupBarrier();
+
+    if u.strategy == 2u {
+        // Materialize the histogram as f32 for the reduction tree.
+        if index < 8u {
+            coverage_values[index] = f32(atomicLoad(&histogram_bins[index]));
         }
         workgroupBarrier();
-        if stride == 1u {
-            break;
+
+        // Tree reduction: 8 bins -> 4 partial sums (indices 0..4), then 2
+        // partial sums stored after them (indices 4..6).
+        if index < 4u {
+            histogram_partials[index] =
+                coverage_values[2u * index] + coverage_values[2u * index + 1u];
         }
-        stride /= 2u;
+        workgroupBarrier();
+
+        if index < 2u {
+            histogram_partials[4u + index] =
+                histogram_partials[2u * index] + histogram_partials[2u * index + 1u];
+        }
+        workgroupBarrier();
+    } else {
+        var stride = 128u;
+        loop {
+            if index < stride {
+                coverage_values[index] += coverage_values[index + stride];
+            }
+            workgroupBarrier();
+            if stride == 1u {
+                break;
+            }
+            stride /= 2u;
+        }
     }
 
     if index == 0u {
-        let coverage = coverage_values[0] / 256.0;
         let elapsed = max(u.now - state.last_full_update_at, 0.0);
         let filter_alpha = select(
             1.0 - exp(-elapsed / 0.12),
             1.0,
             state.initialized == 0u,
         );
-        let filtered = mix(state.filtered_coverage, coverage, filter_alpha);
-        let next_target = smoothstep(0.55, 0.82, filtered) * clamp(u.max_darkness, 0.0, 1.0);
+
+        var filtered = 0.0;
+        var next_target = 0.0;
+        if u.strategy == 2u {
+            // p90 quantile search over the reduction tree: skip the darkest
+            // 4-bin half when it holds fewer than QUANTILE_TARGET samples,
+            // then the darkest 2-bin half, then decide the single bin. The
+            // bin's center represents the p90 backdrop luminance.
+            var p90_bin = 0u;
+            var cumulative = 0.0;
+            if cumulative + histogram_partials[4] < QUANTILE_TARGET {
+                cumulative += histogram_partials[4];
+                p90_bin = 4u;
+            }
+            let level1_index = p90_bin / 2u;
+            if cumulative + histogram_partials[level1_index] < QUANTILE_TARGET {
+                cumulative += histogram_partials[level1_index];
+                p90_bin += 2u;
+            }
+            if cumulative + coverage_values[p90_bin] < QUANTILE_TARGET {
+                p90_bin += 1u;
+            }
+            let p90_luma = (f32(p90_bin) + 0.5) * HISTOGRAM_BIN_WIDTH;
+
+            // EMA-filter the luminance statistic, then invert into the
+            // darkness that holds the glass near L_TARGET. p90 below
+            // L_TARGET yields a negative term, clamped to 0 (dark backdrops
+            // stay clear); very bright backdrops approach max_darkness.
+            filtered = mix(state.filtered_coverage, p90_luma, filter_alpha);
+            next_target = clamp(1.0 - L_TARGET / max(filtered, 1e-4), 0.0, u.max_darkness);
+        } else {
+            let coverage = coverage_values[0] / 256.0;
+            filtered = mix(state.filtered_coverage, coverage, filter_alpha);
+            let mapped = select(
+                smoothstep(0.55, 0.82, filtered),
+                smoothstep(TUNED_COVERAGE_LO, TUNED_COVERAGE_HI, filtered),
+                u.strategy == 1u,
+            );
+            next_target = mapped * clamp(u.max_darkness, 0.0, 1.0);
+        }
 
         if state.initialized == 0u {
             state.from_darkness = 0.0;
