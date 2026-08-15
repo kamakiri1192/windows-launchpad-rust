@@ -1249,11 +1249,11 @@ pub struct ContinuousConfig {
     /// quick nudge instead of a deep pull.
     pub rubber_max_pages: f32,
     /// Native momentum packets are scaled by this factor before they move
-    /// the raw accumulator. The default 1.0 passes the OS stream through
-    /// unscaled: the goal is reproducing the native macOS coast, which
-    /// legitimately reflects the user's scroll-speed setting (issue #190).
-    /// The earlier 0.4 damping, which kept the coast in the pager's range,
-    /// is retained only as an A/B override value.
+    /// the raw accumulator. Default 0.4 keeps a moderate flick's coast in
+    /// the pager's range (#185). A full 1.0 native pass-through was trialed
+    /// on device for issue #190 (2026-08-15) and did not feel right, so the
+    /// damping stands. LAUNCHPAD_SCROLL_MOMENTUM_GAIN overrides at launch
+    /// for A/B feel trials without a rebuild.
     pub momentum_gain: f32,
     /// Rational rubber curve denominator, in viewport fractions.
     pub rubber_curve_a: f32,
@@ -1297,15 +1297,14 @@ impl Default for ContinuousConfig {
             // rather than a deep pull.
             rubber_max_pages: 0.075,
             rubber_curve_a: 0.30,
-            // Native-faithful coast (issue #190): pass the OS momentum
-            // stream through unscaled, matching what every native macOS
-            // scroll view does for the same flick. The pager-matching 0.4
-            // from #185 made the panel feel heavy next to native apps;
-            // override via LAUNCHPAD_SCROLL_MOMENTUM_GAIN to compare.
+            // Damp the native coast into the pager's range (#185). A full
+            // 1.0 pass-through (native-faithful coast) was trialed on
+            // device for issue #190 and rejected, so 0.4 stands; override
+            // via LAUNCHPAD_SCROLL_MOMENTUM_GAIN to re-trial.
             momentum_gain: parse_momentum_gain_override(
                 std::env::var(MOMENTUM_GAIN_OVERRIDE_ENV).ok().as_deref(),
             )
-            .unwrap_or(1.0),
+            .unwrap_or(0.4),
             settle_eps: 0.35,
             max_dt: 1.0 / 60.0,
         }

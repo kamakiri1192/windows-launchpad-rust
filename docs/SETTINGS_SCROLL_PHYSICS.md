@@ -112,7 +112,7 @@ deltaをもう一度反転しない。
 ### 5.1 境界内
 
 contact packetは1:1でpositionへ適用する。native momentum packetは
-**端に届かないパケットだけ`momentum_gain`（既定 1.0）を掛け**、端を越える
+**端に届かないパケットだけ`momentum_gain`（既定 0.4）を掛け**、端を越える
 パケットは**境界内成分も含めてフルフォース**でrawへ累積する。OSがすでに
 momentum packet を生成しているため、momentum終了後にアプリ独自の惰性を
 追加しない。
@@ -128,10 +128,9 @@ position  = rubber(raw)
 `momentum_gain`の経緯: #185ではAppKitのmomentumがシステムのスクロール加速設定を
 反映するため（実機トレース 2026-08-13: 130pxのフリックが972px coast）、ページャー
 （`Scroller`）と同じ感覚のcoastに揃える目的で境界内の移動距離を約40%（0.4）に
-スケールしていた。しかしissue #190の方向性決定（2026-08-15）で**目標は「macOSの
-スクロール体験の再現」に置き直し**、ネイティブアプリと同じくシステム設定に従う
-coastが正解とした。既定は1.0（native momentumを縮めない）。0.4は実機A/B比較用に
-`LAUNCHPAD_SCROLL_MOMENTUM_GAIN`で再現できる。
+スケールした。2026-08-15にissue #190の一実験として**既定1.0（native momentumの
+素通し）を実機検証したが不採用**となり、0.4に戻している。A/B比較や再試行は
+`LAUNCHPAD_SCROLL_MOMENTUM_GAIN`でリビルドなしに行える。
 
 **端を越えるパケットにはゲインを掛けない。** ゲインを全体に掛けると、端まで
 到達したmomentumが境界を越えられず「ピタッと止まる」見た目になる（stretch
