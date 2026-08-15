@@ -1249,10 +1249,11 @@ pub struct ContinuousConfig {
     /// quick nudge instead of a deep pull.
     pub rubber_max_pages: f32,
     /// Native momentum packets are scaled by this factor before they move
-    /// the raw accumulator. The OS momentum stream reflects the system's
-    /// scroll-acceleration setting, which on fast settings coasts far past
-    /// where a launchpad-style panel should stop; scaling keeps the coast
-    /// proportional to the flick instead of to the system acceleration.
+    /// the raw accumulator. The default 1.0 passes the OS stream through
+    /// unscaled: the goal is reproducing the native macOS coast, which
+    /// legitimately reflects the user's scroll-speed setting (issue #190).
+    /// The earlier 0.4 damping, which kept the coast in the pager's range,
+    /// is retained only as an A/B override value.
     pub momentum_gain: f32,
     /// Rational rubber curve denominator, in viewport fractions.
     pub rubber_curve_a: f32,
@@ -1260,6 +1261,19 @@ pub struct ContinuousConfig {
     pub settle_eps: f32,
     /// Maximum frame dt before we subdivide (s).
     pub max_dt: f32,
+}
+
+/// Launch-time override for the default `momentum_gain`, for on-device A/B
+/// feel trials without a rebuild (issue #190). Example:
+/// `LAUNCHPAD_SCROLL_MOMENTUM_GAIN=0.4 cargo run --release`.
+pub const MOMENTUM_GAIN_OVERRIDE_ENV: &str = "LAUNCHPAD_SCROLL_MOMENTUM_GAIN";
+
+/// Parse a positive finite gain override from the raw env value. Malformed,
+/// non-positive, or non-finite input falls back to the built-in default so a
+/// typo can never freeze the panel's coast to zero.
+fn parse_momentum_gain_override(raw: Option<&str>) -> Option<f32> {
+    let value: f32 = raw?.trim().parse().ok()?;
+    (value.is_finite() && value > 0.0).then_some(value)
 }
 
 impl Default for ContinuousConfig {
@@ -1283,13 +1297,15 @@ impl Default for ContinuousConfig {
             // rather than a deep pull.
             rubber_max_pages: 0.075,
             rubber_curve_a: 0.30,
-            // Scale native momentum so a moderate flick coasts ~40% of what
-            // the OS would send. AppKit's momentum carries the user's
-            // scroll-speed setting, which can slam the panel to the far edge
-            // and bounce on every flick; the pager (which ignores native
-            // momentum) does not, so this keeps the panel's coast in the
-            // same range as the pager's.
-            momentum_gain: 0.4,
+            // Native-faithful coast (issue #190): pass the OS momentum
+            // stream through unscaled, matching what every native macOS
+            // scroll view does for the same flick. The pager-matching 0.4
+            // from #185 made the panel feel heavy next to native apps;
+            // override via LAUNCHPAD_SCROLL_MOMENTUM_GAIN to compare.
+            momentum_gain: parse_momentum_gain_override(
+                std::env::var(MOMENTUM_GAIN_OVERRIDE_ENV).ok().as_deref(),
+            )
+            .unwrap_or(1.0),
             settle_eps: 0.35,
             max_dt: 1.0 / 60.0,
         }
@@ -3262,6 +3278,20 @@ mod tests {
         s.move_native_momentum(-1000.0, now + Duration::from_millis(48)); // +400 raw
         assert_eq!(s.phase, ContinuousPhase::Settling);
         assert_eq!(s.settle_target, 600.0);
+    }
+
+    #[test]
+    fn momentum_gain_override_parses_positive_finite_values() {
+        assert_eq!(parse_momentum_gain_override(None), None);
+        assert_eq!(parse_momentum_gain_override(Some("")), None);
+        assert_eq!(parse_momentum_gain_override(Some("garbage")), None);
+        assert_eq!(parse_momentum_gain_override(Some("-1")), None);
+        assert_eq!(parse_momentum_gain_override(Some("0")), None);
+        assert_eq!(parse_momentum_gain_override(Some("inf")), None);
+        assert_eq!(parse_momentum_gain_override(Some("nan")), None);
+        assert_eq!(parse_momentum_gain_override(Some(" 0.4 ")), Some(0.4));
+        assert_eq!(parse_momentum_gain_override(Some("1.0")), Some(1.0));
+        assert_eq!(parse_momentum_gain_override(Some("2")), Some(2.0));
     }
 
     #[test]
