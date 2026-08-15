@@ -146,11 +146,35 @@ fn rel_luminance(rgb: [f32; 3]) -> f32 {
         + 0.0722 * srgb_to_linear(rgb[2])
 }
 
-/// Nearest-rank quantile: sorted[round((n-1) * q)]. Documented convention so
-/// the future WGSL strategy-2 branch can match it exactly.
-fn quantile(sorted: &[f32], q: f32) -> f32 {
-    let idx = ((sorted.len() - 1) as f32 * q).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
+/// Exact mirror of the shader strategy-2 quantile: 8-bin histogram over
+/// relative luminance [0, 1], binary descent for the first bin whose
+/// cumulative count reaches `q * 256`, representative = bin center. The WGSL
+/// quantizes to bin centers (step 0.125), so this replaces a sorted
+/// nearest-rank value to keep GPU parity exact.
+fn histogram_quantile_luma(samples: &[[f32; 3]], q: f32) -> f32 {
+    const BINS: usize = 8;
+    let mut bins = [0u32; BINS];
+    for rgb in samples {
+        let bin = ((rel_luminance(*rgb) * BINS as f32) as usize).min(BINS - 1);
+        bins[bin] += 1;
+    }
+    let target = q * GRID_SAMPLES as f32;
+    let mut p90_bin = 0usize;
+    let mut cumulative = 0.0f32;
+    let lower_half = (bins[0] + bins[1] + bins[2] + bins[3]) as f32;
+    if cumulative + lower_half < target {
+        cumulative += lower_half;
+        p90_bin = 4;
+    }
+    let group = (bins[p90_bin] + bins[p90_bin + 1]) as f32;
+    if cumulative + group < target {
+        cumulative += group;
+        p90_bin += 2;
+    }
+    if cumulative + (bins[p90_bin] as f32) < target {
+        p90_bin += 1;
+    }
+    (p90_bin as f32 + 0.5) / BINS as f32
 }
 
 /// Exact mirror of the shader `sample_grid`: uv = ((x+0.5)/GRID, (y+0.5)/GRID),
@@ -297,12 +321,11 @@ fn coverage_darkness(samples: &[[f32; 3]], p: &TunedParams, knee_lo: f32, knee_h
     smoothstep(knee_lo, knee_hi, c) * MAX_DARKNESS
 }
 
-/// Strategy 2: sRGB -> linear -> relative luminance per sample, quantile,
-/// then clamp(1 - L_target / max(p, 1e-4), 0, MAX_DARKNESS).
+/// Strategy 2: sRGB -> linear -> relative luminance per sample, histogram
+/// quantile (bin-center convention, mirroring the WGSL), then
+/// clamp(1 - L_target / max(p, 1e-4), 0, MAX_DARKNESS).
 fn perceptual_darkness(samples: &[[f32; 3]], l_target: f32, q: f32) -> f32 {
-    let mut lums: Vec<f32> = samples.iter().map(|rgb| rel_luminance(*rgb)).collect();
-    lums.sort_by(f32::total_cmp);
-    let p = quantile(&lums, q);
+    let p = histogram_quantile_luma(samples, q);
     (1.0 - l_target / p.max(1e-4)).clamp(0.0, MAX_DARKNESS)
 }
 
@@ -1362,7 +1385,7 @@ fn write_results_md(path: &Path, r: &ReportData<'_>) {
     lines.push(format!(
         "Headless wgpu dispatch of `assets/shaders/liquid_glass_backdrop_stats.wgsl` (mode=0 full rate, flags=1 force, max_darkness={MAX_DARKNESS}); CPU mirror tolerance {PARITY_TOLERANCE}."
     ));
-    lines.push("CoverageTuned column dispatched/compared with the recommended constants; ContrastPerceptual with the recommended L_target/quantile. Quantile convention: nearest-rank `sorted[round((n-1)*q)]`.".to_string());
+    lines.push("CoverageTuned column dispatched/compared with the recommended constants; ContrastPerceptual with the recommended L_target/quantile. Quantile convention: 8-bin histogram over relative luminance, first bin whose cumulative count reaches q*256, bin center as the representative (mirrors the WGSL exactly).".to_string());
     lines.push(String::new());
     match r.parity {
         Ok(p) => {
@@ -1686,11 +1709,11 @@ mod tests {
         let mid = grid_samples(&corpus_image(CorpusId::MidGray));
         let split = grid_samples(&corpus_image(CorpusId::HalfSplitWhiteDark));
         let sp = StrategyParams::perceptual(0.25, 0.90);
-        // All-white: p90 = 1.0 -> clamp(1 - 0.25/1.0) = 0.75 -> max 0.16.
+        // All-white: bin 7 center 0.9375 -> clamp(1 - 0.25/0.9375) = 0.733 -> max 0.16.
         assert!((strategy_darkness(&pure, &sp) - 0.16).abs() < 1e-6);
-        // Mid gray: p90 ~= 0.216 -> 1 - 0.25/0.216 < 0 -> 0.
+        // Mid gray: luma ~0.216 -> bin 1 center 0.1875 -> negative -> 0.
         assert!(strategy_darkness(&mid, &sp).abs() < 1e-6);
-        // Half split: p90 = 1.0 (bright half) -> 0.16; dilution resolved.
+        // Half split: bright half fills bin 7 -> center 0.9375 -> 0.16; dilution resolved.
         assert!((strategy_darkness(&split, &sp) - 0.16).abs() < 1e-6);
     }
 

@@ -294,21 +294,25 @@ fn auto_darkness_strategies_map_white_black_and_gray_backdrops() {
         let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
 
         // Hand-computed target_darkness for max_darkness = 0.42 on a uniform
-        // backdrop (first classification uses filter_alpha = 1):
-        //   white 255: coverage 1.0; strategy 2 p90 bin 7 center 0.9375 ->
-        //     all strategies saturate to 0.42.
-        //   black 0:   coverage 0; strategy 2 p90 bin 0 center 0.0625 <
+        // backdrop (first classification uses filter_alpha = 1). Tuned and
+        // perceptual constants are the darkness_qa harness winners (issue
+        // #186, docs/qa/auto-darkness/results.md):
+        //   white 255: coverage 1.0; strategy 2 quantile bin 7 center 0.9375
+        //     -> all strategies saturate to 0.42.
+        //   black 0:   coverage 0; strategy 2 quantile bin 0 center 0.0625 <
         //     L_TARGET -> all strategies stay clear at 0.0.
-        //   gray 128:  white_score 0 (luma 0.502 < 0.68); strategy 2 p90 bin
-        //     1 center 0.1875 < L_TARGET -> 0.0 for all strategies.
-        //   gray 200:  white_score 0.461 (< coverage lo 0.55) -> 0.0 for
-        //     strategies 0/1; strategy 2 p90 bin 4 center 0.5625 ->
-        //     clamp(1 - 0.28/0.5625) = 0.502 -> 0.42.
+        //   gray 128:  strategy 0/1 white_score 0 (luma 0.502 < luma_lo);
+        //     strategy 2 quantile bin 1 center 0.1875 < L_TARGET 0.20 ->
+        //     0.0 for all strategies.
+        //   gray 200:  strategy 0 white_score 0.4615 < coverage lo 0.55 ->
+        //     0.0; strategy 1 white_score 0.6630, smoothstep(0.40, 0.70) =
+        //     0.958 -> 0.402; strategy 2 quantile bin 4 center 0.5625 ->
+        //     clamp(1 - 0.20/0.5625) = 0.644 -> 0.42.
         let cases: [(u8, [f32; 3]); 4] = [
             (255, [0.42, 0.42, 0.42]),
             (0, [0.0, 0.0, 0.0]),
             (128, [0.0, 0.0, 0.0]),
-            (200, [0.0, 0.0, 0.42]),
+            (200, [0.0, 0.402, 0.42]),
         ];
         for strategy in 0..=2u32 {
             for &(value, expected) in &cases {

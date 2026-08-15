@@ -12,17 +12,17 @@
 //
 //   strategy 1 (CoverageTuned): identical pipeline, but every tunable
 //     constant is lifted into the named consts below (TUNED_*) so the
-//     calibration harness can sweep them. Initial values reproduce
-//     strategy 0 exactly.
+//     calibration harness can sweep them. Values are the harness winners
+//     (docs/qa/auto-darkness/results.md).
 //
 //   strategy 2 (ContrastPerceptual): sRGB-decode each sample to relative
-//     luminance, build an 8-bin histogram over [0, 1], take the p90
-//     quantile (0.90 * 256 ~= 231 samples), and invert the p90 luminance
+//     luminance, build an 8-bin histogram over [0, 1], take the QUANTILE
+//     quantile (0.75 * 256 = 192 samples), and invert that luminance
 //     into a target darkness so that the glass keeps an approximately
 //     constant target luminance L_TARGET under the backdrop:
-//     target = clamp(1 - L_TARGET / p90_luma, 0, max_darkness).
-//     Dark backdrops (p90 < L_TARGET) stay clear; bright backdrops push
-//     toward max_darkness.
+//     target = clamp(1 - L_TARGET / quantile_luma, 0, max_darkness).
+//     Dark backdrops (quantile < L_TARGET) stay clear; bright backdrops
+//     push toward max_darkness.
 //
 // The EMA smoothing (0.12 s filter constant), transition easing, hysteresis
 // and the 8 Hz throttling are shared by all three strategies.
@@ -49,22 +49,24 @@ struct AutoDarknessState {
     probe_samples: array<f32, 16>,
 };
 
-// --- Strategy 1 (CoverageTuned): named constants, initial values equal to
-// the strategy 0 literals. The verification harness rewrites these.
-const TUNED_LUMA_LO: f32 = 0.68;
-const TUNED_LUMA_HI: f32 = 0.90;
+// --- Strategy 1 (CoverageTuned): constants recalibrated by the
+// `darkness_qa` harness sweep (7/12 golden-bucket agreement vs 5/12 for the
+// PR #184 literals; see docs/qa/auto-darkness/results.md).
+const TUNED_LUMA_LO: f32 = 0.65;
+const TUNED_LUMA_HI: f32 = 0.87;
 const TUNED_CHROMA_LO: f32 = 0.10;
 const TUNED_CHROMA_HI: f32 = 0.26;
-const TUNED_COVERAGE_LO: f32 = 0.55;
-const TUNED_COVERAGE_HI: f32 = 0.82;
+const TUNED_COVERAGE_LO: f32 = 0.40;
+const TUNED_COVERAGE_HI: f32 = 0.70;
 
 // --- Strategy 2 (ContrastPerceptual): constants.
 // Target backdrop-relative luminance the glass tries to hold. Below this
 // the backdrop is dark enough that no tint is needed. Issue #186.
-const L_TARGET: f32 = 0.28;
-// p90 quantile: 90 % of backdrop pixels are at or below this luminance.
-const QUANTILE: f32 = 0.90;
-// 0.90 * 256 samples ~= 231: cumulative count that defines the p90 bin.
+const L_TARGET: f32 = 0.20;
+// Quantile of the backdrop luminance the darkness answers to: 75 % of
+// samples are at or below this luminance.
+const QUANTILE: f32 = 0.75;
+// 0.75 * 256 samples = 192: cumulative count that defines the quantile bin.
 const QUANTILE_TARGET: f32 = QUANTILE * 256.0;
 const HISTOGRAM_BIN_COUNT: u32 = 8u;
 const HISTOGRAM_BIN_WIDTH: f32 = 1.0 / 8.0;
@@ -260,31 +262,31 @@ fn cs_main(
         var filtered = 0.0;
         var next_target = 0.0;
         if u.strategy == 2u {
-            // p90 quantile search over the reduction tree: skip the darkest
+            // Quantile search over the reduction tree: skip the darkest
             // 4-bin half when it holds fewer than QUANTILE_TARGET samples,
             // then the darkest 2-bin half, then decide the single bin. The
-            // bin's center represents the p90 backdrop luminance.
-            var p90_bin = 0u;
+            // bin center represents the quantile backdrop luminance.
+            var quantile_bin = 0u;
             var cumulative = 0.0;
             if cumulative + histogram_partials[4] < QUANTILE_TARGET {
                 cumulative += histogram_partials[4];
-                p90_bin = 4u;
+                quantile_bin = 4u;
             }
-            let level1_index = p90_bin / 2u;
+            let level1_index = quantile_bin / 2u;
             if cumulative + histogram_partials[level1_index] < QUANTILE_TARGET {
                 cumulative += histogram_partials[level1_index];
-                p90_bin += 2u;
+                quantile_bin += 2u;
             }
-            if cumulative + coverage_values[p90_bin] < QUANTILE_TARGET {
-                p90_bin += 1u;
+            if cumulative + coverage_values[quantile_bin] < QUANTILE_TARGET {
+                quantile_bin += 1u;
             }
-            let p90_luma = (f32(p90_bin) + 0.5) * HISTOGRAM_BIN_WIDTH;
+            let quantile_luma = (f32(quantile_bin) + 0.5) * HISTOGRAM_BIN_WIDTH;
 
             // EMA-filter the luminance statistic, then invert into the
-            // darkness that holds the glass near L_TARGET. p90 below
+            // darkness that holds the glass near L_TARGET. The quantile below
             // L_TARGET yields a negative term, clamped to 0 (dark backdrops
             // stay clear); very bright backdrops approach max_darkness.
-            filtered = mix(state.filtered_coverage, p90_luma, filter_alpha);
+            filtered = mix(state.filtered_coverage, quantile_luma, filter_alpha);
             next_target = clamp(1.0 - L_TARGET / max(filtered, 1e-4), 0.0, u.max_darkness);
         } else {
             let coverage = coverage_values[0] / 256.0;

@@ -71,40 +71,40 @@ Ranking: golden-bucket agreement (primary) -> violation samples -> over-dark pen
 
 | rank | params | agreement | violations | over-dark |
 | --- | --- | --- | --- | --- |
-| 1 | L_target 0.25 q 0.75 | 5/12 | 1622 | 0.000 |
-| 2 | L_target 0.25 q 0.85 | 5/12 | 1622 | 0.000 |
-| 3 | L_target 0.28 q 0.75 | 5/12 | 1622 | 0.000 |
-| 4 | L_target 0.28 q 0.85 | 5/12 | 1622 | 0.000 |
-| 5 | L_target 0.30 q 0.75 | 5/12 | 1622 | 0.000 |
+| 1 | L_target 0.20 q 0.75 | 5/12 | 1622 | 0.000 |
+| 2 | L_target 0.20 q 0.85 | 5/12 | 1622 | 0.000 |
+| 3 | L_target 0.25 q 0.75 | 5/12 | 1622 | 0.000 |
+| 4 | L_target 0.25 q 0.85 | 5/12 | 1622 | 0.000 |
+| 5 | L_target 0.28 q 0.75 | 5/12 | 1622 | 0.000 |
 
 ## 3. Recommended parameters
 
 - CoverageTuned: `luma 0.65/0.87 chroma 0.10/0.26 knee 0.40/0.70`
   (agreement 7/12, violations 1622, over-dark 0.000)
-- ContrastPerceptual: `L_target 0.25 q 0.75`
+- ContrastPerceptual: `L_target 0.20 q 0.75`
   (agreement 5/12, violations 1622, over-dark 0.000)
 
 ## 4. GPU parity
 
 Headless wgpu dispatch of `assets/shaders/liquid_glass_backdrop_stats.wgsl` (mode=0 full rate, flags=1 force, max_darkness=0.16); CPU mirror tolerance 0.01.
-CoverageTuned column dispatched/compared with the recommended constants; ContrastPerceptual with the recommended L_target/quantile. Quantile convention: nearest-rank `sorted[round((n-1)*q)]`.
+CoverageTuned column dispatched/compared with the recommended constants; ContrastPerceptual with the recommended L_target/quantile. Quantile convention: 8-bin histogram over relative luminance, first bin whose cumulative count reaches q*256, bin center as the representative (mirrors the WGSL exactly).
 
 Adapter: Apple M3
 
 | image | gpu cur | cpu cur | cur | gpu tuned | cpu tuned | tuned | gpu perc | cpu perc | perc |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| pure_white | 0.160 | 0.160 | pass | 0.160 | 0.160 | pending (shader branch not implemented) | 0.160 | 0.160 | pending (shader branch not implemented) |
-| white_web | 0.160 | 0.160 | pass | 0.160 | 0.160 | pending (shader branch not implemented) | 0.160 | 0.160 | pending (shader branch not implemented) |
-| bright_saturated_yellow | 0.000 | 0.000 | pass | 0.000 | 0.000 | pending (shader branch not implemented) | 0.000 | 0.160 | pending (shader branch not implemented) |
-| bright_saturated_blue | 0.000 | 0.000 | pass | 0.000 | 0.000 | pending (shader branch not implemented) | 0.000 | 0.000 | pending (shader branch not implemented) |
-| light_gray | 0.000 | 0.000 | pass | 0.000 | 0.024 | pending (shader branch not implemented) | 0.000 | 0.160 | pending (shader branch not implemented) |
-| mid_gray | 0.000 | 0.000 | pass | 0.000 | 0.000 | pending (shader branch not implemented) | 0.000 | 0.000 | pending (shader branch not implemented) |
-| dark | 0.000 | 0.000 | pass | 0.000 | 0.000 | pending (shader branch not implemented) | 0.000 | 0.000 | pending (shader branch not implemented) |
-| dark_photo | 0.000 | 0.000 | pass | 0.000 | 0.000 | pending (shader branch not implemented) | 0.000 | 0.000 | pending (shader branch not implemented) |
-| half_split_white_dark | 0.000 | 0.000 | pass | 0.000 | 0.041 | pending (shader branch not implemented) | 0.000 | 0.160 | pending (shader branch not implemented) |
-| small_white_window | 0.000 | 0.000 | pass | 0.000 | 0.000 | pending (shader branch not implemented) | 0.000 | 0.000 | pending (shader branch not implemented) |
-| bright_photo | 0.145 | 0.145 | pass | 0.145 | 0.160 | pending (shader branch not implemented) | 0.145 | 0.160 | pending (shader branch not implemented) |
-| desktop_like | 0.000 | 0.000 | pass | 0.000 | 0.048 | pending (shader branch not implemented) | 0.000 | 0.160 | pending (shader branch not implemented) |
+| pure_white | 0.160 | 0.160 | pass | 0.160 | 0.160 | pass | 0.160 | 0.160 | pass |
+| white_web | 0.160 | 0.160 | pass | 0.160 | 0.160 | pass | 0.160 | 0.160 | pass |
+| bright_saturated_yellow | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass | 0.160 | 0.160 | pass |
+| bright_saturated_blue | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass |
+| light_gray | 0.000 | 0.000 | pass | 0.024 | 0.024 | pass | 0.160 | 0.160 | pass |
+| mid_gray | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass |
+| dark | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass |
+| dark_photo | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass |
+| half_split_white_dark | 0.000 | 0.000 | pass | 0.041 | 0.041 | pass | 0.160 | 0.160 | pass |
+| small_white_window | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass | 0.000 | 0.000 | pass |
+| bright_photo | 0.145 | 0.145 | pass | 0.160 | 0.160 | pass | 0.160 | 0.160 | pass |
+| desktop_like | 0.000 | 0.000 | pass | 0.048 | 0.048 | pass | 0.160 | 0.160 | pass |
 
 
 ## 5. Conclusions
