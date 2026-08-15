@@ -488,7 +488,7 @@ fn rounded_rect_sdf(point: [f32; 2], shape: GlassShape) -> f32 {
 
 fn shapes_hash(shapes: &[GlassShape]) -> u64 {
     let mut key: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut mix = |value: u64, key: &mut u64| {
+    let mix = |value: u64, key: &mut u64| {
         *key ^= value;
         *key = key.wrapping_mul(0x100_0000_01b3);
     };

@@ -94,6 +94,8 @@ pub struct Renderer {
     /// Last scene-content epoch for which the completed-scene chain
     /// (context-menu/settings copy + flatten + blur) ran, keyed by lane.
     completed_scene_cache: Option<(u64, CompletedSceneLane)>,
+    /// Last scene-texture key for which the focus veil pyramid ran.
+    focus_blur_cache: Option<u64>,
     /// Presentation-rate estimator feeding the debug HUD. On Windows it
     /// prefers DXGI frame statistics; elsewhere it tracks `present()` cadence.
     pub(crate) fps_tracker: fps::FpsTracker,

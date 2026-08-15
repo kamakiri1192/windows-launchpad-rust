@@ -428,8 +428,15 @@ impl Renderer {
         self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
         if focus_blur_params.strength > 0.001 {
-            self.focus_blur
-                .blur(&self.device, &self.queue, &mut self.gpu_profiler);
+            // The veil pyramid depends only on the lower-scene texture, not on
+            // the animating veil strength; skip it while that content is
+            // unchanged and keep compositing from the cached blur.
+            let scene_texture_key = self.scene_texture_key(args);
+            if self.focus_blur_cache != Some(scene_texture_key) {
+                self.focus_blur
+                    .blur(&self.device, &self.queue, &mut self.gpu_profiler);
+                self.focus_blur_cache = Some(scene_texture_key);
+            }
         }
         let mut encoder = self
             .device
@@ -865,6 +872,44 @@ impl Renderer {
     /// settings surfaces. When this key is unchanged between two frames, the
     /// completed-scene content is identical and its copy + flatten + blur
     /// chain can be reused instead of re-rendered.
+    /// Key over the lower-scene texture inputs only (used to cache the focus
+    /// veil pyramid while its content is unchanged).
+    fn scene_texture_key(&self, args: &DrawArgs) -> u64 {
+        let base = self.scene_base_key(args);
+        let mut key = base ^ self.below_settings_epoch.wrapping_mul(0x9E37_79B9);
+        key = key.wrapping_mul(0x100_0000_01b3);
+        key
+    }
+
+    /// Inputs shared by every scene-content cache: glass params, backdrop
+    /// capture, scroll/wiggle/drag uniforms, viewport, and frame clip.
+    fn scene_base_key(&self, args: &DrawArgs) -> u64 {
+        let clip = self.frame_clip;
+        let values: [u64; 10] = [
+            self.liquid_glass.content_epoch(),
+            self.liquid_glass.capture_sequence(),
+            args.scroll_x.to_bits() as u64,
+            args.time.to_bits() as u64,
+            args.drag_active.to_bits() as u64,
+            args.drag_pos.0.to_bits() as u64,
+            args.drag_pos.1.to_bits() as u64,
+            args.viewport.0 as u64,
+            args.viewport.1 as u64,
+            u64::from(u32::from(self.liquid_glass.auto_darkness_enabled()))
+                .wrapping_mul(args.time.to_bits() as u64),
+        ];
+        let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+        for value in [clip.0, clip.1, clip.2, clip.3, clip.4] {
+            key ^= value.to_bits() as u64;
+            key = key.wrapping_mul(0x100_0000_01b3);
+        }
+        for value in values.iter() {
+            key ^= *value;
+            key = key.wrapping_mul(0x100_0000_01b3);
+        }
+        key
+    }
+
     fn scene_content_key(
         &self,
         args: &DrawArgs,

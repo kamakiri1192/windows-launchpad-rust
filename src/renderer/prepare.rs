@@ -754,6 +754,19 @@ fn set_instances<T: bytemuck::Pod>(
     }
 }
 
+fn filtered_differs<'a, T: PartialEq + 'a>(
+    mut a: impl Iterator<Item = &'a T>,
+    mut b: impl Iterator<Item = &'a T>,
+) -> bool {
+    loop {
+        match (a.next(), b.next()) {
+            (Some(x), Some(y)) if x == y => continue,
+            (None, None) => return false,
+            _ => return true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,18 +961,5 @@ mod tests {
         assert!(!has_trailing_drag_tile(&[]));
         assert!(!has_trailing_drag_tile(&[ordinary]));
         assert!(has_trailing_drag_tile(&[ordinary, dragged]));
-    }
-}
-
-fn filtered_differs<'a, T: PartialEq + 'a>(
-    mut a: impl Iterator<Item = &'a T>,
-    mut b: impl Iterator<Item = &'a T>,
-) -> bool {
-    loop {
-        match (a.next(), b.next()) {
-            (Some(x), Some(y)) if x == y => continue,
-            (None, None) => return false,
-            _ => return true,
-        }
     }
 }

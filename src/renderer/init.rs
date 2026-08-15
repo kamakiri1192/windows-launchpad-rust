@@ -670,6 +670,7 @@ impl Renderer {
             below_settings_epoch: 0,
             below_menu_epoch: 0,
             completed_scene_cache: None,
+            focus_blur_cache: None,
             fps_tracker: super::fps::FpsTracker::new(),
             last_fps: 0,
             text_pipeline,
@@ -733,6 +734,7 @@ impl Renderer {
     /// Reconfigure the surface after a window resize.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.completed_scene_cache = None;
+        self.focus_blur_cache = None;
         if width == 0 || height == 0 {
             return;
         }
