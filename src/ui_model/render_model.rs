@@ -81,6 +81,15 @@ pub struct GlassSurface {
     /// Per-surface glass activation level (0.0 = idle, 1.0 = fully active).
     /// Controls blur/edge-light/saturation/chromatic-aberration intensity per-shape.
     pub activation: f32,
+    /// Optional per-surface backdrop blur radius. `None` uses the renderer's
+    /// global glass blur setting.
+    pub blur_radius: Option<f32>,
+    /// How strongly this surface replaces the transparent window backdrop
+    /// with the filtered RGB selected by its compositing lane. That source
+    /// may be the native desktop capture or a flattened completed scene.
+    /// `0` keeps ordinary translucent glass compositing; `1` prevents the real
+    /// desktop from bleeding back through an opaque backdrop material.
+    pub backdrop_replacement: f32,
     /// Optional per-surface tint override applied to the glass color.
     pub tint: Option<Color>,
 }
@@ -115,6 +124,10 @@ pub enum GlassLayer {
     DragOverlay,
     Overlay,
     Modal,
+    /// Settings panel glass. Isolated from folder/modal glass so its completed
+    /// scene blur can be captured after the Glass Focus Veil and before the
+    /// settings surface itself is composited.
+    Settings,
     /// Context menu glass. Isolated from `Modal` so the menu's glass never
     /// smooth-unions with an open folder panel's glass — they stay visually
     /// distinct even when overlapping. Composited above `Modal`.
@@ -200,6 +213,12 @@ pub enum ControlKind {
     EyeOff,
     /// Folder glyph (context menu: reveal in Finder/Explorer). Drawn by kind 15.
     FolderIcon,
+    /// ChatGPT logo (context menu: ChatGPT help). Drawn by kind 19 from a
+    /// dedicated rasterized SVG texture (not a procedural SDF).
+    ChatGptLogo,
+    /// Steam logo (context menu: open in Steam). Drawn by kind 20 from a
+    /// dedicated rasterized SVG texture (not a procedural SDF).
+    SteamLogo,
     /// Plus glyph (context menu: larger icon). Drawn by kind 16.
     Plus,
     /// Minus glyph (context menu: smaller icon). Drawn by kind 17.
@@ -259,7 +278,7 @@ pub enum GlyphLane {
     /// Context menu label text. Isolated from `Modal` so it never collides
     /// with folder panel glyphs.
     ContextMenu,
-    /// FPS overlay text, drawn last so it sits above all modal content.
+    /// Debug HUD text, drawn last so it sits above all modal content.
     Overlay,
 }
 

@@ -389,6 +389,7 @@ impl App {
             SettingsPressTarget::Close => self.close_settings(),
             SettingsPressTarget::Category(category) => {
                 self.settings_category = category;
+                self.update_settings_category_selection();
                 self.reset_settings_scroll();
                 self.request_redraw();
             }
@@ -434,6 +435,11 @@ impl App {
                 self.persist_settings();
                 self.request_redraw();
             }
+            SettingsPressTarget::AutoDarknessValueToggle => {
+                self.settings.show_auto_darkness_value = !self.settings.show_auto_darkness_value;
+                self.persist_settings();
+                self.request_redraw();
+            }
             SettingsPressTarget::ResetCache => {
                 self.reset_icons();
                 self.request_redraw();
@@ -458,6 +464,21 @@ impl App {
                     r.set_liquid_glass_enabled(next);
                 }
                 self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassAutoDarkness => {
+                let next = !self.settings.liquid_glass.auto_darkness_enabled;
+                self.settings.liquid_glass.auto_darkness_enabled = next;
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_auto_darkness_enabled(next);
+                }
+                self.persist_settings();
+                self.request_redraw();
+            }
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(mode) => {
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_liquid_glass_auto_darkness_update_mode(mode);
+                }
                 self.request_redraw();
             }
             SettingsPressTarget::LiquidGlassParam(field) => {
@@ -532,6 +553,18 @@ impl App {
             }
             crate::domain::settings::LiquidGlassParamField::Saturation => {
                 sp::LiquidGlassParamId::Saturation
+            }
+            crate::domain::settings::LiquidGlassParamField::AutoDarknessMax => {
+                sp::LiquidGlassParamId::AutoDarknessMax
+            }
+            crate::domain::settings::LiquidGlassParamField::GlassDarkness => {
+                sp::LiquidGlassParamId::GlassDarkness
+            }
+            crate::domain::settings::LiquidGlassParamField::ContextMenuGlassDarkness => {
+                sp::LiquidGlassParamId::ContextMenuGlassDarkness
+            }
+            crate::domain::settings::LiquidGlassParamField::SettingsPanelGlassDarkness => {
+                sp::LiquidGlassParamId::SettingsPanelGlassDarkness
             }
             crate::domain::settings::LiquidGlassParamField::ChromaticAberration => {
                 sp::LiquidGlassParamId::ChromaticAberration
@@ -626,14 +659,10 @@ impl App {
         let now = scroll_sample_instant(self.scroll_clock_origin, sample.timestamp_us);
         match routed.route {
             ScrollRoute::Settings => {
-                if sample.canonical_dy != 0.0 {
-                    self.scroll_settings_by_px_at(
-                        crate::input_routing::continuous_scroller_input_from_canonical_y(
-                            sample.canonical_dy,
-                        ),
-                        now,
-                    );
-                }
+                // Zero-delta terminal packets are part of the native contract:
+                // they transfer an edge rubber-band from OS-owned tracking to
+                // the return spring. Never discard them as "no movement".
+                self.handle_settings_scroll_sample(sample, now);
             }
             ScrollRoute::MainPager => {
                 if let Some(scroller) = self.scroller.as_mut() {
@@ -663,16 +692,119 @@ impl App {
     /// updated here: hit testing derives its row offset from the live pixel
     /// position (`settings_scroll.position / row_step`) so the two never drift.
     pub(crate) fn scroll_settings_by_px(&mut self, delta_px: f32) {
-        self.scroll_settings_by_px_at(delta_px, Instant::now());
-    }
-
-    fn scroll_settings_by_px_at(&mut self, delta_px: f32, now: Instant) {
         let max = self.settings_max_scroll_rows();
         if max <= 0 {
             self.settings_scroll_rows = 0;
             return;
         }
-        self.settings_scroll.apply_wheel(delta_px, now);
+        self.settings_scroll
+            .apply_line_wheel(delta_px, Instant::now());
+        self.request_redraw();
+    }
+
+    /// Keep AppKit's physical-contact and momentum phases intact for settings.
+    /// AppKit starts an edge return at physical-contact `Ended`; if momentum
+    /// follows, its first packet takes over the live return position. Momentum
+    /// that reaches an edge starts the return immediately and its remaining
+    /// dissipating packets are ignored until the terminal packet.
+    fn handle_settings_scroll_sample(
+        &mut self,
+        sample: crate::input_routing::ScrollSample,
+        now: Instant,
+    ) {
+        use crate::input_routing::{NativeScrollPhase as NativePhase, ScrollSource};
+
+        if self.settings_max_scroll_rows() <= 0 {
+            self.settings_scroll_rows = 0;
+            return;
+        }
+
+        let delta_px =
+            crate::input_routing::continuous_scroller_input_from_canonical_y(sample.canonical_dy);
+        let unaccelerated_delta_px = sample
+            .canonical_unaccelerated_dy
+            .map(crate::input_routing::continuous_scroller_input_from_canonical_y);
+        if sample.source == ScrollSource::Line {
+            if delta_px != 0.0 {
+                self.settings_scroll.apply_line_wheel(delta_px, now);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        let apply_delta = |scroller: &mut crate::scroll::ContinuousScroller| {
+            if delta_px != 0.0 {
+                scroller.move_precise_wheel_with_unaccelerated(
+                    delta_px,
+                    unaccelerated_delta_px,
+                    now,
+                );
+            }
+        };
+        match sample.contact_phase {
+            NativePhase::Began => {
+                self.settings_scroll.begin_precise_wheel(now);
+                apply_delta(&mut self.settings_scroll);
+            }
+            NativePhase::Changed => apply_delta(&mut self.settings_scroll),
+            NativePhase::Ended => {
+                apply_delta(&mut self.settings_scroll);
+                self.settings_scroll.end_precise_wheel(now, false);
+            }
+            NativePhase::Cancelled => {
+                apply_delta(&mut self.settings_scroll);
+                self.settings_scroll.end_precise_wheel(now, true);
+            }
+            NativePhase::None => match sample.momentum_phase {
+                NativePhase::Began => {
+                    self.settings_scroll.begin_native_momentum(now);
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                }
+                NativePhase::Changed => {
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                }
+                NativePhase::Ended => {
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                    self.settings_scroll.end_native_momentum(now, false);
+                }
+                NativePhase::Cancelled => {
+                    if delta_px != 0.0 {
+                        self.settings_scroll
+                            .move_native_momentum_with_unaccelerated(
+                                delta_px,
+                                unaccelerated_delta_px,
+                                now,
+                            );
+                    }
+                    self.settings_scroll.end_native_momentum(now, true);
+                }
+                NativePhase::None if sample.sequence_complete => {
+                    self.settings_scroll.end_native_momentum(now, false);
+                }
+                NativePhase::None => {}
+            },
+        }
         self.request_redraw();
     }
 
@@ -739,10 +871,12 @@ impl App {
     /// How many content rows can be scrolled below the fold for the current
     /// category. Returns 0 for categories that fit without scrolling.
     pub(crate) fn settings_max_scroll_rows(&self) -> i32 {
-        // Debug overflows; the other categories fit. The exact count is
-        // computed in the layout module; expose a stable value here.
-        // (See `layout::settings_panel::debug_category_overflow_rows`.)
+        // Scrollable category extents are computed in the layout module;
+        // expose stable row-based values for the legacy input path here.
         match self.settings_category {
+            crate::domain::settings::SettingsCategory::Darkness => {
+                crate::layout::settings_panel::darkness_category_overflow_rows()
+            }
             crate::domain::settings::SettingsCategory::Debug => {
                 crate::layout::settings_panel::debug_category_overflow_rows()
             }
@@ -1000,6 +1134,7 @@ impl App {
         }
         self.pending_press = None;
         self.pressed_on_control = false;
+        self.reset_settings_category_hover();
         self.settings_open = true;
         debug_log!("settings: opened");
         self.request_redraw();
@@ -1011,6 +1146,7 @@ impl App {
             return;
         }
         self.settings_open = false;
+        self.reset_settings_category_hover();
         // Drop any in-flight slider drag and reset the per-category scroll so
         // the next open starts at the top.
         self.settings_slider_drag = None;
@@ -1968,6 +2104,14 @@ fn apply_param_to_renderer(
         LiquidGlassParamField::Thickness => r.set_liquid_glass_thickness(value),
         LiquidGlassParamField::RefractiveIndex => r.set_liquid_glass_refractive_index(value),
         LiquidGlassParamField::Saturation => r.set_liquid_glass_saturation(value),
+        LiquidGlassParamField::AutoDarknessMax => r.set_liquid_glass_auto_darkness_max(value),
+        LiquidGlassParamField::GlassDarkness => r.set_liquid_glass_darkness(value),
+        LiquidGlassParamField::ContextMenuGlassDarkness => {
+            r.set_liquid_glass_context_menu_darkness(value)
+        }
+        LiquidGlassParamField::SettingsPanelGlassDarkness => {
+            r.set_liquid_glass_settings_panel_darkness(value)
+        }
         LiquidGlassParamField::ChromaticAberration => {
             r.set_liquid_glass_chromatic_aberration(value)
         }
@@ -2032,6 +2176,7 @@ mod folder_page_commit_tests {
                 raw_dy: 0.0,
                 canonical_dx: dx,
                 canonical_dy: 0.0,
+                canonical_unaccelerated_dy: None,
                 source: ScrollSource::Precise,
                 contact_phase: phase,
                 momentum_phase: NativeScrollPhase::None,
@@ -2083,6 +2228,7 @@ mod folder_page_commit_tests {
             raw_dy: 0.0,
             canonical_dx: 0.0,
             canonical_dy: -0.0,
+            canonical_unaccelerated_dy: None,
             source: ScrollSource::Precise,
             contact_phase: phase,
             momentum_phase: NativeScrollPhase::None,
@@ -2113,6 +2259,7 @@ mod folder_page_commit_tests {
             raw_dy: 0.0,
             canonical_dx: 0.25,
             canonical_dy: 0.0,
+            canonical_unaccelerated_dy: None,
             source: ScrollSource::Precise,
             contact_phase: NativeScrollPhase::Changed,
             momentum_phase: NativeScrollPhase::None,

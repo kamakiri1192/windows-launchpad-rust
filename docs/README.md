@@ -6,6 +6,10 @@
   Feature-ready refactor plan and migration phases.
 - [GLASS_FOCUS_VEIL.md](GLASS_FOCUS_VEIL.md) - フォルダ表示時に下層シーンを
   ぼかすGlass Focus Veilの目的、描画順、GPU構成、調整方法、視覚QA項目。
+- [LIQUID_GLASS_PER_SURFACE_BLUR.md](LIQUID_GLASS_PER_SURFACE_BLUR.md) -
+  上層パーツ直前の完成シーンを背景にするLiquid Glassブラーの設計。checkpoint、
+  desktopへのflatten、lane別completed blur、backdrop replacement、別パーツへの
+  導入手順、GPU resource lifecycle、失敗例、視覚QAをまとめる。
 - [INPUT_PASSTHROUGH_REQUIREMENTS.md](INPUT_PASSTHROUGH_REQUIREMENTS.md) —
   ページフレーム外のクリック、ドラッグ、縦スクロール、ホバーの入力要件。
 - [INPUT_PASSTHROUGH_TECHNICAL_RESEARCH.md](INPUT_PASSTHROUGH_TECHNICAL_RESEARCH.md) —
@@ -22,6 +26,8 @@
   invalidation rules, and corruption recovery.
 - [ICON_COMPATIBILITY_CI.md](ICON_COMPATIBILITY_CI.md) — macOS 14 / 15 / 26
   icon capture, pixel and outer-shape comparison, artifacts, and label trigger.
+- [CONTEXT_MENU_ICON_ASSETS.md](CONTEXT_MENU_ICON_ASSETS.md) — SVGを透過PNGへ
+  変換し、コンテキストメニューのテクスチャアイコンとして取り込む手順。
 - [APP_REFRESH.md](APP_REFRESH.md) — live Start Menu change detection
   (added / updated / removed) and click-stability via stable app ids.
 - [EDIT_MODE_VISUAL_QA.md](EDIT_MODE_VISUAL_QA.md) — manual visual QA for

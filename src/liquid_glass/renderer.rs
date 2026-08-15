@@ -1,3 +1,7 @@
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 mod frame;
@@ -9,7 +13,7 @@ use super::capture::{
     GpuCaptureFrame,
 };
 use super::geometry::{shapes_from_layout, GlassShape};
-use super::params::{DebugOptions, LiquidGlassParams};
+use super::params::{AutoDarknessUpdateMode, DebugOptions, LiquidGlassParams};
 use crate::layout::grid::GridLayout;
 
 pub(super) const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -37,9 +41,81 @@ pub(super) struct GlassUniforms {
     debug_flags: u32,
     time: f32,
     activation: f32,
-    _pad: [f32; 2],
+    backdrop_replacement: f32,
+    auto_darkness_enabled: u32,
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
+    glass_darkness: f32,
+    _uniform_pad: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct BlurUniforms {
+    sample_scale: f32,
+    _pad: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct SceneFlattenUniforms {
+    viewport: [f32; 2],
+    backdrop_origin: [f32; 2],
+    backdrop_extent: [f32; 2],
+    _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct AutoDarknessUniforms {
+    now: f32,
+    mode: u32,
+    flags: u32,
+    max_darkness: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct AutoDarknessState {
+    from_darkness: f32,
+    target_darkness: f32,
+    transition_started_at: f32,
+    filtered_coverage: f32,
+    last_full_update_at: f32,
+    initialized: u32,
+    classification_count: u32,
+    displayed_darkness: f32,
+    probe_samples: [f32; 16],
+}
+
+const AUTO_DARKNESS_READBACK_IDLE: u8 = 0;
+const AUTO_DARKNESS_READBACK_COPY_ENCODED: u8 = 1;
+const AUTO_DARKNESS_READBACK_MAP_PENDING: u8 = 2;
+const AUTO_DARKNESS_READBACK_READY: u8 = 3;
+const AUTO_DARKNESS_READBACK_FAILED: u8 = 4;
+/// Debug HUD refresh rate. This is independent of backdrop capture and the
+/// renderer's presentation cadence.
+const AUTO_DARKNESS_READBACK_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Debug)]
+struct AutoDarknessReadback {
+    buffer: wgpu::Buffer,
+    status: Arc<AtomicU8>,
+    enabled: bool,
+    latest_value: f32,
+    last_copy_at: Option<Instant>,
+}
+
+impl AutoDarknessReadback {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            buffer: create_auto_darkness_readback_buffer(device),
+            status: Arc::new(AtomicU8::new(AUTO_DARKNESS_READBACK_IDLE)),
+            enabled: false,
+            latest_value: 0.0,
+            last_copy_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -236,17 +312,45 @@ pub struct LiquidGlassRenderer {
     gpu_backdrop_is_copy_target: bool,
     blur_texture: wgpu::Texture,
     blur_view: wgpu::TextureView,
+    /// Raw pre-menu swapchain pixels copied after every lower/modal layer.
+    /// The texture uses the surface format without its sRGB suffix so shader
+    /// sampling observes the same encoded RGB values as the captured desktop.
+    context_menu_scene_texture: wgpu::Texture,
+    context_menu_scene_view: wgpu::TextureView,
+    /// Opaque, capture-sized composition of the pre-menu scene over desktop.
+    context_menu_source_texture: wgpu::Texture,
+    context_menu_source_view: wgpu::TextureView,
+    /// Fully reconstructed blur of `context_menu_source_texture`.
+    context_menu_blur_texture: wgpu::Texture,
+    context_menu_blur_view: wgpu::TextureView,
     /// Pyramids L1=1/2, L2=1/4, L3=1/8 (src for downsample, dst for upsample).
     blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
+    /// Optional context-menu-local blur radius. Other lanes use `params`.
+    context_menu_blur_radius: Option<f32>,
+    context_menu_backdrop_replacement: f32,
+    /// Settings-panel-local blur and completed-scene replacement. These use
+    /// the same per-surface completed-scene resources as the context menu.
+    settings_panel_blur_radius: Option<f32>,
+    settings_panel_backdrop_replacement: f32,
+    settings_panel_completed_scene_enabled: bool,
+    context_menu_glass_darkness: f32,
+    settings_panel_glass_darkness: f32,
+    blur_uniform_buffer: wgpu::Buffer,
+    context_menu_blur_uniform_buffer: wgpu::Buffer,
+    context_menu_flatten_uniform_buffer: wgpu::Buffer,
     sampler: wgpu::Sampler,
     geometry_pipeline: wgpu::RenderPipeline,
     badge_geometry_pipeline: wgpu::RenderPipeline,
     blur_downsample_pipeline: wgpu::RenderPipeline,
     blur_upsample_pipeline: wgpu::RenderPipeline,
+    context_menu_flatten_pipeline: wgpu::RenderPipeline,
     final_pipeline: wgpu::RenderPipeline,
+    backdrop_stats_pipeline: wgpu::ComputePipeline,
     geometry_bind_group_layout: wgpu::BindGroupLayout,
     blur_bind_group_layout: wgpu::BindGroupLayout,
+    context_menu_flatten_bind_group_layout: wgpu::BindGroupLayout,
     final_bind_group_layout: wgpu::BindGroupLayout,
+    backdrop_stats_bind_group_layout: wgpu::BindGroupLayout,
     geometry_bind_group: wgpu::BindGroup,
     /// Downsample bind groups: index i reads level i (level 0 == backdrop) and
     /// writes blur_levels[i]. Recreated when the backdrop source view changes.
@@ -254,12 +358,19 @@ pub struct LiquidGlassRenderer {
     /// Upsample bind groups: index i reads blur_levels[i+1] and writes
     /// blur_levels[i] (or the full-res blur texture for i == 2).
     blur_up_bind_groups: [wgpu::BindGroup; 3],
+    context_menu_blur_down_bind_groups: [wgpu::BindGroup; 3],
+    context_menu_blur_up_bind_groups: [wgpu::BindGroup; 3],
+    context_menu_flatten_bind_group: wgpu::BindGroup,
+    backdrop_stats_bind_group: wgpu::BindGroup,
     final_bind_group: wgpu::BindGroup,
     grid_overlay_final_bind_group: wgpu::BindGroup,
     drag_overlay_final_bind_group: wgpu::BindGroup,
     badge_final_bind_group: wgpu::BindGroup,
     modal_badge_final_bind_group: wgpu::BindGroup,
     control_final_bind_group: wgpu::BindGroup,
+    /// Ordinary modal compositing for folder panels. Settings has a separate
+    /// bind group because it samples the completed-scene blur resources.
+    modal_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     context_menu_final_bind_group: wgpu::BindGroup,
     grid_overlay_geometry_bind_group: wgpu::BindGroup,
@@ -268,7 +379,15 @@ pub struct LiquidGlassRenderer {
     modal_badge_geometry_bind_group: wgpu::BindGroup,
     control_geometry_bind_group: wgpu::BindGroup,
     texture_size: (u32, u32),
+    surface_format: wgpu::TextureFormat,
     last_capture_at: Option<Instant>,
+    auto_darkness_uniform_buffer: wgpu::Buffer,
+    auto_darkness_state_buffer: wgpu::Buffer,
+    auto_darkness_readback: AutoDarknessReadback,
+    auto_darkness_clock_origin: Instant,
+    auto_darkness_update_mode: AutoDarknessUpdateMode,
+    auto_darkness_reset_state: bool,
+    backdrop_stats_dirty: bool,
     /// The blur pyramid depends on the captured backdrop, not on foreground
     /// animation. Rebuild it only when that backdrop (or blur parameters)
     /// changes instead of re-blurring identical pixels every render frame.
@@ -286,6 +405,12 @@ struct GeometryKey {
     width: u32,
     height: u32,
     shape_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BlurProfile {
+    level_count: usize,
+    sample_scale: f32,
 }
 
 fn intersect_bounds(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
@@ -422,6 +547,7 @@ fn capture_region_for_shapes(
 
 fn capture_sampling_padding(
     params: &LiquidGlassParams,
+    requested_blur_radius: f32,
     debug: DebugOptions,
     width: u32,
     height: u32,
@@ -434,10 +560,12 @@ fn capture_sampling_padding(
     };
     let refraction = max_displacement * chromatic_scale + 3.0;
     let reflection = max_displacement * 0.42 + width.max(height) as f32 * 0.035;
-    let blur_support = if debug.disable_blur || params.blur_radius < 0.5 {
+    let blur_support = if debug.disable_blur || requested_blur_radius < 0.5 {
         1.0
     } else {
-        40.0
+        // The widest context profile scales every pyramid kernel, so its
+        // support extends beyond the old fixed 40 px margin.
+        requested_blur_radius * 3.0 + 8.0
     };
     refraction.max(reflection) + blur_support + params.blend * 0.25 + 4.0
 }
@@ -483,6 +611,36 @@ impl LiquidGlassRenderer {
             create_uniform_buffer(device, "liquid glass settings panel uniforms", &uniforms);
         let context_menu_uniform_buffer =
             create_uniform_buffer(device, "liquid glass context menu uniforms", &uniforms);
+        let blur_uniforms = BlurUniforms {
+            sample_scale: 1.0,
+            _pad: [0.0; 3],
+        };
+        let blur_uniform_buffer =
+            create_blur_uniform_buffer(device, "liquid glass blur uniforms", &blur_uniforms);
+        let context_menu_blur_uniform_buffer = create_blur_uniform_buffer(
+            device,
+            "liquid glass context menu blur uniforms",
+            &blur_uniforms,
+        );
+        let context_menu_flatten_uniforms = SceneFlattenUniforms {
+            viewport: [width.max(1) as f32, height.max(1) as f32],
+            backdrop_origin: [0.0; 2],
+            backdrop_extent: [width.max(1) as f32, height.max(1) as f32],
+            _pad: [0.0; 2],
+        };
+        let context_menu_flatten_uniform_buffer =
+            create_scene_flatten_uniform_buffer(device, &context_menu_flatten_uniforms);
+        let auto_darkness_update_mode = AutoDarknessUpdateMode::default();
+        let auto_darkness_uniforms = AutoDarknessUniforms {
+            now: 0.0,
+            mode: auto_darkness_update_mode.shader_value(),
+            flags: 1,
+            max_darkness: params.auto_darkness_max,
+        };
+        let auto_darkness_uniform_buffer =
+            create_auto_darkness_uniform_buffer(device, &auto_darkness_uniforms);
+        let auto_darkness_state_buffer = create_auto_darkness_state_buffer(device);
+        let auto_darkness_readback = AutoDarknessReadback::new(device);
 
         let shapes = shapes_from_layout(layout, width as f32, &[]);
         let active_base_shapes = shapes.clone();
@@ -538,6 +696,17 @@ impl LiquidGlassRenderer {
         // any resolution-mismatch stretch.
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
+        let (context_menu_scene_texture, context_menu_scene_view) =
+            create_context_menu_scene_texture(device, width, height, surface_format);
+        let (context_menu_source_texture, context_menu_source_view) = create_blur_texture_raw(
+            device,
+            width,
+            height,
+            0,
+            "context menu flattened scene texture",
+        );
+        let (context_menu_blur_texture, context_menu_blur_view) =
+            create_blur_texture_raw(device, width, height, 0, "context menu blur texture");
         // L1=1/2, L2=1/4, L3=1/8 pyramid levels used by both down and up passes.
         let blur_levels = [
             create_blur_texture_raw(device, width, height, 1, "blur level 1"),
@@ -585,13 +754,40 @@ impl LiquidGlassRenderer {
                     texture_entry(3, false),
                     texture_entry(4, true),
                     texture_entry(5, true),
+                    auto_darkness_state_entry(6, wgpu::ShaderStages::FRAGMENT, true),
+                    auto_darkness_uniform_entry(7, wgpu::ShaderStages::FRAGMENT),
+                ],
+            });
+
+        let backdrop_stats_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("liquid glass backdrop stats bgl"),
+                entries: &[
+                    texture_entry_for(0, true, wgpu::ShaderStages::COMPUTE),
+                    sampler_entry_for(1, wgpu::ShaderStages::COMPUTE),
+                    auto_darkness_uniform_entry(2, wgpu::ShaderStages::COMPUTE),
+                    auto_darkness_state_entry(3, wgpu::ShaderStages::COMPUTE, false),
                 ],
             });
 
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("liquid glass blur bgl"),
-                entries: &[texture_entry(0, true), sampler_entry(1)],
+                entries: &[
+                    texture_entry(0, true),
+                    sampler_entry(1),
+                    blur_uniform_entry(2),
+                ],
+            });
+        let context_menu_flatten_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("liquid glass context menu scene flatten bgl"),
+                entries: &[
+                    texture_entry(0, true),
+                    texture_entry(1, true),
+                    sampler_entry(2),
+                    scene_flatten_uniform_entry(3),
+                ],
             });
 
         let geometry_bind_group = create_geometry_bind_group(
@@ -651,6 +847,8 @@ impl LiquidGlassRenderer {
             &geometry_view,
             &geometry_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let grid_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -661,6 +859,8 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let drag_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -671,6 +871,8 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let badge_final_bind_group = create_final_bind_group(
             device,
@@ -681,6 +883,8 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let modal_badge_final_bind_group = create_final_bind_group(
             device,
@@ -691,6 +895,8 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let control_final_bind_group = create_final_bind_group(
             device,
@@ -701,8 +907,10 @@ impl LiquidGlassRenderer {
             &control_geometry_view,
             &control_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
-        let settings_panel_final_bind_group = create_final_bind_group(
+        let modal_final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
             &settings_panel_uniform_buffer,
@@ -711,24 +919,65 @@ impl LiquidGlassRenderer {
             &overlay_geometry_view,
             &overlay_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
+        );
+        let settings_panel_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_panel_uniform_buffer,
+            &context_menu_source_view,
+            &sampler,
+            &overlay_geometry_view,
+            &overlay_tint_view,
+            &context_menu_blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let context_menu_final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
             &context_menu_uniform_buffer,
-            &backdrop_view,
+            &context_menu_source_view,
             &sampler,
             &overlay_geometry_view,
             &overlay_tint_view,
-            &blur_view,
+            &context_menu_blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
+        );
+        let backdrop_stats_bind_group = create_backdrop_stats_bind_group(
+            device,
+            &backdrop_stats_bind_group_layout,
+            &backdrop_view,
+            &sampler,
+            &auto_darkness_uniform_buffer,
+            &auto_darkness_state_buffer,
         );
         let (blur_down_bind_groups, blur_up_bind_groups) = create_blur_pyramid_bind_groups(
             device,
             &blur_bind_group_layout,
             &backdrop_view,
             &blur_levels,
-            &blur_view,
             &sampler,
+            &blur_uniform_buffer,
+        );
+        let (context_menu_blur_down_bind_groups, context_menu_blur_up_bind_groups) =
+            create_blur_pyramid_bind_groups(
+                device,
+                &blur_bind_group_layout,
+                &context_menu_source_view,
+                &blur_levels,
+                &sampler,
+                &context_menu_blur_uniform_buffer,
+            );
+        let context_menu_flatten_bind_group = create_scene_flatten_bind_group(
+            device,
+            &context_menu_flatten_bind_group_layout,
+            &context_menu_scene_view,
+            &backdrop_view,
+            &sampler,
+            &context_menu_flatten_uniform_buffer,
         );
 
         let geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -749,6 +998,12 @@ impl LiquidGlassRenderer {
                 include_str!("../../assets/shaders/liquid_glass_final.wgsl").into(),
             ),
         });
+        let backdrop_stats_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("liquid glass backdrop stats shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../assets/shaders/liquid_glass_backdrop_stats.wgsl").into(),
+            ),
+        });
         let blur_downsample_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("liquid glass blur downsample shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -761,6 +1016,13 @@ impl LiquidGlassRenderer {
                 include_str!("../../assets/shaders/liquid_glass_blur_upsample.wgsl").into(),
             ),
         });
+        let context_menu_flatten_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("liquid glass context menu scene flatten shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../assets/shaders/liquid_glass_scene_flatten.wgsl").into(),
+                ),
+            });
 
         let geometry_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -872,6 +1134,50 @@ impl LiquidGlassRenderer {
                 cache: None,
             });
 
+        let context_menu_flatten_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("liquid glass context menu scene flatten pipeline layout"),
+                bind_group_layouts: &[Some(&context_menu_flatten_bind_group_layout)],
+                immediate_size: 0,
+            });
+        let context_menu_flatten_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("liquid glass context menu scene flatten pipeline"),
+                layout: Some(&context_menu_flatten_pipeline_layout),
+                vertex: fullscreen_vertex_state(&context_menu_flatten_shader),
+                fragment: Some(wgpu::FragmentState {
+                    module: &context_menu_flatten_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: BLUR_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: fullscreen_primitive_state(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
+        let backdrop_stats_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("liquid glass backdrop stats pipeline layout"),
+                bind_group_layouts: &[Some(&backdrop_stats_bind_group_layout)],
+                immediate_size: 0,
+            });
+        let backdrop_stats_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("liquid glass backdrop stats pipeline"),
+                layout: Some(&backdrop_stats_pipeline_layout),
+                module: &backdrop_stats_shader,
+                entry_point: Some("cs_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
         let final_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("liquid glass final pipeline layout"),
@@ -972,25 +1278,50 @@ impl LiquidGlassRenderer {
             gpu_backdrop_is_copy_target: false,
             blur_texture,
             blur_view,
+            context_menu_scene_texture,
+            context_menu_scene_view,
+            context_menu_source_texture,
+            context_menu_source_view,
+            context_menu_blur_texture,
+            context_menu_blur_view,
             blur_levels,
+            context_menu_blur_radius: None,
+            context_menu_backdrop_replacement: 0.0,
+            settings_panel_blur_radius: None,
+            settings_panel_backdrop_replacement: 0.0,
+            settings_panel_completed_scene_enabled: false,
+            context_menu_glass_darkness: 0.0,
+            settings_panel_glass_darkness: 0.0,
+            blur_uniform_buffer,
+            context_menu_blur_uniform_buffer,
+            context_menu_flatten_uniform_buffer,
             sampler,
             geometry_pipeline,
             badge_geometry_pipeline,
             blur_downsample_pipeline,
             blur_upsample_pipeline,
+            context_menu_flatten_pipeline,
             final_pipeline,
+            backdrop_stats_pipeline,
             geometry_bind_group_layout,
             blur_bind_group_layout,
+            context_menu_flatten_bind_group_layout,
             final_bind_group_layout,
+            backdrop_stats_bind_group_layout,
             geometry_bind_group,
             blur_down_bind_groups,
             blur_up_bind_groups,
+            context_menu_blur_down_bind_groups,
+            context_menu_blur_up_bind_groups,
+            context_menu_flatten_bind_group,
+            backdrop_stats_bind_group,
             final_bind_group,
             grid_overlay_final_bind_group,
             drag_overlay_final_bind_group,
             badge_final_bind_group,
             modal_badge_final_bind_group,
             control_final_bind_group,
+            modal_final_bind_group,
             settings_panel_final_bind_group,
             context_menu_final_bind_group,
             grid_overlay_geometry_bind_group,
@@ -999,7 +1330,15 @@ impl LiquidGlassRenderer {
             modal_badge_geometry_bind_group,
             control_geometry_bind_group,
             texture_size: (width.max(1), height.max(1)),
+            surface_format,
             last_capture_at: None,
+            auto_darkness_uniform_buffer,
+            auto_darkness_state_buffer,
+            auto_darkness_readback,
+            auto_darkness_clock_origin: Instant::now(),
+            auto_darkness_update_mode,
+            auto_darkness_reset_state: true,
+            backdrop_stats_dirty: true,
             blur_dirty: true,
             last_geometry_key: None,
             stats: RenderStats::new(),
@@ -1027,6 +1366,17 @@ impl LiquidGlassRenderer {
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
+        let (context_menu_scene_texture, context_menu_scene_view) =
+            create_context_menu_scene_texture(device, width, height, self.surface_format);
+        let (context_menu_source_texture, context_menu_source_view) = create_blur_texture_raw(
+            device,
+            width,
+            height,
+            0,
+            "context menu flattened scene texture",
+        );
+        let (context_menu_blur_texture, context_menu_blur_view) =
+            create_blur_texture_raw(device, width, height, 0, "context menu blur texture");
         let blur_levels = [
             create_blur_texture_raw(device, width, height, 1, "blur level 1"),
             create_blur_texture_raw(device, width, height, 2, "blur level 2"),
@@ -1048,12 +1398,19 @@ impl LiquidGlassRenderer {
         self.control_tint_view = control_tint_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
+        self.backdrop_stats_dirty = true;
         self.backdrop_mapping = BackdropMapping::full(width, height);
         self.gpu_backdrop_texture = None;
         self.using_gpu_backdrop = false;
         self.gpu_backdrop_is_copy_target = false;
         self.blur_texture = blur_texture;
         self.blur_view = blur_view;
+        self.context_menu_scene_texture = context_menu_scene_texture;
+        self.context_menu_scene_view = context_menu_scene_view;
+        self.context_menu_source_texture = context_menu_source_texture;
+        self.context_menu_source_view = context_menu_source_view;
+        self.context_menu_blur_texture = context_menu_blur_texture;
+        self.context_menu_blur_view = context_menu_blur_view;
         self.blur_levels = blur_levels;
         self.texture_size = (width, height);
         self.blur_dirty = true;
@@ -1065,11 +1422,37 @@ impl LiquidGlassRenderer {
             &self.blur_bind_group_layout,
             &self.backdrop_view,
             &self.blur_levels,
-            &self.blur_view,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
+        let (context_down, context_up) = create_blur_pyramid_bind_groups(
+            device,
+            &self.blur_bind_group_layout,
+            &self.context_menu_source_view,
+            &self.blur_levels,
+            &self.sampler,
+            &self.context_menu_blur_uniform_buffer,
+        );
+        self.context_menu_blur_down_bind_groups = context_down;
+        self.context_menu_blur_up_bind_groups = context_up;
+        self.context_menu_flatten_bind_group = create_scene_flatten_bind_group(
+            device,
+            &self.context_menu_flatten_bind_group_layout,
+            &self.context_menu_scene_view,
+            &self.backdrop_view,
+            &self.sampler,
+            &self.context_menu_flatten_uniform_buffer,
+        );
+        self.backdrop_stats_bind_group = create_backdrop_stats_bind_group(
+            device,
+            &self.backdrop_stats_bind_group_layout,
+            &self.backdrop_view,
+            &self.sampler,
+            &self.auto_darkness_uniform_buffer,
+            &self.auto_darkness_state_buffer,
+        );
         let backdrop_view = self.backdrop_view.clone();
         self.rebuild_final_bind_groups(device, &backdrop_view);
     }
@@ -1082,12 +1465,190 @@ impl LiquidGlassRenderer {
             &self.blur_bind_group_layout,
             view,
             &self.blur_levels,
-            &self.blur_view,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
+        let (context_down, context_up) = create_blur_pyramid_bind_groups(
+            device,
+            &self.blur_bind_group_layout,
+            &self.context_menu_source_view,
+            &self.blur_levels,
+            &self.sampler,
+            &self.context_menu_blur_uniform_buffer,
+        );
+        self.context_menu_blur_down_bind_groups = context_down;
+        self.context_menu_blur_up_bind_groups = context_up;
+        self.context_menu_flatten_bind_group = create_scene_flatten_bind_group(
+            device,
+            &self.context_menu_flatten_bind_group_layout,
+            &self.context_menu_scene_view,
+            view,
+            &self.sampler,
+            &self.context_menu_flatten_uniform_buffer,
+        );
+        self.backdrop_stats_bind_group = create_backdrop_stats_bind_group(
+            device,
+            &self.backdrop_stats_bind_group_layout,
+            view,
+            &self.sampler,
+            &self.auto_darkness_uniform_buffer,
+            &self.auto_darkness_state_buffer,
+        );
+        self.backdrop_stats_dirty = true;
         self.rebuild_final_bind_groups(device, view);
+    }
+
+    fn update_auto_darkness_uniforms(&mut self, queue: &wgpu::Queue) {
+        if self.auto_darkness_reset_state {
+            queue.write_buffer(
+                &self.auto_darkness_state_buffer,
+                0,
+                bytemuck::bytes_of(&AutoDarknessState::default()),
+            );
+            self.auto_darkness_reset_state = false;
+        }
+        let uniforms = AutoDarknessUniforms {
+            now: self.auto_darkness_clock_origin.elapsed().as_secs_f32(),
+            mode: self.auto_darkness_update_mode.shader_value(),
+            flags: u32::from(self.backdrop_stats_dirty),
+            max_darkness: self.params.auto_darkness_max,
+        };
+        queue.write_buffer(
+            &self.auto_darkness_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+    }
+
+    fn encode_backdrop_stats(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("liquid glass backdrop stats pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.backdrop_stats_pipeline);
+            pass.set_bind_group(0, &self.backdrop_stats_bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        self.backdrop_stats_dirty = false;
+    }
+
+    fn encode_auto_darkness_debug_readback(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.auto_darkness_readback.enabled || !self.params.auto_darkness_enabled {
+            return;
+        }
+        if self.auto_darkness_readback.status.load(Ordering::Acquire) != AUTO_DARKNESS_READBACK_IDLE
+        {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .auto_darkness_readback
+            .last_copy_at
+            .is_some_and(|last| now.duration_since(last) < AUTO_DARKNESS_READBACK_INTERVAL)
+        {
+            return;
+        }
+
+        encoder.copy_buffer_to_buffer(
+            &self.auto_darkness_state_buffer,
+            0,
+            &self.auto_darkness_readback.buffer,
+            0,
+            std::mem::size_of::<AutoDarknessState>() as u64,
+        );
+        self.auto_darkness_readback.last_copy_at = Some(now);
+        self.auto_darkness_readback
+            .status
+            .store(AUTO_DARKNESS_READBACK_COPY_ENCODED, Ordering::Release);
+    }
+
+    /// Start mapping a debug copy after the command buffer containing it has
+    /// been submitted. Mapping is asynchronous and never stalls the frame.
+    pub(crate) fn begin_auto_darkness_debug_readback(&mut self) {
+        if self
+            .auto_darkness_readback
+            .status
+            .compare_exchange(
+                AUTO_DARKNESS_READBACK_COPY_ENCODED,
+                AUTO_DARKNESS_READBACK_MAP_PENDING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return;
+        }
+
+        let status = Arc::clone(&self.auto_darkness_readback.status);
+        self.auto_darkness_readback.buffer.slice(..).map_async(
+            wgpu::MapMode::Read,
+            move |result| {
+                status.store(
+                    if result.is_ok() {
+                        AUTO_DARKNESS_READBACK_READY
+                    } else {
+                        AUTO_DARKNESS_READBACK_FAILED
+                    },
+                    Ordering::Release,
+                );
+            },
+        );
+    }
+
+    pub(crate) fn set_auto_darkness_debug_readback_enabled(&mut self, enabled: bool) {
+        self.auto_darkness_readback.enabled = enabled;
+        if !enabled {
+            self.auto_darkness_readback.latest_value = 0.0;
+            self.auto_darkness_readback.last_copy_at = None;
+        }
+    }
+
+    /// Poll an in-flight mapping without waiting and return the latest complete
+    /// value. A one-frame-old value is preferable to blocking the UI thread.
+    pub(crate) fn poll_auto_darkness_debug_value(&mut self, device: &wgpu::Device) -> f32 {
+        if self.auto_darkness_readback.status.load(Ordering::Acquire)
+            == AUTO_DARKNESS_READBACK_MAP_PENDING
+        {
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
+
+        match self.auto_darkness_readback.status.load(Ordering::Acquire) {
+            AUTO_DARKNESS_READBACK_READY => {
+                let mapped = self
+                    .auto_darkness_readback
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range();
+                let state = *bytemuck::from_bytes::<AutoDarknessState>(&mapped);
+                drop(mapped);
+                self.auto_darkness_readback.buffer.unmap();
+                self.auto_darkness_readback.latest_value = if state.displayed_darkness.is_finite() {
+                    state
+                        .displayed_darkness
+                        .clamp(0.0, self.params.auto_darkness_max)
+                } else {
+                    0.0
+                };
+                self.auto_darkness_readback
+                    .status
+                    .store(AUTO_DARKNESS_READBACK_IDLE, Ordering::Release);
+            }
+            AUTO_DARKNESS_READBACK_FAILED => {
+                self.auto_darkness_readback
+                    .status
+                    .store(AUTO_DARKNESS_READBACK_IDLE, Ordering::Release);
+            }
+            _ => {}
+        }
+
+        if self.params.enabled && self.params.auto_darkness_enabled {
+            self.auto_darkness_readback.latest_value
+        } else {
+            0.0
+        }
     }
 
     fn rebuild_final_bind_groups(
@@ -1104,6 +1665,8 @@ impl LiquidGlassRenderer {
             &self.geometry_view,
             &self.geometry_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.grid_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -1114,6 +1677,8 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.drag_overlay_final_bind_group = create_final_bind_group(
             device,
@@ -1124,6 +1689,8 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.badge_final_bind_group = create_final_bind_group(
             device,
@@ -1134,6 +1701,8 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.modal_badge_final_bind_group = create_final_bind_group(
             device,
@@ -1144,6 +1713,8 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.control_final_bind_group = create_final_bind_group(
             device,
@@ -1154,8 +1725,10 @@ impl LiquidGlassRenderer {
             &self.control_geometry_view,
             &self.control_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
-        self.settings_panel_final_bind_group = create_final_bind_group(
+        self.modal_final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
             &self.settings_panel_uniform_buffer,
@@ -1164,16 +1737,32 @@ impl LiquidGlassRenderer {
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
             &self.blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
+        );
+        self.settings_panel_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_panel_uniform_buffer,
+            &self.context_menu_source_view,
+            &self.sampler,
+            &self.overlay_geometry_view,
+            &self.overlay_tint_view,
+            &self.context_menu_blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.context_menu_final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
             &self.context_menu_uniform_buffer,
-            backdrop_view,
+            &self.context_menu_source_view,
             &self.sampler,
             &self.overlay_geometry_view,
             &self.overlay_tint_view,
-            &self.blur_view,
+            &self.context_menu_blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
     }
 
@@ -1202,7 +1791,15 @@ impl LiquidGlassRenderer {
             width,
             height,
             scroll_x,
-            capture_sampling_padding(&self.params, self.debug, width, height),
+            capture_sampling_padding(
+                &self.params,
+                self.params
+                    .blur_radius
+                    .max(self.context_menu_blur_radius.unwrap_or(0.0)),
+                self.debug,
+                width,
+                height,
+            ),
             &groups,
         )
     }
@@ -1236,6 +1833,20 @@ impl LiquidGlassRenderer {
                 create_backdrop_texture(device, frame.width, frame.height);
             let (blur_texture, blur_view) =
                 create_blur_texture_raw(device, frame.width, frame.height, 0, "blur texture");
+            let (context_menu_source_texture, context_menu_source_view) = create_blur_texture_raw(
+                device,
+                frame.width,
+                frame.height,
+                0,
+                "context menu flattened scene texture",
+            );
+            let (context_menu_blur_texture, context_menu_blur_view) = create_blur_texture_raw(
+                device,
+                frame.width,
+                frame.height,
+                0,
+                "context menu blur texture",
+            );
             let blur_levels = [
                 create_blur_texture_raw(device, frame.width, frame.height, 1, "blur level 1"),
                 create_blur_texture_raw(device, frame.width, frame.height, 2, "blur level 2"),
@@ -1245,6 +1856,10 @@ impl LiquidGlassRenderer {
             self.backdrop_view = backdrop_view;
             self.blur_texture = blur_texture;
             self.blur_view = blur_view;
+            self.context_menu_source_texture = context_menu_source_texture;
+            self.context_menu_source_view = context_menu_source_view;
+            self.context_menu_blur_texture = context_menu_blur_texture;
+            self.context_menu_blur_view = context_menu_blur_view;
             self.blur_levels = blur_levels;
         }
         self.backdrop_mapping = next_mapping;
@@ -1291,6 +1906,16 @@ impl LiquidGlassRenderer {
             if texture_changed {
                 let (blur_texture, blur_view) =
                     create_blur_texture_raw(device, width, height, 0, "blur texture");
+                let (context_menu_source_texture, context_menu_source_view) =
+                    create_blur_texture_raw(
+                        device,
+                        width,
+                        height,
+                        0,
+                        "context menu flattened scene texture",
+                    );
+                let (context_menu_blur_texture, context_menu_blur_view) =
+                    create_blur_texture_raw(device, width, height, 0, "context menu blur texture");
                 let blur_levels = [
                     create_blur_texture_raw(device, width, height, 1, "blur level 1"),
                     create_blur_texture_raw(device, width, height, 2, "blur level 2"),
@@ -1298,6 +1923,10 @@ impl LiquidGlassRenderer {
                 ];
                 self.blur_texture = blur_texture;
                 self.blur_view = blur_view;
+                self.context_menu_source_texture = context_menu_source_texture;
+                self.context_menu_source_view = context_menu_source_view;
+                self.context_menu_blur_texture = context_menu_blur_texture;
+                self.context_menu_blur_view = context_menu_blur_view;
                 self.blur_levels = blur_levels;
             }
             self.bind_backdrop_view(device, &gpu_view);
@@ -1616,6 +2245,64 @@ impl LiquidGlassRenderer {
         }
     }
 
+    /// Set the context menu's local blur profile without rebuilding geometry.
+    /// The profile is rendered into its own completed full-resolution output.
+    pub fn set_context_menu_blur_radius(&mut self, radius: Option<f32>) {
+        let radius = radius.map(|value| {
+            if value.is_finite() {
+                value.clamp(0.0, 64.0)
+            } else {
+                0.0
+            }
+        });
+        if self.context_menu_blur_radius == radius {
+            return;
+        }
+        self.context_menu_blur_radius = radius;
+    }
+
+    pub fn set_context_menu_backdrop_replacement(&mut self, replacement: f32) {
+        self.context_menu_backdrop_replacement = if replacement.is_finite() {
+            replacement.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn set_context_menu_glass_darkness(&mut self, value: f32) {
+        self.context_menu_glass_darkness = value.clamp(0.0, 1.0);
+    }
+
+    /// Set the settings panel's local completed-scene blur profile.
+    pub fn set_settings_panel_blur_radius(&mut self, radius: Option<f32>) {
+        self.settings_panel_blur_radius = radius.map(|value| {
+            if value.is_finite() {
+                value.clamp(0.0, 64.0)
+            } else {
+                0.0
+            }
+        });
+    }
+
+    pub fn set_settings_panel_backdrop_replacement(&mut self, replacement: f32) {
+        self.settings_panel_backdrop_replacement = if replacement.is_finite() {
+            replacement.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn set_settings_panel_glass_darkness(&mut self, value: f32) {
+        self.settings_panel_glass_darkness = value.clamp(0.0, 1.0);
+    }
+
+    /// Tell the frame pass whether the modal-shape buffer currently belongs to
+    /// a settings surface. Folder panels reuse that buffer but must not cause a
+    /// settings checkpoint.
+    pub fn set_settings_panel_completed_scene_enabled(&mut self, enabled: bool) {
+        self.settings_panel_completed_scene_enabled = enabled;
+    }
+
     /// Replace the edit-mode delete-badge glass shapes. These are rendered as
     /// a separate Liquid Glass overlay after the app tiles/icons, so the badge
     /// actually refracts through the Liquid Glass shader instead of being a
@@ -1831,30 +2518,32 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// How many pyramid levels to run this frame.
-    ///
-    /// Maps blur_radius to pyramid depth so weak blurs stay cheap and large
-    /// radii stay smooth. Returns 0 when blur is disabled (final shader then
-    /// bypasses the blur texture via its `blur_radius < 0.5` check).
-    fn blur_level_count(&self) -> usize {
-        if self.debug.disable_blur {
-            return 0;
-        }
+    fn blur_profile(&self, radius: f32) -> BlurProfile {
         let region = self.backdrop_mapping.region;
         let (texture_width, texture_height) = self.backdrop_mapping.texture_size;
         let capture_scale = (texture_width as f32 / region.width.max(1) as f32)
             .min(texture_height as f32 / region.height.max(1) as f32)
             .clamp(0.25, 1.0);
-        // A lower-resolution texture covers more physical pixels per texel.
-        // Scale the requested radius before selecting pyramid depth so a 2x
-        // Retina downsample does not accidentally double the visible blur.
-        let radius = self.params.blur_radius * capture_scale;
-        if radius < 6.0 {
+        Self::blur_profile_for_radius(radius, capture_scale)
+    }
+
+    fn blur_profile_for_radius(radius: f32, capture_scale: f32) -> BlurProfile {
+        let effective_radius = radius.max(0.0) * capture_scale.clamp(0.25, 1.0);
+        let level_count = if radius < 0.5 {
+            0
+        } else if effective_radius < 6.0 {
             1
-        } else if radius < 16.0 {
+        } else if effective_radius < 16.0 {
             2
         } else {
             3
+        };
+        BlurProfile {
+            level_count,
+            // The pyramid depth provides the coarse radius. Scaling the
+            // kernel provides the per-lane difference while still producing
+            // a complete full-resolution output for every profile.
+            sample_scale: (effective_radius / 16.0).clamp(0.25, 2.5),
         }
     }
 
@@ -1886,6 +2575,35 @@ impl LiquidGlassRenderer {
         }
     }
 
+    pub fn set_auto_darkness_enabled(&mut self, enabled: bool) {
+        if self.params.auto_darkness_enabled != enabled {
+            self.params.auto_darkness_enabled = enabled;
+            self.backdrop_stats_dirty = true;
+            if enabled {
+                self.auto_darkness_reset_state = true;
+            }
+        }
+    }
+
+    pub fn auto_darkness_update_mode(&self) -> AutoDarknessUpdateMode {
+        self.auto_darkness_update_mode
+    }
+
+    pub fn set_auto_darkness_update_mode(&mut self, mode: AutoDarknessUpdateMode) {
+        if self.auto_darkness_update_mode != mode {
+            self.auto_darkness_update_mode = mode;
+            self.backdrop_stats_dirty = true;
+        }
+    }
+
+    pub fn set_auto_darkness_max(&mut self, value: f32) {
+        let value = value.clamp(0.0, 1.0);
+        if self.params.auto_darkness_max != value {
+            self.params.auto_darkness_max = value;
+            self.backdrop_stats_dirty = true;
+        }
+    }
+
     pub fn set_thickness(&mut self, value: f32) {
         self.params.thickness = value.clamp(6.0, 48.0);
         self.blur_dirty = true;
@@ -1899,6 +2617,10 @@ impl LiquidGlassRenderer {
     pub fn set_saturation(&mut self, value: f32) {
         self.params.saturation = value.clamp(0.5, 2.0);
         self.blur_dirty = true;
+    }
+
+    pub fn set_glass_darkness(&mut self, value: f32) {
+        self.params.glass_darkness = value.clamp(0.0, 1.0);
     }
 
     pub fn set_chromatic_aberration(&mut self, value: f32) {
@@ -1917,31 +2639,53 @@ impl LiquidGlassRenderer {
     pub fn reset_params_to_defaults(&mut self) {
         let default = LiquidGlassParams::default();
         self.params.enabled = default.enabled;
+        self.params.auto_darkness_enabled = default.auto_darkness_enabled;
+        self.params.auto_darkness_max = default.auto_darkness_max;
+        self.auto_darkness_reset_state = true;
         self.params.thickness = default.thickness;
         self.params.refractive_index = default.refractive_index;
         self.params.saturation = default.saturation;
+        self.params.glass_darkness = default.glass_darkness;
+        self.context_menu_glass_darkness = 0.0;
+        self.settings_panel_glass_darkness = 0.0;
         self.params.chromatic_aberration = default.chromatic_aberration;
         self.params.blur_radius = default.blur_radius;
+        self.backdrop_stats_dirty = true;
         self.blur_dirty = true;
     }
 
-    /// Apply the six persisted fields from a settings snapshot. Debug options
+    /// Apply the persisted fields from a settings snapshot. Debug options
     /// are not touched. Used at startup to restore the user's last values.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_params(
         &mut self,
         enabled: bool,
+        auto_darkness_enabled: bool,
+        auto_darkness_max: f32,
         thickness: f32,
         refractive_index: f32,
         saturation: f32,
+        glass_darkness: f32,
+        context_menu_glass_darkness: f32,
+        settings_panel_glass_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
     ) {
         self.params.enabled = enabled;
+        if auto_darkness_enabled && !self.params.auto_darkness_enabled {
+            self.auto_darkness_reset_state = true;
+        }
+        self.params.auto_darkness_enabled = auto_darkness_enabled;
+        self.params.auto_darkness_max = auto_darkness_max.clamp(0.0, 1.0);
         self.params.thickness = thickness.clamp(6.0, 48.0);
         self.params.refractive_index = refractive_index.clamp(1.02, 1.75);
         self.params.saturation = saturation.clamp(0.5, 2.0);
+        self.params.glass_darkness = glass_darkness.clamp(0.0, 1.0);
+        self.context_menu_glass_darkness = context_menu_glass_darkness.clamp(0.0, 1.0);
+        self.settings_panel_glass_darkness = settings_panel_glass_darkness.clamp(0.0, 1.0);
         self.params.chromatic_aberration = chromatic_aberration.clamp(0.0, 0.18);
         self.params.blur_radius = blur_radius.clamp(0.0, 40.0);
+        self.backdrop_stats_dirty = true;
         self.blur_dirty = true;
     }
 
@@ -2030,6 +2774,7 @@ fn uniforms_from_params(
             params.blur_radius
         },
         saturation: params.saturation,
+        glass_darkness: params.glass_darkness,
         glass_color: params.glass_color,
         light_direction: params.light_direction,
         light_intensity: params.light_intensity,
@@ -2040,9 +2785,11 @@ fn uniforms_from_params(
         debug_flags: debug.flags(),
         time,
         activation,
-        _pad: [0.0; 2],
+        backdrop_replacement: 0.0,
+        auto_darkness_enabled: u32::from(params.auto_darkness_enabled),
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
+        _uniform_pad: [0.0; 3],
     }
 }
 
@@ -2083,7 +2830,7 @@ mod shape_capacity_tests {
     use super::{
         base_shape_may_affect_frame, capture_region_for_shapes, next_shape_capacity,
         overlay_shape_may_affect_clip, should_refresh_blur, CaptureRegion, GlassShape,
-        GlassUniforms,
+        GlassUniforms, LiquidGlassRenderer, SceneFlattenUniforms,
     };
 
     fn test_scene_sdf(shapes: &[GlassShape], scroll_x: f32, point: [f32; 2], blend: f32) -> f32 {
@@ -2107,8 +2854,9 @@ mod shape_capacity_tests {
 
     #[test]
     fn glass_uniform_layout_matches_wgsl() {
-        assert_eq!(std::mem::size_of::<GlassUniforms>(), 112);
+        assert_eq!(std::mem::size_of::<GlassUniforms>(), 128);
         assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
+        assert_eq!(std::mem::size_of::<SceneFlattenUniforms>(), 32);
     }
 
     #[test]
@@ -2116,6 +2864,22 @@ mod shape_capacity_tests {
         assert!(should_refresh_blur(true, false));
         assert!(should_refresh_blur(false, true));
         assert!(!should_refresh_blur(false, false));
+    }
+
+    #[test]
+    fn blur_profiles_change_completed_kernel_strength_per_radius() {
+        let disabled = LiquidGlassRenderer::blur_profile_for_radius(0.0, 1.0);
+        let global = LiquidGlassRenderer::blur_profile_for_radius(16.0, 1.0);
+        let menu = LiquidGlassRenderer::blur_profile_for_radius(24.0, 1.0);
+        let animated_menu = LiquidGlassRenderer::blur_profile_for_radius(32.0, 1.0);
+
+        assert_eq!(disabled.level_count, 0);
+        assert_eq!(global.level_count, 3);
+        assert_eq!(menu.level_count, 3);
+        assert_eq!(animated_menu.level_count, 3);
+        assert_eq!(global.sample_scale, 1.0);
+        assert_eq!(menu.sample_scale, 1.5);
+        assert_eq!(animated_menu.sample_scale, 2.0);
     }
 
     #[test]

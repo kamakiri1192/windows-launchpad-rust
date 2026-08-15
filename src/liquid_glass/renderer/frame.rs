@@ -96,6 +96,16 @@ impl LiquidGlassRenderer {
             self.capture_status = next_status;
         }
 
+        if self.params.auto_darkness_enabled {
+            self.update_auto_darkness_uniforms(queue);
+            if captured || self.backdrop_stats_dirty {
+                // The 16x16 reduction is encoded into the caller's frame encoder.
+                // This preserves full-rate classification without adding a queue
+                // submission between capture and the visible glass pass.
+                self.encode_backdrop_stats(encoder);
+            }
+        }
+
         let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
@@ -108,10 +118,10 @@ impl LiquidGlassRenderer {
         );
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let blur_levels = self.blur_level_count();
-        let refreshed_blur = should_refresh_blur(self.blur_dirty, captured)
+        let global_blur = self.blur_profile(self.params.blur_radius);
+        let refreshed_global_blur = should_refresh_blur(self.blur_dirty, captured)
             && !self.debug.disable_blur
-            && self.params.blur_radius >= 0.5;
+            && global_blur.level_count > 0;
 
         // Each blur pass runs in its OWN command encoder. wgpu groups all
         // passes in a single encoder into one "usage scope", and a texture
@@ -119,89 +129,37 @@ impl LiquidGlassRenderer {
         // dual-Kawase pyramid feeds each pass's output into the next pass's
         // input (L2 is written by down then read by up), we must split scopes
         // by submitting one encoder per pass.
-        let _ = encoder; // the caller's encoder is used only for geometry/final.
-
         // Downsample: backdrop -> L1 -> ... -> L(k-1). down[i] reads the
         // backdrop for i==0 else levels[i-1], and writes levels[i].
-        let mut blur_commands = Vec::with_capacity(blur_levels * 2);
-        for i in 0..if refreshed_blur { blur_levels } else { 0 } {
-            let dst = &self.blur_levels[i].1;
-            let label = format!("liquid glass blur downsample L{i}->L{}", i + 1);
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(label.as_str()),
-            });
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dst,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blur_downsample_pipeline);
-                pass.set_bind_group(0, &self.blur_down_bind_groups[i], &[]);
-                pass.draw(0..3, 0..1);
-            }
-            blur_commands.push(enc.finish());
-        }
-
-        // Upsample: L(k-1) -> L(k-2) -> ... -> L1 -> full-res blur.
-        // up pass j reads levels[k-1-j] (bind index 3-k+j in the fixed
-        // [L3,L2,L1] bind array) and writes levels[k-2-j], or the full-res
-        // blur texture for the final hop (j == k-1).
-        for j in 0..if refreshed_blur { blur_levels } else { 0 } {
-            let dst = if j == blur_levels - 1 {
-                &self.blur_view
-            } else {
-                &self.blur_levels[blur_levels - 2 - j].1
-            };
-            let bind_idx = 3 - blur_levels + j;
-            let label = format!(
-                "liquid glass blur upsample L{}->L{}",
-                blur_levels - j,
-                blur_levels - 1 - j
+        let mut blur_commands = Vec::with_capacity(global_blur.level_count * 2);
+        if refreshed_global_blur {
+            queue.write_buffer(
+                &self.blur_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&BlurUniforms {
+                    sample_scale: global_blur.sample_scale,
+                    _pad: [0.0; 3],
+                }),
             );
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(label.as_str()),
-            });
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dst,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blur_upsample_pipeline);
-                pass.set_bind_group(0, &self.blur_up_bind_groups[bind_idx], &[]);
-                pass.draw(0..3, 0..1);
-            }
-            blur_commands.push(enc.finish());
+            blur_commands.extend(encode_blur_profile(
+                device,
+                &self.blur_downsample_pipeline,
+                &self.blur_upsample_pipeline,
+                &self.blur_levels,
+                &self.blur_view,
+                &self.blur_down_bind_groups,
+                &self.blur_up_bind_groups,
+                global_blur.level_count,
+                "liquid glass global blur",
+            ));
         }
         if !blur_commands.is_empty() {
             queue.submit(blur_commands);
         }
-        if refreshed_blur {
+        if refreshed_global_blur {
             self.blur_dirty = false;
         }
+        let refreshed_blur = refreshed_global_blur;
 
         let geometry_key = self.geometry_key(scroll_x);
         let refreshed_geometry = self.last_geometry_key != Some(geometry_key);
@@ -260,6 +218,10 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+
+        // Opt-in debug readback only. The tiny copy is mapped asynchronously
+        // after submission, so displaying the value never waits on the GPU.
+        self.encode_auto_darkness_debug_readback(encoder);
 
         let _ = device;
         self.stats.record(
@@ -725,8 +687,10 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// Render the settings overlay panel glass. Drawn last (over everything),
-    /// so it composites above the grid, control, and gear.
+    /// Render the settings/folder modal glass from the shared modal-shape
+    /// buffer. Settings uses the completed-scene bind group; folders use their
+    /// ordinary backdrop path so they do not sample an unprepared settings
+    /// capture.
     pub fn render_settings_panel(
         &mut self,
         queue: &wgpu::Queue,
@@ -741,7 +705,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -751,6 +715,15 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        if self.settings_panel_completed_scene_enabled && !self.debug.disable_blur {
+            uniforms.blur_radius = self
+                .settings_panel_blur_radius
+                .unwrap_or(self.params.blur_radius);
+        }
+        if self.settings_panel_completed_scene_enabled {
+            uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
+            uniforms.glass_darkness = self.settings_panel_glass_darkness;
+        }
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
             0,
@@ -808,9 +781,166 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.final_pipeline);
-            pass.set_bind_group(0, &self.settings_panel_final_bind_group, &[]);
+            let final_bind_group = if self.settings_panel_completed_scene_enabled {
+                &self.settings_panel_final_bind_group
+            } else {
+                &self.modal_final_bind_group
+            };
+            pass.set_bind_group(0, final_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+    }
+
+    pub fn has_context_menu_glass(&self) -> bool {
+        self.params.enabled && self.context_menu_shape_count > 0
+    }
+
+    pub fn has_settings_panel_glass(&self) -> bool {
+        self.params.enabled
+            && self.settings_panel_completed_scene_enabled
+            && self.settings_panel_shape_count > 0
+    }
+
+    /// Capture every layer already rendered to the transparent swapchain,
+    /// flatten it over the real desktop capture, then build the menu's blur.
+    /// This must run after modal content and before `render_context_menu_glass`.
+    pub fn prepare_context_menu_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pre_menu_scene: &wgpu::Texture,
+    ) {
+        if !self.has_context_menu_glass() {
+            return;
+        }
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            pre_menu_scene,
+            self.context_menu_blur_radius
+                .unwrap_or(self.params.blur_radius),
+        );
+    }
+
+    /// Capture the completed scene immediately below the settings surface and
+    /// build the same full-resolution blur used by the context menu.
+    pub fn prepare_settings_panel_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pre_settings_scene: &wgpu::Texture,
+    ) {
+        if !self.has_settings_panel_glass() {
+            return;
+        }
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            pre_settings_scene,
+            self.settings_panel_blur_radius
+                .unwrap_or(self.params.blur_radius),
+        );
+    }
+
+    fn prepare_completed_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pre_scene: &wgpu::Texture,
+        blur_radius: f32,
+    ) {
+        let (viewport_width, viewport_height) = self.texture_size;
+        queue.write_buffer(
+            &self.context_menu_flatten_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&SceneFlattenUniforms {
+                viewport: [viewport_width as f32, viewport_height as f32],
+                backdrop_origin: [
+                    self.backdrop_mapping.region.x as f32,
+                    self.backdrop_mapping.region.y as f32,
+                ],
+                backdrop_extent: [
+                    self.backdrop_mapping.region.width as f32,
+                    self.backdrop_mapping.region.height as f32,
+                ],
+                _pad: [0.0; 2],
+            }),
+        );
+
+        let mut commands = Vec::with_capacity(8);
+        let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("liquid glass context menu pre-menu scene copy encoder"),
+        });
+        copy_encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: pre_scene,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.context_menu_scene_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: viewport_width,
+                height: viewport_height,
+                depth_or_array_layers: 1,
+            },
+        );
+        commands.push(copy_encoder.finish());
+
+        let mut flatten_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("liquid glass context menu scene flatten encoder"),
+        });
+        {
+            let mut pass = flatten_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("liquid glass context menu scene flatten pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.context_menu_source_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.context_menu_flatten_pipeline);
+            pass.set_bind_group(0, &self.context_menu_flatten_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        commands.push(flatten_encoder.finish());
+
+        let profile = self.blur_profile(blur_radius);
+        if !self.debug.disable_blur && profile.level_count > 0 {
+            queue.write_buffer(
+                &self.context_menu_blur_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&BlurUniforms {
+                    sample_scale: profile.sample_scale,
+                    _pad: [0.0; 3],
+                }),
+            );
+            commands.extend(encode_blur_profile(
+                device,
+                &self.blur_downsample_pipeline,
+                &self.blur_upsample_pipeline,
+                &self.blur_levels,
+                &self.context_menu_blur_view,
+                &self.context_menu_blur_down_bind_groups,
+                &self.context_menu_blur_up_bind_groups,
+                profile.level_count,
+                "liquid glass context menu completed-scene blur",
+            ));
+        }
+        queue.submit(commands);
     }
 
     /// Render the context-menu glass. Drawn after the modal/settings glass so
@@ -830,7 +960,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -840,6 +970,13 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        if !self.debug.disable_blur {
+            uniforms.blur_radius = self
+                .context_menu_blur_radius
+                .unwrap_or(self.params.blur_radius);
+        }
+        uniforms.backdrop_replacement = self.context_menu_backdrop_replacement;
+        uniforms.glass_darkness = self.context_menu_glass_darkness;
         queue.write_buffer(
             &self.context_menu_uniform_buffer,
             0,
@@ -901,4 +1038,94 @@ impl LiquidGlassRenderer {
             pass.draw(0..3, 0..1);
         }
     }
+}
+
+/// Build one complete downsample + upsample chain into a full-resolution
+/// output. The shared pyramid is only scratch storage; callers must bind the
+/// returned `output` texture in the final material pass, never an intermediate
+/// level from `levels`.
+#[allow(clippy::too_many_arguments)]
+fn encode_blur_profile(
+    device: &wgpu::Device,
+    downsample_pipeline: &wgpu::RenderPipeline,
+    upsample_pipeline: &wgpu::RenderPipeline,
+    levels: &[(wgpu::Texture, wgpu::TextureView); 3],
+    output: &wgpu::TextureView,
+    down_bind_groups: &[wgpu::BindGroup; 3],
+    up_bind_groups: &[wgpu::BindGroup; 3],
+    level_count: usize,
+    label_prefix: &str,
+) -> Vec<wgpu::CommandBuffer> {
+    debug_assert!((1..=3).contains(&level_count));
+    let mut commands = Vec::with_capacity(level_count * 2);
+
+    for i in 0..level_count {
+        let label = format!("{label_prefix} downsample L{i}->L{}", i + 1);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some(label.as_str()),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label.as_str()),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &levels[i].1,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(downsample_pipeline);
+            pass.set_bind_group(0, &down_bind_groups[i], &[]);
+            pass.draw(0..3, 0..1);
+        }
+        commands.push(encoder.finish());
+    }
+
+    for j in 0..level_count {
+        let destination = if j == level_count - 1 {
+            output
+        } else {
+            &levels[level_count - 2 - j].1
+        };
+        let bind_index = 3 - level_count + j;
+        let label = format!(
+            "{label_prefix} upsample L{}->L{}",
+            level_count - j,
+            level_count - 1 - j
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some(label.as_str()),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label.as_str()),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: destination,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(upsample_pipeline);
+            pass.set_bind_group(0, &up_bind_groups[bind_index], &[]);
+            pass.draw(0..3, 0..1);
+        }
+        commands.push(encoder.finish());
+    }
+
+    commands
 }

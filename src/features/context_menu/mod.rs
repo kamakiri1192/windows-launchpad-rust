@@ -13,6 +13,7 @@
 //! position can spring fast while corner radius eases slowly.
 
 use crate::domain::launcher_item::LauncherItem;
+use crate::layout::context_menu::{menu_rows, CONTEXT_MENU_ITEM_COUNT};
 use crate::spring_anim::{self, Channel, Ease, Transition};
 
 // Re-export the item enum from the pure layout layer so feature/app/render
@@ -122,6 +123,15 @@ const T_CLOSE_CONTENT_OPACITY: Transition = Transition::Easing {
 /// wait for an invisible position-spring tail makes Escape/dismissal feel
 /// stuck.
 pub const CONTENT_VISIBILITY_THRESHOLD: f32 = 0.02;
+
+/// Row hit-testing stays disabled while the open/close morph is still visibly
+/// scaling the rows. During the open animation each row's hit rect is scaled by
+/// `content_scale` (2.0 → 1.0), so above this threshold the expanded rects
+/// swallow a cursor that is still sitting over the right-clicked icon and
+/// wrongly focus the panel-center (middle) row — the "middle row gets
+/// selected on open" bug. Once the content has settled to nearly its resting
+/// scale, hit testing turns back on.
+pub const ROW_HIT_SCALE_THRESHOLD: f32 = 1.02;
 /// Preserve a few closing frames even when dismissal happens immediately
 /// after open, while avoiding the ~1 second invisible spring tail.
 const MIN_CLOSE_LIFETIME: f32 = 0.08;
@@ -130,13 +140,27 @@ const T_OPTICS: Transition = Transition::Easing {
     duration: 0.3,
     ease: Ease::EaseIn,
 };
+/// Short ease-out used for the row focus pill. It is deliberately slower than
+/// a pointer event but shorter than the menu's panel morph.
+const T_FOCUS: Transition = Transition::Easing {
+    duration: 0.15,
+    ease: Ease::EaseOut,
+};
 
 #[derive(Debug, Clone)]
 pub struct ContextMenuState {
-    /// The launcher item the menu is open for (an app or a folder). Drives the
+    /// The launcher item the menu is open for (an app or folder). Drives the
     /// open/close lifecycle via `Some`/`None` and serves as the opaque UiId key
     /// for the rendered rows; it never participates in launching.
     pub active_target: Option<LauncherItem>,
+    /// The row list built once at open time from the target's kind
+    /// (`(is_folder, is_steam)` → [`menu_rows`]). A `Vec` rather than a static
+    /// slice so future per-app menu customization can compose rows without a
+    /// combinatorial explosion of static arrays. The per-frame render path and
+    /// the release-time row resolution both read this cached list, so they
+    /// never call [`menu_rows`] per frame (zero per-frame allocation) and always
+    /// agree on which row is which.
+    pub items: Vec<ContextMenuItem>,
     pub phase: ContextMenuPhase,
     /// Anchor point (physical px) the seed springs from — typically the center
     /// of the right-clicked icon.
@@ -147,17 +171,24 @@ pub struct ContextMenuState {
     elapsed: [f32; PROP_COUNT],
     /// Per-channel active transition. Retargeted on open/close.
     transitions: [Transition; PROP_COUNT],
+    /// Independent focus channels let adjacent rows cross-fade when the
+    /// pointer moves directly from one row to another.
+    focus_channels: [Channel; CONTEXT_MENU_ITEM_COUNT],
+    focus_elapsed: [f32; CONTEXT_MENU_ITEM_COUNT],
 }
 
 impl Default for ContextMenuState {
     fn default() -> Self {
         Self {
             active_target: None,
+            items: Vec::new(),
             phase: ContextMenuPhase::Closed,
             anchor: (0.0, 0.0),
             channels: [Channel::rest(0.0); PROP_COUNT],
             elapsed: [0.0; PROP_COUNT],
             transitions: [Transition::Snap; PROP_COUNT],
+            focus_channels: [Channel::rest(0.0); CONTEXT_MENU_ITEM_COUNT],
+            focus_elapsed: [0.0; CONTEXT_MENU_ITEM_COUNT],
         }
     }
 }
@@ -167,6 +198,14 @@ impl ContextMenuState {
     /// `(x, y)` (physical px). `target_rect` is the fully-open panel rectangle
     /// in physical px; the seed springs from the anchor toward it.
     pub fn open(&mut self, target: LauncherItem, x: f32, y: f32, target_rect: MenuTarget) {
+        // Build the row list once from the target's kind and cache it. The
+        // render/hit-test/release paths read `self.items` instead of rebuilding
+        // every frame. `target` carries everything needed (folder vs app, and
+        // whether the app id is a Steam id), so the row set is derived here
+        // without extra parameters.
+        let is_folder = matches!(target, LauncherItem::Folder(_));
+        let is_steam = matches!(&target, LauncherItem::App(id) if id.is_steam());
+        self.items = menu_rows(is_folder, is_steam);
         self.active_target = Some(target);
         self.anchor = (x, y);
         self.phase = ContextMenuPhase::Opening;
@@ -188,6 +227,8 @@ impl ContextMenuState {
         ];
         self.channels = seed;
         self.elapsed = [0.0; PROP_COUNT];
+        self.focus_channels = [Channel::rest(0.0); CONTEXT_MENU_ITEM_COUNT];
+        self.focus_elapsed = [0.0; CONTEXT_MENU_ITEM_COUNT];
 
         // Retarget every channel toward its open target with the open preset.
         self.transitions = [
@@ -225,6 +266,7 @@ impl ContextMenuState {
             return;
         }
         self.phase = ContextMenuPhase::Closing;
+        self.set_hovered_item(None);
 
         let seed_x = self.anchor.0 - SEED_SIZE * 0.5;
         let seed_y = self.anchor.1 - SEED_SIZE * 0.5;
@@ -293,6 +335,14 @@ impl ContextMenuState {
             );
             animating |= still_going;
         }
+        for i in 0..CONTEXT_MENU_ITEM_COUNT {
+            animating |= spring_anim::step(
+                &mut self.focus_channels[i],
+                T_FOCUS,
+                &mut self.focus_elapsed[i],
+                dt,
+            );
+        }
 
         // Glass/ink/glyph rendering is already gated by this exact opacity.
         // Finish the lifecycle when the menu becomes visually absent instead
@@ -342,6 +392,16 @@ impl ContextMenuState {
         self.phase == ContextMenuPhase::Open
     }
 
+    /// Whether row hit-testing should respond to the pointer yet. While the
+    /// content morph is scaling the rows (`content_scale` above
+    /// [`ROW_HIT_SCALE_THRESHOLD`]), the scaled hit rects extend well beyond
+    /// the visible rows and would catch a cursor still sitting on the
+    /// right-clicked icon — focusing the middle row. Disable hit testing until
+    /// the rows have nearly settled at their resting scale.
+    pub fn row_hit_test_enabled(&self) -> bool {
+        self.content_scale() <= ROW_HIT_SCALE_THRESHOLD
+    }
+
     // --- Resolved property accessors (physical px) ----------------------------
 
     pub fn pos_x(&self) -> f32 {
@@ -371,6 +431,25 @@ impl ContextMenuState {
     pub fn activation(&self) -> f32 {
         self.channels[Prop::Activation as usize].current
     }
+
+    /// Retarget the row focus animation. Returns whether at least one row
+    /// changed target and therefore needs another redraw.
+    pub fn set_hovered_item(&mut self, hovered: Option<usize>) -> bool {
+        let mut changed = false;
+        for (index, channel) in self.focus_channels.iter_mut().enumerate() {
+            let target = f32::from(hovered == Some(index));
+            if (channel.target - target).abs() > f32::EPSILON {
+                spring_anim::retarget(channel, target, T_FOCUS, &mut self.focus_elapsed[index]);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Snapshot the animated focus amounts for the renderer-neutral layout.
+    pub fn focus_amounts(&self) -> [f32; CONTEXT_MENU_ITEM_COUNT] {
+        std::array::from_fn(|index| self.focus_channels[index].current)
+    }
 }
 
 /// Resolved fully-open panel geometry in physical px. The app shell computes
@@ -388,6 +467,7 @@ pub struct MenuTarget {
 mod tests {
     use super::*;
     use crate::domain::app_id::AppId;
+    use crate::layout::context_menu::ContextMenuItem;
 
     fn target_at(x: f32, y: f32) -> MenuTarget {
         MenuTarget {
@@ -396,6 +476,60 @@ mod tests {
             width: MENU_WIDTH,
             height: 6.0 * 40.0 + 40.0,
         }
+    }
+
+    /// `open()` builds and caches the row list from the target's kind, so the
+    /// render/release paths read one consistent `items` snapshot. A folder
+    /// gets four rows; a non-Steam app gets seven (no Steam row); a Steam app
+    /// gets the full eight-row superset including OpenInSteam.
+    #[test]
+    fn open_builds_and_caches_the_row_list_for_each_target_kind() {
+        let mut state = ContextMenuState::default();
+        assert!(state.items.is_empty(), "default state has no rows");
+
+        // Folder: EditHome, IconLarger, IconSmaller, AppInfo (4 rows).
+        state.open(
+            LauncherItem::folder(crate::domain::folders::FolderId::from_normalized("f")),
+            0.0,
+            0.0,
+            target_at(0.0, 0.0),
+        );
+        assert_eq!(
+            state.items,
+            vec![
+                ContextMenuItem::EditHome,
+                ContextMenuItem::IconLarger,
+                ContextMenuItem::IconSmaller,
+                ContextMenuItem::AppInfo,
+            ]
+        );
+        assert!(!state.items.contains(&ContextMenuItem::OpenInSteam));
+
+        // Non-Steam app: seven rows, no Steam row.
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            0.0,
+            0.0,
+            target_at(0.0, 0.0),
+        );
+        assert_eq!(state.items.len(), 7);
+        assert!(!state.items.contains(&ContextMenuItem::OpenInSteam));
+
+        // Steam app: eight rows including OpenInSteam.
+        state.open(
+            LauncherItem::app(AppId::from_normalized("steam:620")),
+            0.0,
+            0.0,
+            target_at(0.0, 0.0),
+        );
+        assert_eq!(state.items.len(), 8);
+        assert!(state.items.contains(&ContextMenuItem::OpenInSteam));
+
+        // The cached list matches what `menu_rows` builds for the same flags.
+        assert_eq!(
+            state.items,
+            crate::layout::context_menu::menu_rows(false, true)
+        );
     }
 
     #[test]
@@ -484,6 +618,51 @@ mod tests {
     }
 
     #[test]
+    fn row_focus_crossfades_when_pointer_moves_between_rows() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+
+        state.set_hovered_item(Some(1));
+        assert_eq!(state.focus_amounts()[1], 0.0);
+        state.tick(0.1);
+        let first = state.focus_amounts();
+        assert!(first[1] > 0.0 && first[1] < 1.0);
+
+        state.set_hovered_item(Some(2));
+        state.tick(0.1);
+        let crossfade = state.focus_amounts();
+        assert!(crossfade[1] > 0.0 && crossfade[1] < first[1]);
+        assert!(crossfade[2] > 0.0 && crossfade[2] < 1.0);
+    }
+
+    #[test]
+    fn opening_a_menu_clears_focus_from_the_previous_menu() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        state.set_hovered_item(Some(3));
+        state.tick(0.1);
+        assert!(state.focus_amounts()[3] > 0.0);
+
+        state.open(
+            LauncherItem::app(AppId::from_normalized("notes")),
+            200.0,
+            200.0,
+            target_at(200.0, 200.0),
+        );
+        assert!(state.focus_amounts().iter().all(|amount| *amount == 0.0));
+    }
+
+    #[test]
     fn repeated_close_does_not_restart_the_transition() {
         let mut state = ContextMenuState::default();
         state.open(
@@ -524,5 +703,29 @@ mod tests {
         assert_eq!(state.phase, ContextMenuPhase::Closed);
         assert!(!state.is_active());
         assert!(state.content_opacity() <= CONTENT_VISIBILITY_THRESHOLD);
+    }
+
+    #[test]
+    fn row_hit_test_is_disabled_while_the_open_morph_still_scales_rows() {
+        let mut state = ContextMenuState::default();
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            100.0,
+            100.0,
+            target_at(100.0, 100.0),
+        );
+        // Seed state: content_scale starts at 2.0, so hit testing is disabled.
+        // The scaled row rects would otherwise swallow a cursor still on the
+        // right-clicked icon and focus the middle row on the first pointer move.
+        assert!(!state.row_hit_test_enabled());
+        assert!(state.content_scale() > ROW_HIT_SCALE_THRESHOLD);
+
+        // Tick until the content scale settles to ~1.0.
+        let mut guard = 0;
+        while state.tick(1.0 / 60.0) && guard < 5_000 {
+            guard += 1;
+        }
+        assert!(state.row_hit_test_enabled());
+        assert!(state.content_scale() <= ROW_HIT_SCALE_THRESHOLD);
     }
 }

@@ -8,6 +8,13 @@
 
 @group(0) @binding(0) var source_texture: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;
+struct BlurUniforms {
+    sample_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+};
+@group(0) @binding(2) var<uniform> blur: BlurUniforms;
 
 const KERNEL_NORMALIZATION: f32 = 1.0 / 8.0;
 
@@ -39,7 +46,8 @@ fn sample_source(uv: vec2<f32>) -> vec4<f32> {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // texel size of the *source* texture (higher resolution level).
     let src_size = textureDimensions(source_texture, 0);
-    let texel = vec2<f32>(1.0) / vec2<f32>(f32(src_size.x), f32(src_size.y));
+    let texel = vec2<f32>(1.0) / vec2<f32>(f32(src_size.x), f32(src_size.y))
+        * clamp(blur.sample_scale, 0.25, 2.5);
 
     // Sample at half-texel offset so the kernel straddles 2x2 source blocks
     // symmetrically (reduces temporal shimmer on motion).

@@ -8,7 +8,7 @@
 
 use crate::layout::hit_map::{HitMap, HitRegion};
 use crate::layout::LayoutResult;
-use crate::ui_model::geometry::{Point, Rect};
+use crate::ui_model::geometry::{Insets, Point, Rect};
 use crate::ui_model::hit::HitTarget;
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
@@ -22,7 +22,7 @@ const ROW_HEIGHT: f32 = 40.0;
 const ROW_INNER_MARGIN_X: f32 = 10.0;
 const CONTENT_PAD_X: f32 = 30.0;
 const CONTENT_PAD_Y: f32 = 20.0;
-const ICON_SIZE: f32 = 20.0;
+const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 17.0;
 /// Content-driven panel width is clamped to these bounds (logical px at 1× DPI)
 /// so very short or very long localized labels still render comfortably. The
@@ -32,21 +32,45 @@ const MIN_MENU_WIDTH: f32 = 200.0;
 const MAX_MENU_WIDTH: f32 = 320.0;
 /// Conservative fallback for the longest label width (logical px) when the text
 /// engine is unavailable at open time. Roughly the width of the longest current
-/// label ("エクスプローラーで開く") at 14 px.
-pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 160.0;
+/// label ("ChatGPTで使い方を調べる") at 14 px.
+pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 200.0;
+/// Number of rows currently emitted by the context menu. Kept public so the
+/// feature animation and renderer-neutral input model share one array size.
+/// This is the *superset* row count (the Steam-app menu); a non-Steam app
+/// menu omits the Steam row and a folder menu omits four rows.
+pub const CONTEXT_MENU_ITEM_COUNT: usize = 8;
+/// Number of rows omitted when the menu targets a folder. A folder cannot be
+/// hidden (no hide-app row), has no file to reveal (no reveal row), has no app
+/// metadata for a ChatGPT lookup (no chatgpt-help row), and is never a Steam
+/// app (no open-in-Steam row), so four rows are omitted from the app menu.
+pub const FOLDER_OMITTED_ITEM_COUNT: usize = 4;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
 const FONT_SIZE: f32 = 14.0;
-const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
+pub const CONTEXT_MENU_TINT_ALPHA: f32 = 0.68;
+/// System blue reserved for persistent selection states such as the settings
+/// category selection. Context-menu hover is intentionally neutral so a
+/// transient pointer focus is not confused with a selected item.
+pub const SYSTEM_BLUE_RGB: [f32; 3] = [0.039, 0.518, 1.0];
+pub const FOCUS_ROW_OPACITY: f32 = 0.20;
+/// Leave a little breathing room between the focused pill and adjacent rows.
+pub const FOCUS_ROW_VERTICAL_INSET: f32 = 3.0;
+/// Keep the menu body visibly blurred even after the content-reveal animation
+/// reaches its resting value of zero. The animated `content_blur` widens the
+/// dedicated context-menu blur kernel on top of this baseline.
+pub const CONTEXT_MENU_BASE_BLUR: f32 = 24.0;
 
 /// iOS/macOS-style primary label color on a light material. This is the
 /// familiar near-black `#1C1C1E`, rather than absolute black.
 pub const MENU_LABEL_RGB: [f32; 3] = [0.11, 0.11, 0.118];
+/// Neutral hover tint for context-menu rows. Keep it close to the menu label
+/// color so the translucent pill follows the light Liquid Glass surface.
+pub const CONTEXT_MENU_HOVER_RGB: [f32; 3] = MENU_LABEL_RGB;
 /// iOS-style destructive action color (`systemRed`, approximately `#FF3B30`).
 pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
-/// One of the six placeholder menu actions. All items are mock actions for
-/// this iteration: selecting any of them simply closes the menu.
+/// One of the context-menu actions. Selecting an action runs it and closes the
+/// menu; the mock rows (icon size / app info) still close only.
 ///
 /// Defined here (in the pure layout layer) rather than in the feature module
 /// so the renderer-neutral geometry does not depend on the binary-only
@@ -59,6 +83,10 @@ pub enum ContextMenuItem {
     HideApp,
     /// Finderで開く / Reveal in Explorer
     RevealInFinder,
+    /// ChatGPTで使い方を調べる
+    ChatGptHelp,
+    /// Steamで開く / Open in Steam
+    OpenInSteam,
     /// アイコンを大きくする
     IconLarger,
     /// アイコンを小さくする
@@ -68,11 +96,57 @@ pub enum ContextMenuItem {
 }
 
 impl ContextMenuItem {
-    /// All items in display order.
-    pub const ALL: [Self; 6] = [
+    /// All items in display order. This is the *superset* shown when the menu
+    /// targets a Steam app: it includes the "Steamで開く" row. A non-Steam app
+    /// omits that row (see [`APP_ITEMS`]); a folder omits four rows (see
+    /// [`FOLDER_ITEMS`]).
+    ///
+    /// [`APP_ITEMS`]: ContextMenuItem::APP_ITEMS
+    /// [`FOLDER_ITEMS`]: ContextMenuItem::FOLDER_ITEMS
+    pub const ALL: [Self; CONTEXT_MENU_ITEM_COUNT] = [
         Self::EditHome,
         Self::HideApp,
         Self::RevealInFinder,
+        Self::ChatGptHelp,
+        Self::OpenInSteam,
+        Self::IconLarger,
+        Self::IconSmaller,
+        Self::AppInfo,
+    ];
+
+    /// Number of rows shown when the menu targets a non-Steam app. A non-Steam
+    /// app has no Steam library page to open, so the "Steamで開く" row is
+    /// omitted — one row shorter than the Steam-app [`ALL`] superset.
+    pub const APP_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - 1;
+
+    /// Items shown when the menu targets a non-Steam app. See
+    /// [`APP_ITEM_COUNT`]: a non-Steam app has no Steam page, so "Steamで開く"
+    /// is omitted. (A Steam app shows the full [`ALL`] superset instead.)
+    pub const APP_ITEMS: [Self; Self::APP_ITEM_COUNT] = [
+        Self::EditHome,
+        Self::HideApp,
+        Self::RevealInFinder,
+        Self::ChatGptHelp,
+        Self::IconLarger,
+        Self::IconSmaller,
+        Self::AppInfo,
+    ];
+
+    /// Number of rows shown when the menu targets a folder. A folder has no
+    /// hide action (it cannot be hidden), no file to reveal (it is a virtual
+    /// launcher group with no file on disk to open), no app metadata for a
+    /// ChatGPT lookup, and is never a Steam app, so [`FOLDER_OMITTED_ITEM_COUNT`]
+    /// rows are omitted — the folder menu is that many rows shorter than the
+    /// app menu.
+    pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - FOLDER_OMITTED_ITEM_COUNT;
+
+    /// Items shown when the menu targets a folder. See [`FOLDER_ITEM_COUNT`]:
+    /// a folder has no hide action, no file to reveal, no app metadata for a
+    /// ChatGPT lookup, and is never a Steam app, so "アプリを非表示",
+    /// "Finderで開く", "ChatGPTで使い方を調べる", and "Steamで開く" are all
+    /// omitted.
+    pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
+        Self::EditHome,
         Self::IconLarger,
         Self::IconSmaller,
         Self::AppInfo,
@@ -90,25 +164,13 @@ impl ContextMenuItem {
                     "エクスプローラーで開く"
                 }
             }
+            Self::ChatGptHelp => "ChatGPTで使い方を調べる",
+            Self::OpenInSteam => "Steamで開く",
             Self::IconLarger => "アイコンを大きくする",
             Self::IconSmaller => "アイコンを小さくする",
             Self::AppInfo => "アプリの概要",
         }
     }
-
-    /// Display labels for [`ALL`], in the same order. Precomputed at compile
-    /// time so callers (the context-menu renderer, which runs every frame)
-    /// can borrow a static slice instead of reallocating a `Vec` each frame.
-    ///
-    /// [`ALL`]: ContextMenuItem::ALL
-    pub const ALL_LABELS: [&'static str; 6] = [
-        Self::EditHome.label(),
-        Self::HideApp.label(),
-        Self::RevealInFinder.label(),
-        Self::IconLarger.label(),
-        Self::IconSmaller.label(),
-        Self::AppInfo.label(),
-    ];
 
     /// Foreground color for this menu action, shared by its label and icon.
     pub const fn foreground_rgb(self) -> [f32; 3] {
@@ -117,6 +179,41 @@ impl ContextMenuItem {
             _ => MENU_LABEL_RGB,
         }
     }
+}
+
+/// Build the row list to display for a menu target, in display order, selected
+/// at runtime from the target's kind. The list is *constructed* (not selected
+/// from a static slice) so future per-app menu customization can compose rows
+/// without a combinatorial explosion of static arrays. Folder targets omit four
+/// rows (hide-app / reveal / ChatGPT-help / open-in-Steam — none apply to a
+/// virtual launcher group); a non-Steam app omits the Steam row; a Steam app
+/// shows the full superset.
+///
+/// Labels are *not* returned here: callers derive them on demand via
+/// [`ContextMenuItem::label`], so the row list carries no duplicate label
+/// storage. The app shell builds this once at open time and caches it on the
+/// [`ContextMenuState`](crate::features::context_menu::ContextMenuState), so the
+/// per-frame render path and the release-time row resolution read the same
+/// cached list (zero per-frame allocation, and open/release always agree).
+pub fn menu_rows(is_folder_target: bool, is_steam: bool) -> Vec<ContextMenuItem> {
+    let mut items = Vec::with_capacity(CONTEXT_MENU_ITEM_COUNT);
+    // "ホーム画面を編集" is always available.
+    items.push(ContextMenuItem::EditHome);
+    if !is_folder_target {
+        // App-only actions: hide, reveal, ChatGPT help.
+        items.push(ContextMenuItem::HideApp);
+        items.push(ContextMenuItem::RevealInFinder);
+        items.push(ContextMenuItem::ChatGptHelp);
+        // The Steam row appears only for a Steam app.
+        if is_steam {
+            items.push(ContextMenuItem::OpenInSteam);
+        }
+    }
+    // Icon-size and app-info are always available.
+    items.push(ContextMenuItem::IconLarger);
+    items.push(ContextMenuItem::IconSmaller);
+    items.push(ContextMenuItem::AppInfo);
+    items
 }
 
 /// Inputs resolved by the app shell from the live [`ContextMenuState`].
@@ -144,9 +241,11 @@ pub struct ContextMenuInput<'a> {
     pub content_blur: f32,
     /// Per-surface glass activation 0..1 (the open-time optics bump).
     pub activation: f32,
+    /// Per-row focus amounts in the range 0..1. The app shell animates these
+    /// values from pointer hit changes; the layout only applies the resulting
+    /// opacity and scale to the focused pill.
+    pub focus_amounts: [f32; CONTEXT_MENU_ITEM_COUNT],
     pub items: &'a [ContextMenuItem],
-    /// Localized label for each item, in display order.
-    pub labels: &'a [&'a str],
 }
 
 /// Per-item layout geometry, kept for hit-test resolution by the app shell.
@@ -269,6 +368,12 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             z: 100,
             clip: None,
             activation: input.activation,
+            blur_radius: Some((CONTEXT_MENU_BASE_BLUR + input.content_blur).max(0.0)),
+            // The renderer flattens the completed pre-menu scene over the
+            // desktop and uses that as the material under the menu. Replace
+            // the real DWM backdrop while open, then release it with the same
+            // reveal channel so the closing seed does not remain opaque.
+            backdrop_replacement: content_opacity,
             // The context menu is intentionally brighter than the global glass tint.
             // Fade the override with the menu reveal so the collapsed seed does not
             // leave a white disc behind during close.
@@ -308,7 +413,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
     let mut text_views: Vec<TextView> = Vec::new();
     let mut rows: Vec<ContextMenuItemRow> = Vec::new();
 
-    for (index, (item, label)) in input.items.iter().zip(input.labels.iter()).enumerate() {
+    for (index, item) in input.items.iter().enumerate() {
         // Position in fully-open panel space.
         let open_row_y = pad_y + index as f32 * row_h;
         let open_icon_x = pad_x;
@@ -336,6 +441,42 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
             (row_bottom - row_top).abs(),
         );
 
+        // Draw the focus treatment before the row's icon and label so the
+        // foreground stays crisp above the translucent neutral material. The
+        // row hit rect intentionally remains unchanged: the visual inset is
+        // only for the breathing room visible in the reference design.
+        let focus_amount = input.focus_amounts.get(index).copied().unwrap_or(0.0);
+        if focus_amount > 0.001 {
+            let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
+            let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
+            let focus_scale = 0.96 + 0.04 * focus_amount.clamp(0.0, 1.0);
+            let focus_center = focus_rect.center();
+            let focus_rect = Rect::new(
+                focus_center.x - focus_rect.width * focus_scale * 0.5,
+                focus_center.y - focus_rect.height * focus_scale * 0.5,
+                focus_rect.width * focus_scale,
+                focus_rect.height * focus_scale,
+            );
+            ink.push(InkView {
+                id: UiId::context_menu_item(input.target, index),
+                center: focus_rect.center(),
+                extent: focus_rect.height * 0.5,
+                opacity: reveal * FOCUS_ROW_OPACITY * focus_amount.clamp(0.0, 1.0),
+                scene_blur: 0.0,
+                stroke: focus_rect.width * 0.5,
+                corner_radius: focus_rect.height * 0.5,
+                color: Color::rgba(
+                    CONTEXT_MENU_HOVER_RGB[0],
+                    CONTEXT_MENU_HOVER_RGB[1],
+                    CONTEXT_MENU_HOVER_RGB[2],
+                    1.0,
+                ),
+                kind: ControlKind::RowBackground,
+                z: 130,
+                clip: None,
+            });
+        }
+
         ink.push(InkView {
             id: UiId::context_menu_item(input.target, index),
             center: Point::new(icon_cx, icon_cy),
@@ -353,7 +494,7 @@ pub fn build(input: &ContextMenuInput<'_>) -> ContextMenuModel {
         let label_width = (open_w - open_label_x - pad_x).max(1.0);
         text_views.push(TextView {
             id: UiId::context_menu_item(input.target, index),
-            text: (*label).to_string(),
+            text: item.label().to_string(),
             rect: Rect::new(
                 label_cx,
                 label_cy - font_size * 0.5 * content_scale,
@@ -425,6 +566,8 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
         ContextMenuItem::EditHome => ControlKind::Pencil,
         ContextMenuItem::HideApp => ControlKind::EyeOff,
         ContextMenuItem::RevealInFinder => ControlKind::FolderIcon,
+        ContextMenuItem::ChatGptHelp => ControlKind::ChatGptLogo,
+        ContextMenuItem::OpenInSteam => ControlKind::SteamLogo,
         ContextMenuItem::IconLarger => ControlKind::Plus,
         ContextMenuItem::IconSmaller => ControlKind::Minus,
         ContextMenuItem::AppInfo => ControlKind::Info,
@@ -434,9 +577,40 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        build, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer, Rect,
+        build, menu_rows, open_panel_origin, Color, ContextMenuInput, ContextMenuItem, GlassLayer,
+        InkLane, Rect, CONTEXT_MENU_HOVER_RGB, CONTEXT_MENU_ITEM_COUNT, FOCUS_ROW_OPACITY,
         MENU_DESTRUCTIVE_RGB, MENU_LABEL_RGB,
     };
+    use crate::ui_model::render_model::ControlKind;
+
+    /// `menu_rows` builds the row list at runtime from `(is_folder, is_steam)`.
+    /// A folder omits four rows; a non-Steam app omits the Steam row; a Steam
+    /// app shows the full superset. The built `Vec`s match the canonical static
+    /// arrays (`FOLDER_ITEMS` / `APP_ITEMS` / `ALL`) kept for test reference.
+    #[test]
+    fn folder_menu_omits_the_hide_reveal_chatgpt_and_steam_rows() {
+        let items = menu_rows(true, false);
+        assert_eq!(items, ContextMenuItem::FOLDER_ITEMS);
+        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 4);
+        assert!(!items.contains(&ContextMenuItem::HideApp));
+        assert!(!items.contains(&ContextMenuItem::RevealInFinder));
+        assert!(!items.contains(&ContextMenuItem::ChatGptHelp));
+        assert!(!items.contains(&ContextMenuItem::OpenInSteam));
+
+        // A non-Steam app keeps the seven non-Steam rows (no Steam row), in the
+        // same order as `APP_ITEMS`.
+        let app_items = menu_rows(false, false);
+        assert_eq!(app_items, ContextMenuItem::APP_ITEMS);
+        assert!(!app_items.contains(&ContextMenuItem::OpenInSteam));
+
+        // A Steam app shows the full eight-row superset, in `ALL` order.
+        let steam_items = menu_rows(false, true);
+        assert_eq!(steam_items, ContextMenuItem::ALL);
+        assert!(steam_items.contains(&ContextMenuItem::OpenInSteam));
+
+        // The built rows carry no label storage; labels derive on demand.
+        assert_eq!(items[0].label(), ContextMenuItem::EditHome.label());
+    }
 
     /// Icon near the right of the viewport so the menu cannot fit on its right
     /// side, but has ample room on the left: it must flip to the left edge,
@@ -488,7 +662,7 @@ mod tests {
 
     #[test]
     fn menu_uses_per_surface_tint_without_opaque_fallback() {
-        let input = ContextMenuInput {
+        let mut input = ContextMenuInput {
             viewport: (1280, 800),
             scale_factor: 1.0,
             target: "app:qa-context-menu",
@@ -500,8 +674,8 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
+            focus_amounts: [0.0; CONTEXT_MENU_ITEM_COUNT],
             items: &ContextMenuItem::ALL,
-            labels: &ContextMenuItem::ALL_LABELS,
         };
 
         let model = build(&input);
@@ -518,6 +692,33 @@ mod tests {
             .and_then(|batch| batch.surfaces.first())
             .expect("context menu glass surface");
         assert_eq!(surface.tint, Some(Color::rgba(0.93, 0.94, 0.96, 0.68)));
+        assert_eq!(surface.blur_radius, Some(24.0));
+        assert_eq!(surface.backdrop_replacement, 1.0);
+
+        input.content_blur = 8.0;
+        let animated_model = build(&input);
+        let animated_surface = animated_model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| batch.surfaces.first())
+            .expect("animated context menu glass surface");
+        assert_eq!(animated_surface.blur_radius, Some(32.0));
+        assert_eq!(animated_surface.backdrop_replacement, 1.0);
+
+        input.content_opacity = 0.4;
+        let closing_model = build(&input);
+        let closing_surface = closing_model
+            .result
+            .render
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| batch.surfaces.first())
+            .expect("closing context menu glass surface");
+        assert_eq!(closing_surface.backdrop_replacement, 0.4);
     }
 
     #[test]
@@ -528,5 +729,98 @@ mod tests {
             MENU_DESTRUCTIVE_RGB
         );
         assert_ne!(MENU_LABEL_RGB, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn focused_row_emits_a_translucent_pill_behind_its_content() {
+        let input = ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            target: "app:qa-context-menu-focus",
+            pos: (320.0, 180.0),
+            size: (280.0, 280.0),
+            open_size: (280.0, 280.0),
+            radius: 28.0,
+            content_scale: 1.0,
+            content_opacity: 1.0,
+            content_blur: 0.0,
+            activation: 0.0,
+            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            items: &ContextMenuItem::ALL,
+        };
+
+        let model = build(&input);
+        let ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::ContextMenu)
+            .expect("context-menu ink batch");
+        let focus = ink
+            .views
+            .iter()
+            .find(|view| view.kind == ControlKind::RowBackground)
+            .expect("focused row background");
+
+        assert_eq!(focus.center, model.rows[1].rect.center());
+        assert_eq!(focus.opacity, FOCUS_ROW_OPACITY);
+        assert_eq!(focus.corner_radius, focus.extent);
+        assert_eq!(
+            [focus.color.r, focus.color.g, focus.color.b],
+            CONTEXT_MENU_HOVER_RGB
+        );
+        assert_eq!(
+            ink.views
+                .iter()
+                .filter(|view| view.kind == ControlKind::RowBackground)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn menu_icons_follow_the_display_order() {
+        let input = ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            target: "app:qa-context-menu-order",
+            pos: (320.0, 180.0),
+            size: (280.0, 280.0),
+            open_size: (280.0, 280.0),
+            radius: 28.0,
+            content_scale: 1.0,
+            content_opacity: 1.0,
+            content_blur: 0.0,
+            activation: 0.0,
+            focus_amounts: [0.0; CONTEXT_MENU_ITEM_COUNT],
+            items: &ContextMenuItem::ALL,
+        };
+
+        let model = build(&input);
+        let icons = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::ContextMenu)
+            .expect("context-menu icon batch")
+            .views
+            .iter()
+            .map(|view| view.kind.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            icons,
+            vec![
+                ControlKind::Pencil,
+                ControlKind::EyeOff,
+                ControlKind::FolderIcon,
+                ControlKind::ChatGptLogo,
+                ControlKind::SteamLogo,
+                ControlKind::Plus,
+                ControlKind::Minus,
+                ControlKind::Info,
+            ]
+        );
     }
 }

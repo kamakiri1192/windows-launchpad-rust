@@ -7,6 +7,15 @@
 
 use std::num::NonZeroU64;
 
+use wgpu::util::DeviceExt;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurUniforms {
+    sample_scale: f32,
+    _pad: [f32; 3],
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct FocusBlurUniforms {
@@ -33,6 +42,7 @@ pub(super) struct FocusBlurRenderer {
     blur_levels: [(wgpu::Texture, wgpu::TextureView); 3],
     sampler: wgpu::Sampler,
     blur_bind_group_layout: wgpu::BindGroupLayout,
+    blur_uniform_buffer: wgpu::Buffer,
     blur_down_bind_groups: [wgpu::BindGroup; 3],
     blur_up_bind_groups: [wgpu::BindGroup; 3],
     composite_bind_group_layout: wgpu::BindGroupLayout,
@@ -71,6 +81,18 @@ impl FocusBlurRenderer {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: NonZeroU64::new(
+                                std::mem::size_of::<BlurUniforms>() as u64
+                            ),
+                        },
                         count: None,
                     },
                 ],
@@ -156,6 +178,16 @@ impl FocusBlurRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let blur_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("focus blur kernel uniform buffer"),
+            contents: bytemuck::bytes_of(&BlurUniforms {
+                // Preserve the focus veil's established kernel width. Only
+                // context-menu blur varies this value per profile.
+                sample_scale: 1.0,
+                _pad: [0.0; 3],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
         let (scene_texture, scene_view) =
             create_texture(device, "focus scene texture", width, height, format);
@@ -168,9 +200,15 @@ impl FocusBlurRenderer {
             &scene_view,
             &blur_levels,
             &sampler,
+            &blur_uniform_buffer,
         );
-        let blur_up_bind_groups =
-            create_up_bind_groups(device, &blur_bind_group_layout, &blur_levels, &sampler);
+        let blur_up_bind_groups = create_up_bind_groups(
+            device,
+            &blur_bind_group_layout,
+            &blur_levels,
+            &sampler,
+            &blur_uniform_buffer,
+        );
         let composite_bind_group = create_composite_bind_group(
             device,
             &composite_bind_group_layout,
@@ -188,6 +226,7 @@ impl FocusBlurRenderer {
             blur_levels,
             sampler,
             blur_bind_group_layout,
+            blur_uniform_buffer,
             blur_down_bind_groups,
             blur_up_bind_groups,
             composite_bind_group_layout,
@@ -222,12 +261,14 @@ impl FocusBlurRenderer {
             &scene_view,
             &blur_levels,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.blur_up_bind_groups = create_up_bind_groups(
             device,
             &self.blur_bind_group_layout,
             &blur_levels,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.composite_bind_group = create_composite_bind_group(
             device,
@@ -468,6 +509,7 @@ fn blur_bind_group(
     layout: &wgpu::BindGroupLayout,
     source: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("focus blur bg"),
@@ -481,6 +523,10 @@ fn blur_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
         ],
     })
 }
@@ -491,11 +537,12 @@ fn create_down_bind_groups(
     scene: &wgpu::TextureView,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> [wgpu::BindGroup; 3] {
     [
-        blur_bind_group(device, layout, scene, sampler),
-        blur_bind_group(device, layout, &levels[0].1, sampler),
-        blur_bind_group(device, layout, &levels[1].1, sampler),
+        blur_bind_group(device, layout, scene, sampler, uniforms),
+        blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
+        blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
     ]
 }
 
@@ -504,11 +551,12 @@ fn create_up_bind_groups(
     layout: &wgpu::BindGroupLayout,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> [wgpu::BindGroup; 3] {
     [
-        blur_bind_group(device, layout, &levels[2].1, sampler),
-        blur_bind_group(device, layout, &levels[1].1, sampler),
-        blur_bind_group(device, layout, &levels[0].1, sampler),
+        blur_bind_group(device, layout, &levels[2].1, sampler, uniforms),
+        blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
+        blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
     ]
 }
 
@@ -551,5 +599,6 @@ mod tests {
     #[test]
     fn focus_blur_uniform_layout_matches_wgsl() {
         assert_eq!(std::mem::size_of::<FocusBlurUniforms>(), 32);
+        assert_eq!(std::mem::size_of::<BlurUniforms>(), 16);
     }
 }

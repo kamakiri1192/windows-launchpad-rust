@@ -664,9 +664,12 @@ impl App {
                         // flags are session-only and stay out of `settings`.
                         let p = r.liquid_glass_params_snapshot();
                         self.settings.liquid_glass.enabled = p.enabled;
+                        self.settings.liquid_glass.auto_darkness_enabled = p.auto_darkness_enabled;
+                        self.settings.liquid_glass.auto_darkness_max = p.auto_darkness_max;
                         self.settings.liquid_glass.thickness = p.thickness;
                         self.settings.liquid_glass.refractive_index = p.refractive_index;
                         self.settings.liquid_glass.saturation = p.saturation;
+                        self.settings.liquid_glass.glass_darkness = p.glass_darkness;
                         self.settings.liquid_glass.chromatic_aberration = p.chromatic_aberration;
                         self.settings.liquid_glass.blur_radius = p.blur_radius;
                         self.persist_settings();
@@ -796,6 +799,15 @@ impl App {
         let _ = self
             .input_router
             .pointer_moved(crate::input_routing::PhysicalPoint::new(x, y));
+        // Context-menu row focus is animated by the feature state. Update its
+        // target as the pointer crosses rows so the settled menu still
+        // requests the short fade/scale transition.
+        if self.context_menu.is_active() {
+            self.update_context_menu_hover(x, y);
+        }
+        if self.settings_panel_active() {
+            self.update_settings_category_hover(x, y);
+        }
         // Settings overlay slider drag: follow the pointer live.
         if self.settings_slider_drag.is_some() {
             self.update_settings_slider_drag(x);
@@ -995,12 +1007,13 @@ impl App {
             || folder_long_press_pending
             || self.qa_capture_due()
             || self.profile_scroll.is_some()
-            // Only keep redrawing for the FPS counter while the window is
+            // Only keep redrawing for the debug HUD while the window is
             // visible. `about_to_wait` ticks keep firing even after hide(),
             // so without `self.visible` the hidden window would be rendered
-            // every tick (sluggish machine + GPU driver crash). `show_fps`
-            // stays persisted; the counter returns on the next summon.
-            || (self.settings.show_fps && self.visible)
+            // every tick (sluggish machine + GPU driver crash). Overlay
+            // settings stay persisted; the HUD returns on the next summon.
+            || ((self.settings.show_fps || self.settings.show_auto_darkness_value)
+                && self.visible)
             || matches!(
                 self.folders.phase,
                 crate::features::folders::FolderPhase::Opening
@@ -1563,6 +1576,10 @@ mod tests {
         let launch = AppCommand::LaunchApp(crate::domain::app_registry::AppLaunchInfo {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
+            publisher: String::new(),
+            identifier: String::new(),
         });
         assert!(matches!(hide, AppCommand::HideWindow));
         assert!(matches!(launch, AppCommand::LaunchApp(_)));

@@ -250,6 +250,9 @@ impl App {
                     slot,
                     icon_state: IconState::Missing,
                     uv: None,
+                    version: entry.version.clone(),
+                    publisher: entry.publisher.clone(),
+                    identifier: entry.identifier.clone(),
                 };
                 self.registry.insert(rec);
             } else {
@@ -257,6 +260,9 @@ impl App {
                     record.name = entry.name.clone();
                     record.link_path = PathBuf::from(&entry.link_path);
                     record.resolved_target = PathBuf::from(&entry.target_path);
+                    record.version = entry.version.clone();
+                    record.publisher = entry.publisher.clone();
+                    record.identifier = entry.identifier.clone();
                 });
                 if previous_name.as_deref() != Some(entry.name.as_str()) {
                     if let Err(error) = self.cache.update_display_name(id, &entry.name) {
@@ -441,6 +447,9 @@ impl App {
                     slot,
                     icon_state: IconState::Missing,
                     uv: None,
+                    version: entry.version.clone(),
+                    publisher: entry.publisher.clone(),
+                    identifier: entry.identifier.clone(),
                 });
             } else {
                 // Existing app: update mutable fields.
@@ -448,6 +457,9 @@ impl App {
                     rec.name = entry.name.clone();
                     rec.link_path = PathBuf::from(&entry.link_path);
                     rec.resolved_target = PathBuf::from(&entry.target_path);
+                    rec.version = entry.version.clone();
+                    rec.publisher = entry.publisher.clone();
+                    rec.identifier = entry.identifier.clone();
                 });
             }
         }

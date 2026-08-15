@@ -175,13 +175,30 @@ fn edit_badge_frame_motion_is_gpu_driven() {
     let control_shader = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shader_control.wgsl"),
     )
-    .expect("control shader");
+    .expect("control shader")
+    .replace("\r\n", "\n");
     let glass_shader = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets/shaders/liquid_glass_geometry.wgsl"),
     )
     .expect("glass shader");
     assert!(control_shader.contains("u.viewport_scroll.w + kind.w"));
+    assert!(control_shader
+        .contains("if (kind.x > 3.5 && kind.x < 4.5)\n        || (kind.x > 8.5 && kind.x < 9.5)"));
+    assert!(
+        !control_shader.contains("if (kind.x > 3.5 && kind.x < 4.5) || kind.x > 8.5"),
+        "context-menu icon kinds must not enter edit-badge motion"
+    );
+    let context_extent = control_shader
+        .find("if kind > 12.5")
+        .expect("context-menu extent branch");
+    let reset_extent = control_shader
+        .find("if kind > 11.5 && kind < 12.5")
+        .expect("reset-arrow extent branch");
+    assert!(
+        context_extent < reset_extent,
+        "context-menu extent must be checked before the reset-arrow range"
+    );
     assert!(glass_shader.contains("u.time + shape.motion.z"));
 }
 

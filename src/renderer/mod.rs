@@ -85,12 +85,12 @@ pub struct Renderer {
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
     gpu_profiler: gpu_profile::GpuProfilerState,
-    /// Presentation-rate estimator feeding the FPS overlay. On Windows it
+    /// Presentation-rate estimator feeding the debug HUD. On Windows it
     /// prefers DXGI frame statistics; elsewhere it tracks `present()` cadence.
     pub(crate) fps_tracker: fps::FpsTracker,
     /// Cached reading of [`fps_tracker`](Self::fps_tracker), updated at the
     /// end of each successful `render()` so callers (the app layer building
-    /// overlay glyphs) read a stable value without borrowing the tracker.
+    /// HUD glyphs) read a stable value without borrowing the tracker.
     pub last_fps: u32,
 
     // -- Text rendering -------------------------------------------------
@@ -137,6 +137,17 @@ pub struct Renderer {
     /// Control bind group layout, kept so the control bind groups can be
     /// rebuilt when the glyph atlas grows (they sample the atlas).
     control_bgl: wgpu::BindGroupLayout,
+    /// Brand-logo SDF atlas (binding 3 of the control bind group). A 2D array
+    /// texture whose layer 0 is the ChatGPT logo and layer 1 is the Steam logo,
+    /// each a single-channel signed distance field. Kept on the struct so it
+    /// outlives the bind group that references it.
+    logo_sdf_atlas_texture: wgpu::Texture,
+    /// View into [`logo_sdf_atlas_texture`]. Cached so the control bind group
+    /// can be rebuilt (on glyph-atlas growth) without re-deriving it each time.
+    logo_sdf_atlas_view: wgpu::TextureView,
+    /// Linear sampler for [`logo_sdf_atlas_texture`]. Cached for the same reason
+    /// as the view.
+    logo_sdf_atlas_sampler: wgpu::Sampler,
     control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     backdrop_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
@@ -153,7 +164,7 @@ pub struct Renderer {
     control_text_pipeline: RenderPipeline,
     control_text_bind_group: wgpu::BindGroup,
     control_text_instance_buffer: InstanceBuffer<GlyphQuad>,
-    /// FPS overlay glyphs (e.g. "FPS: 60"), drawn in the final overlay pass
+    /// Debug HUD glyphs (e.g. "FPS: 60"), drawn in the final overlay pass
     /// on top of all modal content. Populated by the app layer from
     /// [`Self::last_fps`]; reuses the control-text pipeline + atlas.
     overlay_text_instance_buffer: InstanceBuffer<GlyphQuad>,

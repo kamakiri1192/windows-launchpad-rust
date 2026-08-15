@@ -7,6 +7,11 @@ pub mod grid;
 pub mod hit_map;
 pub mod settings_panel;
 
+/// Cool-neutral wash used outside a focused Liquid Glass surface. The scene
+/// blur itself carries the separation; this value only lowers residual
+/// contrast without tinting the transparent window backdrop.
+pub const GLASS_FOCUS_VEIL_OPACITY: f32 = 0.14;
+
 use crate::layout::hit_map::HitMap;
 use crate::ui_model::render_model::RenderModel;
 

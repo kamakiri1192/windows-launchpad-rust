@@ -205,6 +205,8 @@ tests/               # アーキテクチャ境界、domain 統合、WGSL 検証
 - [docs/STARTUP_PERFORMANCE.md](docs/STARTUP_PERFORMANCE.md) — 初回描画とバックグラウンド処理
 - [docs/ICON_CACHE.md](docs/ICON_CACHE.md) — SQLite アイコンキャッシュ
 - [docs/APP_REFRESH.md](docs/APP_REFRESH.md) — 起動中のアプリ差分検出
+- [docs/CONTEXT_MENU_ICON_ASSETS.md](docs/CONTEXT_MENU_ICON_ASSETS.md) — SVGを透過PNGへ
+  変換してコンテキストメニューのアイコンへ取り込む手順
 - [docs/MACOS_DEVELOPMENT.md](docs/MACOS_DEVELOPMENT.md) — macOS の権限、性能計測、配布
 - [docs/PROFILING_EVALUATION.md](docs/PROFILING_EVALUATION.md) — CPU / GPU プロファイリング
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — 既知の問題と調査記録

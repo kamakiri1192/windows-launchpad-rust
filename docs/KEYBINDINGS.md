@@ -142,10 +142,12 @@ All parameters are adjusted live and the new value is logged to stderr.
 | `9`  | blur_radius −          | 0.0 .. 40.0  |
 | `0`  | blur_radius +          | 0.0 .. 40.0  |
 
-### `blur_radius` → pyramid depth
+### `blur_radius` → pyramid depth / kernel scale
 
 The blur runs a dual-Kawase pyramid whose depth is derived from the radius,
-so weak blurs stay cheap and large radii stay smooth:
+so weak blurs stay cheap and large radii stay smooth. The same radius also
+scales the down/up sample kernel (`16px = 1.0`) so lane-local values such as
+the context menu's 24–32px produce distinct completed blur outputs:
 
 | `blur_radius` | Pyramid levels (down + up) | Effective levels |
 |---------------|----------------------------|------------------|

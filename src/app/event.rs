@@ -93,6 +93,20 @@ pub enum AppCommand {
     /// Launch `info`'s shortcut. The launcher is hidden first, then the
     /// shortcut is opened (hide-before-launch ordering).
     LaunchApp(AppLaunchInfo),
+    /// Reveal `info` in the OS file manager (Explorer / Finder), selecting its
+    /// file. The launcher is hidden first, mirroring the launch ordering so
+    /// the file manager arrives on top.
+    RevealApp(AppLaunchInfo),
+    /// Open ChatGPT with a prompt asking how to use `info`'s app. The launcher
+    /// is *not* hidden: the browser opens in the background and the user can
+    /// dismiss the menu / keep working. Carries the app name + version so the
+    /// prompt is specific.
+    AskChatGpt(AppLaunchInfo),
+    /// Open `app_id`'s Steam library page (`steam://nav/games/details/<appid>`).
+    /// The launcher is hidden first, mirroring the launch/reveal ordering so
+    /// Steam arrives on top. Carries the Steam app id directly (not the launch
+    /// info snapshot) because only the numeric id is needed to build the URL.
+    OpenInSteam { app_id: AppId },
     /// Persist the current settings blob.
     PersistSettings,
     /// Persist the current display order (`registry.order()`).
@@ -146,10 +160,50 @@ mod tests {
         let launch = AppCommand::LaunchApp(crate::domain::app_registry::AppLaunchInfo {
             name: "X".to_string(),
             link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
+            publisher: String::new(),
+            identifier: String::new(),
         });
         assert!(matches!(hide, AppCommand::HideWindow));
         assert!(matches!(launch, AppCommand::LaunchApp(_)));
         assert!(!matches!(hide, AppCommand::LaunchApp(_)));
+    }
+
+    /// The reveal-in-file-manager path is a distinct command from launch (and
+    /// from plain hide): it carries the same launch info snapshot, but the
+    /// executor's hide-then-reveal ordering must not be conflatable with
+    /// launch. The reveal row and the launch row are separate menu actions.
+    #[test]
+    fn reveal_command_is_distinct_from_launch_and_hide() {
+        let info = crate::domain::app_registry::AppLaunchInfo {
+            name: "X".to_string(),
+            link_path: std::path::PathBuf::from("x.lnk"),
+            resolved_target: std::path::PathBuf::from("x.exe"),
+            version: "1.0".to_string(),
+            publisher: String::new(),
+            identifier: String::new(),
+        };
+        let reveal = AppCommand::RevealApp(info.clone());
+        assert!(matches!(reveal, AppCommand::RevealApp(_)));
+        assert!(!matches!(reveal, AppCommand::LaunchApp(_)));
+        assert!(!matches!(reveal, AppCommand::HideWindow));
+    }
+
+    /// The open-in-Steam path is a distinct command from launch, reveal, and
+    /// plain hide: it carries only the Steam app id (not the launch-info
+    /// snapshot the launch/reveal rows carry), so the executor builds the
+    /// `steam://` URL from that id alone. The Steam row and the launch row are
+    /// separate menu actions.
+    #[test]
+    fn open_in_steam_command_is_distinct_from_launch_reveal_and_hide() {
+        let steam = AppCommand::OpenInSteam {
+            app_id: AppId::from_normalized("steam:620"),
+        };
+        assert!(matches!(steam, AppCommand::OpenInSteam { .. }));
+        assert!(!matches!(steam, AppCommand::LaunchApp(_)));
+        assert!(!matches!(steam, AppCommand::RevealApp(_)));
+        assert!(!matches!(steam, AppCommand::HideWindow));
     }
 
     /// A modal dismiss (settings overlay outside click) must hide the overlay

@@ -203,6 +203,8 @@ impl App {
         let control_animating = self.control.tick(now, control_dt);
         let edit_control_animating = self.step_edit_control_width(control_dt);
         let settings_animating = self.step_settings_panel(control_dt);
+        let settings_hover_animating = self.step_settings_category_hover(control_dt);
+        let settings_selection_animating = self.step_settings_category_selection(control_dt);
 
         // Upload the control's capsule + overlays before the render.
         // This also measures query + preedit width for the IME cursor.
@@ -214,14 +216,14 @@ impl App {
         // Upload the settings overlay panel (if open).
         self.render_settings_panel();
         self.render_folder_panel();
-        // Upload the context-menu panel (if active). It owns the Modal glass
-        // lane, so we render it only when the folder panel is not showing.
+        // Upload the context-menu panel (if active). It owns the ContextMenu
+        // glass lane, so we render it only when the folder panel is not showing.
         if self.context_menu.is_active() {
             self.render_context_menu();
         }
-        // Upload the HUD FPS overlay (if enabled). Generated every frame so
-        // the counter keeps updating while the surface is presenting.
-        self.render_fps_overlay();
+        // Upload the debug HUD (if enabled). Generated every frame so FPS and
+        // the latest nonblocking automatic-darkness sample stay current.
+        self.render_debug_overlay();
 
         // Sync the OS IME with the search field (on while focused,
         // parked at the caret) so Japanese / other IME input works.
@@ -304,6 +306,8 @@ impl App {
             || control_animating
             || edit_control_animating
             || settings_animating
+            || settings_hover_animating
+            || settings_selection_animating
             || folder_animating
             || context_menu_animating
             || hover_changed
@@ -313,13 +317,14 @@ impl App {
             || folder_scroller_animating
             || self.editing
             || self.profile_scroll.is_some()
-            // FPS counter drives a continuous redraw, but only while the
+            // Debug HUD drives a continuous redraw, but only while the
             // launcher is actually visible. Without `self.visible` here the
             // loop keeps rendering the hidden window at vsync rate after
             // hide(), which makes the whole machine sluggish and eventually
-            // destabilizes the GPU driver (crash). `show_fps` itself stays
-            // persisted so the counter returns on the next summon.
-            || (self.settings.show_fps && self.visible)
+            // destabilizes the GPU driver (crash). Overlay settings stay
+            // persisted so the HUD returns on the next summon.
+            || ((self.settings.show_fps || self.settings.show_auto_darkness_value)
+                && self.visible)
         {
             self.request_redraw();
         }

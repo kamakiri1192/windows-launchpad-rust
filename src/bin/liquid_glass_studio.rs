@@ -12,6 +12,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 const INITIAL_WIDTH: u32 = 1180;
 const INITIAL_HEIGHT: u32 = 760;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const TINT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -45,6 +46,38 @@ struct GlassUniforms {
     _pad: [f32; 3],
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
+    glass_darkness: f32,
+    _uniform_pad: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct AutoDarknessUniforms {
+    now: f32,
+    mode: u32,
+    flags: u32,
+    max_darkness: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct AutoDarknessState {
+    from_darkness: f32,
+    target_darkness: f32,
+    transition_started_at: f32,
+    filtered_coverage: f32,
+    last_full_update_at: f32,
+    initialized: u32,
+    classification_count: u32,
+    displayed_darkness: f32,
+    probe_samples: [f32; 16],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurUniforms {
+    sample_scale: f32,
+    _pad: [f32; 3],
 }
 
 #[repr(C)]
@@ -465,9 +498,14 @@ struct StudioRenderer {
     params: StudioParams,
     debug: DebugOptions,
     uniform_buffer: wgpu::Buffer,
+    auto_darkness_uniform_buffer: wgpu::Buffer,
+    auto_darkness_state_buffer: wgpu::Buffer,
+    blur_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     geometry_texture: wgpu::Texture,
     geometry_view: wgpu::TextureView,
+    tint_texture: wgpu::Texture,
+    tint_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
     blur_texture: wgpu::Texture,
@@ -550,6 +588,31 @@ impl StudioRenderer {
             contents: bytemuck::bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let auto_darkness_uniform_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("studio liquid glass auto darkness uniforms"),
+                contents: bytemuck::bytes_of(&AutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 1,
+                    flags: 0,
+                    max_darkness: 0.0,
+                }),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let auto_darkness_state_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("studio liquid glass auto darkness state"),
+                contents: bytemuck::bytes_of(&AutoDarknessState::default()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let blur_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("studio liquid glass blur uniforms"),
+            contents: bytemuck::bytes_of(&BlurUniforms {
+                sample_scale: 1.0,
+                _pad: [0.0; 3],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let shape_buffer = create_shape_buffer(&device, &[]);
         let ui_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("studio ui uniforms"),
@@ -563,6 +626,8 @@ impl StudioRenderer {
 
         let (geometry_texture, geometry_view) =
             create_geometry_texture(&device, config.width, config.height);
+        let (tint_texture, tint_view) = create_tint_texture(&device, config.width, config.height);
+        upload_transparent_tint(&queue, &tint_texture, config.width, config.height);
         let (backdrop_texture, backdrop_view) =
             create_backdrop_texture(&device, config.width, config.height);
         upload_backdrop(&queue, &backdrop_texture, config.width, config.height);
@@ -633,7 +698,11 @@ impl StudioRenderer {
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("studio liquid glass blur bgl"),
-                entries: &[texture_entry(0, true), sampler_entry(1)],
+                entries: &[
+                    texture_entry(0, true),
+                    sampler_entry(1),
+                    blur_uniform_entry(2),
+                ],
             });
         let final_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -644,6 +713,9 @@ impl StudioRenderer {
                     sampler_entry(2),
                     texture_entry(3, false),
                     texture_entry(4, true),
+                    texture_entry(5, true),
+                    auto_darkness_state_entry(6),
+                    auto_darkness_uniform_entry(7),
                 ],
             });
         let ui_bind_group_layout =
@@ -679,6 +751,7 @@ impl StudioRenderer {
             &backdrop_view,
             &blur_levels,
             &sampler,
+            &blur_uniform_buffer,
         );
         let final_bind_group = create_final_bind_group(
             &device,
@@ -688,6 +761,9 @@ impl StudioRenderer {
             &sampler,
             &geometry_view,
             &blur_view,
+            &tint_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
         );
         let ui_bind_group =
             create_ui_bind_group(&device, &ui_bind_group_layout, &ui_uniform_buffer);
@@ -817,9 +893,14 @@ impl StudioRenderer {
             params,
             debug,
             uniform_buffer,
+            auto_darkness_uniform_buffer,
+            auto_darkness_state_buffer,
+            blur_uniform_buffer,
             shape_buffer,
             geometry_texture,
             geometry_view,
+            tint_texture,
+            tint_view,
             backdrop_texture,
             backdrop_view,
             blur_texture,
@@ -858,6 +939,14 @@ impl StudioRenderer {
 
         let (geometry_texture, geometry_view) =
             create_geometry_texture(&self.device, self.config.width, self.config.height);
+        let (tint_texture, tint_view) =
+            create_tint_texture(&self.device, self.config.width, self.config.height);
+        upload_transparent_tint(
+            &self.queue,
+            &tint_texture,
+            self.config.width,
+            self.config.height,
+        );
         let (backdrop_texture, backdrop_view) =
             create_backdrop_texture(&self.device, self.config.width, self.config.height);
         upload_backdrop(
@@ -899,6 +988,8 @@ impl StudioRenderer {
 
         self.geometry_texture = geometry_texture;
         self.geometry_view = geometry_view;
+        self.tint_texture = tint_texture;
+        self.tint_view = tint_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
         self.blur_texture = blur_texture;
@@ -916,6 +1007,7 @@ impl StudioRenderer {
             &self.backdrop_view,
             &self.blur_levels,
             &self.sampler,
+            &self.blur_uniform_buffer,
         );
         self.blur_down_bind_groups = down;
         self.blur_up_bind_groups = up;
@@ -927,6 +1019,9 @@ impl StudioRenderer {
             &self.sampler,
             &self.geometry_view,
             &self.blur_view,
+            &self.tint_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
         );
         self.queue.write_buffer(
             &self.ui_uniform_buffer,
@@ -987,6 +1082,14 @@ impl StudioRenderer {
         );
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        self.queue.write_buffer(
+            &self.blur_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&BlurUniforms {
+                sample_scale: (self.params.blur_radius / 16.0).clamp(0.25, 2.5),
+                _pad: [0.0; 3],
+            }),
+        );
         let ui_instances = build_ui_instances(
             self.config.width as f32,
             self.config.height as f32,
@@ -1305,6 +1408,8 @@ fn uniforms_from_params(
         _pad: [0.0; 3],
         backdrop_origin: [0.0, 0.0],
         backdrop_extent: [width as f32, height as f32],
+        glass_darkness: 0.0,
+        _uniform_pad: [0.0; 3],
     }
 }
 
@@ -1743,6 +1848,25 @@ fn create_backdrop_texture(
     (texture, view)
 }
 
+fn create_tint_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("studio liquid glass tint texture"),
+        size: texture_extent(width, height),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TINT_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 fn create_blur_texture_raw(
     device: &wgpu::Device,
     width: u32,
@@ -1785,6 +1909,25 @@ fn blur_level_extent(width: u32, height: u32, level: u32) -> (u32, u32) {
 
 fn upload_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) {
     let pixels = make_backdrop(width.max(1), height.max(1));
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width.max(1) * 4),
+            rows_per_image: Some(height.max(1)),
+        },
+        texture_extent(width, height),
+    );
+}
+
+fn upload_transparent_tint(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32) {
+    let pixels = vec![0u8; (width.max(1) * height.max(1) * 4) as usize];
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -1877,6 +2020,7 @@ fn create_blur_bind_group(
     layout: &wgpu::BindGroupLayout,
     source_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("studio liquid glass blur bind group"),
@@ -1890,6 +2034,10 @@ fn create_blur_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
         ],
     })
 }
@@ -1900,20 +2048,22 @@ fn create_blur_pyramid_bind_groups(
     backdrop_view: &wgpu::TextureView,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
     sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
 ) -> ([wgpu::BindGroup; 3], [wgpu::BindGroup; 3]) {
     let down = [
-        create_blur_bind_group(device, layout, backdrop_view, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
+        create_blur_bind_group(device, layout, backdrop_view, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
     ];
     let up = [
-        create_blur_bind_group(device, layout, &levels[2].1, sampler),
-        create_blur_bind_group(device, layout, &levels[1].1, sampler),
-        create_blur_bind_group(device, layout, &levels[0].1, sampler),
+        create_blur_bind_group(device, layout, &levels[2].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[1].1, sampler, uniforms),
+        create_blur_bind_group(device, layout, &levels[0].1, sampler, uniforms),
     ];
     (down, up)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_final_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1922,6 +2072,9 @@ fn create_final_bind_group(
     sampler: &wgpu::Sampler,
     geometry_view: &wgpu::TextureView,
     blur_view: &wgpu::TextureView,
+    tint_view: &wgpu::TextureView,
+    auto_darkness_state: &wgpu::Buffer,
+    auto_darkness_uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("studio liquid glass final bind group"),
@@ -1946,6 +2099,18 @@ fn create_final_bind_group(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: wgpu::BindingResource::TextureView(blur_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(tint_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: auto_darkness_state.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: auto_darkness_uniforms.as_entire_binding(),
             },
         ],
     })
@@ -2076,6 +2241,45 @@ fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
             min_binding_size: NonZeroU64::new(std::mem::size_of::<GlassUniforms>() as u64),
+        },
+        count: None,
+    }
+}
+
+fn blur_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<BlurUniforms>() as u64),
+        },
+        count: None,
+    }
+}
+
+fn auto_darkness_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<AutoDarknessUniforms>() as u64),
+        },
+        count: None,
+    }
+}
+
+fn auto_darkness_state_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(std::mem::size_of::<AutoDarknessState>() as u64),
         },
         count: None,
     }

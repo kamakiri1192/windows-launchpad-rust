@@ -38,8 +38,12 @@ pub struct Settings {
     /// `frame.present()` cadence EMA otherwise. Off by default.
     #[serde(default)]
     pub show_fps: bool,
-    /// Persisted Liquid Glass parameters (the master switch plus the five
-    /// numeric parameters exposed in the settings panel). Debug-only flags
+    /// Shows the effective automatic-darkness value in the top-right debug
+    /// overlay. Off by default; GPU readback is enabled only while visible.
+    #[serde(default)]
+    pub show_auto_darkness_value: bool,
+    /// Persisted Liquid Glass parameters (master/automatic switches plus the
+    /// nine numeric parameters exposed in the settings panel). Debug-only flags
     /// (the B/G/D/A/F debug views and the C/E/L disable toggles) and the
     /// window-decoration toggle are *not* persisted: they reset on every
     /// launch so a stale debug view can never survive a restart.
@@ -60,6 +64,7 @@ impl Default for Settings {
             show_steam_apps: true,
             debug_keys_enabled: false,
             show_fps: false,
+            show_auto_darkness_value: false,
             liquid_glass: LiquidGlassSettings::default(),
         }
     }
@@ -73,12 +78,22 @@ impl Default for Settings {
 pub struct LiquidGlassSettings {
     #[serde(default = "default_lg_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub auto_darkness_enabled: bool,
+    #[serde(default = "default_lg_auto_darkness_max")]
+    pub auto_darkness_max: f32,
     #[serde(default = "default_lg_thickness")]
     pub thickness: f32,
     #[serde(default = "default_lg_refractive_index")]
     pub refractive_index: f32,
     #[serde(default = "default_lg_saturation")]
     pub saturation: f32,
+    #[serde(default = "default_lg_glass_darkness")]
+    pub glass_darkness: f32,
+    #[serde(default = "default_lg_surface_darkness")]
+    pub context_menu_glass_darkness: f32,
+    #[serde(default = "default_lg_surface_darkness")]
+    pub settings_panel_glass_darkness: f32,
     #[serde(default = "default_lg_chromatic_aberration")]
     pub chromatic_aberration: f32,
     #[serde(default = "default_lg_blur_radius")]
@@ -89,9 +104,14 @@ impl Default for LiquidGlassSettings {
     fn default() -> Self {
         Self {
             enabled: default_lg_enabled(),
+            auto_darkness_enabled: false,
+            auto_darkness_max: default_lg_auto_darkness_max(),
             thickness: default_lg_thickness(),
             refractive_index: default_lg_refractive_index(),
             saturation: default_lg_saturation(),
+            glass_darkness: default_lg_glass_darkness(),
+            context_menu_glass_darkness: default_lg_surface_darkness(),
+            settings_panel_glass_darkness: default_lg_surface_darkness(),
             chromatic_aberration: default_lg_chromatic_aberration(),
             blur_radius: default_lg_blur_radius(),
         }
@@ -119,12 +139,24 @@ const fn default_lg_thickness() -> f32 {
     26.0
 }
 
+const fn default_lg_auto_darkness_max() -> f32 {
+    0.16
+}
+
 const fn default_lg_refractive_index() -> f32 {
     1.42
 }
 
 const fn default_lg_saturation() -> f32 {
     1.34
+}
+
+const fn default_lg_glass_darkness() -> f32 {
+    0.0
+}
+
+const fn default_lg_surface_darkness() -> f32 {
+    0.0
 }
 
 const fn default_lg_chromatic_aberration() -> f32 {
@@ -135,7 +167,7 @@ const fn default_lg_blur_radius() -> f32 {
     16.0
 }
 
-/// Identifies one of the five numeric Liquid Glass parameters that the
+/// Identifies one of the nine numeric Liquid Glass parameters that the
 /// settings panel exposes as a slider. Used by hit-testing, drag tracking,
 /// and the per-parameter reset action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,15 +175,23 @@ pub enum LiquidGlassParamField {
     Thickness,
     RefractiveIndex,
     Saturation,
+    AutoDarknessMax,
+    GlassDarkness,
+    ContextMenuGlassDarkness,
+    SettingsPanelGlassDarkness,
     ChromaticAberration,
     BlurRadius,
 }
 
 impl LiquidGlassParamField {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 9] = [
         Self::Thickness,
         Self::RefractiveIndex,
         Self::Saturation,
+        Self::AutoDarknessMax,
+        Self::GlassDarkness,
+        Self::ContextMenuGlassDarkness,
+        Self::SettingsPanelGlassDarkness,
         Self::ChromaticAberration,
         Self::BlurRadius,
     ];
@@ -163,6 +203,10 @@ impl LiquidGlassParamField {
             Self::Thickness => (6.0, 48.0, default_lg_thickness()),
             Self::RefractiveIndex => (1.02, 1.75, default_lg_refractive_index()),
             Self::Saturation => (0.5, 2.0, default_lg_saturation()),
+            Self::AutoDarknessMax => (0.0, 1.0, default_lg_auto_darkness_max()),
+            Self::GlassDarkness => (0.0, 1.0, default_lg_glass_darkness()),
+            Self::ContextMenuGlassDarkness => (0.0, 1.0, default_lg_surface_darkness()),
+            Self::SettingsPanelGlassDarkness => (0.0, 1.0, default_lg_surface_darkness()),
             Self::ChromaticAberration => (0.0, 0.18, default_lg_chromatic_aberration()),
             Self::BlurRadius => (0.0, 40.0, default_lg_blur_radius()),
         }
@@ -173,6 +217,10 @@ impl LiquidGlassParamField {
             Self::Thickness => s.thickness,
             Self::RefractiveIndex => s.refractive_index,
             Self::Saturation => s.saturation,
+            Self::AutoDarknessMax => s.auto_darkness_max,
+            Self::GlassDarkness => s.glass_darkness,
+            Self::ContextMenuGlassDarkness => s.context_menu_glass_darkness,
+            Self::SettingsPanelGlassDarkness => s.settings_panel_glass_darkness,
             Self::ChromaticAberration => s.chromatic_aberration,
             Self::BlurRadius => s.blur_radius,
         }
@@ -185,6 +233,10 @@ impl LiquidGlassParamField {
             Self::Thickness => s.thickness = value,
             Self::RefractiveIndex => s.refractive_index = value,
             Self::Saturation => s.saturation = value,
+            Self::AutoDarknessMax => s.auto_darkness_max = value,
+            Self::GlassDarkness => s.glass_darkness = value,
+            Self::ContextMenuGlassDarkness => s.context_menu_glass_darkness = value,
+            Self::SettingsPanelGlassDarkness => s.settings_panel_glass_darkness = value,
             Self::ChromaticAberration => s.chromatic_aberration = value,
             Self::BlurRadius => s.blur_radius = value,
         }
@@ -196,6 +248,10 @@ impl LiquidGlassParamField {
             Self::Thickness => "thickness",
             Self::RefractiveIndex => "refractive-index",
             Self::Saturation => "saturation",
+            Self::AutoDarknessMax => "auto-darkness-max",
+            Self::GlassDarkness => "glass-darkness",
+            Self::ContextMenuGlassDarkness => "context-menu-glass-darkness",
+            Self::SettingsPanelGlassDarkness => "settings-panel-glass-darkness",
             Self::ChromaticAberration => "chromatic-aberration",
             Self::BlurRadius => "blur-radius",
         }
@@ -256,24 +312,28 @@ pub enum SettingsCategory {
     Apps,
     Search,
     System,
+    Darkness,
     About,
     Debug,
 }
 
 impl SettingsCategory {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Apps,
         Self::Search,
         Self::System,
+        Self::Darkness,
         Self::About,
         Self::Debug,
     ];
+    pub const COUNT: usize = Self::ALL.len();
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Apps => "アプリ",
             Self::Search => "表示と検索",
             Self::System => "システム",
+            Self::Darkness => "Darkness",
             Self::About => "このアプリについて",
             Self::Debug => "デバッグ",
         }
@@ -293,6 +353,7 @@ mod tests {
         assert!(s.show_steam_apps);
         assert!(!s.debug_keys_enabled);
         assert!(!s.show_fps);
+        assert!(!s.show_auto_darkness_value);
         assert!(s.liquid_glass.is_default());
     }
 
@@ -305,11 +366,17 @@ mod tests {
             show_steam_apps: false,
             debug_keys_enabled: true,
             show_fps: true,
+            show_auto_darkness_value: true,
             liquid_glass: LiquidGlassSettings {
                 enabled: false,
+                auto_darkness_enabled: true,
+                auto_darkness_max: 0.24,
                 thickness: 40.0,
                 refractive_index: 1.5,
                 saturation: 1.8,
+                glass_darkness: 0.3,
+                context_menu_glass_darkness: 0.2,
+                settings_panel_glass_darkness: 0.1,
                 chromatic_aberration: 0.1,
                 blur_radius: 24.0,
             },
@@ -356,6 +423,44 @@ mod tests {
     }
 
     #[test]
+    fn older_json_defaults_auto_darkness_value_overlay_to_disabled() {
+        let json = br#"{
+            "sort_order":"Name",
+            "frequent_apps_enabled":false,
+            "search_includes_hidden":false,
+            "show_steam_apps":true,
+            "debug_keys_enabled":false,
+            "show_fps":false
+        }"#;
+        let decoded: Settings = serde_json::from_slice(json).unwrap();
+        assert!(!decoded.show_auto_darkness_value);
+    }
+
+    #[test]
+    fn older_liquid_glass_json_defaults_auto_darkness_max() {
+        let json = br#"{
+            "sort_order":"Name",
+            "frequent_apps_enabled":false,
+            "search_includes_hidden":false,
+            "liquid_glass":{
+                "enabled":true,
+                "auto_darkness_enabled":true,
+                "thickness":26.0,
+                "refractive_index":1.42,
+                "saturation":1.34,
+                "glass_darkness":0.0,
+                "context_menu_glass_darkness":0.0,
+                "settings_panel_glass_darkness":0.0,
+                "chromatic_aberration":0.075,
+                "blur_radius":16.0
+            }
+        }"#;
+        let decoded: Settings = serde_json::from_slice(json).unwrap();
+        assert!(decoded.liquid_glass.auto_darkness_enabled);
+        assert_eq!(decoded.liquid_glass.auto_darkness_max, 0.16);
+    }
+
+    #[test]
     fn older_json_defaults_liquid_glass_to_renderer_baseline() {
         // JSON written by an older build (before Liquid Glass was persisted).
         // It must decode with the same numeric baseline the renderer boots
@@ -372,12 +477,28 @@ mod tests {
         }"#;
         let decoded: Settings = serde_json::from_slice(json).unwrap();
         assert!(decoded.liquid_glass.enabled);
+        assert_eq!(
+            decoded.liquid_glass.auto_darkness_max,
+            default_lg_auto_darkness_max()
+        );
         assert_eq!(decoded.liquid_glass.thickness, default_lg_thickness());
         assert_eq!(
             decoded.liquid_glass.refractive_index,
             default_lg_refractive_index()
         );
         assert_eq!(decoded.liquid_glass.saturation, default_lg_saturation());
+        assert_eq!(
+            decoded.liquid_glass.glass_darkness,
+            default_lg_glass_darkness()
+        );
+        assert_eq!(
+            decoded.liquid_glass.context_menu_glass_darkness,
+            default_lg_surface_darkness()
+        );
+        assert_eq!(
+            decoded.liquid_glass.settings_panel_glass_darkness,
+            default_lg_surface_darkness()
+        );
         assert_eq!(
             decoded.liquid_glass.chromatic_aberration,
             default_lg_chromatic_aberration()
@@ -392,9 +513,14 @@ mod tests {
         // we inline the constants here).
         let s = LiquidGlassSettings::default();
         assert!(s.enabled);
+        assert!(!s.auto_darkness_enabled);
+        assert_eq!(s.auto_darkness_max, 0.16);
         assert_eq!(s.thickness, 26.0);
         assert_eq!(s.refractive_index, 1.42);
         assert_eq!(s.saturation, 1.34);
+        assert_eq!(s.glass_darkness, 0.0);
+        assert_eq!(s.context_menu_glass_darkness, 0.0);
+        assert_eq!(s.settings_panel_glass_darkness, 0.0);
         assert_eq!(s.chromatic_aberration, 0.075);
         assert_eq!(s.blur_radius, 16.0);
     }
@@ -403,9 +529,14 @@ mod tests {
     fn liquid_glass_reset_to_defaults_restores_baseline() {
         let mut s = LiquidGlassSettings {
             enabled: false,
+            auto_darkness_enabled: true,
+            auto_darkness_max: 0.9,
             thickness: 6.0,
             refractive_index: 1.02,
             saturation: 0.5,
+            glass_darkness: 1.0,
+            context_menu_glass_darkness: 1.0,
+            settings_panel_glass_darkness: 1.0,
             chromatic_aberration: 0.0,
             blur_radius: 0.0,
         };

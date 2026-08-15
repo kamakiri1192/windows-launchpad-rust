@@ -56,6 +56,11 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
             } else {
                 extract::file_mtime(Path::new(&meta.target_path))
             };
+            let exe_meta = if meta.target_path.is_empty() {
+                crate::platform::windows::ExeMetadata::default()
+            } else {
+                crate::platform::windows::exe_metadata(Path::new(&meta.target_path))
+            };
 
             let entry = SnapshotEntry {
                 app_id: app_id.clone(),
@@ -66,6 +71,9 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
                 target_mtime,
                 icon_location: meta.icon_location,
                 icon_index: meta.icon_index,
+                version: exe_meta.version,
+                publisher: exe_meta.publisher,
+                identifier: exe_meta.product_name,
             };
             // Duplicate ids (same file via two roots) collapse; last one wins,
             // which is fine — they're the same shortcut.

@@ -20,10 +20,10 @@ use super::{color_from_array, control_size_multiplier, scale_color_alpha, Z_CONT
 // Colour palette (mirrors settings_panel.rs)
 // ---------------------------------------------------------------------------
 
-const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
-const MUTED: [f32; 4] = [1.0, 1.0, 1.0, 0.58];
-const ACCENT: [f32; 4] = [0.35, 0.68, 1.0, 0.42];
-const ROW_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.12];
+const INK: [f32; 4] = [0.11, 0.11, 0.118, 0.92];
+const MUTED: [f32; 4] = [0.11, 0.11, 0.118, 0.58];
+const ACCENT: [f32; 4] = [0.039, 0.518, 1.0, 0.20];
+const ROW_BG: [f32; 4] = [0.11, 0.11, 0.118, 0.06];
 
 /// Default row height in logical pixels (matches `ROW_H`).
 pub const ROW_H: f32 = 46.0;

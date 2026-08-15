@@ -300,7 +300,8 @@ impl Ui {
     }
 
     /// Push a `HitRegion` onto the hit-test map.
-    pub fn push_hit(&mut self, region: HitRegion) {
+    pub fn push_hit(&mut self, mut region: HitRegion) {
+        self.apply_clip(&mut region.clip);
         self.hits.push(region);
     }
 
@@ -459,6 +460,24 @@ mod tests {
 
         let (_render, hits, _reg) = ui.take();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn push_hit_inherits_clip_from_stack() {
+        let mut ui = new_ui();
+        let clip = ClipRegion::new(Rect::new(0.0, 20.0, 100.0, 80.0), 0.0);
+        ui.clip_stack.push(clip);
+        ui.push_hit(HitRegion::new(
+            UiId::named("btn"),
+            Rect::new(10.0, 10.0, 40.0, 40.0),
+            HitTarget::launcher_item("btn"),
+            0,
+        ));
+
+        let (_render, hits, _reg) = ui.take();
+        assert_eq!(hits.regions()[0].clip, Some(clip));
+        assert!(hits.hit_test(Point::new(20.0, 15.0)).is_none());
+        assert!(hits.hit_test(Point::new(20.0, 25.0)).is_some());
     }
 
     // ------------------------------------------------------------------

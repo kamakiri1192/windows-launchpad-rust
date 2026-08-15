@@ -5,10 +5,37 @@ use std::{
 };
 
 const LAUNCHPAD_UNIFORMS_SIZE: u64 = 48;
-const GLASS_UNIFORMS_SIZE: u64 = 112;
+const GLASS_UNIFORMS_SIZE: u64 = 128;
+const BLUR_UNIFORMS_SIZE: u64 = 16;
+const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 16;
+const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TestAutoDarknessUniforms {
+    now: f32,
+    mode: u32,
+    flags: u32,
+    max_darkness: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct TestAutoDarknessState {
+    from_darkness: f32,
+    target_darkness: f32,
+    transition_started_at: f32,
+    filtered_coverage: f32,
+    last_full_update_at: f32,
+    initialized: u32,
+    classification_count: u32,
+    displayed_darkness: f32,
+    probe_samples: [f32; 16],
+}
 
 #[test]
 fn blur_downsample_preserves_constant_color_energy() {
@@ -19,6 +46,298 @@ fn blur_downsample_preserves_constant_color_energy() {
     let shader = include_str!("../assets/shaders/liquid_glass_blur_downsample.wgsl");
     assert!(shader.contains("const KERNEL_NORMALIZATION: f32 = 1.0 / 8.0;"));
     assert_eq!(shader.matches("KERNEL_NORMALIZATION").count(), 5);
+}
+
+#[test]
+fn auto_darkness_uses_parallel_reduction_and_per_frame_interpolation() {
+    let reduction = include_str!("../assets/shaders/liquid_glass_backdrop_stats.wgsl");
+    assert!(reduction.contains("@compute @workgroup_size(16, 16, 1)"));
+    assert!(reduction.contains("elapsed >= 0.125"));
+    assert!(reduction.contains("probe_delta >= 0.035"));
+
+    assert!(reduction.contains("state.displayed_darkness = interpolated_darkness(u.now);"));
+
+    let final_shader = include_str!("../assets/shaders/liquid_glass_final.wgsl");
+    assert!(final_shader.contains("return auto_darkness.displayed_darkness;"));
+}
+
+#[test]
+fn auto_darkness_compute_respects_maximum_and_update_modes() {
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("auto darkness execution test shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../assets/shaders/liquid_glass_backdrop_stats.wgsl").into(),
+            ),
+        });
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("auto darkness execution test bgl"),
+            entries: &[
+                texture_entry_for(0, true, wgpu::ShaderStages::COMPUTE),
+                sampler_entry_for(1, wgpu::ShaderStages::COMPUTE),
+                uniform_entry(2, wgpu::ShaderStages::COMPUTE, AUTO_DARKNESS_UNIFORMS_SIZE),
+                storage_entry(
+                    3,
+                    wgpu::ShaderStages::COMPUTE,
+                    false,
+                    AUTO_DARKNESS_STATE_SIZE,
+                ),
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("auto darkness execution test pipeline layout"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("auto darkness execution test pipeline"),
+            layout: Some(&layout),
+            module: &shader,
+            entry_point: Some("cs_main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("auto darkness execution test backdrop"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        write_test_backdrop(&queue, &texture, 255);
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("auto darkness execution test uniforms"),
+            size: AUTO_DARKNESS_UNIFORMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let state = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("auto darkness execution test state"),
+            size: AUTO_DARKNESS_STATE_SIZE,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("auto darkness execution test bind group"),
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: state.as_entire_binding(),
+                },
+            ],
+        });
+
+        reset_test_auto_darkness_state(&queue, &state);
+        dispatch_test_auto_darkness(
+            &device,
+            &queue,
+            &pipeline,
+            &bind_group,
+            &uniforms,
+            TestAutoDarknessUniforms {
+                now: 0.0,
+                mode: 1,
+                flags: 1,
+                max_darkness: 0.42,
+            },
+        );
+        let initial = read_test_auto_darkness_state(&device, &queue, &state);
+        assert_eq!(initial.classification_count, 1);
+        assert!((initial.target_darkness - 0.42).abs() < 0.0001);
+
+        // Adaptive mode skips a stable frame before the 125 ms deadline, but
+        // performs a full classification at the deadline.
+        for now in [0.05, 0.126] {
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &bind_group,
+                &uniforms,
+                TestAutoDarknessUniforms {
+                    now,
+                    mode: 1,
+                    flags: 0,
+                    max_darkness: 0.42,
+                },
+            );
+        }
+        let adaptive = read_test_auto_darkness_state(&device, &queue, &state);
+        assert_eq!(adaptive.classification_count, 2);
+
+        // A coarse-probe change wakes adaptive mode immediately, before the
+        // next 8 Hz deadline.
+        write_test_backdrop(&queue, &texture, 0);
+        dispatch_test_auto_darkness(
+            &device,
+            &queue,
+            &pipeline,
+            &bind_group,
+            &uniforms,
+            TestAutoDarknessUniforms {
+                now: 0.14,
+                mode: 1,
+                flags: 0,
+                max_darkness: 0.42,
+            },
+        );
+        let changed = read_test_auto_darkness_state(&device, &queue, &state);
+        assert_eq!(changed.classification_count, 3);
+
+        // Fixed mode ignores probe changes and runs only on its 8 Hz cadence.
+        reset_test_auto_darkness_state(&queue, &state);
+        write_test_backdrop(&queue, &texture, 255);
+        for (index, now) in [0.0, 0.05, 0.126].into_iter().enumerate() {
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &bind_group,
+                &uniforms,
+                TestAutoDarknessUniforms {
+                    now,
+                    mode: 2,
+                    flags: u32::from(index == 0),
+                    max_darkness: 0.42,
+                },
+            );
+        }
+        let fixed = read_test_auto_darkness_state(&device, &queue, &state);
+        assert_eq!(fixed.classification_count, 2);
+
+        // Full-rate mode classifies every dispatched capture.
+        reset_test_auto_darkness_state(&queue, &state);
+        write_test_backdrop(&queue, &texture, 255);
+        for (index, now) in [0.0, 0.01, 0.02].into_iter().enumerate() {
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &bind_group,
+                &uniforms,
+                TestAutoDarknessUniforms {
+                    now,
+                    mode: 0,
+                    flags: u32::from(index == 0),
+                    max_darkness: 0.42,
+                },
+            );
+        }
+        let full_rate = read_test_auto_darkness_state(&device, &queue, &state);
+        assert_eq!(full_rate.classification_count, 3);
+    });
+}
+
+fn dispatch_test_auto_darkness(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipeline: &wgpu::ComputePipeline,
+    bind_group: &wgpu::BindGroup,
+    uniform_buffer: &wgpu::Buffer,
+    uniforms: TestAutoDarknessUniforms,
+) {
+    queue.write_buffer(uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("auto darkness execution test encoder"),
+    });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("auto darkness execution test pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+}
+
+fn reset_test_auto_darkness_state(queue: &wgpu::Queue, state: &wgpu::Buffer) {
+    queue.write_buffer(
+        state,
+        0,
+        bytemuck::bytes_of(&TestAutoDarknessState::default()),
+    );
+}
+
+fn read_test_auto_darkness_state(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    state: &wgpu::Buffer,
+) -> TestAutoDarknessState {
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("auto darkness execution test readback"),
+        size: AUTO_DARKNESS_STATE_SIZE,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("auto darkness execution test readback encoder"),
+    });
+    encoder.copy_buffer_to_buffer(state, 0, &readback, 0, AUTO_DARKNESS_STATE_SIZE);
+    queue.submit(std::iter::once(encoder.finish()));
+    let slice = readback.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("poll auto darkness execution test readback");
+    let mapped = slice.get_mapped_range();
+    let result = bytemuck::pod_read_unaligned(&mapped);
+    drop(mapped);
+    readback.unmap();
+    result
+}
+
+fn write_test_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, value: u8) {
+    let pixels = vec![value; 16 * 16 * 4];
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(16 * 4),
+            rows_per_image: Some(16),
+        },
+        wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 const TILE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32, 4 => Float32x4];
@@ -286,7 +605,11 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
     });
     let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass blur bgl"),
-        entries: &[texture_entry(0, true), sampler_entry(1)],
+        entries: &[
+            texture_entry(0, true),
+            sampler_entry(1),
+            uniform_entry(2, wgpu::ShaderStages::FRAGMENT, BLUR_UNIFORMS_SIZE),
+        ],
     });
     let final_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass final bgl"),
@@ -297,6 +620,36 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
             texture_entry(3, false),
             texture_entry(4, true),
             texture_entry(5, true),
+            storage_entry(
+                6,
+                wgpu::ShaderStages::FRAGMENT,
+                true,
+                AUTO_DARKNESS_STATE_SIZE,
+            ),
+            uniform_entry(7, wgpu::ShaderStages::FRAGMENT, AUTO_DARKNESS_UNIFORMS_SIZE),
+        ],
+    });
+    let backdrop_stats_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("test liquid glass backdrop stats bgl"),
+        entries: &[
+            texture_entry_for(0, true, wgpu::ShaderStages::COMPUTE),
+            sampler_entry_for(1, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(2, wgpu::ShaderStages::COMPUTE, AUTO_DARKNESS_UNIFORMS_SIZE),
+            storage_entry(
+                3,
+                wgpu::ShaderStages::COMPUTE,
+                false,
+                AUTO_DARKNESS_STATE_SIZE,
+            ),
+        ],
+    });
+    let scene_flatten_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("test liquid glass scene flatten bgl"),
+        entries: &[
+            texture_entry(0, true),
+            texture_entry(1, true),
+            sampler_entry(2),
+            uniform_entry(3, wgpu::ShaderStages::FRAGMENT, SCENE_FLATTEN_UNIFORMS_SIZE),
         ],
     });
 
@@ -322,6 +675,18 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         device,
         "assets/shaders/liquid_glass_blur_upsample.wgsl",
         &manifest_dir.join("assets/shaders/liquid_glass_blur_upsample.wgsl"),
+    )
+    .await;
+    let scene_flatten_shader = create_shader_module_checked(
+        device,
+        "assets/shaders/liquid_glass_scene_flatten.wgsl",
+        &manifest_dir.join("assets/shaders/liquid_glass_scene_flatten.wgsl"),
+    )
+    .await;
+    let backdrop_stats_shader = create_shader_module_checked(
+        device,
+        "assets/shaders/liquid_glass_backdrop_stats.wgsl",
+        &manifest_dir.join("assets/shaders/liquid_glass_backdrop_stats.wgsl"),
     )
     .await;
 
@@ -366,6 +731,41 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         None,
     )
     .await;
+
+    let scene_flatten_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("test liquid glass scene flatten pipeline layout"),
+            bind_group_layouts: &[Some(&scene_flatten_bgl)],
+            immediate_size: 0,
+        });
+    let _scene_flatten_pipeline = create_fullscreen_render_pipeline_checked(
+        device,
+        "liquid glass scene flatten pipeline",
+        "test liquid glass scene flatten pipeline",
+        &scene_flatten_pipeline_layout,
+        &scene_flatten_shader,
+        BLUR_FORMAT,
+        None,
+    )
+    .await;
+
+    let backdrop_stats_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("test liquid glass backdrop stats pipeline layout"),
+            bind_group_layouts: &[Some(&backdrop_stats_bgl)],
+            immediate_size: 0,
+        });
+    let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let _backdrop_stats_pipeline =
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("test liquid glass backdrop stats pipeline"),
+            layout: Some(&backdrop_stats_pipeline_layout),
+            module: &backdrop_stats_shader,
+            entry_point: Some("cs_main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+    assert_no_validation_error(error_scope, "liquid glass backdrop stats pipeline").await;
 
     let final_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("test liquid glass final pipeline layout"),
@@ -474,9 +874,17 @@ fn uniform_entry(
 }
 
 fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
+    texture_entry_for(binding, filterable, wgpu::ShaderStages::FRAGMENT)
+}
+
+fn texture_entry_for(
+    binding: u32,
+    filterable: bool,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable },
             view_dimension: wgpu::TextureViewDimension::D2,
@@ -487,10 +895,32 @@ fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
 }
 
 fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    sampler_entry_for(binding, wgpu::ShaderStages::FRAGMENT)
+}
+
+fn sampler_entry_for(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+fn storage_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    read_only: bool,
+    min_binding_size: u64,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: NonZeroU64::new(min_binding_size),
+        },
         count: None,
     }
 }

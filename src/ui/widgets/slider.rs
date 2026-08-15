@@ -22,8 +22,8 @@ use super::{color_from_array, control_size_multiplier, scale_color_alpha, Z_CONT
 // Palette constants
 // ---------------------------------------------------------------------------
 
-const INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
-const MUTED: [f32; 4] = [1.0, 1.0, 1.0, 0.58];
+const INK: [f32; 4] = [0.11, 0.11, 0.118, 0.92];
+const MUTED: [f32; 4] = [0.11, 0.11, 0.118, 0.58];
 const TRACK_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.16];
 const KNOB_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
 const RESET_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.7];
@@ -259,7 +259,7 @@ impl Ui {
                 scene_blur: 0.0,
                 stroke: half_w,
                 corner_radius: corner,
-                color: Color::rgba(1.0, 1.0, 1.0, 0.12),
+                color: Color::rgba(0.11, 0.11, 0.118, 0.06),
                 kind: ControlKind::RowBackground,
                 z: Z_CONTROL,
                 clip: None,

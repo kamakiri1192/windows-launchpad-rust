@@ -1458,6 +1458,9 @@ impl App {
                 slot,
                 icon_state: IconState::Loaded,
                 uv: Some(uv),
+                version: String::new(),
+                publisher: String::new(),
+                identifier: String::new(),
             });
         }
         let mut launcher = LauncherState::new();
@@ -1602,6 +1605,7 @@ impl App {
                         raw_dy: canonical_dy,
                         canonical_dx,
                         canonical_dy,
+                        canonical_unaccelerated_dy: None,
                         source: match source {
                             QaScrollSource::Precise => crate::input_routing::ScrollSource::Precise,
                             QaScrollSource::Line => crate::input_routing::ScrollSource::Line,
@@ -1665,6 +1669,7 @@ impl App {
                         .adapt_native(crate::input_routing::RawScrollEvent {
                             timestamp_us: dispatch_timestamp_us,
                             delta_physical_px: (raw_dx, raw_dy),
+                            unaccelerated_delta_physical_px: None,
                             source: match source {
                                 QaScrollSource::Precise => {
                                     crate::input_routing::ScrollSource::Precise
@@ -2457,6 +2462,49 @@ mod tests {
             .actions
             .iter()
             .any(|action| matches!(action.action, QaAction::RightClick)));
+    }
+
+    #[test]
+    fn context_menu_repeated_targets_scenario_covers_main_and_folder_apps() {
+        let scenario: QaScenario = serde_json::from_str(include_str!(
+            "../qa/context_menu_repeated_targets_stable.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::RightClick))
+                .count(),
+            20
+        );
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::OpenFolder { .. })));
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::Escape)));
+    }
+
+    #[test]
+    fn folder_context_menu_outside_dismiss_scenario_keeps_folder_open() {
+        let scenario: QaScenario = serde_json::from_str(include_str!(
+            "../qa/context_menu_folder_outside_dismiss.json"
+        ))
+        .unwrap();
+        validate_context_menu_expectations(&scenario).unwrap();
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::OpenFolder { .. })));
+        assert!(scenario.actions.iter().any(|action| matches!(
+            action.action,
+            QaAction::Move {
+                target: QaTarget::Point { .. }
+            }
+        )));
     }
 
     #[test]

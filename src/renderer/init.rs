@@ -507,8 +507,38 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // Brand-logo SDF atlas (binding 3) + sampler (binding 4). The
+                // atlas is a 2D array texture whose layer 0 is the ChatGPT logo
+                // and layer 1 is the Steam logo, each a single-channel signed
+                // distance field. Kinds 19 and 20 of shader_control.wgsl sample
+                // the right layer and reconstruct a crisp, resolution-
+                // independent edge, so both logos stay sharp at any DPI from a
+                // compact 64×64 source (see examples/generate_logo_sdf.rs and
+                // https://jobtalle.com/distance_field_transparency.html).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
+        // Decode the embedded ChatGPT and Steam SDF textures and pack them as
+        // the two layers of a small 2D array texture. The menu draws the logos
+        // at ~20 logical px, and the distance field reconstructs the edge, so a
+        // 64² source per layer is ample and keeps the atlas tiny.
+        let (logo_atlas_texture, logo_atlas_view, logo_atlas_sampler) =
+            create_logo_sdf_atlas(&device, &queue);
         let control_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("control bg"),
             layout: &control_bgl,
@@ -524,6 +554,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&logo_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&logo_atlas_sampler),
                 },
             ],
         });
@@ -553,7 +591,10 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // shader_control.wgsl outputs premultiplied alpha
+                    // (`rgb * coverage * opacity`, alpha), so the source RGB
+                    // must not be multiplied by alpha a second time here.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -652,6 +693,9 @@ impl Renderer {
             control_uniform_buffer,
             control_bind_group: control_bind_group.clone(),
             control_bgl,
+            logo_sdf_atlas_texture: logo_atlas_texture,
+            logo_sdf_atlas_view: logo_atlas_view,
+            logo_sdf_atlas_sampler: logo_atlas_sampler,
             control_instance_buffer: InstanceBuffer::new("control instance buffer"),
             backdrop_instance_buffer: InstanceBuffer::new("backdrop instance buffer"),
             gear_instance_buffer: InstanceBuffer::new("gear instance buffer"),
@@ -758,6 +802,26 @@ impl Renderer {
         self.liquid_glass.params().enabled
     }
 
+    pub fn liquid_glass_auto_darkness_enabled(&self) -> bool {
+        self.liquid_glass.params().auto_darkness_enabled
+    }
+
+    pub fn liquid_glass_auto_darkness_update_mode(
+        &self,
+    ) -> crate::liquid_glass::AutoDarknessUpdateMode {
+        self.liquid_glass.auto_darkness_update_mode()
+    }
+
+    pub fn set_auto_darkness_debug_readback_enabled(&mut self, enabled: bool) {
+        self.liquid_glass
+            .set_auto_darkness_debug_readback_enabled(enabled);
+    }
+
+    pub fn poll_auto_darkness_debug_value(&mut self) -> f32 {
+        self.liquid_glass
+            .poll_auto_darkness_debug_value(&self.device)
+    }
+
     pub fn liquid_glass_thickness(&self) -> f32 {
         self.liquid_glass.params().thickness
     }
@@ -807,6 +871,21 @@ impl Renderer {
         self.liquid_glass.set_enabled(enabled);
     }
 
+    pub fn set_liquid_glass_auto_darkness_enabled(&mut self, enabled: bool) {
+        self.liquid_glass.set_auto_darkness_enabled(enabled);
+    }
+
+    pub fn set_liquid_glass_auto_darkness_update_mode(
+        &mut self,
+        mode: crate::liquid_glass::AutoDarknessUpdateMode,
+    ) {
+        self.liquid_glass.set_auto_darkness_update_mode(mode);
+    }
+
+    pub fn set_liquid_glass_auto_darkness_max(&mut self, value: f32) {
+        self.liquid_glass.set_auto_darkness_max(value);
+    }
+
     pub fn set_liquid_glass_thickness(&mut self, value: f32) {
         self.liquid_glass.set_thickness(value);
     }
@@ -817,6 +896,18 @@ impl Renderer {
 
     pub fn set_liquid_glass_saturation(&mut self, value: f32) {
         self.liquid_glass.set_saturation(value);
+    }
+
+    pub fn set_liquid_glass_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_glass_darkness(value);
+    }
+
+    pub fn set_liquid_glass_context_menu_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_context_menu_glass_darkness(value);
+    }
+
+    pub fn set_liquid_glass_settings_panel_darkness(&mut self, value: f32) {
+        self.liquid_glass.set_settings_panel_glass_darkness(value);
     }
 
     pub fn set_liquid_glass_chromatic_aberration(&mut self, value: f32) {
@@ -831,20 +922,31 @@ impl Renderer {
         self.liquid_glass.reset_params_to_defaults();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_persisted_liquid_glass(
         &mut self,
         enabled: bool,
+        auto_darkness_enabled: bool,
+        auto_darkness_max: f32,
         thickness: f32,
         refractive_index: f32,
         saturation: f32,
+        glass_darkness: f32,
+        context_menu_glass_darkness: f32,
+        settings_panel_glass_darkness: f32,
         chromatic_aberration: f32,
         blur_radius: f32,
     ) {
         self.liquid_glass.apply_persisted_params(
             enabled,
+            auto_darkness_enabled,
+            auto_darkness_max,
             thickness,
             refractive_index,
             saturation,
+            glass_darkness,
+            context_menu_glass_darkness,
+            settings_panel_glass_darkness,
             chromatic_aberration,
             blur_radius,
         );
@@ -997,6 +1099,114 @@ fn create_qa_offscreen_texture(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
+}
+
+/// The embedded ChatGPT-logo PNG (rasterized from the source SVG at the
+/// near-black menu label color `#1C1C1E`). Declared here so the bytes are
+/// baked into the binary exactly once.
+/// The embedded ChatGPT-logo SDF texture (64×64 grayscale). Generated from
+/// `assets/icons/chatgpt-logo.png` by `examples/generate_logo_sdf.rs` (JFA +
+/// 1+JFA, see https://jobtalle.com/distance_field_transparency.html). Layer 0
+/// of the brand-logo atlas; the shader reconstructs a crisp edge from it.
+const CHATGPT_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/chatgpt-logo-sdf.png");
+
+/// The embedded Steam-logo SDF texture (64×64 grayscale). Generated from
+/// `assets/icons/steam-logo.png` by `examples/generate_logo_sdf.rs`. Layer 1 of
+/// the brand-logo atlas.
+const STEAM_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/steam-logo-sdf.png");
+
+/// Decode the embedded brand-logo SDF textures and pack them as the two layers
+/// of a small 2D array texture. Layer 0 is the ChatGPT logo (kind 19), layer 1
+/// is the Steam logo (kind 20). Each layer is a single-channel signed distance
+/// field (0.5 at the silhouette edge, values above 0.5 inside) from which the
+/// shader reconstructs a crisp, resolution-independent edge. Returns
+/// `(texture, view, sampler)`. On decode failure each layer falls back to a
+/// 1×1 fully-inside texel (0xFF) so the logo renders as a solid block instead
+/// of vanishing, keeping a valid resource bound.
+fn create_logo_sdf_atlas(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    let chatgpt = decode_logo_sdf(CHATGPT_LOGO_SDF_PNG, "chatgpt");
+    let steam = decode_logo_sdf(STEAM_LOGO_SDF_PNG, "steam");
+    let size = chatgpt.0.max(steam.0).max(1);
+    let layers = 2u32;
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("brand logo SDF atlas"),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: layers,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    for (layer, (_, pixels)) in [chatgpt, steam].iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("brand logo SDF sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        lod_min_clamp: 0.0,
+        lod_max_clamp: 0.0,
+        ..Default::default()
+    });
+    (texture, view, sampler)
+}
+
+/// Decode an embedded 8-bit grayscale SDF PNG into `(side, pixels)`. Returns
+/// the larger of width/height as the per-layer side so non-square sources still
+/// upload cleanly; both current logos are square 64×64.
+fn decode_logo_sdf(bytes: &[u8], name: &str) -> (u32, Vec<u8>) {
+    match image::load_from_memory(bytes) {
+        Ok(image) => {
+            let gray = image.to_luma8();
+            let (w, h) = gray.dimensions();
+            (w.max(h), gray.into_raw())
+        }
+        Err(err) => {
+            eprintln!("{name} logo SDF: failed to decode embedded PNG: {err}");
+            (1, vec![0xFF])
+        }
+    }
 }
 
 #[cfg(test)]

@@ -7,15 +7,17 @@
 //! persistent storage buffers only when a shape actually changes.
 
 use crate::liquid_glass::geometry::GlassShape;
+use crate::ui_model::geometry::Rect;
 use crate::ui_model::render_model::{
     ControlKind, GlassBehavior, GlassLayer, GlassSurface, GlyphLane, GlyphView, IconSource,
     IconView, InkLane, InkView, RenderModel, TileView,
 };
 
 use super::controls::{
-    ControlInstance, KIND_CARET, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT, KIND_EYE_OFF,
-    KIND_FOLDER, KIND_GEAR, KIND_INFO, KIND_MAGNIFIER, KIND_MINUS, KIND_PENCIL, KIND_PLUS,
-    KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
+    ControlInstance, KIND_CARET, KIND_CHATGPT_LOGO, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT,
+    KIND_EYE_OFF, KIND_FOLDER, KIND_GEAR, KIND_INFO, KIND_MAGNIFIER, KIND_MINUS, KIND_PENCIL,
+    KIND_PLUS, KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
+    KIND_STEAM_LOGO,
 };
 use super::counters::Category;
 use super::icon_pipeline::IconInstance;
@@ -109,6 +111,33 @@ fn highest_shape(surfaces: &[GlassSurface]) -> Option<GlassShape> {
         .map(|(_, surface)| shape_for(surface))
 }
 
+/// Select the owner of the shared modal shape buffer. Empty batches are
+/// retained in the render model so lane ownership can be cleared, but only
+/// one non-empty Settings/Modal batch may be uploaded to that buffer.
+fn modal_surfaces_from_model(
+    model: &RenderModel,
+) -> &[crate::ui_model::render_model::GlassSurface] {
+    model
+        .glass
+        .iter()
+        .find(|batch| {
+            matches!(batch.layer, GlassLayer::Modal | GlassLayer::Settings)
+                && !batch.surfaces.is_empty()
+        })
+        .map(|batch| batch.surfaces.as_slice())
+        .unwrap_or_default()
+}
+
+/// Select the content clip for the modal pass from the same owner surface
+/// that is uploaded to the shared modal shape buffer.
+fn modal_clip_from_model(model: &RenderModel) -> Option<(Rect, f32)> {
+    modal_surfaces_from_model(model)
+        .iter()
+        .enumerate()
+        .max_by_key(|(index, surface)| (surface.z, *index))
+        .map(|(_, surface)| (surface.rect, surface.radius))
+}
+
 fn control_kind(kind: &ControlKind) -> f32 {
     match kind {
         ControlKind::Magnifier => KIND_MAGNIFIER,
@@ -125,6 +154,8 @@ fn control_kind(kind: &ControlKind) -> f32 {
         ControlKind::Pencil => KIND_PENCIL,
         ControlKind::EyeOff => KIND_EYE_OFF,
         ControlKind::FolderIcon => KIND_FOLDER,
+        ControlKind::ChatGptLogo => KIND_CHATGPT_LOGO,
+        ControlKind::SteamLogo => KIND_STEAM_LOGO,
         ControlKind::Plus => KIND_PLUS,
         ControlKind::Minus => KIND_MINUS,
         ControlKind::Info => KIND_INFO,
@@ -224,18 +255,7 @@ impl Renderer {
     /// shader-facing structs remains an internal renderer responsibility.
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
-        let modal_clip = model
-            .glass
-            .iter()
-            .find(|batch| batch.layer == GlassLayer::Modal)
-            .and_then(|batch| {
-                batch
-                    .surfaces
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(index, surface)| (surface.z, *index))
-                    .map(|(_, surface)| (surface.rect, surface.radius))
-            });
+        let modal_clip = modal_clip_from_model(model);
         self.modal_clip_rect = modal_clip.map(|(rect, _)| rect);
         self.modal_clip_radius = modal_clip.map_or(0.0, |(_, radius)| radius);
         // Context menu clip is computed independently so that, when both a
@@ -256,6 +276,74 @@ impl Renderer {
             });
         self.context_menu_clip_rect = context_menu_clip.map(|(rect, _)| rect);
         self.context_menu_clip_radius = context_menu_clip.map_or(0.0, |(_, radius)| radius);
+        let context_menu_blur_radius = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .and_then(|(_, surface)| surface.blur_radius)
+            });
+        self.liquid_glass
+            .set_context_menu_blur_radius(context_menu_blur_radius);
+        let context_menu_backdrop_replacement = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::ContextMenu)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| surface.backdrop_replacement)
+            })
+            .unwrap_or(0.0);
+        self.liquid_glass
+            .set_context_menu_backdrop_replacement(context_menu_backdrop_replacement);
+        let settings_panel = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Settings);
+        let settings_panel_blur_radius = settings_panel.and_then(|batch| {
+            batch
+                .surfaces
+                .iter()
+                .enumerate()
+                .max_by_key(|(index, surface)| (surface.z, *index))
+                .and_then(|(_, surface)| surface.blur_radius)
+        });
+        let settings_panel_backdrop_replacement = settings_panel
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(index, surface)| (surface.z, *index))
+                    .map(|(_, surface)| surface.backdrop_replacement)
+            })
+            .unwrap_or(0.0);
+        self.liquid_glass
+            .set_settings_panel_blur_radius(settings_panel_blur_radius);
+        self.liquid_glass
+            .set_settings_panel_backdrop_replacement(settings_panel_backdrop_replacement);
+        self.liquid_glass
+            .set_settings_panel_completed_scene_enabled(
+                settings_panel.is_some_and(|batch| !batch.surfaces.is_empty()),
+            );
+        let modal_shapes: Vec<_> = modal_surfaces_from_model(model)
+            .iter()
+            .map(shape_for)
+            .collect();
+        // Settings and folder panels share one GPU shape buffer for the
+        // ordinary modal pass. Resolve its owner once here; uploading every
+        // matching batch would let a later empty batch erase the active one.
+        self.liquid_glass
+            .set_modal_shapes(&self.device, &self.queue, &modal_shapes);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -298,11 +386,9 @@ impl Renderer {
                     self.liquid_glass
                         .set_overlay_shapes(&self.device, &self.queue, &shapes);
                 }
-                GlassLayer::Modal => {
-                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
-                    self.liquid_glass
-                        .set_modal_shapes(&self.device, &self.queue, &shapes);
-                }
+                // Settings and Modal are resolved together above because
+                // they share the same GPU shape buffer.
+                GlassLayer::Modal | GlassLayer::Settings => {}
                 GlassLayer::ContextMenu => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
@@ -632,6 +718,8 @@ mod tests {
             z,
             clip: None,
             activation: 0.0,
+            blur_radius: None,
+            backdrop_replacement: 0.0,
             tint: None,
         }
     }
@@ -646,6 +734,36 @@ mod tests {
     #[test]
     fn non_modal_surfaces_are_not_submitted_to_modal_lane() {
         assert!(highest_shape(&[]).is_none());
+    }
+
+    #[test]
+    fn empty_settings_batch_does_not_hide_folder_modal_clip() {
+        let mut model = RenderModel::new();
+        model.set_glass_batch(GlassLayer::Settings, Vec::new());
+        let folder = surface("folder", 100, 320.0);
+        model.set_glass_batch(GlassLayer::Modal, vec![folder.clone()]);
+
+        assert_eq!(
+            modal_clip_from_model(&model),
+            Some((folder.rect, folder.radius))
+        );
+    }
+
+    #[test]
+    fn non_empty_settings_batch_owns_shared_modal_shapes_over_empty_modal() {
+        let mut model = RenderModel::new();
+        let settings = surface("settings", 90, 640.0);
+        model.set_glass_batch(GlassLayer::Settings, vec![settings.clone()]);
+        model.set_glass_batch(GlassLayer::Modal, Vec::new());
+
+        assert_eq!(
+            modal_surfaces_from_model(&model),
+            std::slice::from_ref(&settings)
+        );
+        assert_eq!(
+            modal_clip_from_model(&model),
+            Some((settings.rect, settings.radius))
+        );
     }
 
     #[test]

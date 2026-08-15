@@ -2,6 +2,116 @@
 
 use std::path::Path;
 
+/// Open `url` in the user's default browser. macOS uses `/usr/bin/open`,
+/// Windows shells to the default http handler via `ShellExecuteW("open", ...)`.
+/// Both return as soon as the browser process spawns, so the result only
+/// reflects whether the browser was *started*, not whether the page loaded.
+#[cfg(target_os = "macos")]
+pub fn open_url(url: &str) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open url failed: {error}"))
+}
+
+#[cfg(windows)]
+pub fn open_url(url: &str) -> Result<(), String> {
+    // ShellExecuteW("open", <url>) routes to the registered http(s) handler,
+    // which is the user's default browser. `shell_execute` takes a path-like
+    // string; URLs work identically.
+    let wide = wide_null(url);
+    let operation = wide_null("open");
+    // SAFETY: all PCWSTR arguments point to NUL-terminated UTF-16 buffers that
+    // live for the duration of the call. ShellExecuteW returns synchronously.
+    let result = unsafe {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as usize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW failed with code {code}"))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn open_url(_url: &str) -> Result<(), String> {
+    Err("opening a URL is unsupported on this platform".to_string())
+}
+
+/// Open the Steam library page for a numeric app id (`appid`) via the
+/// `steam://` protocol handler. The URL is `steam://nav/games/details/<appid>`,
+/// which Steam's registered protocol handler turns into the app's library
+/// details page.
+///
+/// Windows uses `ShellExecuteW("open", url)` (same path as `open_url`, since
+/// `steam://` flows to its registered handler the same way `http://` does);
+/// macOS uses `/usr/bin/open`. Both return as soon as the handler process
+/// spawns, so the result only reflects whether Steam was *started*, not
+/// whether the page appeared (or whether Steam is even installed).
+#[cfg(target_os = "macos")]
+pub fn open_steam_page(appid: &str) -> Result<(), String> {
+    let url = steam_url(appid);
+    std::process::Command::new("/usr/bin/open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open steam url failed: {error}"))
+}
+
+#[cfg(windows)]
+pub fn open_steam_page(appid: &str) -> Result<(), String> {
+    // ShellExecuteW("open", <url>) routes to the registered steam:// handler,
+    // identical in mechanism to how open_url reaches the http(s) handler.
+    let url = steam_url(appid);
+    let wide = wide_null(&url);
+    let operation = wide_null("open");
+    // SAFETY: all PCWSTR arguments point to NUL-terminated UTF-16 buffers that
+    // live for the duration of the call. ShellExecuteW returns synchronously.
+    let result = unsafe {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as usize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW failed with code {code}"))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn open_steam_page(_appid: &str) -> Result<(), String> {
+    Err("opening a Steam URL is unsupported on this platform".to_string())
+}
+
+/// Build the `steam://nav/games/details/<appid>` library-details URL from a
+/// numeric Steam app id. Kept as a free, pure function so the app-command
+/// layer can unit-test the URL shape without spawning a handler.
+fn steam_url(appid: &str) -> String {
+    format!("steam://nav/games/details/{appid}")
+}
+
 #[cfg(windows)]
 pub fn open_shortcut(path: &Path) -> Result<(), String> {
     match shell_execute(path) {
@@ -10,6 +120,40 @@ pub fn open_shortcut(path: &Path) -> Result<(), String> {
             format!("{shell_err}; explorer.exe fallback failed: {explorer_err}")
         }),
     }
+}
+
+/// Open the OS file manager (Explorer / Finder) with `path` selected.
+///
+/// Windows reveals a file by launching `explorer.exe /select,<path>`; macOS
+/// uses `open -R`. Both return as soon as the child process spawns, so the
+/// result only reflects whether the manager was *started*, not whether the
+/// selection actually appeared.
+#[cfg(windows)]
+pub fn reveal(path: &Path) -> Result<(), String> {
+    // `/select,<path>` must arrive as a single command-line argument (the
+    // comma is part of the switch, no space after it). Building the string
+    // here keeps `Command` from splitting on the comma.
+    let arg = format!("/select,{}", path.to_string_lossy());
+    std::process::Command::new("explorer.exe")
+        .arg(arg)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(target_os = "macos")]
+pub fn reveal(path: &Path) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open -R failed: {error}"))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn reveal(_path: &Path) -> Result<(), String> {
+    Err("revealing in a file manager is unsupported on this platform".to_string())
 }
 
 #[cfg(windows)]
@@ -71,4 +215,15 @@ pub fn open_shortcut(_path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steam_url_targets_library_details() {
+        assert_eq!(steam_url("620"), "steam://nav/games/details/620");
+        assert_eq!(steam_url("0"), "steam://nav/games/details/0");
+    }
 }
