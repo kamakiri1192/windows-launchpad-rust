@@ -282,6 +282,25 @@ impl App {
                     Err(err) => eprintln!("failed to open ChatGPT help for {}: {}", name, err),
                 }
             }
+            AppCommand::OpenInSteam { app_id } => {
+                // Hide first, mirroring launch/reveal, so Steam arrives on top.
+                self.hide();
+                match steam_numeric_appid(app_id.as_str()) {
+                    Some(numeric) => match crate::platform::launch::open_steam_page(&numeric) {
+                        Ok(()) => {
+                            eprintln!("opened Steam page for {} ({})", app_id, numeric)
+                        }
+                        Err(err) => eprintln!(
+                            "failed to open Steam page for {} ({}): {}",
+                            app_id, numeric, err
+                        ),
+                    },
+                    None => eprintln!(
+                        "open-in-steam: {} is not a Steam app id (expected \"steam:<appid>\")",
+                        app_id
+                    ),
+                }
+            }
             AppCommand::PersistSettings => self.persist_settings(),
             AppCommand::PersistUserOrder => self.persist_user_order(),
             AppCommand::PersistHidden => self.persist_hidden(),
@@ -647,6 +666,20 @@ pub(crate) fn chatgpt_help_url(info: &AppLaunchInfo) -> String {
     format!("https://chatgpt.com/?q={}", urlencoding::encode(&prompt))
 }
 
+/// Extract the numeric Steam app id from a [`AppId`] string of the form
+/// `steam:<appid>` (e.g. `steam:620` → `620`). Returns `None` when the id is
+/// not a Steam id or carries no numeric suffix, so the executor can fall back
+/// to an `eprintln!` instead of constructing a malformed `steam://` URL. Kept
+/// as a free, pure function so the app-command layer can unit-test the
+/// projection without spawning a protocol handler.
+fn steam_numeric_appid(app_id: &str) -> Option<String> {
+    let numeric = app_id.strip_prefix("steam:")?;
+    if numeric.is_empty() {
+        return None;
+    }
+    Some(numeric.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +729,24 @@ mod tests {
                 std::path::PathBuf::from("x.lnk")
             );
         }
+    }
+
+    /// The Steam app id projection strips the `steam:` prefix and yields the
+    /// numeric suffix the platform layer needs to build the `steam://` URL. A
+    /// non-Steam id (a `.lnk` path or a macOS bundle id) yields `None` so the
+    /// executor logs instead of building a malformed URL.
+    #[test]
+    fn steam_numeric_appid_strips_the_steam_prefix() {
+        assert_eq!(steam_numeric_appid("steam:620"), Some("620".to_string()));
+        assert_eq!(
+            steam_numeric_appid("steam:1245620"),
+            Some("1245620".to_string())
+        );
+        // A non-Steam id has nothing to open in Steam.
+        assert_eq!(steam_numeric_appid("c:/apps/game.lnk"), None);
+        assert_eq!(steam_numeric_appid("mac:com.example.Game"), None);
+        // A Steam id with an empty numeric suffix is not a valid Steam app.
+        assert_eq!(steam_numeric_appid("steam:"), None);
     }
 
     /// The pure projection from `EditModeCommand` to `AppCommand` is total:

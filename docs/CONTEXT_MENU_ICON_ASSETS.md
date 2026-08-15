@@ -143,3 +143,52 @@ cargo build --release --locked
 
 Liquid Glassのスクリーンショットを撮る場合は、通常起動ではなく
 [EDIT_MODE_VISUAL_QA.md](EDIT_MODE_VISUAL_QA.md) に記載されたスクリーンショット許可フラグを設定して起動する。
+
+## ブランドロゴの SDF 化（解像度非依存・アトラス化）
+
+上記の通常 PNG パスは **ChatGPT ロゴの初期実装** として書かれていたが、現在はブランドロゴ（ChatGPT / Steam）を **符号付き距離場（SDF）テクスチャ** で描いている。256×256 RGBA をそのまま縮小表示すると高 DPI でボケる問題を、小さな SDF テクスチャからシェーダーで輪郭を再構築することで根本解決している。方式は <https://jobtalle.com/distance_field_transparency.html> に従う。
+
+### なぜ SDF か
+
+- 通常アイコン（鉛筆・目・フォルダなど）は `shader_control.wgsl` の手書き SDF で描けるが、ブランドロゴは形状が複雑で SDF 関数で再現すると崩れる
+- 一方でラスター PNG を縮小表示すると高 DPI でボケる（mipmap なしの大幅縮小が原因）
+- 距離場テクスチャは「小さなテクスチャに高解像度の形状をエンコード」し、シェーダーで輪郭を再構築するため、**どんな DPI でもボケない**。実行時依存も増やさない（`resvg`/`usvg` 不要）
+
+### SDF の生成（一度だけ実行する example）
+
+`examples/generate_logo_sdf.rs` が Jump Flooding Algorithm（JFA）+ 1+JFA で距離場を生成する。PNG と SVG 両方の入力を受け付ける（SVG は内部で `rsvg-convert` でラスタライズするので librsvg が必要）。
+
+```sh
+# ChatGPT ロゴ（PNG ソースから）
+cargo run --release --example generate_logo_sdf -- \
+    assets/icons/chatgpt-logo.png assets/icons/chatgpt-logo-sdf.png
+
+# Steam ロゴ（SVG ソースから。rsvg-convert が走る）
+cargo run --release --example generate_logo_sdf -- \
+    assets/icons/steam-logo.svg assets/icons/steam-logo-sdf.png
+```
+
+デフォルト出力は 64×64・8bit グレースケール。アルファ（実際には単一チャネル）は `0.5` が輪郭、`>0.5` が内側、`<0.5` が外側。生成物（`*-sdf.png`）はリポジトリにコミットするので、CI で再生成は不要。ロゴを差し替えたときだけ上記コマンドを再実行する。
+
+### アトラス化（`texture_2d_array`）
+
+複数ロゴを個別テクスチャ＋サンプラーで持つと binding がロゴ数分増え、`rebind_text_atlas` のメンテも重くなる。そのため ChatGPT（layer 0）と Steam（layer 1）を **1枚の 2D 配列テクスチャ** にパックする。ロゴを足すときは layer を増やすだけで binding 数は不変。
+
+- `src/renderer/init.rs::create_logo_sdf_atlas` が `CHATGPT_LOGO_SDF_PNG` / `STEAM_LOGO_SDF_PNG` をデコードし、`R8Unorm` の `texture_2d_array`（layer 2 枚）へ書き込む
+- control bind group の **binding 3** がこのアトラス（`D2Array` ビュー）、**binding 4** がサンプラー。従来の binding 3〜6（ロゴ別のテクスチャ＋サンプラー2組）は廃止
+- `rebind_text_atlas`（`src/renderer/text.rs`）は layout が5 binding になったので、グリフアトラス拡張時の再構築でも **binding 3/4 を必ず含める**（従来の落とし穴と同じ。省略すると validation panic）
+
+### シェーダーでの輪郭再構築
+
+`shader_control.wgsl` の kind 19（ChatGPT）は layer 0、kind 20（Steam）は layer 1 をサンプリングし、記事と同じ式で1ピクセル幅のアンチエイリアスをかける。
+
+```wgsl
+let layer = select(0, 1, kind > 19.5);
+let sampled = textureSample(logo_sdf_atlas, logo_sampler, uv, layer);
+let d = sampled.r;                       // 0.5 が輪郭
+let aa = fwidth(d);
+coverage = clamp((d - 0.5) * 2.0 / max(aa, 0.0001), 0.0, 1.0);
+```
+
+インスタンス色で着色するため RGB 色保持は不要（記事のカラーテクスチャ処理は省略）。ロゴを追加するときは `examples/generate_logo_sdf.rs` で SDF を生成 → `include_bytes!` 定数を足す → `create_logo_sdf_atlas` の layers とループを更新 → `ControlKind` / kind 値 / WGSL の layer を増やす。
+

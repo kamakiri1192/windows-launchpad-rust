@@ -13,7 +13,7 @@
 //! position can spring fast while corner radius eases slowly.
 
 use crate::domain::launcher_item::LauncherItem;
-use crate::layout::context_menu::CONTEXT_MENU_ITEM_COUNT;
+use crate::layout::context_menu::{menu_rows, CONTEXT_MENU_ITEM_COUNT};
 use crate::spring_anim::{self, Channel, Ease, Transition};
 
 // Re-export the item enum from the pure layout layer so feature/app/render
@@ -149,10 +149,18 @@ const T_FOCUS: Transition = Transition::Easing {
 
 #[derive(Debug, Clone)]
 pub struct ContextMenuState {
-    /// The launcher item the menu is open for (an app or a folder). Drives the
+    /// The launcher item the menu is open for (an app or folder). Drives the
     /// open/close lifecycle via `Some`/`None` and serves as the opaque UiId key
     /// for the rendered rows; it never participates in launching.
     pub active_target: Option<LauncherItem>,
+    /// The row list built once at open time from the target's kind
+    /// (`(is_folder, is_steam)` → [`menu_rows`]). A `Vec` rather than a static
+    /// slice so future per-app menu customization can compose rows without a
+    /// combinatorial explosion of static arrays. The per-frame render path and
+    /// the release-time row resolution both read this cached list, so they
+    /// never call [`menu_rows`] per frame (zero per-frame allocation) and always
+    /// agree on which row is which.
+    pub items: Vec<ContextMenuItem>,
     pub phase: ContextMenuPhase,
     /// Anchor point (physical px) the seed springs from — typically the center
     /// of the right-clicked icon.
@@ -173,6 +181,7 @@ impl Default for ContextMenuState {
     fn default() -> Self {
         Self {
             active_target: None,
+            items: Vec::new(),
             phase: ContextMenuPhase::Closed,
             anchor: (0.0, 0.0),
             channels: [Channel::rest(0.0); PROP_COUNT],
@@ -189,6 +198,14 @@ impl ContextMenuState {
     /// `(x, y)` (physical px). `target_rect` is the fully-open panel rectangle
     /// in physical px; the seed springs from the anchor toward it.
     pub fn open(&mut self, target: LauncherItem, x: f32, y: f32, target_rect: MenuTarget) {
+        // Build the row list once from the target's kind and cache it. The
+        // render/hit-test/release paths read `self.items` instead of rebuilding
+        // every frame. `target` carries everything needed (folder vs app, and
+        // whether the app id is a Steam id), so the row set is derived here
+        // without extra parameters.
+        let is_folder = matches!(target, LauncherItem::Folder(_));
+        let is_steam = matches!(&target, LauncherItem::App(id) if id.is_steam());
+        self.items = menu_rows(is_folder, is_steam);
         self.active_target = Some(target);
         self.anchor = (x, y);
         self.phase = ContextMenuPhase::Opening;
@@ -450,6 +467,7 @@ pub struct MenuTarget {
 mod tests {
     use super::*;
     use crate::domain::app_id::AppId;
+    use crate::layout::context_menu::ContextMenuItem;
 
     fn target_at(x: f32, y: f32) -> MenuTarget {
         MenuTarget {
@@ -458,6 +476,60 @@ mod tests {
             width: MENU_WIDTH,
             height: 6.0 * 40.0 + 40.0,
         }
+    }
+
+    /// `open()` builds and caches the row list from the target's kind, so the
+    /// render/release paths read one consistent `items` snapshot. A folder
+    /// gets four rows; a non-Steam app gets seven (no Steam row); a Steam app
+    /// gets the full eight-row superset including OpenInSteam.
+    #[test]
+    fn open_builds_and_caches_the_row_list_for_each_target_kind() {
+        let mut state = ContextMenuState::default();
+        assert!(state.items.is_empty(), "default state has no rows");
+
+        // Folder: EditHome, IconLarger, IconSmaller, AppInfo (4 rows).
+        state.open(
+            LauncherItem::folder(crate::domain::folders::FolderId::from_normalized("f")),
+            0.0,
+            0.0,
+            target_at(0.0, 0.0),
+        );
+        assert_eq!(
+            state.items,
+            vec![
+                ContextMenuItem::EditHome,
+                ContextMenuItem::IconLarger,
+                ContextMenuItem::IconSmaller,
+                ContextMenuItem::AppInfo,
+            ]
+        );
+        assert!(!state.items.contains(&ContextMenuItem::OpenInSteam));
+
+        // Non-Steam app: seven rows, no Steam row.
+        state.open(
+            LauncherItem::app(AppId::from_normalized("calc")),
+            0.0,
+            0.0,
+            target_at(0.0, 0.0),
+        );
+        assert_eq!(state.items.len(), 7);
+        assert!(!state.items.contains(&ContextMenuItem::OpenInSteam));
+
+        // Steam app: eight rows including OpenInSteam.
+        state.open(
+            LauncherItem::app(AppId::from_normalized("steam:620")),
+            0.0,
+            0.0,
+            target_at(0.0, 0.0),
+        );
+        assert_eq!(state.items.len(), 8);
+        assert!(state.items.contains(&ContextMenuItem::OpenInSteam));
+
+        // The cached list matches what `menu_rows` builds for the same flags.
+        assert_eq!(
+            state.items,
+            crate::layout::context_menu::menu_rows(false, true)
+        );
     }
 
     #[test]

@@ -137,15 +137,17 @@ pub struct Renderer {
     /// Control bind group layout, kept so the control bind groups can be
     /// rebuilt when the glyph atlas grows (they sample the atlas).
     control_bgl: wgpu::BindGroupLayout,
-    /// Dedicated ChatGPT-logo texture (binding 3 of the control bind group).
-    /// Kept on the struct so it outlives the bind group that references it.
-    chatgpt_logo_texture: wgpu::Texture,
-    /// View into [`chatgpt_logo_texture`]. Cached so the control bind group can
-    /// be rebuilt (on glyph-atlas growth) without re-deriving it each time.
-    chatgpt_logo_view: wgpu::TextureView,
-    /// Linear sampler for [`chatgpt_logo_texture`]. Cached for the same reason
+    /// Brand-logo SDF atlas (binding 3 of the control bind group). A 2D array
+    /// texture whose layer 0 is the ChatGPT logo and layer 1 is the Steam logo,
+    /// each a single-channel signed distance field. Kept on the struct so it
+    /// outlives the bind group that references it.
+    logo_sdf_atlas_texture: wgpu::Texture,
+    /// View into [`logo_sdf_atlas_texture`]. Cached so the control bind group
+    /// can be rebuilt (on glyph-atlas growth) without re-deriving it each time.
+    logo_sdf_atlas_view: wgpu::TextureView,
+    /// Linear sampler for [`logo_sdf_atlas_texture`]. Cached for the same reason
     /// as the view.
-    chatgpt_logo_sampler: wgpu::Sampler,
+    logo_sdf_atlas_sampler: wgpu::Sampler,
     control_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     backdrop_instance_buffer: InstanceBuffer<crate::renderer::controls::ControlInstance>,
     /// Corner gear ink instances (settings entry). Drawn in the control
