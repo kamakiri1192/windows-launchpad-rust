@@ -11,7 +11,7 @@ const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 16;
+const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 20;
 const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
 
 #[repr(C)]
@@ -21,6 +21,7 @@ struct TestAutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    strategy: u32,
 }
 
 #[repr(C)]
@@ -165,6 +166,7 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                 mode: 1,
                 flags: 1,
                 max_darkness: 0.42,
+                strategy: 0,
             },
         );
         let initial = read_test_auto_darkness_state(&device, &queue, &state);
@@ -185,6 +187,7 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                     mode: 1,
                     flags: 0,
                     max_darkness: 0.42,
+                    strategy: 0,
                 },
             );
         }
@@ -205,6 +208,7 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                 mode: 1,
                 flags: 0,
                 max_darkness: 0.42,
+                strategy: 0,
             },
         );
         let changed = read_test_auto_darkness_state(&device, &queue, &state);
@@ -225,6 +229,7 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                     mode: 2,
                     flags: u32::from(index == 0),
                     max_darkness: 0.42,
+                    strategy: 0,
                 },
             );
         }
@@ -246,6 +251,7 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                     mode: 0,
                     flags: u32::from(index == 0),
                     max_darkness: 0.42,
+                    strategy: 0,
                 },
             );
         }

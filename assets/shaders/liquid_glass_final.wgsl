@@ -34,6 +34,8 @@ struct AutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    // Mirror of the stats-shader uniform; the final pass does not branch on it.
+    strategy: u32,
 };
 
 struct AutoDarknessState {

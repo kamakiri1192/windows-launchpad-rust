@@ -57,6 +57,7 @@ struct AutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    strategy: u32,
 }
 
 #[repr(C)]
@@ -596,6 +597,7 @@ impl StudioRenderer {
                     mode: 1,
                     flags: 0,
                     max_darkness: 0.0,
+                    strategy: 0,
                 }),
                 usage: wgpu::BufferUsages::UNIFORM,
             });

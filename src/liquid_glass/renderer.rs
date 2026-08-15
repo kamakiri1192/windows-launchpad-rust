@@ -13,7 +13,9 @@ use super::capture::{
     GpuCaptureFrame,
 };
 use super::geometry::{shapes_from_layout, GlassShape};
-use super::params::{AutoDarknessUpdateMode, DebugOptions, LiquidGlassParams};
+use super::params::{
+    AutoDarknessStrategy, AutoDarknessUpdateMode, DebugOptions, LiquidGlassParams,
+};
 use crate::layout::grid::GridLayout;
 
 pub(super) const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -72,6 +74,7 @@ pub(super) struct AutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    strategy: u32,
 }
 
 #[repr(C)]
@@ -386,6 +389,7 @@ pub struct LiquidGlassRenderer {
     auto_darkness_readback: AutoDarknessReadback,
     auto_darkness_clock_origin: Instant,
     auto_darkness_update_mode: AutoDarknessUpdateMode,
+    auto_darkness_strategy: AutoDarknessStrategy,
     auto_darkness_reset_state: bool,
     backdrop_stats_dirty: bool,
     /// The blur pyramid depends on the captured backdrop, not on foreground
@@ -636,6 +640,7 @@ impl LiquidGlassRenderer {
             mode: auto_darkness_update_mode.shader_value(),
             flags: 1,
             max_darkness: params.auto_darkness_max,
+            strategy: AutoDarknessStrategy::default().shader_value(),
         };
         let auto_darkness_uniform_buffer =
             create_auto_darkness_uniform_buffer(device, &auto_darkness_uniforms);
@@ -1337,6 +1342,7 @@ impl LiquidGlassRenderer {
             auto_darkness_readback,
             auto_darkness_clock_origin: Instant::now(),
             auto_darkness_update_mode,
+            auto_darkness_strategy: AutoDarknessStrategy::default(),
             auto_darkness_reset_state: true,
             backdrop_stats_dirty: true,
             blur_dirty: true,
@@ -1514,6 +1520,7 @@ impl LiquidGlassRenderer {
             mode: self.auto_darkness_update_mode.shader_value(),
             flags: u32::from(self.backdrop_stats_dirty),
             max_darkness: self.params.auto_darkness_max,
+            strategy: self.auto_darkness_strategy.shader_value(),
         };
         queue.write_buffer(
             &self.auto_darkness_uniform_buffer,
@@ -2592,6 +2599,20 @@ impl LiquidGlassRenderer {
     pub fn set_auto_darkness_update_mode(&mut self, mode: AutoDarknessUpdateMode) {
         if self.auto_darkness_update_mode != mode {
             self.auto_darkness_update_mode = mode;
+            self.backdrop_stats_dirty = true;
+        }
+    }
+
+    pub fn auto_darkness_strategy(&self) -> AutoDarknessStrategy {
+        self.auto_darkness_strategy
+    }
+
+    pub fn set_auto_darkness_strategy(&mut self, strategy: AutoDarknessStrategy) {
+        if self.auto_darkness_strategy != strategy {
+            self.auto_darkness_strategy = strategy;
+            // Each formula derives its own filtered statistic, so restart the
+            // transition state instead of interpolating across formulas.
+            self.auto_darkness_reset_state = true;
             self.backdrop_stats_dirty = true;
         }
     }

@@ -3,6 +3,9 @@ struct AutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    // 0 = PR #184 white-coverage baseline, 1 = recalibrated coverage,
+    // 2 = perceptual-luminance contrast inversion. See issue #186.
+    strategy: u32,
 };
 
 struct AutoDarknessState {
