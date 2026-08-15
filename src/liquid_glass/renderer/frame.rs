@@ -50,8 +50,7 @@ impl LiquidGlassRenderer {
                     }
                     GpuCaptureFrame::Ephemeral(frame) => {
                         let upload_started = Instant::now();
-                        captured =
-                            self.copy_ephemeral_gpu_backdrop(device, queue, profiler, frame);
+                        captured = self.copy_ephemeral_gpu_backdrop(device, queue, profiler, frame);
                         upload_time = upload_started.elapsed();
                     }
                     GpuCaptureFrame::Updated => {
@@ -1068,11 +1067,8 @@ const GLOBAL_BLUR_DOWN_SCOPES: [&str; 3] = [
     "global_blur_down_2",
     "global_blur_down_3",
 ];
-const GLOBAL_BLUR_UP_SCOPES: [&str; 3] = [
-    "global_blur_up_1",
-    "global_blur_up_2",
-    "global_blur_up_3",
-];
+const GLOBAL_BLUR_UP_SCOPES: [&str; 3] =
+    ["global_blur_up_1", "global_blur_up_2", "global_blur_up_3"];
 const COMPLETED_BLUR_DOWN_SCOPES: [&str; 3] = [
     "completed_blur_down_1",
     "completed_blur_down_2",
