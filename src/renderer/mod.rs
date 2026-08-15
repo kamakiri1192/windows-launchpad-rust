@@ -85,6 +85,15 @@ pub struct Renderer {
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
     gpu_profiler: gpu_profile::GpuProfilerState,
+    /// Bumped whenever `prepare` observes changes in the model lanes that are
+    /// composited below each completed-scene checkpoint, so the checkpoint
+    /// caches can detect stale inputs without being invalidated by the
+    /// checkpoint's own animated lanes.
+    below_settings_epoch: u64,
+    below_menu_epoch: u64,
+    /// Last scene-content epoch for which the completed-scene chain
+    /// (context-menu/settings copy + flatten + blur) ran, keyed by lane.
+    completed_scene_cache: Option<(u64, CompletedSceneLane)>,
     /// Presentation-rate estimator feeding the debug HUD. On Windows it
     /// prefers DXGI frame statistics; elsewhere it tracks `present()` cadence.
     pub(crate) fps_tracker: fps::FpsTracker,
@@ -186,6 +195,13 @@ pub struct Renderer {
     /// CI / sandboxes without foreground access can capture rendered frames.
     /// Cleared after one frame.
     pub qa_shot: Option<std::path::PathBuf>,
+}
+
+/// Which surface owns the current completed-scene blur cache entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompletedSceneLane {
+    Settings,
+    ContextMenu,
 }
 
 pub struct DrawArgs {

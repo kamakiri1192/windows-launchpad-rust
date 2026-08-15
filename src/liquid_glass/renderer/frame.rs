@@ -94,6 +94,9 @@ impl LiquidGlassRenderer {
             }
             self.last_capture_at = Some(Instant::now());
         }
+        if captured {
+            self.capture_sequence = self.capture_sequence.wrapping_add(1);
+        }
         let next_status = self.capture.status();
         if next_status != self.capture_status {
             log_capture_status(&next_status);
