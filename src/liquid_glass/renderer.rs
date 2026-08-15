@@ -1876,6 +1876,7 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut crate::renderer::gpu_profile::GpuProfilerState,
         frame: EphemeralGpuCaptureFrame,
     ) -> bool {
         let EphemeralGpuCaptureFrame {
@@ -1943,6 +1944,7 @@ impl LiquidGlassRenderer {
         let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass IOSurface copy encoder"),
         });
+        let copy_scope = profiler.begin("backdrop_capture_copy", &mut copy_encoder);
         copy_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -1962,6 +1964,8 @@ impl LiquidGlassRenderer {
                 depth_or_array_layers: 1,
             },
         );
+        profiler.end(&mut copy_encoder, copy_scope);
+        profiler.resolve(&mut copy_encoder);
         queue.submit(std::iter::once(copy_encoder.finish()));
         queue.on_submitted_work_done(move || drop(release_after_submit));
         true

@@ -1,5 +1,7 @@
 //! Liquid Glass frame and lane render-pass orchestration.
 
+use crate::renderer::gpu_profile::GpuProfilerState;
+
 use super::*;
 
 impl LiquidGlassRenderer {
@@ -7,6 +9,7 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scroll_x: f32,
@@ -47,7 +50,8 @@ impl LiquidGlassRenderer {
                     }
                     GpuCaptureFrame::Ephemeral(frame) => {
                         let upload_started = Instant::now();
-                        captured = self.copy_ephemeral_gpu_backdrop(device, queue, frame);
+                        captured =
+                            self.copy_ephemeral_gpu_backdrop(device, queue, profiler, frame);
                         upload_time = upload_started.elapsed();
                     }
                     GpuCaptureFrame::Updated => {
@@ -143,6 +147,7 @@ impl LiquidGlassRenderer {
             );
             blur_commands.extend(encode_blur_profile(
                 device,
+                profiler,
                 &self.blur_downsample_pipeline,
                 &self.blur_upsample_pipeline,
                 &self.blur_levels,
@@ -151,6 +156,8 @@ impl LiquidGlassRenderer {
                 &self.blur_up_bind_groups,
                 global_blur.level_count,
                 "liquid glass global blur",
+                GLOBAL_BLUR_DOWN_SCOPES,
+                GLOBAL_BLUR_UP_SCOPES,
             ));
         }
         if !blur_commands.is_empty() {
@@ -808,6 +815,7 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         pre_menu_scene: &wgpu::Texture,
     ) {
         if !self.has_context_menu_glass() {
@@ -816,6 +824,7 @@ impl LiquidGlassRenderer {
         self.prepare_completed_scene_blur(
             device,
             queue,
+            profiler,
             pre_menu_scene,
             self.context_menu_blur_radius
                 .unwrap_or(self.params.blur_radius),
@@ -828,6 +837,7 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         pre_settings_scene: &wgpu::Texture,
     ) {
         if !self.has_settings_panel_glass() {
@@ -836,6 +846,7 @@ impl LiquidGlassRenderer {
         self.prepare_completed_scene_blur(
             device,
             queue,
+            profiler,
             pre_settings_scene,
             self.settings_panel_blur_radius
                 .unwrap_or(self.params.blur_radius),
@@ -846,6 +857,7 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         pre_scene: &wgpu::Texture,
         blur_radius: f32,
     ) {
@@ -871,6 +883,7 @@ impl LiquidGlassRenderer {
         let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass context menu pre-menu scene copy encoder"),
         });
+        let copy_scope = profiler.begin("completed_scene_copy", &mut copy_encoder);
         copy_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: pre_scene,
@@ -890,11 +903,14 @@ impl LiquidGlassRenderer {
                 depth_or_array_layers: 1,
             },
         );
+        profiler.end(&mut copy_encoder, copy_scope);
+        profiler.resolve(&mut copy_encoder);
         commands.push(copy_encoder.finish());
 
         let mut flatten_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass context menu scene flatten encoder"),
         });
+        let flatten_scope = profiler.begin("completed_scene_flatten", &mut flatten_encoder);
         {
             let mut pass = flatten_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass context menu scene flatten pass"),
@@ -916,6 +932,8 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &self.context_menu_flatten_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(&mut flatten_encoder, flatten_scope);
+        profiler.resolve(&mut flatten_encoder);
         commands.push(flatten_encoder.finish());
 
         let profile = self.blur_profile(blur_radius);
@@ -930,6 +948,7 @@ impl LiquidGlassRenderer {
             );
             commands.extend(encode_blur_profile(
                 device,
+                profiler,
                 &self.blur_downsample_pipeline,
                 &self.blur_upsample_pipeline,
                 &self.blur_levels,
@@ -938,6 +957,8 @@ impl LiquidGlassRenderer {
                 &self.context_menu_blur_up_bind_groups,
                 profile.level_count,
                 "liquid glass context menu completed-scene blur",
+                COMPLETED_BLUR_DOWN_SCOPES,
+                COMPLETED_BLUR_UP_SCOPES,
             ));
         }
         queue.submit(commands);
@@ -1040,6 +1061,29 @@ impl LiquidGlassRenderer {
     }
 }
 
+/// GPU profiler scope names for the shared pyramid users. Global = backdrop
+/// pyramid; completed = context-menu/settings completed-scene blur.
+const GLOBAL_BLUR_DOWN_SCOPES: [&str; 3] = [
+    "global_blur_down_1",
+    "global_blur_down_2",
+    "global_blur_down_3",
+];
+const GLOBAL_BLUR_UP_SCOPES: [&str; 3] = [
+    "global_blur_up_1",
+    "global_blur_up_2",
+    "global_blur_up_3",
+];
+const COMPLETED_BLUR_DOWN_SCOPES: [&str; 3] = [
+    "completed_blur_down_1",
+    "completed_blur_down_2",
+    "completed_blur_down_3",
+];
+const COMPLETED_BLUR_UP_SCOPES: [&str; 3] = [
+    "completed_blur_up_1",
+    "completed_blur_up_2",
+    "completed_blur_up_3",
+];
+
 /// Build one complete downsample + upsample chain into a full-resolution
 /// output. The shared pyramid is only scratch storage; callers must bind the
 /// returned `output` texture in the final material pass, never an intermediate
@@ -1047,6 +1091,7 @@ impl LiquidGlassRenderer {
 #[allow(clippy::too_many_arguments)]
 fn encode_blur_profile(
     device: &wgpu::Device,
+    profiler: &mut GpuProfilerState,
     downsample_pipeline: &wgpu::RenderPipeline,
     upsample_pipeline: &wgpu::RenderPipeline,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
@@ -1055,6 +1100,8 @@ fn encode_blur_profile(
     up_bind_groups: &[wgpu::BindGroup; 3],
     level_count: usize,
     label_prefix: &str,
+    down_scopes: [&'static str; 3],
+    up_scopes: [&'static str; 3],
 ) -> Vec<wgpu::CommandBuffer> {
     debug_assert!((1..=3).contains(&level_count));
     let mut commands = Vec::with_capacity(level_count * 2);
@@ -1064,6 +1111,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
+        let profile_scope = profiler.begin(down_scopes[i], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1085,6 +1133,8 @@ fn encode_blur_profile(
             pass.set_bind_group(0, &down_bind_groups[i], &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(&mut encoder, profile_scope);
+        profiler.resolve(&mut encoder);
         commands.push(encoder.finish());
     }
 
@@ -1103,6 +1153,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
+        let profile_scope = profiler.begin(up_scopes[j], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1124,6 +1175,8 @@ fn encode_blur_profile(
             pass.set_bind_group(0, &up_bind_groups[bind_index], &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(&mut encoder, profile_scope);
+        profiler.resolve(&mut encoder);
         commands.push(encoder.finish());
     }
 

@@ -156,6 +156,7 @@ impl Renderer {
         self.liquid_glass.render(
             &self.device,
             &self.queue,
+            &mut self.gpu_profiler,
             &mut encoder,
             scene_view,
             args.scroll_x,
@@ -477,6 +478,7 @@ impl Renderer {
             self.liquid_glass.prepare_settings_panel_scene_blur(
                 &self.device,
                 &self.queue,
+                &mut self.gpu_profiler,
                 frame.texture(),
             );
             encoder = self
@@ -690,6 +692,7 @@ impl Renderer {
             self.liquid_glass.prepare_context_menu_scene_blur(
                 &self.device,
                 &self.queue,
+                &mut self.gpu_profiler,
                 frame.texture(),
             );
             encoder = self

@@ -26,7 +26,7 @@ mod counters;
 mod focus_blur;
 mod fps;
 mod frame;
-mod gpu_profile;
+pub(crate) mod gpu_profile;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
 mod icons;
