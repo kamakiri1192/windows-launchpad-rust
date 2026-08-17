@@ -1,6 +1,8 @@
 //! Discover locally installed Steam apps from Steam library manifests.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+#[cfg(target_os = "macos")]
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
