@@ -48,8 +48,9 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// v5: resolves macOS app icons through Launch Services so asset catalogs and
 /// modern ICNS encodings render consistently with Finder.
 /// v6/v5: Issue #48 アイコンサイズ自動正規化（solid_fill 分類 + カテゴリ別 scale）
+/// v7: macOS FullBleedアイコンの影を本体のサイズ・中心計算から除外。
 #[cfg(target_os = "macos")]
-pub const EXTRACTION_VERSION: u32 = 6;
+pub const EXTRACTION_VERSION: u32 = 7;
 #[cfg(not(target_os = "macos"))]
 pub const EXTRACTION_VERSION: u32 = 5;
 

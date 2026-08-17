@@ -142,7 +142,7 @@ mod macos {
         }
         let source = extract_workspace_icon(app_path)
             .ok_or_else(|| format!("could not extract icon: {}", app_path.display()))?;
-        let normalized = normalize::normalize(&source);
+        let normalized = normalize::normalize_macos_app_icon(&source);
         let app_name = app_path
             .file_stem()
             .map(|name| name.to_string_lossy().into_owned())
