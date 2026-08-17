@@ -333,7 +333,7 @@ impl SettingsCategory {
             Self::Apps => "アプリ",
             Self::Search => "表示と検索",
             Self::System => "システム",
-            Self::Darkness => "Darkness",
+            Self::Darkness => "ガラスの見え方",
             Self::About => "このアプリについて",
             Self::Debug => "デバッグ",
         }

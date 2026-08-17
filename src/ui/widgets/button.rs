@@ -21,9 +21,9 @@ use super::{color_from_array, control_size_multiplier, scale_color_alpha, Z_CONT
 // ---------------------------------------------------------------------------
 
 const INK: [f32; 4] = [0.11, 0.11, 0.118, 0.92];
-const MUTED: [f32; 4] = [0.11, 0.11, 0.118, 0.58];
-const ACCENT: [f32; 4] = [0.039, 0.518, 1.0, 0.20];
-const ROW_BG: [f32; 4] = [0.11, 0.11, 0.118, 0.06];
+const MUTED: [f32; 4] = [0.11, 0.11, 0.118, 0.68];
+const ACCENT: [f32; 4] = [0.039, 0.518, 1.0, 0.28];
+const ROW_BG: [f32; 4] = [0.11, 0.11, 0.118, 0.08];
 
 /// Default row height in logical pixels (matches `ROW_H`).
 pub const ROW_H: f32 = 46.0;
@@ -58,6 +58,9 @@ pub struct Button {
     pub control_size: super::super::theme::ControlSize,
     pub tint: Option<[f32; 4]>,
     pub enabled: bool,
+    /// Optional logical row height. Useful for compact controls such as a
+    /// segmented picker while preserving the regular 46 px settings rows.
+    pub height: Option<f32>,
     /// Show a chevron (>) on the right side.
     pub chevron: bool,
     /// Explicit hit-target for the HitRegion. When `Some`, replaces the
@@ -76,6 +79,7 @@ impl Button {
             control_size: super::super::theme::ControlSize::Regular,
             tint: None,
             enabled: true,
+            height: None,
             chevron: true,
             hit_target: None,
         }
@@ -123,6 +127,12 @@ impl Button {
         self
     }
 
+    /// Override the row height in logical pixels.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = Some(height.max(1.0));
+        self
+    }
+
     /// Show or hide the chevron indicator.
     pub fn chevron_opt(mut self, show: bool) -> Self {
         self.chevron = show;
@@ -151,7 +161,7 @@ impl Ui {
     pub fn button(&mut self, button: &Button) -> Response {
         let b = button.clone().ensure_id(self);
         let scale = self.scale_factor() * control_size_multiplier(b.control_size);
-        let height = ROW_H * scale;
+        let height = b.height.unwrap_or(ROW_H) * scale;
 
         self.begin_widget();
 
@@ -531,6 +541,14 @@ mod tests {
         let resp = ui.button(&Button::new("Click"));
         assert_eq!(resp.rect.height, ROW_H);
         assert!(resp.rect.width > 0.0);
+    }
+
+    #[test]
+    fn button_accepts_a_compact_explicit_height() {
+        let mut ui = new_ui();
+        let resp = ui.button(&Button::new("Segment").height(32.0));
+        assert_eq!(resp.rect.height, 32.0);
+        assert_eq!(resp.hit_rect.height, 32.0);
     }
 
     #[test]
