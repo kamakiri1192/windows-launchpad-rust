@@ -20,6 +20,8 @@ use crate::domain::app_id::AppId;
 use crate::icon_cache::{self, CachedIcon, IconCache};
 #[cfg(windows)]
 use crate::icons::extract::{self, ComScope};
+#[cfg(target_os = "macos")]
+use crate::icons::normalize::normalize_macos_app_icon;
 use crate::icons::normalize::{normalize, DecodedIcon};
 use crate::startup_timer::{self, prefix};
 
@@ -189,6 +191,17 @@ fn process_one(
 
     // (2) Normalization: resize → TARGET×TARGET straight-alpha square.
     let normalize_start = std::time::Instant::now();
+    #[cfg(target_os = "macos")]
+    let image = if req.link_path.extension().is_some_and(|ext| ext == "app") {
+        // NSWorkspace app icons include a platform drop shadow. Use the opaque
+        // app body for geometry so the body, rather than the shadow, aligns to
+        // the launcher's tile fill. Steam/local image files retain the generic
+        // cross-platform normalization path.
+        normalize_macos_app_icon(&raw)
+    } else {
+        normalize(&raw)
+    };
+    #[cfg(not(target_os = "macos"))]
     let image = normalize(&raw);
     timer.mark_with(prefix::ICON_WORKER, "normalized icon", || {
         format!(
