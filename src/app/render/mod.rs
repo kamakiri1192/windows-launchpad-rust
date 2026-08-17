@@ -19,4 +19,6 @@ mod icons;
 mod overlay;
 mod settings;
 
+pub(crate) use context_menu::ContextMenuLayoutCache;
+pub(crate) use controls::ControlTextCache;
 pub(crate) use settings::{settings_press_target_from_hit_target, SettingsRenderCache};

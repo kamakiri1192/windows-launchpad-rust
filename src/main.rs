@@ -74,11 +74,22 @@ const CELL: u32 = renderer::icon_atlas::CELL;
 use app::state::{App, Inbox, WorkerMessage, INITIAL_WINDOW_HEIGHT, INITIAL_WINDOW_WIDTH};
 use app::UserEvent;
 
+/// Optional monitor override for profiling: `LAUNCHPAD_MONITOR_INDEX=N`
+/// selects the Nth monitor from `available_monitors()` so real-window frame
+/// pacing can be measured on an external display without changing primary-
+/// monitor settings.
+fn monitor_from_env(event_loop: &ActiveEventLoop) -> Option<winit::monitor::MonitorHandle> {
+    let index = std::env::var("LAUNCHPAD_MONITOR_INDEX")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())?;
+    event_loop.available_monitors().nth(index)
+}
+
 pub(crate) fn initial_window_position(
     event_loop: &ActiveEventLoop,
 ) -> Option<PhysicalPosition<i32>> {
-    let monitor = event_loop
-        .primary_monitor()
+    let monitor = monitor_from_env(event_loop)
+        .or_else(|| event_loop.primary_monitor())
         .or_else(|| event_loop.available_monitors().next())?;
     let monitor_position = monitor.position();
     let monitor_size = monitor.size();

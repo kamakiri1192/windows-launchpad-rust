@@ -23,6 +23,20 @@ use super::state::App;
 impl App {
     /// Advance one frame and submit the render. Returns early if the scroller
     /// is not yet initialized (mirrors the historical early `return`).
+    /// Drop every cache that stores glyph quads or UV-carrying glyph views.
+    ///
+    /// When the glyph atlas grows, every previously built quad's normalized
+    /// UVs are stale: the denominators changed and the old cells now hold
+    /// different glyphs, so a cached "検索" placeholder would render as
+    /// whatever moved into those cells. The retained grid lane is rebuilt by
+    /// `relayout()`; these per-feature caches must be dropped for the same
+    /// reason.
+    pub(crate) fn invalidate_text_quads_caches(&mut self) {
+        self.control_text_cache = None;
+        self.context_menu_layout_cache = None;
+        self.settings_render_cache = None;
+    }
+
     pub(crate) fn tick_frame(&mut self) {
         let now = Instant::now();
         let vp = self.viewport_phys();
@@ -73,6 +87,7 @@ impl App {
         if let Some(text) = self.text.as_mut() {
             if text.take_atlas_grew() {
                 self.relayout();
+                self.invalidate_text_quads_caches();
             }
         }
         let folder_scroller_animating = if let Some(scroller) = self.folder_scroller.as_mut() {
@@ -236,16 +251,30 @@ impl App {
         // point at the wrong texels and render garbled this frame. The opening
         // check at the top of `tick_frame` only catches growth from the
         // *previous* frame; rebuild the retained Grid lane once more here so
-        // no stale quads reach the GPU this frame. (Transient lanes are
-        // regenerated every frame, so any pre-grow UVs they carry self-correct
-        // next frame — at worst a single imperceptible frame on a short-lived
-        // surface.)
+        // no stale quads reach the GPU this frame. Text lanes with retained
+        // caches are rebuilt in the same frame below — a fix that crosses a
+        // frame boundary shows one garbled frame first (flicker).
         if self
             .text
             .as_mut()
             .is_some_and(|text| text.take_atlas_grew())
         {
             self.relayout();
+            self.invalidate_text_quads_caches();
+            // Dropping the caches alone would leave the pre-growth quads on
+            // screen for one frame and snap to the rebuilt text on the next —
+            // visible flicker. Re-run every text-bearing lane builder now, in
+            // this same frame, so the model handed to prepare() already uses
+            // post-growth UVs. The builders read current state and are
+            // idempotent, so a second pass is safe.
+            let control_shape = self.render_bottom_control();
+            self.render_gear(control_shape);
+            self.render_settings_panel();
+            self.render_folder_panel();
+            if self.context_menu.is_active() {
+                self.render_context_menu();
+            }
+            self.render_debug_overlay();
         }
 
         // Submit one complete renderer-neutral frame model. Renderer-side

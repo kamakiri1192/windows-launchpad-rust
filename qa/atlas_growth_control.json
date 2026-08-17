@@ -1,0 +1,875 @@
+{
+  "name": "atlas-growth-control",
+  "viewport": [
+    3840,
+    2160
+  ],
+  "fps": 60,
+  "duration_ms": 4000,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      {
+        "id": "qa-atlas-0",
+        "name": "一丁丂七丄丅丆万丈三上下"
+      },
+      {
+        "id": "qa-atlas-1",
+        "name": "丌不与丏丐丑丒专且丕世丗"
+      },
+      {
+        "id": "qa-atlas-2",
+        "name": "丘丙业丛东丝丞丟丠両丢丣"
+      },
+      {
+        "id": "qa-atlas-3",
+        "name": "两严並丧丨丩个丫丬中丮丯"
+      },
+      {
+        "id": "qa-atlas-4",
+        "name": "丰丱串丳临丵丶丷丸丹为主"
+      },
+      {
+        "id": "qa-atlas-5",
+        "name": "丼丽举丿乀乁乂乃乄久乆乇"
+      },
+      {
+        "id": "qa-atlas-6",
+        "name": "么义乊之乌乍乎乏乐乑乒乓"
+      },
+      {
+        "id": "qa-atlas-7",
+        "name": "乔乕乖乗乘乙乚乛乜九乞也"
+      },
+      {
+        "id": "qa-atlas-8",
+        "name": "习乡乢乣乤乥书乧乨乩乪乫"
+      },
+      {
+        "id": "qa-atlas-9",
+        "name": "乬乭乮乯买乱乲乳乴乵乶乷"
+      },
+      {
+        "id": "qa-atlas-10",
+        "name": "乸乹乺乻乼乽乾乿亀亁亂亃"
+      },
+      {
+        "id": "qa-atlas-11",
+        "name": "亄亅了亇予争亊事二亍于亏"
+      },
+      {
+        "id": "qa-atlas-12",
+        "name": "亐云互亓五井亖亗亘亙亚些"
+      },
+      {
+        "id": "qa-atlas-13",
+        "name": "亜亝亞亟亠亡亢亣交亥亦产"
+      },
+      {
+        "id": "qa-atlas-14",
+        "name": "亨亩亪享京亭亮亯亰亱亲亳"
+      },
+      {
+        "id": "qa-atlas-15",
+        "name": "亴亵亶亷亸亹人亻亼亽亾亿"
+      },
+      {
+        "id": "qa-atlas-16",
+        "name": "什仁仂仃仄仅仆仇仈仉今介"
+      },
+      {
+        "id": "qa-atlas-17",
+        "name": "仌仍从仏仐仑仒仓仔仕他仗"
+      },
+      {
+        "id": "qa-atlas-18",
+        "name": "付仙仚仛仜仝仞仟仠仡仢代"
+      },
+      {
+        "id": "qa-atlas-19",
+        "name": "令以仦仧仨仩仪仫们仭仮仯"
+      },
+      {
+        "id": "qa-atlas-20",
+        "name": "仰仱仲仳仴仵件价仸仹仺任"
+      },
+      {
+        "id": "qa-atlas-21",
+        "name": "仼份仾仿伀企伂伃伄伅伆伇"
+      },
+      {
+        "id": "qa-atlas-22",
+        "name": "伈伉伊伋伌伍伎伏伐休伒伓"
+      },
+      {
+        "id": "qa-atlas-23",
+        "name": "伔伕伖众优伙会伛伜伝伞伟"
+      },
+      {
+        "id": "qa-atlas-24",
+        "name": "传伡伢伣伤伥伦伧伨伩伪伫"
+      },
+      {
+        "id": "qa-atlas-25",
+        "name": "伬伭伮伯估伱伲伳伴伵伶伷"
+      },
+      {
+        "id": "qa-atlas-26",
+        "name": "伸伹伺伻似伽伾伿佀佁佂佃"
+      },
+      {
+        "id": "qa-atlas-27",
+        "name": "佄佅但佇佈佉佊佋佌位低住"
+      },
+      {
+        "id": "qa-atlas-28",
+        "name": "佐佑佒体佔何佖佗佘余佚佛"
+      },
+      {
+        "id": "qa-atlas-29",
+        "name": "作佝佞佟你佡佢佣佤佥佦佧"
+      },
+      {
+        "id": "qa-atlas-30",
+        "name": "佨佩佪佫佬佭佮佯佰佱佲佳"
+      },
+      {
+        "id": "qa-atlas-31",
+        "name": "佴併佶佷佸佹佺佻佼佽佾使"
+      },
+      {
+        "id": "qa-atlas-32",
+        "name": "侀侁侂侃侄侅來侇侈侉侊例"
+      },
+      {
+        "id": "qa-atlas-33",
+        "name": "侌侍侎侏侐侑侒侓侔侕侖侗"
+      },
+      {
+        "id": "qa-atlas-34",
+        "name": "侘侙侚供侜依侞侟侠価侢侣"
+      },
+      {
+        "id": "qa-atlas-35",
+        "name": "侤侥侦侧侨侩侪侫侬侭侮侯"
+      },
+      {
+        "id": "qa-atlas-36",
+        "name": "侰侱侲侳侴侵侶侷侸侹侺侻"
+      },
+      {
+        "id": "qa-atlas-37",
+        "name": "侼侽侾便俀俁係促俄俅俆俇"
+      },
+      {
+        "id": "qa-atlas-38",
+        "name": "俈俉俊俋俌俍俎俏俐俑俒俓"
+      },
+      {
+        "id": "qa-atlas-39",
+        "name": "俔俕俖俗俘俙俚俛俜保俞俟"
+      },
+      {
+        "id": "qa-atlas-40",
+        "name": "俠信俢俣俤俥俦俧俨俩俪俫"
+      },
+      {
+        "id": "qa-atlas-41",
+        "name": "俬俭修俯俰俱俲俳俴俵俶俷"
+      },
+      {
+        "id": "qa-atlas-42",
+        "name": "俸俹俺俻俼俽俾俿倀倁倂倃"
+      },
+      {
+        "id": "qa-atlas-43",
+        "name": "倄倅倆倇倈倉倊個倌倍倎倏"
+      },
+      {
+        "id": "qa-atlas-44",
+        "name": "倐們倒倓倔倕倖倗倘候倚倛"
+      },
+      {
+        "id": "qa-atlas-45",
+        "name": "倜倝倞借倠倡倢倣値倥倦倧"
+      },
+      {
+        "id": "qa-atlas-46",
+        "name": "倨倩倪倫倬倭倮倯倰倱倲倳"
+      },
+      {
+        "id": "qa-atlas-47",
+        "name": "倴倵倶倷倸倹债倻值倽倾倿"
+      },
+      {
+        "id": "qa-atlas-48",
+        "name": "偀偁偂偃偄偅偆假偈偉偊偋"
+      },
+      {
+        "id": "qa-atlas-49",
+        "name": "偌偍偎偏偐偑偒偓偔偕偖偗"
+      },
+      {
+        "id": "qa-atlas-50",
+        "name": "偘偙做偛停偝偞偟偠偡偢偣"
+      },
+      {
+        "id": "qa-atlas-51",
+        "name": "偤健偦偧偨偩偪偫偬偭偮偯"
+      },
+      {
+        "id": "qa-atlas-52",
+        "name": "偰偱偲偳側偵偶偷偸偹偺偻"
+      },
+      {
+        "id": "qa-atlas-53",
+        "name": "偼偽偾偿傀傁傂傃傄傅傆傇"
+      },
+      {
+        "id": "qa-atlas-54",
+        "name": "傈傉傊傋傌傍傎傏傐傑傒傓"
+      },
+      {
+        "id": "qa-atlas-55",
+        "name": "傔傕傖傗傘備傚傛傜傝傞傟"
+      },
+      {
+        "id": "qa-atlas-56",
+        "name": "傠傡傢傣傤傥傦傧储傩傪傫"
+      },
+      {
+        "id": "qa-atlas-57",
+        "name": "催傭傮傯傰傱傲傳傴債傶傷"
+      },
+      {
+        "id": "qa-atlas-58",
+        "name": "傸傹傺傻傼傽傾傿僀僁僂僃"
+      },
+      {
+        "id": "qa-atlas-59",
+        "name": "僄僅僆僇僈僉僊僋僌働僎像"
+      },
+      {
+        "id": "qa-atlas-60",
+        "name": "僐僑僒僓僔僕僖僗僘僙僚僛"
+      },
+      {
+        "id": "qa-atlas-61",
+        "name": "僜僝僞僟僠僡僢僣僤僥僦僧"
+      },
+      {
+        "id": "qa-atlas-62",
+        "name": "僨僩僪僫僬僭僮僯僰僱僲僳"
+      },
+      {
+        "id": "qa-atlas-63",
+        "name": "僴僵僶僷僸價僺僻僼僽僾僿"
+      },
+      {
+        "id": "qa-atlas-64",
+        "name": "儀儁儂儃億儅儆儇儈儉儊儋"
+      },
+      {
+        "id": "qa-atlas-65",
+        "name": "儌儍儎儏儐儑儒儓儔儕儖儗"
+      },
+      {
+        "id": "qa-atlas-66",
+        "name": "儘儙儚儛儜儝儞償儠儡儢儣"
+      },
+      {
+        "id": "qa-atlas-67",
+        "name": "儤儥儦儧儨儩優儫儬儭儮儯"
+      },
+      {
+        "id": "qa-atlas-68",
+        "name": "儰儱儲儳儴儵儶儷儸儹儺儻"
+      },
+      {
+        "id": "qa-atlas-69",
+        "name": "儼儽儾儿兀允兂元兄充兆兇"
+      },
+      {
+        "id": "qa-atlas-70",
+        "name": "先光兊克兌免兎兏児兑兒兓"
+      },
+      {
+        "id": "qa-atlas-71",
+        "name": "兔兕兖兗兘兙党兛兜兝兞兟"
+      },
+      {
+        "id": "qa-atlas-72",
+        "name": "兠兡兢兣兤入兦內全兩兪八"
+      },
+      {
+        "id": "qa-atlas-73",
+        "name": "公六兮兯兰共兲关兴兵其具"
+      },
+      {
+        "id": "qa-atlas-74",
+        "name": "典兹兺养兼兽兾兿冀冁冂冃"
+      },
+      {
+        "id": "qa-atlas-75",
+        "name": "冄内円冇冈冉冊冋册再冎冏"
+      },
+      {
+        "id": "qa-atlas-76",
+        "name": "冐冑冒冓冔冕冖冗冘写冚军"
+      },
+      {
+        "id": "qa-atlas-77",
+        "name": "农冝冞冟冠冡冢冣冤冥冦冧"
+      },
+      {
+        "id": "qa-atlas-78",
+        "name": "冨冩冪冫冬冭冮冯冰冱冲决"
+      },
+      {
+        "id": "qa-atlas-79",
+        "name": "冴况冶冷冸冹冺冻冼冽冾冿"
+      },
+      {
+        "id": "qa-atlas-80",
+        "name": "净凁凂凃凄凅准凇凈凉凊凋"
+      },
+      {
+        "id": "qa-atlas-81",
+        "name": "凌凍凎减凐凑凒凓凔凕凖凗"
+      },
+      {
+        "id": "qa-atlas-82",
+        "name": "凘凙凚凛凜凝凞凟几凡凢凣"
+      },
+      {
+        "id": "qa-atlas-83",
+        "name": "凤凥処凧凨凩凪凫凬凭凮凯"
+      },
+      {
+        "id": "qa-atlas-84",
+        "name": "凰凱凲凳凴凵凶凷凸凹出击"
+      },
+      {
+        "id": "qa-atlas-85",
+        "name": "凼函凾凿刀刁刂刃刄刅分切"
+      },
+      {
+        "id": "qa-atlas-86",
+        "name": "刈刉刊刋刌刍刎刏刐刑划刓"
+      },
+      {
+        "id": "qa-atlas-87",
+        "name": "刔刕刖列刘则刚创刜初刞刟"
+      },
+      {
+        "id": "qa-atlas-88",
+        "name": "删刡刢刣判別刦刧刨利刪别"
+      },
+      {
+        "id": "qa-atlas-89",
+        "name": "刬刭刮刯到刱刲刳刴刵制刷"
+      },
+      {
+        "id": "qa-atlas-90",
+        "name": "券刹刺刻刼刽刾刿剀剁剂剃"
+      },
+      {
+        "id": "qa-atlas-91",
+        "name": "剄剅剆則剈剉削剋剌前剎剏"
+      },
+      {
+        "id": "qa-atlas-92",
+        "name": "剐剑剒剓剔剕剖剗剘剙剚剛"
+      },
+      {
+        "id": "qa-atlas-93",
+        "name": "剜剝剞剟剠剡剢剣剤剥剦剧"
+      },
+      {
+        "id": "qa-atlas-94",
+        "name": "剨剩剪剫剬剭剮副剰剱割剳"
+      },
+      {
+        "id": "qa-atlas-95",
+        "name": "剴創剶剷剸剹剺剻剼剽剾剿"
+      },
+      {
+        "id": "qa-atlas-96",
+        "name": "劀劁劂劃劄劅劆劇劈劉劊劋"
+      },
+      {
+        "id": "qa-atlas-97",
+        "name": "劌劍劎劏劐劑劒劓劔劕劖劗"
+      },
+      {
+        "id": "qa-atlas-98",
+        "name": "劘劙劚力劜劝办功加务劢劣"
+      },
+      {
+        "id": "qa-atlas-99",
+        "name": "劤劥劦劧动助努劫劬劭劮劯"
+      }
+    ],
+    "folders": [],
+    "items": [
+      {
+        "kind": "app",
+        "id": "qa-atlas-0"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-1"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-2"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-3"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-4"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-5"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-6"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-7"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-8"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-9"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-10"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-11"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-12"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-13"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-14"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-15"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-16"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-17"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-18"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-19"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-20"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-21"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-22"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-23"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-24"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-25"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-26"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-27"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-28"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-29"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-30"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-31"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-32"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-33"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-34"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-35"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-36"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-37"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-38"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-39"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-40"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-41"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-42"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-43"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-44"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-45"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-46"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-47"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-48"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-49"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-50"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-51"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-52"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-53"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-54"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-55"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-56"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-57"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-58"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-59"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-60"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-61"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-62"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-63"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-64"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-65"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-66"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-67"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-68"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-69"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-70"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-71"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-72"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-73"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-74"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-75"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-76"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-77"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-78"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-79"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-80"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-81"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-82"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-83"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-84"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-85"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-86"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-87"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-88"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-89"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-90"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-91"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-92"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-93"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-94"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-95"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-96"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-97"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-98"
+      },
+      {
+        "kind": "app",
+        "id": "qa-atlas-99"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 300,
+      "type": "move",
+      "target": {
+        "kind": "grid_item",
+        "index": 0
+      }
+    },
+    {
+      "at_ms": 400,
+      "type": "long_press"
+    },
+    {
+      "at_ms": 2200,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 2006.0,
+        "y": 1546.0
+      }
+    },
+    {
+      "at_ms": 2300,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2800,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 1920.0,
+        "y": 1080.0
+      }
+    },
+    {
+      "at_ms": 3200,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 1920.0,
+        "y": 1080.0
+      }
+    },
+    {
+      "at_ms": 3600,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 1920.0,
+        "y": 1080.0
+      }
+    }
+  ]
+}

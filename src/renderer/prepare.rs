@@ -289,6 +289,50 @@ impl Renderer {
     /// Reflect one complete renderer-neutral frame model into persistent GPU
     /// resources. Exact lane comparisons skip unchanged uploads; packing into
     /// shader-facing structs remains an internal renderer responsibility.
+    /// Compare only the model lanes composited below a completed-scene
+    /// checkpoint. `for_menu` keeps the settings/modal lanes that render
+    /// between the settings checkpoint and the context-menu checkpoint.
+    fn below_lanes_differ(a: &RenderModel, b: &RenderModel, for_menu: bool) -> bool {
+        if a.tiles != b.tiles || a.icons != b.icons || a.text != b.text || a.controls != b.controls
+        {
+            return true;
+        }
+        if for_menu && (a.modal_tiles != b.modal_tiles || a.modal_icons != b.modal_icons) {
+            return true;
+        }
+        let glass_keep = |layer: GlassLayer| match layer {
+            GlassLayer::ContextMenu => false,
+            GlassLayer::Settings | GlassLayer::Modal => for_menu,
+            _ => true,
+        };
+        let ink_keep = |lane: InkLane| match lane {
+            InkLane::ContextMenu => false,
+            InkLane::Settings | InkLane::Modal => for_menu,
+            _ => true,
+        };
+        let glyph_keep = |lane: GlyphLane| match lane {
+            GlyphLane::ContextMenu | GlyphLane::Overlay => false,
+            GlyphLane::Settings | GlyphLane::Modal => for_menu,
+            _ => true,
+        };
+        if filtered_differs(
+            a.glass.iter().filter(|batch| glass_keep(batch.layer)),
+            b.glass.iter().filter(|batch| glass_keep(batch.layer)),
+        ) {
+            return true;
+        }
+        if filtered_differs(
+            a.ink.iter().filter(|batch| ink_keep(batch.lane)),
+            b.ink.iter().filter(|batch| ink_keep(batch.lane)),
+        ) {
+            return true;
+        }
+        filtered_differs(
+            a.glyphs.iter().filter(|batch| glyph_keep(batch.lane)),
+            b.glyphs.iter().filter(|batch| glyph_keep(batch.lane)),
+        )
+    }
+
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
         // 戦略D: keep the liquid-glass renderer's modal-local darkness region
@@ -297,6 +341,15 @@ impl Renderer {
         // the rect appears, moves, or disappears.
         self.liquid_glass
             .set_modal_darkness_region(active_modal_region_from_model(model));
+        // Diff the lanes composited below each completed-scene checkpoint
+        // BEFORE prepare updates `prepared_model`, so the checkpoint caches
+        // are not invalidated by the checkpoint's own animated lanes.
+        if Self::below_lanes_differ(model, &self.prepared_model, false) {
+            self.below_settings_epoch = self.below_settings_epoch.wrapping_add(1);
+        }
+        if Self::below_lanes_differ(model, &self.prepared_model, true) {
+            self.below_menu_epoch = self.below_menu_epoch.wrapping_add(1);
+        }
         let modal_clip = modal_clip_from_model(model);
         self.modal_clip_rect = modal_clip.map(|(rect, _)| rect);
         self.modal_clip_radius = modal_clip.map_or(0.0, |(_, radius)| radius);
@@ -740,6 +793,19 @@ fn set_instances<T: bytemuck::Pod>(
     }
     if outcome.wrote {
         counters.record_write(category);
+    }
+}
+
+fn filtered_differs<'a, T: PartialEq + 'a>(
+    mut a: impl Iterator<Item = &'a T>,
+    mut b: impl Iterator<Item = &'a T>,
+) -> bool {
+    loop {
+        match (a.next(), b.next()) {
+            (Some(x), Some(y)) if x == y => continue,
+            (None, None) => return false,
+            _ => return true,
+        }
     }
 }
 

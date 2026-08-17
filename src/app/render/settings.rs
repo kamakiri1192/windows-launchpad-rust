@@ -246,7 +246,13 @@ impl App {
         let (frame_cx, frame_cy, frame_w, frame_h) =
             self.layout.frame_panel_rect(viewport.0 as f32);
 
-        // Current pointer position in logical pixels (for widget hover/press states)
+        // Current pointer position in physical pixels. The retained layout
+        // cache is deliberately pointer-independent: hover/press only affect
+        // the hovered toggle thumb's glass activation, which is a pure
+        // function of the pointer and the cached row geometry, applied per
+        // frame as an overlay below. Feeding the pointer into the layout would
+        // invalidate the retained cache on every pointer move (measured at
+        // ~1.9 ms/frame rebuild).
         let pointer_logical = if scale > 0.0 {
             Some(ui_model::geometry::Point::new(
                 self.pointer_phys_x,
@@ -304,8 +310,10 @@ impl App {
                 blur_radius: lg.blur_radius,
             },
             liquid_glass_debug: lg_debug_state,
-            pointer_pos: pointer_logical,
-            pointer_pressed,
+            // The layout does not use the pointer (hover is an overlay); keep
+            // the cache key free of it so pointer moves never rebuild.
+            pointer_pos: None,
+            pointer_pressed: false,
             page_frame_rect: Rect::new(
                 frame_cx - frame_w * 0.5,
                 frame_cy - frame_h * 0.5,
@@ -394,11 +402,24 @@ impl App {
         // retained settings toggle lenses are merged back each frame. No
         // panel-AABB culling is used: every settings surface remains available
         // to the renderer and its own clip contract controls visibility.
-        let settings_overlay = self
+        let mut settings_overlay = self
             .settings_render_cache
             .as_ref()
             .map(|cache| cache.materialize_overlay(scroll_position))
             .unwrap_or_default();
+        // Re-apply the pointer hover/press state the layout was built without.
+        // The only pointer-sensitive visual in the panel is the hovered toggle
+        // thumb's glass activation (one spring tick from a fresh state, since
+        // the panel's Ui is rebuilt per frame), which we reproduce here from
+        // the live pointer against the cached hit map. Everything else — ink,
+        // text, geometry — is pointer-independent, so the retained cache key
+        // stays valid across pointer moves.
+        apply_settings_toggle_hover(
+            &mut settings_overlay,
+            self.cached_settings_hit_map.as_ref(),
+            pointer_logical,
+            pointer_pressed,
+        );
         // Count existing overlay glass that's merged in (from bottom control etc.)
         let existing_overlay = self
             .render_model
@@ -578,6 +599,73 @@ impl App {
             [crate::spring_anim::Channel::rest(0.0); SettingsCategory::COUNT];
         self.settings_category_hover_elapsed = [0.0; SettingsCategory::COUNT];
     }
+}
+
+/// Value a toggle's `glass_activation`/`press_amount` spring reaches after a
+/// single tick from a freshly-created state gliding toward `target`. The
+/// settings panel rebuilds its `Ui` every frame, so the hovered/pressed thumb
+/// never animates past this one-tick value; the overlay reproduces the exact
+/// f32 arithmetic of the widget's spring step so the rendered thumb is
+/// bit-identical to the pre-cache path.
+fn toggle_one_tick_spring_value(target: f32) -> f32 {
+    let motion = crate::ui::Theme::default().toggle_motion;
+    let cfg = crate::scroll::PhysicsConfig {
+        spring_omega: motion.thumb_spring_omega,
+        spring_zeta: motion.thumb_spring_zeta,
+        ..Default::default()
+    };
+    let mut spring = crate::scroll::Spring::at(0.0);
+    spring.glide_to(target);
+    spring.step(1.0 / 60.0, &cfg);
+    spring.value
+}
+
+/// Re-apply the toggle hover/press visuals the retained layout was built
+/// without (pointer kept out of the cache key). The only pointer-sensitive
+/// output of the settings panel is the hovered toggle thumb's glass surface:
+/// hovering raises its `activation` by one spring tick; hovering while pressed
+/// also grows the thumb by the press scale. The overlay mutates the
+/// materialized toggle-thumb glass in `settings_overlay` in place, matching
+/// the exact values the widget would have produced with a live pointer.
+fn apply_settings_toggle_hover(
+    settings_overlay: &mut [GlassSurface],
+    hits: Option<&HitMap>,
+    pointer: Option<ui_model::geometry::Point>,
+    pressed: bool,
+) {
+    let (Some(hits), Some(pointer)) = (hits, pointer) else {
+        return;
+    };
+    // The toggle's hit region carries the same id as its thumb glass surface
+    // (the toggle UiId), and its rect matches the row the widget hovers on.
+    let Some(hovered) = hits.hit_test(pointer) else {
+        return;
+    };
+    let Some(thumb) = settings_overlay
+        .iter_mut()
+        .find(|surface| surface.id == hovered.id)
+    else {
+        return;
+    };
+    if !pressed {
+        // Hovered: `glass_activation` glides toward 0.15; one tick from the
+        // fresh per-frame state yields 0.024000002 (geometry unchanged).
+        thumb.activation = toggle_one_tick_spring_value(0.15);
+        return;
+    }
+    // Pressed: both the glass activation and the press amount glide toward
+    // 1.0; the thumb also grows by `press_scale` (radius + rect about its
+    // center), matching the widget's `thumb_display_r` math.
+    let press_a = toggle_one_tick_spring_value(1.0);
+    let motion = crate::ui::Theme::default().toggle_motion;
+    let press_scale = 1.0 + (motion.press_scale - 1.0) * press_a;
+    let cx = thumb.rect.x + thumb.rect.width * 0.5;
+    let cy = thumb.rect.y + thumb.rect.height * 0.5;
+    let half_w = thumb.rect.width * 0.5 * press_scale;
+    let half_h = thumb.rect.height * 0.5 * press_scale;
+    thumb.rect = Rect::new(cx - half_w, cy - half_h, half_w * 2.0, half_h * 2.0);
+    thumb.radius *= press_scale;
+    thumb.activation = press_a;
 }
 
 pub(crate) fn settings_category_id(
@@ -1333,6 +1421,223 @@ mod tests {
             retained_elapsed.as_secs_f64() * 1_000_000.0 / RETAINED_RUNS as f64
         );
         eprintln!();
+    }
+
+    /// Compare two glass surfaces except for the toggle thumb `activation`
+    /// channel (the per-frame hover overlay owns that).
+    fn surfaces_eq_ignoring_activation(a: &GlassSurface, b: &GlassSurface) -> bool {
+        a.id == b.id
+            && a.rect == b.rect
+            && a.radius == b.radius
+            && a.material == b.material
+            && a.behavior == b.behavior
+            && a.z == b.z
+            && a.clip == b.clip
+            && a.blur_radius == b.blur_radius
+            && a.backdrop_replacement == b.backdrop_replacement
+            && a.tint == b.tint
+    }
+
+    /// Order-insensitive comparison of two settings models: every batch must
+    /// contain the same surfaces/views (the `Ui` iterates a HashMap, so batch
+    /// and element order is not stable across builds).
+    fn models_match(
+        a: &layout::settings_panel::SettingsPanelModel,
+        b: &layout::settings_panel::SettingsPanelModel,
+    ) -> bool {
+        let mut a_glass: Vec<_> = a.result.render.glass.iter().collect();
+        let mut b_glass: Vec<_> = b.result.render.glass.iter().collect();
+        a_glass.sort_by_key(|batch| batch.layer as u8);
+        b_glass.sort_by_key(|batch| batch.layer as u8);
+        if a_glass.len() != b_glass.len() {
+            return false;
+        }
+        for (x, y) in a_glass.iter().zip(b_glass.iter()) {
+            if x.layer != y.layer {
+                return false;
+            }
+            let mut xs = x.surfaces.clone();
+            let mut ys = y.surfaces.clone();
+            xs.sort_by_key(|s| s.id.as_str().to_string());
+            ys.sort_by_key(|s| s.id.as_str().to_string());
+            if xs.len() != ys.len()
+                || xs.iter().zip(ys.iter()).any(|(a, b)| {
+                    let toggle_thumb = a.id.as_str().contains("toggle");
+                    // The hover/press overlay owns the hovered toggle thumb's
+                    // activation and press-scale geometry; every other
+                    // surface must be bit-identical across pointer states.
+                    if toggle_thumb {
+                        !surfaces_eq_ignoring_activation(a, b)
+                    } else {
+                        a != b
+                    }
+                })
+            {
+                return false;
+            }
+        }
+        let mut a_ink: Vec<_> = a.result.render.ink.iter().collect();
+        let mut b_ink: Vec<_> = b.result.render.ink.iter().collect();
+        a_ink.sort_by_key(|batch| batch.lane as u8);
+        b_ink.sort_by_key(|batch| batch.lane as u8);
+        if a_ink.len() != b_ink.len() {
+            return false;
+        }
+        for (x, y) in a_ink.iter().zip(b_ink.iter()) {
+            if x.lane != y.lane {
+                return false;
+            }
+            let mut xv = x.views.clone();
+            let mut yv = y.views.clone();
+            xv.sort_by_key(|v| v.id.as_str().to_string());
+            yv.sort_by_key(|v| v.id.as_str().to_string());
+            if xv != yv {
+                return false;
+            }
+        }
+        let mut a_glyphs: Vec<_> = a.result.render.glyphs.iter().collect();
+        let mut b_glyphs: Vec<_> = b.result.render.glyphs.iter().collect();
+        a_glyphs.sort_by_key(|batch| batch.lane as u8);
+        b_glyphs.sort_by_key(|batch| batch.lane as u8);
+        if a_glyphs.len() != b_glyphs.len()
+            || a_glyphs
+                .iter()
+                .zip(b_glyphs.iter())
+                .any(|(x, y)| x.lane != y.lane || x.views != y.views)
+        {
+            return false;
+        }
+        a.result.render.text == b.result.render.text
+            && a.result.hits.regions() == b.result.hits.regions()
+    }
+
+    /// The settings layout output is bit-identical for every pointer position
+    /// (up to the hovered toggle thumb's glass activation, which the per-frame
+    /// overlay owns): pointer state never reaches the retained layout, so the
+    /// cache key stays valid while the pointer moves.
+    #[test]
+    fn settings_layout_is_pointer_independent() {
+        let mut input = test_input();
+        let hidden_count_label = "0 件";
+        let copy = settings_panel_copy(hidden_count_label);
+        for cat in [
+            layout::settings_panel::SettingsCategoryId::Apps,
+            layout::settings_panel::SettingsCategoryId::Search,
+            layout::settings_panel::SettingsCategoryId::System,
+            layout::settings_panel::SettingsCategoryId::Darkness,
+            layout::settings_panel::SettingsCategoryId::About,
+            layout::settings_panel::SettingsCategoryId::Debug,
+        ] {
+            input.category = cat;
+            let mut scroll =
+                crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+            let base = layout::settings_panel::build_with_ui(input, &copy, &mut scroll);
+            for y in (100..700).step_by(80) {
+                for x in (100..1180).step_by(80) {
+                    input.pointer_pos = Some(Point::new(x as f32, y as f32));
+                    // Press is covered by the round-trip overlay test; here
+                    // only the hover activation may differ.
+                    input.pointer_pressed = false;
+                    let mut scroll2 = crate::scroll::ContinuousScroller::new(
+                        crate::scroll::ContinuousConfig::default(),
+                    );
+                    let m = layout::settings_panel::build_with_ui(input, &copy, &mut scroll2);
+                    let ok = models_match(&base, &m);
+                    assert!(ok, "{cat:?} pointer ({x}, {y}) must not change the layout");
+                }
+            }
+        }
+    }
+
+    /// The per-frame hover overlay must reproduce the toggle thumb glass the
+    /// live-pointer build produces — hover activation, and the pressed
+    /// activation + press-scale growth — bit for bit.
+    #[test]
+    fn settings_toggle_hover_overlay_matches_live_pointer_build() {
+        let input = test_input();
+        let hidden_count_label = "0 件";
+        let copy = settings_panel_copy(hidden_count_label);
+        let overlay_of = |model: &layout::settings_panel::SettingsPanelModel| -> Vec<GlassSurface> {
+            model
+                .result
+                .render
+                .glass
+                .iter()
+                .find(|batch| batch.layer == GlassLayer::Overlay)
+                .map(|batch| batch.surfaces.clone())
+                .unwrap_or_default()
+        };
+        fn thumb_of(overlay: &[GlassSurface]) -> &GlassSurface {
+            overlay
+                .iter()
+                .find(|s| s.id.as_str().contains("toggle-debug"))
+                .expect("debug category has a toggle-debug thumb")
+        }
+
+        // Base layout built without a pointer (the retained-cache state).
+        let mut base_scroll =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        let base = layout::settings_panel::build_with_ui(input, &copy, &mut base_scroll);
+        let base_overlay = overlay_of(&base);
+
+        // Hover: pointer over the toggle-debug row.
+        let hover_point = Point::new(940.0, 280.0);
+        let mut hovered_overlay = base_overlay.clone();
+        apply_settings_toggle_hover(
+            &mut hovered_overlay,
+            Some(&base.result.hits),
+            Some(hover_point),
+            false,
+        );
+
+        let mut live_input = input;
+        live_input.pointer_pos = Some(hover_point);
+        live_input.pointer_pressed = false;
+        let mut live_scroll =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        let live = layout::settings_panel::build_with_ui(live_input, &copy, &mut live_scroll);
+        let live_thumb = thumb_of(&overlay_of(&live)).clone();
+        assert_eq!(thumb_of(&hovered_overlay), &live_thumb);
+
+        // Pressed: activation 1.0 one-tick value and the press-scale growth.
+        let mut pressed_overlay = base_overlay.clone();
+        apply_settings_toggle_hover(
+            &mut pressed_overlay,
+            Some(&base.result.hits),
+            Some(hover_point),
+            true,
+        );
+        live_input.pointer_pressed = true;
+        let mut pressed_scroll =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        let pressed_live =
+            layout::settings_panel::build_with_ui(live_input, &copy, &mut pressed_scroll);
+        assert_eq!(
+            thumb_of(&pressed_overlay),
+            thumb_of(&overlay_of(&pressed_live))
+        );
+
+        // Pointer over a non-toggle area leaves every thumb untouched.
+        let mut idle_overlay = base_overlay.clone();
+        apply_settings_toggle_hover(
+            &mut idle_overlay,
+            Some(&base.result.hits),
+            Some(Point::new(600.0, 380.0)),
+            false,
+        );
+        assert_eq!(idle_overlay, base_overlay);
+    }
+
+    /// The one-tick spring values reproduce the widget's observed hover/press
+    /// thumb activation (0.024000002 hover, 0.16000001 pressed at the default
+    /// theme motion).
+    #[test]
+    fn toggle_one_tick_spring_value_matches_widget_math() {
+        assert_eq!(toggle_one_tick_spring_value(0.15), 0.024000002);
+        assert_eq!(toggle_one_tick_spring_value(1.0), 0.16000001);
+        // Press scale: 1.0 + (1.04 - 1.0) * press_a.
+        let press_a = toggle_one_tick_spring_value(1.0);
+        assert_eq!(1.0 + 0.04 * press_a, 1.0064);
     }
 
     #[test]

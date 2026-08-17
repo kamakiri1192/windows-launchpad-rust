@@ -31,6 +31,10 @@ const RING_CAP: usize = 64;
 const MIN_SPAN: Duration = Duration::from_millis(120);
 /// FPS value reported before enough samples have accumulated.
 const WARMUP_FPS: u32 = 0;
+/// Interval between periodic `presented fps:` stderr reports. Logging real
+/// presentation rates is the only way to confirm the vsync budget is held on
+/// actual hardware; the on-screen HUD value never reaches a log file.
+const REPORT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// A ring-buffer presentation-rate estimator.
 ///
@@ -47,6 +51,9 @@ pub(crate) struct FpsTracker {
     len: usize,
     /// Most recent reading, cached so [`Self::current`] is a pure accessor.
     cached: u32,
+    /// Anchor for the periodic stderr report and frames counted since it.
+    report_anchor: Option<Instant>,
+    report_frames: u64,
 }
 
 impl Default for FpsTracker {
@@ -63,6 +70,8 @@ impl FpsTracker {
             head: 0,
             len: 0,
             cached: WARMUP_FPS,
+            report_anchor: None,
+            report_frames: 0,
         }
     }
 
@@ -73,6 +82,7 @@ impl FpsTracker {
     pub(crate) fn note_presented(&mut self, now: Instant) {
         self.push(now);
         self.recompute(now);
+        self.maybe_report(now);
     }
 
     /// Record a frame whose presentation was confirmed by DXGI presentation
@@ -98,6 +108,29 @@ impl FpsTracker {
     /// Latest reported FPS reading. Returns `0` until enough samples arrive.
     pub(crate) fn current(&self) -> u32 {
         self.cached
+    }
+
+    /// Every [`REPORT_INTERVAL`], print the measured presentation rate to
+    /// stderr so real-window frame pacing can be verified from logs.
+    fn maybe_report(&mut self, now: Instant) {
+        self.report_frames += 1;
+        match self.report_anchor {
+            None => self.report_anchor = Some(now),
+            Some(anchor) => {
+                let elapsed = now.duration_since(anchor);
+                if elapsed >= REPORT_INTERVAL {
+                    let secs = elapsed.as_secs_f64().max(0.001);
+                    eprintln!(
+                        "presented fps: {:.1} ({} frames / {:.2}s)",
+                        self.report_frames as f64 / secs,
+                        self.report_frames,
+                        secs
+                    );
+                    self.report_anchor = Some(now);
+                    self.report_frames = 0;
+                }
+            }
+        }
     }
 
     /// Push a timestamp onto the ring buffer, overwriting the oldest sample
