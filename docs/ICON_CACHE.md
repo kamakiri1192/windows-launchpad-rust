@@ -76,14 +76,16 @@ Two independent version numbers guard against stale data:
 - **`SCHEMA_VERSION`** (`icon_cache::SCHEMA_VERSION`, currently `1`) — the
   on-disk table layout. A mismatch on open wipes the `icons` table so every
   entry is re-extracted against the new schema.
-- **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `4`
-  on Windows and `5` on macOS) —
+- **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `5`
+  on Windows and `7` on macOS) —
   the *extraction algorithm itself* (normalization target size, alpha handling,
   fallback strategy). Stored per-row in `extraction_version`; an entry whose
   stored version differs from the current one is treated as invalid even if the
   source is byte-identical. macOS version 5 resolves icons through Launch
   Services, covering asset-catalog-only apps and ICNS encodings that the
-  portable decoder cannot read.
+  portable decoder cannot read. macOS Steam entries prefer the installed
+  game's `.app` bundle, avoiding the low-resolution artwork in
+  `appcache/librarycache`.
 
 Bump either constant when you change the corresponding thing; no manual
 migration code is needed.
