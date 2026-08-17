@@ -28,6 +28,18 @@ use crate::debug_log;
 
 use super::state::SettingsPressTarget;
 
+/// Return the parameter controlled by a settings slider press. Slider drags
+/// start on pointer-down; keeping this mapping pure makes the press/release
+/// ownership rule explicit and regression-testable.
+fn settings_slider_field(
+    target: SettingsPressTarget,
+) -> Option<crate::domain::settings::LiquidGlassParamField> {
+    match target {
+        SettingsPressTarget::LiquidGlassParam(field) => Some(field),
+        _ => None,
+    }
+}
+
 /// Normalized input intent. The handler produces one of these from each raw
 /// event and dispatches it via [`App::handle_action`].
 #[derive(Debug)]
@@ -759,6 +771,13 @@ impl App {
             PressAction::ContextMenu => self.handle_context_menu_pointer_press(px, py),
             PressAction::Settings(target) => {
                 self.pressed_on_settings = Some(target);
+                if let Some(field) = settings_slider_field(target) {
+                    // A slider owns the pointer from press to release. Starting
+                    // here prevents the old bug where the knob began following
+                    // the cursor only after the mouse button was released.
+                    self.settings_slider_drag = Some(field);
+                    self.update_settings_slider_drag(px);
+                }
             }
             PressAction::Control => {
                 self.pressed_on_control = true;
@@ -853,6 +872,7 @@ impl App {
         // Commit any in-flight settings slider drag first so the value is
         // persisted even if the release landed outside the slider row.
         self.end_settings_slider_drag();
+        self.pressed_on_settings = None;
         // Always clear the control-press flag on release — it was set by the
         // press classifier and must not persist beyond the matching release,
         // otherwise subsequent grid presses would be misclassified through the
@@ -868,7 +888,11 @@ impl App {
                     self.close_settings();
                     return;
                 }
-                if pressed == released {
+                // Slider values were already updated continuously during the
+                // press-to-release drag. Do not dispatch the normal click
+                // handler here, because it would start a new drag after the
+                // button had been released.
+                if pressed == released && settings_slider_field(released).is_none() {
                     self.handle_settings_click(released);
                 }
                 // Mismatched inside/outside releases are ignored (no close),
@@ -919,6 +943,11 @@ impl App {
 
     /// Handle a cursor-left event.
     fn handle_cursor_left(&mut self) {
+        // A native mouse-up can be lost when the pointer exits the client
+        // window. End settings slider ownership here as a defensive fallback
+        // so re-entering the window cannot move a released knob.
+        self.end_settings_slider_drag();
+        self.pressed_on_settings = None;
         let dragging = self
             .scroller
             .as_ref()
@@ -1476,6 +1505,25 @@ mod tests {
     fn pointer_press_settings_takes_precedence() {
         let action = pointer_press_action(true, Outside, true, true);
         assert!(matches!(action, PressAction::Settings(_)));
+    }
+
+    #[test]
+    fn settings_slider_drag_starts_only_for_parameter_rows() {
+        use crate::domain::settings::LiquidGlassParamField;
+
+        assert_eq!(
+            settings_slider_field(SettingsPressTarget::LiquidGlassParam(
+                LiquidGlassParamField::Thickness
+            )),
+            Some(LiquidGlassParamField::Thickness)
+        );
+        assert_eq!(
+            settings_slider_field(SettingsPressTarget::LiquidGlassParamReset(
+                LiquidGlassParamField::Thickness
+            )),
+            None
+        );
+        assert_eq!(settings_slider_field(SettingsPressTarget::Inside), None);
     }
 
     #[test]
