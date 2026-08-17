@@ -213,12 +213,20 @@ pub enum ControlKind {
     EyeOff,
     /// Folder glyph (context menu: reveal in Finder/Explorer). Drawn by kind 15.
     FolderIcon,
-    /// ChatGPT logo (context menu: ChatGPT help). Drawn by kind 19 from a
-    /// dedicated rasterized SVG texture (not a procedural SDF).
+    /// ChatGPT logo (context menu: ChatGPT help). Drawn by kind 19 from SDF
+    /// atlas layer 0 (not a procedural SDF).
     ChatGptLogo,
-    /// Steam logo (context menu: open in Steam). Drawn by kind 20 from a
-    /// dedicated rasterized SVG texture (not a procedural SDF).
+    /// Steam logo (context menu: open in Steam). Drawn by kind 20 from SDF
+    /// atlas layer 1 (not a procedural SDF).
     SteamLogo,
+    /// Monochrome settings category icons. Drawn from SDF atlas layers 2–7 by
+    /// kinds 21–26 so they stay crisp at compact macOS sidebar sizes.
+    SettingsAppsIcon,
+    SettingsSearchIcon,
+    SettingsSystemIcon,
+    SettingsDarknessIcon,
+    SettingsAboutIcon,
+    SettingsDebugIcon,
     /// Plus glyph (context menu: larger icon). Drawn by kind 16.
     Plus,
     /// Minus glyph (context menu: smaller icon). Drawn by kind 17.

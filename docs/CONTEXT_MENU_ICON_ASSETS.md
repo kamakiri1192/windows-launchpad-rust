@@ -172,11 +172,31 @@ cargo run --release --example generate_logo_sdf -- \
 
 ### アトラス化（`texture_2d_array`）
 
-複数ロゴを個別テクスチャ＋サンプラーで持つと binding がロゴ数分増え、`rebind_text_atlas` のメンテも重くなる。そのため ChatGPT（layer 0）と Steam（layer 1）を **1枚の 2D 配列テクスチャ** にパックする。ロゴを足すときは layer を増やすだけで binding 数は不変。
+複数アイコンを個別テクスチャ＋サンプラーで持つと binding がアイコン数分増え、`rebind_text_atlas` のメンテも重くなる。そのためブランドロゴと設定カテゴリ用アイコンを **1枚の 2D 配列テクスチャ** にパックする。アイコンを足すときは layer を増やすだけで binding 数は不変。
 
-- `src/renderer/init.rs::create_logo_sdf_atlas` が `CHATGPT_LOGO_SDF_PNG` / `STEAM_LOGO_SDF_PNG` をデコードし、`R8Unorm` の `texture_2d_array`（layer 2 枚）へ書き込む
+- `src/renderer/init.rs::create_logo_sdf_atlas` が各SDF PNGをデコードし、`R8Unorm` の `texture_2d_array`（layer 8 枚）へ書き込む
 - control bind group の **binding 3** がこのアトラス（`D2Array` ビュー）、**binding 4** がサンプラー。従来の binding 3〜6（ロゴ別のテクスチャ＋サンプラー2組）は廃止
 - `rebind_text_atlas`（`src/renderer/text.rs`）は layout が5 binding になったので、グリフアトラス拡張時の再構築でも **binding 3/4 を必ず含める**（従来の落とし穴と同じ。省略すると validation panic）
+
+現在のレイヤーとWGSL kindの対応は次の通り。
+
+| layer | kind | 用途 |
+| ---: | ---: | --- |
+| 0 | 19 | ChatGPT |
+| 1 | 20 | Steam |
+| 2 | 21 | 設定: アプリ |
+| 3 | 22 | 設定: 表示と検索 |
+| 4 | 23 | 設定: システム |
+| 5 | 24 | 設定: Darkness |
+| 6 | 25 | 設定: このアプリについて |
+| 7 | 26 | 設定: デバッグ |
+
+設定カテゴリ用の生成元は `assets/icons/settings-*.png`、JFAで変換した実行時アセットは `assets/icons/settings-*-sdf.png` に置く。生成元は透過背景の黒い単色シルエットにし、同じコマンドで128×128のSDFへ変換する。
+
+```sh
+cargo run --release --example generate_logo_sdf -- \
+    assets/icons/settings-apps.png assets/icons/settings-apps-sdf.png 128
+```
 
 ### シェーダーでの輪郭再構築
 
@@ -191,4 +211,3 @@ coverage = clamp((d - 0.5) * 2.0 / max(aa, 0.0001), 0.0, 1.0);
 ```
 
 インスタンス色で着色するため RGB 色保持は不要（記事のカラーテクスチャ処理は省略）。ロゴを追加するときは `examples/generate_logo_sdf.rs` で SDF を生成 → `include_bytes!` 定数を足す → `create_logo_sdf_atlas` の layers とループを更新 → `ControlKind` / kind 値 / WGSL の layer を増やす。
-

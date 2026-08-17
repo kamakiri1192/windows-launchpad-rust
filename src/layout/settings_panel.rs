@@ -35,17 +35,20 @@ const PANEL_H: f32 = 540.0;
 const PANEL_OUTER_MARGIN: f32 = 24.0;
 const PANEL_RADIUS: f32 = 26.0;
 const HEADER_TOP: f32 = 20.0;
-const DISMISS_BUTTON_W: f32 = 52.0;
-const DISMISS_BUTTON_H: f32 = 28.0;
-const DISMISS_BUTTON_TOP: f32 = 16.0;
-const DISMISS_BUTTON_RIGHT: f32 = 18.0;
-const DISMISS_LABEL_SIZE: f32 = 13.0;
+const RETURN_BUTTON_W: f32 = 112.0;
+const RETURN_BUTTON_H: f32 = 30.0;
+const RETURN_BUTTON_TOP: f32 = 15.0;
+const RETURN_BUTTON_RIGHT: f32 = 16.0;
+const RETURN_LABEL_SIZE: f32 = 12.0;
 const DIVIDER_TOP: f32 = 12.0;
 const DIVIDER_BOTTOM: f32 = 28.0;
-const SIDEBAR_W: f32 = 192.0;
+const SIDEBAR_W: f32 = 220.0;
 const SIDEBAR_TOP: f32 = 12.0;
 const SIDEBAR_ROW_H: f32 = 36.0;
 const SIDEBAR_STEP: f32 = 38.0;
+const SIDEBAR_ICON_EXTENT: f32 = 11.0;
+const SIDEBAR_ICON_CENTER_X: f32 = 23.0;
+const SIDEBAR_LABEL_X: f32 = 44.0;
 const CONTENT_PAD: f32 = 32.0;
 const CONTENT_TOP: f32 = 68.0;
 const ROW_H: f32 = 46.0;
@@ -132,6 +135,17 @@ impl SettingsCategoryId {
             Self::Darkness => 3,
             Self::About => 4,
             Self::Debug => 5,
+        }
+    }
+
+    pub const fn icon_kind(self) -> ControlKind {
+        match self {
+            Self::Apps => ControlKind::SettingsAppsIcon,
+            Self::Search => ControlKind::SettingsSearchIcon,
+            Self::System => ControlKind::SettingsSystemIcon,
+            Self::Darkness => ControlKind::SettingsDarknessIcon,
+            Self::About => ControlKind::SettingsAboutIcon,
+            Self::Debug => ControlKind::SettingsDebugIcon,
         }
     }
 }
@@ -394,18 +408,18 @@ impl SettingsPanelLayout {
         (self.content_right(scale) - left, ROW_H * scale)
     }
 
-    pub fn dismiss_rect(&self, scale: f32) -> Rect {
-        let width = DISMISS_BUTTON_W * scale;
+    pub fn return_rect(&self, scale: f32) -> Rect {
+        let width = RETURN_BUTTON_W * scale;
         Rect::new(
-            self.panel_right() - DISMISS_BUTTON_RIGHT * scale - width,
-            self.top + DISMISS_BUTTON_TOP * scale,
+            self.panel_right() - RETURN_BUTTON_RIGHT * scale - width,
+            self.top + RETURN_BUTTON_TOP * scale,
             width,
-            DISMISS_BUTTON_H * scale,
+            RETURN_BUTTON_H * scale,
         )
     }
 
     pub fn close_center(&self, scale: f32) -> (f32, f32) {
-        let center = self.dismiss_rect(scale).center();
+        let center = self.return_rect(scale).center();
         (center.x, center.y)
     }
 }
@@ -535,7 +549,7 @@ impl LiquidGlassDebugState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsPanelCopy<'a> {
-    pub dismiss_label: &'a str,
+    pub return_label: &'a str,
     pub categories: [(SettingsCategoryId, &'a str); SettingsCategoryId::COUNT],
     pub sort_orders: [(SortOrderId, &'a str); 4],
     pub sort_label: &'a str,
@@ -645,7 +659,7 @@ pub fn contains(layout: &SettingsPanelLayout, point: Point) -> bool {
 
 pub fn hit_close(layout: &SettingsPanelLayout, scale_factor: f32, point: Point) -> bool {
     let scale = sanitize_scale(scale_factor);
-    layout.dismiss_rect(scale).contains(point)
+    layout.return_rect(scale).contains(point)
 }
 
 /// Build the settings panel using the new Liquid Glass UI foundation
@@ -812,6 +826,22 @@ pub fn build_with_ui(
             z: Z_CONTROL,
             clip: None,
         });
+        ui.push_ink(InkView {
+            id: UiId::settings_row(format!("category-icon-{}", cat_id.key())),
+            center: Point::new(
+                row_rect.x + SIDEBAR_ICON_CENTER_X * scale,
+                row_rect.center().y,
+            ),
+            extent: SIDEBAR_ICON_EXTENT * scale,
+            opacity: 0.82 + 0.14 * selection_amount + 0.04 * hover_amount,
+            scene_blur: 0.0,
+            stroke: 0.0,
+            corner_radius: 0.0,
+            color: Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+            kind: cat_id.icon_kind(),
+            z: Z_CONTROL + 1,
+            clip: None,
+        });
         let id = UiId::settings_row(format!("category-{}", cat_id.key()));
         ui.push_hit(HitRegion::new(
             id.clone(),
@@ -821,7 +851,7 @@ pub fn build_with_ui(
         ));
         ui.begin_absolute_placement();
         ui.set_cursor(
-            row_rect.x + 16.0 * scale,
+            row_rect.x + SIDEBAR_LABEL_X * scale,
             row_top + (SIDEBAR_ROW_H - LABEL_SIZE) * 0.5 * scale,
         );
         ui.set_available_width(sidebar_w);
@@ -870,71 +900,79 @@ pub fn build_with_ui(
             .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
     );
 
-    // This surface is an in-app modal, not a native macOS window. A faux
-    // window-close glyph would imply window chrome that is not present, so use
-    // the familiar modal completion action instead. Escape and backdrop click
-    // remain available as secondary dismissal paths.
-    let dismiss_rect = layout.dismiss_rect(scale);
-    let dismiss_hovered = input
+    // This is navigation within the launcher rather than a task-completion
+    // dialog. Name the destination instead of asking people to "close" or
+    // "finish" settings; the four tiles reinforce the spatial return to the
+    // launchpad behind this card.
+    let return_rect = layout.return_rect(scale);
+    let return_hovered = input
         .pointer_pos
-        .is_some_and(|point| dismiss_rect.contains(point));
-    let dismiss_opacity = if dismiss_hovered && input.pointer_pressed {
+        .is_some_and(|point| return_rect.contains(point));
+    let return_opacity = if return_hovered && input.pointer_pressed {
         0.18
-    } else if dismiss_hovered {
-        0.10
+    } else if return_hovered {
+        0.12
     } else {
-        0.0
+        0.06
     };
     ui.push_ink(InkView {
-        id: UiId::settings_row("dismiss-background"),
-        center: dismiss_rect.center(),
-        extent: dismiss_rect.height * 0.5,
-        opacity: dismiss_opacity,
+        id: UiId::settings_row("return-background"),
+        center: return_rect.center(),
+        extent: return_rect.height * 0.5,
+        opacity: return_opacity,
         scene_blur: 0.0,
-        stroke: dismiss_rect.width * 0.5,
-        corner_radius: 8.0 * scale,
-        color: Color::rgba(
-            SYSTEM_BLUE_RGB[0],
-            SYSTEM_BLUE_RGB[1],
-            SYSTEM_BLUE_RGB[2],
-            1.0,
-        ),
+        stroke: return_rect.width * 0.5,
+        corner_radius: return_rect.height * 0.5,
+        color: Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
         kind: ControlKind::RowBackground,
         z: Z_CONTROL,
         clip: None,
     });
     ui.push_hit(HitRegion::new(
         UiId::settings_close(),
-        dismiss_rect,
+        return_rect,
         SettingsPanelHit::Close.target(),
         Z_CONTROL + 2,
     ));
+    ui.push_ink(InkView {
+        id: UiId::settings_row("return-icon"),
+        center: Point::new(return_rect.x + 18.0 * scale, return_rect.center().y),
+        extent: 7.0 * scale,
+        opacity: 0.78,
+        scene_blur: 0.0,
+        stroke: 0.0,
+        corner_radius: 0.0,
+        color: Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+        kind: ControlKind::SettingsAppsIcon,
+        z: Z_CONTROL + 1,
+        clip: None,
+    });
     ui.begin_absolute_placement();
     ui.set_cursor(
-        dismiss_rect.x,
-        dismiss_rect.y + (dismiss_rect.height - DISMISS_LABEL_SIZE * scale) * 0.5,
+        return_rect.x + 30.0 * scale,
+        return_rect.y + (return_rect.height - RETURN_LABEL_SIZE * scale) * 0.5,
     );
-    ui.set_available_width(dismiss_rect.width);
+    ui.set_available_width(return_rect.width - 36.0 * scale);
     ui.label(
-        &Label::new(copy.dismiss_label)
-            .id(UiId::settings_row("dismiss-label"))
+        &Label::new(copy.return_label)
+            .id(UiId::settings_row("return-label"))
             .style(TextStyle::new(
                 TextRole::SettingsRow,
-                DISMISS_LABEL_SIZE,
+                RETURN_LABEL_SIZE,
                 Color::rgba(
-                    SYSTEM_BLUE_RGB[0],
-                    SYSTEM_BLUE_RGB[1],
-                    SYSTEM_BLUE_RGB[2],
-                    1.0,
+                    MENU_LABEL_RGB[0],
+                    MENU_LABEL_RGB[1],
+                    MENU_LABEL_RGB[2],
+                    0.82,
                 ),
                 TextWeight::Medium,
                 TextAlign::Center,
             ))
             .color([
-                SYSTEM_BLUE_RGB[0],
-                SYSTEM_BLUE_RGB[1],
-                SYSTEM_BLUE_RGB[2],
-                1.0,
+                MENU_LABEL_RGB[0],
+                MENU_LABEL_RGB[1],
+                MENU_LABEL_RGB[2],
+                0.82,
             ]),
     );
 
@@ -1644,7 +1682,7 @@ mod tests {
 
     fn copy<'a>(hidden_count_label: &'a str) -> SettingsPanelCopy<'a> {
         SettingsPanelCopy {
-            dismiss_label: "Done",
+            return_label: "Back to Launchpad",
             categories: [
                 (SettingsCategoryId::Apps, "Apps"),
                 (SettingsCategoryId::Search, "Search"),
@@ -1777,10 +1815,10 @@ mod tests {
         assert_eq!(layout.hh, 270.0);
         assert_eq!(layout.left, 240.0);
         assert_eq!(layout.top, 130.0);
-        assert_eq!(layout.sidebar_w, 192.0);
-        assert_eq!(layout.right_left, 432.0);
-        assert_eq!(layout.row_size(1.0).0, 544.0);
-        assert!((layout.sidebar_w / (layout.hw * 2.0) - 0.24).abs() < f32::EPSILON);
+        assert_eq!(layout.sidebar_w, 220.0);
+        assert_eq!(layout.right_left, 460.0);
+        assert_eq!(layout.row_size(1.0).0, 516.0);
+        assert!((layout.sidebar_w / (layout.hw * 2.0) - 0.275).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1953,7 +1991,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_heading_and_dismiss_action_follow_shared_alignment_lines() {
+    fn navigation_heading_and_launcher_return_follow_shared_alignment_lines() {
         let inp = input(SettingsCategoryId::Apps);
         let c = copy("0");
         let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
@@ -1968,10 +2006,10 @@ mod tests {
         let heading = find_text("category-heading");
         let sidebar_apps = find_text("category-apps");
         let sort_label = find_text("text-sort-label");
-        let dismiss_label = find_text("dismiss-label");
+        let return_label = find_text("return-label");
 
         assert_eq!(sidebar_apps.rect.center().y, heading.rect.center().y);
-        assert_eq!(dismiss_label.rect.center().y, heading.rect.center().y);
+        assert_eq!(return_label.rect.center().y, heading.rect.center().y);
         assert_eq!(heading.rect.x, sort_label.rect.x);
         assert!(!text
             .iter()
@@ -1985,6 +2023,32 @@ mod tests {
             let previous = sidebar_row_top(&layout, index - 1, 1.0);
             let current = sidebar_row_top(&layout, index, 1.0);
             assert!((current - previous - SIDEBAR_STEP).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn sidebar_categories_emit_matching_sdf_icons() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let settings_ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .expect("settings ink batch");
+
+        for category in SettingsCategoryId::ALL {
+            let icon = settings_ink
+                .views
+                .iter()
+                .find(|view| {
+                    view.id == UiId::settings_row(format!("category-icon-{}", category.key()))
+                })
+                .unwrap_or_else(|| panic!("missing category icon: {}", category.key()));
+            assert_eq!(icon.kind, category.icon_kind());
         }
     }
 
@@ -2315,13 +2379,13 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Dismiss button
+    // Return-to-launcher button
     // ------------------------------------------------------------------
 
     #[test]
-    fn hit_close_matches_the_visible_done_button() {
+    fn hit_close_matches_the_visible_launcher_return_button() {
         let layout = layout();
-        let rect = layout.dismiss_rect(1.0);
+        let rect = layout.return_rect(1.0);
 
         assert!(hit_close(&layout, 1.0, rect.center()));
         assert!(hit_close(&layout, 1.0, Point::new(rect.x, rect.center().y)));
@@ -2333,11 +2397,11 @@ mod tests {
     }
 
     #[test]
-    fn hit_close_scales_done_button_with_dpi() {
+    fn hit_close_scales_launcher_return_button_with_dpi() {
         let layout = layout();
-        let rect = layout.dismiss_rect(1.5);
-        assert_eq!(rect.width, DISMISS_BUTTON_W * 1.5);
-        assert_eq!(rect.height, DISMISS_BUTTON_H * 1.5);
+        let rect = layout.return_rect(1.5);
+        assert_eq!(rect.width, RETURN_BUTTON_W * 1.5);
+        assert_eq!(rect.height, RETURN_BUTTON_H * 1.5);
         assert!(hit_close(&layout, 1.5, rect.center()));
     }
 
