@@ -11,16 +11,18 @@
 //! take down the rest of the batch — panics are caught and reported as a
 //! [`IconResult::Failed`] for that id.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
 use crate::domain::app_id::AppId;
 use crate::icon_cache::{self, CachedIcon, IconCache};
+use crate::icons::adaptive_normalize;
 #[cfg(windows)]
 use crate::icons::extract::{self, ComScope};
-use crate::icons::normalize::{normalize, DecodedIcon};
+use crate::icons::normalize::DecodedIcon;
+use crate::icons::scale_model::{default_model_dir, ScalePolicy, POLICY_REVISION_FILE_NAME};
 use crate::startup_timer::{self, prefix};
 
 /// Why we're asking for an icon. Drives logging only.
@@ -67,16 +69,80 @@ pub struct WorkerHandle {
 /// Spawn the icon worker. Shares the cache via `Arc<IconCache>` (SQLite handles
 /// its own locking). Returns the request sender; results arrive on `results`.
 pub fn spawn(cache: Arc<IconCache>, results: Sender<IconResult>) -> WorkerHandle {
+    let policy_dir = cache
+        .path()
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty() && cache.path() != Path::new(":memory:"))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_model_dir);
+    let scale_policy = Arc::new(ScalePolicy::load_from_dir(&policy_dir));
+    ensure_policy_revision(&cache, &policy_dir, &scale_policy);
+
     let (tx, rx): (Sender<IconRequest>, Receiver<IconRequest>) = mpsc::channel();
     thread::Builder::new()
         .name("icon-worker".to_string())
-        .spawn(move || worker_loop(rx, cache, results))
+        .spawn(move || worker_loop(rx, cache, scale_policy, results))
         .expect("spawn icon-worker");
 
     WorkerHandle { requests: tx }
 }
 
-fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender<IconResult>) {
+fn ensure_policy_revision(cache: &IconCache, policy_dir: &Path, policy: &ScalePolicy) {
+    if cache.path() == Path::new(":memory:") {
+        return;
+    }
+    if let Err(error) = std::fs::create_dir_all(policy_dir) {
+        eprintln!(
+            "icon-scale: could not create policy directory {}: {error}",
+            policy_dir.display()
+        );
+        return;
+    }
+
+    let marker_path = policy_dir.join(POLICY_REVISION_FILE_NAME);
+    let stored_revision = std::fs::read_to_string(&marker_path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let current_revision = policy.revision();
+    if stored_revision == Some(current_revision) {
+        return;
+    }
+
+    // A missing marker with no model/overrides is the legacy rule-only state;
+    // record it without forcing a pointless first-run re-extraction. Any real
+    // policy transition invalidates the baked 128×128 cache pixels.
+    if stored_revision.is_some() || current_revision != 0 {
+        match cache.clear_all() {
+            Ok(count) => {
+                eprintln!("icon-scale: policy revision changed; invalidated {count} cached icons")
+            }
+            Err(error) => {
+                // Do not advance the marker. The next launch must retry the
+                // invalidation instead of accepting stale, already-baked pixels.
+                eprintln!("icon-scale: cache invalidation failed: {error}");
+                return;
+            }
+        }
+    }
+    if let Err(error) = std::fs::write(&marker_path, current_revision.to_string()) {
+        eprintln!(
+            "icon-scale: could not write policy marker {}: {error}",
+            marker_path.display()
+        );
+    }
+    eprintln!(
+        "icon-scale: loaded model={} manual_overrides={}",
+        policy.has_model(),
+        policy.override_count()
+    );
+}
+
+fn worker_loop(
+    rx: Receiver<IconRequest>,
+    cache: Arc<IconCache>,
+    scale_policy: Arc<ScalePolicy>,
+    results: Sender<IconResult>,
+) {
     // COM lives for the whole thread. STA matches the shell's expectations.
     #[cfg(windows)]
     let _com = ComScope::new();
@@ -115,7 +181,7 @@ fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender
                 // Process inside a catch_unwind so a panic in extraction can't
                 // kill the worker (and leave the UI waiting forever).
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    process_one(&req, &cache, &timer)
+                    process_one(&req, &cache, &scale_policy, &timer)
                 }));
                 batch_extract_ms += extract_t0.elapsed().as_millis();
                 batch_count += 1;
@@ -168,6 +234,7 @@ fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender
 fn process_one(
     req: &IconRequest,
     cache: &IconCache,
+    scale_policy: &ScalePolicy,
     timer: &startup_timer::StartupTimer,
 ) -> Result<DecodedIcon, String> {
     // (1) Extraction: Shell/GDI/COM → raw RGBA. This is the expensive part.
@@ -187,13 +254,20 @@ fn process_one(
         )
     });
 
-    // (2) Normalization: resize → TARGET×TARGET straight-alpha square.
+    // (2) Normalization: features + policy → one resize into TARGET×TARGET.
     let normalize_start = std::time::Instant::now();
-    let image = normalize(&raw);
+    let source_path = req.link_path.to_string_lossy();
+    let image = adaptive_normalize::normalize_for_app(
+        &raw,
+        req.app_id.as_ref(),
+        &source_path,
+        scale_policy,
+    );
     timer.mark_with(prefix::ICON_WORKER, "normalized icon", || {
         format!(
-            "app_id={} ({}ms)",
+            "app_id={} scale={:.3} ({}ms)",
             req.app_id,
+            image.scale,
             normalize_start.elapsed().as_millis()
         )
     });
