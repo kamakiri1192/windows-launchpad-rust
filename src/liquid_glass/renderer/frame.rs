@@ -1,12 +1,16 @@
 //! Liquid Glass frame and lane render-pass orchestration.
 
+use crate::renderer::gpu_profile::GpuProfilerState;
+
 use super::*;
 
 impl LiquidGlassRenderer {
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scroll_x: f32,
@@ -47,7 +51,7 @@ impl LiquidGlassRenderer {
                     }
                     GpuCaptureFrame::Ephemeral(frame) => {
                         let upload_started = Instant::now();
-                        captured = self.copy_ephemeral_gpu_backdrop(device, queue, frame);
+                        captured = self.copy_ephemeral_gpu_backdrop(device, queue, profiler, frame);
                         upload_time = upload_started.elapsed();
                     }
                     GpuCaptureFrame::Updated => {
@@ -89,6 +93,9 @@ impl LiquidGlassRenderer {
                 capture_time = capture_started.elapsed();
             }
             self.last_capture_at = Some(Instant::now());
+        }
+        if captured {
+            self.capture_sequence = self.capture_sequence.wrapping_add(1);
         }
         let next_status = self.capture.status();
         if next_status != self.capture_status {
@@ -143,6 +150,7 @@ impl LiquidGlassRenderer {
             );
             blur_commands.extend(encode_blur_profile(
                 device,
+                profiler,
                 &self.blur_downsample_pipeline,
                 &self.blur_upsample_pipeline,
                 &self.blur_levels,
@@ -151,6 +159,8 @@ impl LiquidGlassRenderer {
                 &self.blur_up_bind_groups,
                 global_blur.level_count,
                 "liquid glass global blur",
+                GLOBAL_BLUR_DOWN_SCOPES,
+                GLOBAL_BLUR_UP_SCOPES,
             ));
         }
         if !blur_commands.is_empty() {
@@ -808,17 +818,25 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         pre_menu_scene: &wgpu::Texture,
     ) {
         if !self.has_context_menu_glass() {
             return;
         }
+        let bounds = completed_scene_screen_bounds(
+            &self.context_menu_shapes,
+            self.texture_size.0,
+            self.texture_size.1,
+        );
         self.prepare_completed_scene_blur(
             device,
             queue,
+            profiler,
             pre_menu_scene,
             self.context_menu_blur_radius
                 .unwrap_or(self.params.blur_radius),
+            bounds,
         );
     }
 
@@ -828,17 +846,25 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         pre_settings_scene: &wgpu::Texture,
     ) {
         if !self.has_settings_panel_glass() {
             return;
         }
+        let bounds = completed_scene_screen_bounds(
+            &self.settings_panel_shapes,
+            self.texture_size.0,
+            self.texture_size.1,
+        );
         self.prepare_completed_scene_blur(
             device,
             queue,
+            profiler,
             pre_settings_scene,
             self.settings_panel_blur_radius
                 .unwrap_or(self.params.blur_radius),
+            bounds,
         );
     }
 
@@ -846,10 +872,13 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
         pre_scene: &wgpu::Texture,
         blur_radius: f32,
+        screen_bounds: Option<[f32; 4]>,
     ) {
         let (viewport_width, viewport_height) = self.texture_size;
+        let roi = self.completed_scene_roi(screen_bounds, blur_radius);
         queue.write_buffer(
             &self.context_menu_flatten_uniform_buffer,
             0,
@@ -871,30 +900,42 @@ impl LiquidGlassRenderer {
         let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass context menu pre-menu scene copy encoder"),
         });
+        let copy_scope = profiler.begin("completed_scene_copy", &mut copy_encoder);
         copy_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: pre_scene,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d {
+                    x: roi.copy.0,
+                    y: roi.copy.1,
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
                 texture: &self.context_menu_scene_texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d {
+                    x: roi.copy.0,
+                    y: roi.copy.1,
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: viewport_width,
-                height: viewport_height,
+                width: roi.copy.2,
+                height: roi.copy.3,
                 depth_or_array_layers: 1,
             },
         );
+        profiler.end(&mut copy_encoder, copy_scope);
+        profiler.resolve(&mut copy_encoder);
         commands.push(copy_encoder.finish());
 
         let mut flatten_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass context menu scene flatten encoder"),
         });
+        let flatten_scope = profiler.begin("completed_scene_flatten", &mut flatten_encoder);
         {
             let mut pass = flatten_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass context menu scene flatten pass"),
@@ -912,10 +953,13 @@ impl LiquidGlassRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            pass.set_scissor_rect(roi.blur.0, roi.blur.1, roi.blur.2, roi.blur.3);
             pass.set_pipeline(&self.context_menu_flatten_pipeline);
             pass.set_bind_group(0, &self.context_menu_flatten_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(&mut flatten_encoder, flatten_scope);
+        profiler.resolve(&mut flatten_encoder);
         commands.push(flatten_encoder.finish());
 
         let profile = self.blur_profile(blur_radius);
@@ -930,6 +974,7 @@ impl LiquidGlassRenderer {
             );
             commands.extend(encode_blur_profile(
                 device,
+                profiler,
                 &self.blur_downsample_pipeline,
                 &self.blur_upsample_pipeline,
                 &self.blur_levels,
@@ -938,9 +983,119 @@ impl LiquidGlassRenderer {
                 &self.context_menu_blur_up_bind_groups,
                 profile.level_count,
                 "liquid glass context menu completed-scene blur",
+                COMPLETED_BLUR_DOWN_SCOPES,
+                COMPLETED_BLUR_UP_SCOPES,
             ));
         }
         queue.submit(commands);
+    }
+
+    /// Compute the region-of-interest rectangles for a completed-scene chain
+    /// so the copy and flatten passes only touch pixels the lane's glass can
+    /// sample, instead of the whole frame on every open frame.
+    fn completed_scene_roi(
+        &self,
+        screen_bounds: Option<[f32; 4]>,
+        blur_radius: f32,
+    ) -> CompletedSceneRoi {
+        let (viewport_width, viewport_height) = self.texture_size;
+        let texture_size = (
+            self.backdrop_mapping.texture_size.0.max(1),
+            self.backdrop_mapping.texture_size.1.max(1),
+        );
+        let region = &self.backdrop_mapping.region;
+
+        let full = CompletedSceneRoi {
+            copy: (0, 0, viewport_width, viewport_height),
+            blur: (0, 0, texture_size.0, texture_size.1),
+        };
+        let Some(bounds) = screen_bounds else {
+            return full;
+        };
+
+        // The final glass shader samples the blurred scene beyond the shape
+        // bounds (refraction, reflection, chromatic split); the capture-region
+        // padding models that reach for the same shaders.
+        let pad = capture_sampling_padding(
+            &self.params,
+            blur_radius,
+            self.debug,
+            viewport_width,
+            viewport_height,
+        );
+        let screen = [
+            bounds[0] - pad,
+            bounds[1] - pad,
+            bounds[2] + pad,
+            bounds[3] + pad,
+        ];
+
+        // Map into capture-texture space and grow by the dual-Kawase kernel
+        // reach so texels near the shapes see the same neighborhood a
+        // full-frame blur would give them. The pyramid passes themselves stay
+        // full-frame (scissored fullscreen passes proved unreliable on this
+        // wgpu/Metal combination), so this padding protects the scissored
+        // flatten pass feeding them.
+        let scale_x = texture_size.0 as f32 / region.width.max(1) as f32;
+        let scale_y = texture_size.1 as f32 / region.height.max(1) as f32;
+        let profile = self.blur_profile(blur_radius);
+        let blur_enabled = !self.debug.disable_blur && profile.level_count > 0;
+        let kernel_pad = if blur_enabled {
+            (profile.sample_scale.max(1.0) * 48.0).ceil() as u32 + 8
+        } else {
+            2
+        };
+        let capture_min_x = (screen[0] - region.x as f32) * scale_x - kernel_pad as f32;
+        let capture_min_y = (screen[1] - region.y as f32) * scale_y - kernel_pad as f32;
+        let capture_max_x = (screen[2] - region.x as f32) * scale_x + kernel_pad as f32;
+        let capture_max_y = (screen[3] - region.y as f32) * scale_y + kernel_pad as f32;
+
+        // 16 px alignment keeps the flatten pass on the same sampling phase a
+        // full-frame pass would use, so written texels stay identical.
+        const ALIGN: u32 = 16;
+        let x = ((capture_min_x.max(0.0).floor() as u32) / ALIGN) * ALIGN;
+        let y = ((capture_min_y.max(0.0).floor() as u32) / ALIGN) * ALIGN;
+        let right = ((capture_max_x.clamp(0.0, texture_size.0 as f32).ceil() as u32)
+            .div_ceil(ALIGN)
+            * ALIGN)
+            .min(texture_size.0);
+        let bottom = ((capture_max_y.clamp(0.0, texture_size.1 as f32).ceil() as u32)
+            .div_ceil(ALIGN)
+            * ALIGN)
+            .min(texture_size.1);
+        let blur = (
+            x.min(texture_size.0 - 1),
+            y.min(texture_size.1 - 1),
+            right.saturating_sub(x).max(1),
+            bottom.saturating_sub(y).max(1),
+        );
+
+        // The flatten pass reads the pre-scene surface exactly where its
+        // scissored capture pixels map, so copy at least that inverse mapping.
+        let inv_x = |cx: f32| region.x as f32 + cx / texture_size.0 as f32 * region.width as f32;
+        let inv_y = |cy: f32| region.y as f32 + cy / texture_size.1 as f32 * region.height as f32;
+        let copy_x = inv_x(blur.0 as f32)
+            .floor()
+            .clamp(0.0, viewport_width.saturating_sub(1) as f32) as u32;
+        let copy_y = inv_y(blur.1 as f32)
+            .floor()
+            .clamp(0.0, viewport_height.saturating_sub(1) as f32) as u32;
+        let copy_right = (inv_x((blur.0 + blur.2) as f32)
+            .ceil()
+            .clamp(1.0, viewport_width as f32) as u32)
+            .max(copy_x + 1);
+        let copy_bottom = (inv_y((blur.1 + blur.3) as f32)
+            .ceil()
+            .clamp(1.0, viewport_height as f32) as u32)
+            .max(copy_y + 1);
+        let copy = (
+            copy_x,
+            copy_y,
+            copy_right.saturating_sub(copy_x).min(viewport_width),
+            copy_bottom.saturating_sub(copy_y).min(viewport_height),
+        );
+
+        CompletedSceneRoi { copy, blur }
     }
 
     /// Render the context-menu glass. Drawn after the modal/settings glass so
@@ -1040,13 +1195,45 @@ impl LiquidGlassRenderer {
     }
 }
 
+/// GPU profiler scope names for the shared pyramid users. Global = backdrop
+/// pyramid; completed = context-menu/settings completed-scene blur.
+const GLOBAL_BLUR_DOWN_SCOPES: [&str; 3] = [
+    "global_blur_down_1",
+    "global_blur_down_2",
+    "global_blur_down_3",
+];
+const GLOBAL_BLUR_UP_SCOPES: [&str; 3] =
+    ["global_blur_up_1", "global_blur_up_2", "global_blur_up_3"];
+const COMPLETED_BLUR_DOWN_SCOPES: [&str; 3] = [
+    "completed_blur_down_1",
+    "completed_blur_down_2",
+    "completed_blur_down_3",
+];
+const COMPLETED_BLUR_UP_SCOPES: [&str; 3] = [
+    "completed_blur_up_1",
+    "completed_blur_up_2",
+    "completed_blur_up_3",
+];
+
+/// Screen- and capture-space rectangles that limit the completed-scene
+/// copy/flatten/blur chain to the pixels a lane's glass can actually sample.
+#[derive(Clone, Copy, Debug)]
+struct CompletedSceneRoi {
+    /// Viewport-space (x, y, w, h) copied from the pre-scene surface.
+    copy: (u32, u32, u32, u32),
+    /// Capture-space (x, y, w, h) for the flatten output and blur pyramid.
+    blur: (u32, u32, u32, u32),
+}
+
 /// Build one complete downsample + upsample chain into a full-resolution
 /// output. The shared pyramid is only scratch storage; callers must bind the
 /// returned `output` texture in the final material pass, never an intermediate
 /// level from `levels`.
+///
 #[allow(clippy::too_many_arguments)]
 fn encode_blur_profile(
     device: &wgpu::Device,
+    profiler: &mut GpuProfilerState,
     downsample_pipeline: &wgpu::RenderPipeline,
     upsample_pipeline: &wgpu::RenderPipeline,
     levels: &[(wgpu::Texture, wgpu::TextureView); 3],
@@ -1055,6 +1242,8 @@ fn encode_blur_profile(
     up_bind_groups: &[wgpu::BindGroup; 3],
     level_count: usize,
     label_prefix: &str,
+    down_scopes: [&'static str; 3],
+    up_scopes: [&'static str; 3],
 ) -> Vec<wgpu::CommandBuffer> {
     debug_assert!((1..=3).contains(&level_count));
     let mut commands = Vec::with_capacity(level_count * 2);
@@ -1064,6 +1253,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
+        let profile_scope = profiler.begin(down_scopes[i], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1085,6 +1275,8 @@ fn encode_blur_profile(
             pass.set_bind_group(0, &down_bind_groups[i], &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(&mut encoder, profile_scope);
+        profiler.resolve(&mut encoder);
         commands.push(encoder.finish());
     }
 
@@ -1103,6 +1295,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
+        let profile_scope = profiler.begin(up_scopes[j], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1124,8 +1317,39 @@ fn encode_blur_profile(
             pass.set_bind_group(0, &up_bind_groups[bind_index], &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(&mut encoder, profile_scope);
+        profiler.resolve(&mut encoder);
         commands.push(encoder.finish());
     }
 
     commands
+}
+
+/// Union of a lane's shape bounds in screen space, clipped to the viewport.
+/// Screen-fixed lanes (context menu, settings panel) pass a scroll of zero.
+fn completed_scene_screen_bounds(
+    shapes: &[GlassShape],
+    width: u32,
+    height: u32,
+) -> Option<[f32; 4]> {
+    let viewport = [0.0, 0.0, width.max(1) as f32, height.max(1) as f32];
+    let mut union: Option<[f32; 4]> = None;
+    for shape in shapes {
+        if shape.is_clip_only() {
+            continue;
+        }
+        let Some(bounds) = intersect_bounds(shape.screen_bounds(0.0), viewport) else {
+            continue;
+        };
+        union = Some(match union {
+            Some(current) => [
+                current[0].min(bounds[0]),
+                current[1].min(bounds[1]),
+                current[2].max(bounds[2]),
+                current[3].max(bounds[3]),
+            ],
+            None => bounds,
+        });
+    }
+    union
 }

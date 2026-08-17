@@ -1,0 +1,107 @@
+{
+  "name": "5k-settings",
+  "viewport": [
+    5120,
+    2880
+  ],
+  "fps": 60,
+  "duration_ms": 4000,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      {
+        "id": "qa-4k-settings-0",
+        "name": "Settings Fixture 0"
+      },
+      {
+        "id": "qa-4k-settings-1",
+        "name": "Settings Fixture 1"
+      },
+      {
+        "id": "qa-4k-settings-2",
+        "name": "Settings Fixture 2"
+      },
+      {
+        "id": "qa-4k-settings-3",
+        "name": "Settings Fixture 3"
+      }
+    ],
+    "folders": [],
+    "items": [
+      {
+        "kind": "app",
+        "id": "qa-4k-settings-0"
+      },
+      {
+        "kind": "app",
+        "id": "qa-4k-settings-1"
+      },
+      {
+        "kind": "app",
+        "id": "qa-4k-settings-2"
+      },
+      {
+        "kind": "app",
+        "id": "qa-4k-settings-3"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 300,
+      "type": "move",
+      "target": {
+        "kind": "grid_item",
+        "index": 0
+      }
+    },
+    {
+      "at_ms": 400,
+      "type": "long_press"
+    },
+    {
+      "at_ms": 2200,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 2006.0,
+        "y": 1546.0
+      }
+    },
+    {
+      "at_ms": 2300,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2800,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 1920.0,
+        "y": 1080.0
+      }
+    },
+    {
+      "at_ms": 3200,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 1920.0,
+        "y": 1080.0
+      }
+    },
+    {
+      "at_ms": 3600,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 1920.0,
+        "y": 1080.0
+      }
+    }
+  ]
+}

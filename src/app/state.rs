@@ -307,6 +307,11 @@ pub struct App {
     /// the per-frame layout path doesn't re-run `format!` every frame. Cleared
     /// when the menu is dismissed.
     pub context_menu_target_key: Option<String>,
+    /// Retained open-panel-space context-menu layout + label shaping, keyed on
+    /// everything except the animated values (target, panel size, quantized
+    /// font size, DPI). Steady frames re-map the cached geometry through the
+    /// live animation instead of rebuilding the model and re-shaping text.
+    pub(crate) context_menu_layout_cache: Option<crate::app::render::ContextMenuLayoutCache>,
 
     // ---- bottom-center morphing control (search pill / page indicator /
     // search field) ----
@@ -318,6 +323,10 @@ pub struct App {
     pub cached_query_width: Option<f32>,
     /// Measured laid-out width (physical px) of the edit-mode Done label.
     pub cached_done_width: Option<f32>,
+    /// Retained shaping for the bottom-control text lines (label, query,
+    /// placeholder, preedit, Done). Rebuilt only when the text, DPI scale, or
+    /// on-screen anchors change; steady-state frames reuse the quads.
+    pub(crate) control_text_cache: Option<crate::app::render::ControlTextCache>,
     /// 0 = normal bottom control width, 1 = edit-mode Done width.
     pub edit_control_progress: f32,
     /// Last settled page index, used to detect page changes for the indicator.
@@ -477,9 +486,11 @@ impl App {
             context_menu_layout: None,
             context_menu_open_width_logical: crate::layout::context_menu::FALLBACK_MAX_LABEL_WIDTH,
             context_menu_target_key: None,
+            context_menu_layout_cache: None,
             control: crate::features::bottom_control::BottomControl::new(),
             cached_query_width: None,
             cached_done_width: None,
+            control_text_cache: None,
             edit_control_progress: 0.0,
             last_page: 0,
             pointer_over_control: false,

@@ -10,11 +10,20 @@ use crate::domain::app_id::AppId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::features::context_menu::MenuTarget;
 use crate::layout::context_menu::{
-    self, open_panel_origin, open_panel_size_logical, ContextMenuInput,
+    self, open_panel_origin, open_panel_size_logical, ContextMenuInput, ContextMenuItemRow,
+    ContextMenuModel, CONTEXT_MENU_BASE_BLUR, CONTEXT_MENU_HOVER_RGB, CONTEXT_MENU_TINT_ALPHA,
+    FOCUS_ROW_OPACITY, FOCUS_ROW_VERTICAL_INSET,
 };
-use crate::renderer::text_engine::{self, GlyphQuad, UI_FONT_FAMILY};
-use crate::ui_model::geometry::Rect;
-use crate::ui_model::render_model::{GlassLayer, GlyphLane, InkLane};
+use crate::layout::hit_map::{HitMap, HitRegion};
+use crate::layout::LayoutResult;
+use crate::renderer::text_engine::{self, GlyphQuad, TextRenderer, UI_FONT_FAMILY};
+use crate::ui_model::geometry::{Insets, Point, Rect};
+use crate::ui_model::hit::HitTarget;
+use crate::ui_model::ids::UiId;
+use crate::ui_model::render_model::{
+    Color, ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, GlyphLane, InkLane,
+    InkView, RenderModel,
+};
 
 /// Menu font metrics, in logical px at 1× DPI. Match the app-icon label size
 /// (`LABEL_FONT_SIZE` = 14) so the menu reads at the same scale as the grid.
@@ -32,6 +41,357 @@ fn menu_target_flags(target: Option<&LauncherItem>) -> (bool, bool) {
         Some(LauncherItem::Folder(_)) => (true, false),
         Some(LauncherItem::App(id)) => (false, id.is_steam()),
         None => (false, false),
+    }
+}
+
+/// Retained context-menu layout + label shaping.
+///
+/// The menu animates its position, size, corner radius, content scale,
+/// opacity, blur, and activation on every frame while open, but the row set,
+/// fully-open panel size, DPI scale, and quantized label font size only change
+/// when the target changes or the reveal animation steps to a new whole-pixel
+/// font size. Re-running the pure layout build and re-shaping the labels with
+/// cosmic-text on every frame is pure per-frame waste (the shaping alone is a
+/// few hundred µs): this cache stores the open-panel-space row geometry — the
+/// layout, independent of the animation transform — plus the shaped label
+/// quads. Each frame only maps the cached geometry through the live animated
+/// transform (the same math [`layout::context_menu::build`] would apply) and
+/// translates/recolors the cached quads, so a steady frame performs no
+/// allocation-heavy layout and no shaping at all.
+#[derive(Debug)]
+pub(crate) struct ContextMenuLayoutCache {
+    key: ContextMenuLayoutKey,
+    scale: f32,
+    open_w: f32,
+    open_h: f32,
+    row_h: f32,
+    icon_size: f32,
+    /// `ROW_INNER_MARGIN_X` scaled to physical px (private to the layout
+    /// module; captured here so the derivation needs no layout constants).
+    row_inner_margin: f32,
+    rows: Vec<ContextMenuStaticRow>,
+    /// Label glyphs shaped at the cache-build anchors for the cached quantized
+    /// font size. Lazily shaped: the reveal animation starts below the
+    /// visibility threshold.
+    glyphs: Vec<Option<CachedMenuGlyph>>,
+}
+
+/// Everything the cached layout depends on — the animated values (position,
+/// size, radius, content scale/opacity/blur, activation, focus amounts) are
+/// deliberately absent so they never invalidate the cache.
+#[derive(Debug, Clone, PartialEq)]
+struct ContextMenuLayoutKey {
+    /// Stable key of the menu target (also the UiId prefix for row ids).
+    target: String,
+    /// Fully-open panel size in physical px.
+    open_size: (f32, f32),
+    /// DPI scale, bit pattern.
+    scale_bits: u32,
+    /// Quantized physical label font px. Steps during the reveal animation;
+    /// the only font-size dimension that re-shapes the labels.
+    font_px: u32,
+}
+
+/// Row geometry in fully-open panel space (physical px). The animation
+/// transform maps these coordinates into the live panel each frame.
+#[derive(Debug, Clone)]
+struct ContextMenuStaticRow {
+    open_row_y: f32,
+    open_row_cy: f32,
+    open_icon_x: f32,
+    open_label_x: f32,
+    label_width: f32,
+    /// Icon control kind, matching the layout's private `item_icon_kind`
+    /// mapping (verified by the round-trip test against `context_menu::build`).
+    kind: ControlKind,
+}
+
+/// Shaped label glyphs plus the anchors they were shaped at; per-frame frames
+/// translate them to the live label rects without re-shaping.
+#[derive(Debug, Clone)]
+struct CachedMenuGlyph {
+    /// Label left anchor (unrounded `label_rect.x`) at shaping time.
+    left: f32,
+    /// Label vertical center anchor (`label_rect.y`) at shaping time.
+    cy: f32,
+    quads: Vec<GlyphQuad>,
+}
+
+impl ContextMenuLayoutCache {
+    /// Build the open-panel-space geometry for `items`. `key` is stored
+    /// verbatim; the glyphs are shaped lazily by [`Self::glyphs_for_frame`].
+    fn build(
+        items: &[context_menu::ContextMenuItem],
+        open_size: (f32, f32),
+        scale: f32,
+        key: ContextMenuLayoutKey,
+    ) -> Self {
+        // Row metrics mirror the layout module's private constants (see
+        // `layout::context_menu::build`); the round-trip test pins them.
+        let open_w = open_size.0.max(1.0);
+        let open_h = open_size.1.max(1.0);
+        let row_h = 40.0 * scale;
+        let pad_x = 30.0 * scale;
+        let pad_y = 20.0 * scale;
+        let icon_size = 24.0 * scale;
+        let icon_gap = 17.0 * scale;
+        let row_inner_margin = 10.0 * scale;
+        let rows = items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| ContextMenuStaticRow {
+                open_row_y: pad_y + index as f32 * row_h,
+                open_row_cy: pad_y + index as f32 * row_h + row_h * 0.5,
+                open_icon_x: pad_x,
+                open_label_x: pad_x + icon_size + icon_gap,
+                label_width: (open_w - (pad_x + icon_size + icon_gap) - pad_x).max(1.0),
+                kind: context_menu_item_kind(*item),
+            })
+            .collect();
+        Self {
+            key,
+            scale,
+            open_w,
+            open_h,
+            row_h,
+            icon_size,
+            row_inner_margin,
+            rows,
+            glyphs: vec![None; items.len()],
+        }
+    }
+
+    /// Derive the animated render model from the cached open-panel-space
+    /// geometry, reproducing [`layout::context_menu::build`] bit for bit (the
+    /// round-trip test asserts equality across the animation).
+    fn derive_model(&self, input: &ContextMenuInput<'_>) -> ContextMenuModel {
+        let scale = self.scale;
+        let (vw, vh) = (input.viewport.0 as f32, input.viewport.1 as f32);
+        let panel_rect = Rect::new(input.pos.0, input.pos.1, input.size.0, input.size.1);
+        let content_opacity = input.content_opacity.clamp(0.0, 1.0);
+        let reveal = content_opacity;
+
+        let mut render = RenderModel::new();
+        render.set_glass_batch(
+            GlassLayer::ContextMenu,
+            vec![GlassSurface {
+                id: UiId::context_menu_panel(),
+                rect: panel_rect,
+                radius: input.radius,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: 100,
+                clip: None,
+                activation: input.activation,
+                blur_radius: Some((CONTEXT_MENU_BASE_BLUR + input.content_blur).max(0.0)),
+                backdrop_replacement: content_opacity,
+                tint: Some(Color::rgba(
+                    0.93,
+                    0.94,
+                    0.96,
+                    CONTEXT_MENU_TINT_ALPHA * content_opacity,
+                )),
+            }],
+        );
+
+        let open_w = self.open_w;
+        let open_h = self.open_h;
+        let content_scale = input.content_scale.max(0.0);
+        let panel_center_x = panel_rect.x + panel_rect.width * 0.5;
+        let panel_center_y = panel_rect.y + panel_rect.height * 0.5;
+
+        let mut ink: Vec<InkView> = Vec::new();
+        let mut rows: Vec<ContextMenuItemRow> = Vec::new();
+
+        for (index, (row, item)) in self.rows.iter().zip(input.items.iter()).enumerate() {
+            // Position in fully-open panel space (cached), then map into the
+            // live animated panel — the exact `map` closure of the layout.
+            let map = |ox: f32, oy: f32| -> (f32, f32) {
+                let dx = (ox - open_w * 0.5) * content_scale;
+                let dy = (oy - open_h * 0.5) * content_scale;
+                (panel_center_x + dx, panel_center_y + dy)
+            };
+            let (icon_cx, icon_cy) = map(row.open_icon_x + self.icon_size * 0.5, row.open_row_cy);
+            let (label_cx, label_cy) = map(row.open_label_x, row.open_row_cy);
+            let color = item.foreground_rgb();
+
+            // Hit-test row rect (in current panel space).
+            let (row_left, row_top) = map(self.row_inner_margin, row.open_row_y);
+            let (row_right, row_bottom) =
+                map(open_w - self.row_inner_margin, row.open_row_y + self.row_h);
+            let row_rect = Rect::new(
+                row_left.min(row_right),
+                row_top.min(row_bottom),
+                (row_right - row_left).abs(),
+                (row_bottom - row_top).abs(),
+            );
+
+            // Draw the focus treatment before the row's icon and label so the
+            // foreground stays crisp above the translucent neutral material.
+            let focus_amount = input.focus_amounts.get(index).copied().unwrap_or(0.0);
+            if focus_amount > 0.001 {
+                let vertical_inset = (FOCUS_ROW_VERTICAL_INSET * scale).min(row_rect.height * 0.5);
+                let focus_rect = row_rect.inset(Insets::symmetric(0.0, vertical_inset));
+                let focus_scale = 0.96 + 0.04 * focus_amount.clamp(0.0, 1.0);
+                let focus_center = focus_rect.center();
+                let focus_rect = Rect::new(
+                    focus_center.x - focus_rect.width * focus_scale * 0.5,
+                    focus_center.y - focus_rect.height * focus_scale * 0.5,
+                    focus_rect.width * focus_scale,
+                    focus_rect.height * focus_scale,
+                );
+                ink.push(InkView {
+                    id: UiId::context_menu_item(input.target, index),
+                    center: focus_rect.center(),
+                    extent: focus_rect.height * 0.5,
+                    opacity: reveal * FOCUS_ROW_OPACITY * focus_amount.clamp(0.0, 1.0),
+                    scene_blur: 0.0,
+                    stroke: focus_rect.width * 0.5,
+                    corner_radius: focus_rect.height * 0.5,
+                    color: Color::rgba(
+                        CONTEXT_MENU_HOVER_RGB[0],
+                        CONTEXT_MENU_HOVER_RGB[1],
+                        CONTEXT_MENU_HOVER_RGB[2],
+                        1.0,
+                    ),
+                    kind: ControlKind::RowBackground,
+                    z: 130,
+                    clip: None,
+                });
+            }
+
+            ink.push(InkView {
+                id: UiId::context_menu_item(input.target, index),
+                center: Point::new(icon_cx, icon_cy),
+                extent: self.icon_size * 0.5 * content_scale,
+                opacity: reveal,
+                scene_blur: 0.0,
+                stroke: 1.8 * scale * content_scale,
+                corner_radius: 0.0,
+                color: Color::rgba(color[0], color[1], color[2], 1.0),
+                kind: row.kind.clone(),
+                z: 140,
+                clip: None,
+            });
+
+            rows.push(ContextMenuItemRow {
+                rect: row_rect,
+                icon_center: Point::new(icon_cx, icon_cy),
+                label_rect: Rect::new(label_cx, label_cy, row.label_width, MENU_FONT_SIZE),
+            });
+        }
+
+        render.set_ink_batch(InkLane::ContextMenu, ink);
+
+        // Hit map: backdrop dismiss, panel, and per-row regions gated on the
+        // reveal like the layout.
+        let mut hits = HitMap::new();
+        hits.push(HitRegion::new(
+            UiId::backdrop("context-menu-modal"),
+            Rect::new(0.0, 0.0, vw, vh),
+            HitTarget::modal_dismiss_backdrop(),
+            90,
+        ));
+        hits.push(HitRegion::new(
+            UiId::context_menu_panel(),
+            panel_rect,
+            HitTarget::context_menu_panel(),
+            100,
+        ));
+        if content_opacity > 0.5 {
+            for (index, row) in rows.iter().enumerate() {
+                hits.push(HitRegion::new(
+                    UiId::context_menu_item(input.target, index),
+                    row.rect,
+                    HitTarget::context_menu_item(input.target, index),
+                    140,
+                ));
+            }
+        }
+
+        ContextMenuModel {
+            result: LayoutResult::new(render, hits),
+            panel_rect,
+            rows,
+            scale,
+        }
+    }
+
+    /// Shape the label glyphs on cache misses, or translate + recolor the
+    /// cached quads to the live label rects on hits. Appends the frame's
+    /// glyphs to `out` in row order.
+    #[allow(clippy::too_many_arguments)]
+    fn glyphs_for_frame(
+        &mut self,
+        t: &mut TextRenderer,
+        items: &[context_menu::ContextMenuItem],
+        rows: &[ContextMenuItemRow],
+        opacity: f32,
+        scale: f32,
+        content_scale: f32,
+        out: &mut Vec<GlyphQuad>,
+    ) {
+        let text_scale = quantize_menu_text_scale(content_scale, scale);
+        for (index, (entry, row)) in self.glyphs.iter_mut().zip(rows.iter()).enumerate() {
+            let left = row.label_rect.x;
+            let center_y = row.label_rect.y;
+            match entry {
+                Some(cached) => {
+                    // The cached quads embed the shape-time rounded anchors;
+                    // translate by the exact rounded x delta (the layout's
+                    // `left.round()` origin) and the fractional y delta. The
+                    // stored quads are never mutated: translating them in
+                    // place would compound the per-frame deltas and let the
+                    // text drift away from the animated anchors.
+                    let dx = left.round() - cached.left.round();
+                    let dy = center_y - cached.cy;
+                    let color = menu_text_color(items[index], opacity);
+                    out.extend(cached.quads.iter().map(|quad| {
+                        let mut translated = *quad;
+                        translated.x += dx;
+                        translated.y += dy;
+                        translated.color = color;
+                        translated
+                    }));
+                }
+                None => {
+                    let mut quads = Vec::new();
+                    push_menu_text(
+                        t,
+                        &mut quads,
+                        items[index].label(),
+                        left,
+                        center_y,
+                        MENU_FONT_SIZE * text_scale,
+                        MENU_LINE_HEIGHT * text_scale,
+                        menu_text_color(items[index], opacity),
+                        scale,
+                    );
+                    out.extend_from_slice(&quads);
+                    *entry = Some(CachedMenuGlyph {
+                        left,
+                        cy: center_y,
+                        quads,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Map a menu item to its procedural icon kind, mirroring the layout module's
+/// private `item_icon_kind`. The round-trip test against
+/// `layout::context_menu::build` pins this mapping to the layout.
+fn context_menu_item_kind(item: context_menu::ContextMenuItem) -> ControlKind {
+    match item {
+        context_menu::ContextMenuItem::EditHome => ControlKind::Pencil,
+        context_menu::ContextMenuItem::HideApp => ControlKind::EyeOff,
+        context_menu::ContextMenuItem::RevealInFinder => ControlKind::FolderIcon,
+        context_menu::ContextMenuItem::ChatGptHelp => ControlKind::ChatGptLogo,
+        context_menu::ContextMenuItem::OpenInSteam => ControlKind::SteamLogo,
+        context_menu::ContextMenuItem::IconLarger => ControlKind::Plus,
+        context_menu::ContextMenuItem::IconSmaller => ControlKind::Minus,
+        context_menu::ContextMenuItem::AppInfo => ControlKind::Info,
     }
 }
 
@@ -289,6 +649,16 @@ impl App {
         // `stable_key` was computed once at open time; borrow it instead of
         // re-running `format!` (and cloning the target) every frame.
         let target_key = self.context_menu_target_key.as_deref().unwrap_or_default();
+        let content_scale = self.context_menu.content_scale().max(0.0);
+        let opacity = self.context_menu.content_opacity();
+        // cosmic-text includes the exact f32 font size in its cache key. The
+        // menu animates `content_scale` every frame, so pass a
+        // physical-pixel-quantized scale to keep repeated open/close
+        // animations from manufacturing unbounded glyph variants — and to key
+        // the retained shaping on a bounded set of font sizes.
+        let text_scale = quantize_menu_text_scale(content_scale, scale);
+        let font_px = (MENU_FONT_SIZE * text_scale * scale).round() as u32;
+
         let input = ContextMenuInput {
             viewport: self.viewport_phys(),
             scale_factor: scale,
@@ -297,14 +667,44 @@ impl App {
             size: (self.context_menu.width(), self.context_menu.height()),
             open_size,
             radius: self.context_menu.radius(),
-            content_scale: self.context_menu.content_scale(),
-            content_opacity: self.context_menu.content_opacity(),
+            content_scale,
+            content_opacity: opacity,
             content_blur: self.context_menu.content_blur(),
             activation: self.context_menu.activation(),
             focus_amounts: self.context_menu.focus_amounts(),
             items,
         };
-        let model = context_menu::build(&input);
+
+        // Retained layout + shaping, keyed on everything except the animated
+        // values (target/items, panel width, quantized font size, DPI). While
+        // the reveal animation runs, only the animation parameters change per
+        // frame — the open-panel-space geometry is re-mapped through them and
+        // the cached label quads are translated/recolored, so a steady frame
+        // performs no layout build and no shaping.
+        let cache_miss = self.context_menu_layout_cache.as_ref().is_none_or(|cache| {
+            cache.key.target != target_key
+                || cache.key.open_size != open_size
+                || cache.key.scale_bits != scale.to_bits()
+                || cache.key.font_px != font_px
+        });
+        if cache_miss {
+            self.context_menu_layout_cache = Some(ContextMenuLayoutCache::build(
+                items,
+                open_size,
+                scale,
+                ContextMenuLayoutKey {
+                    target: target_key.to_owned(),
+                    open_size,
+                    scale_bits: scale.to_bits(),
+                    font_px,
+                },
+            ));
+        }
+        let cache = self
+            .context_menu_layout_cache
+            .as_mut()
+            .expect("context menu cache must exist after build");
+        let model = cache.derive_model(&input);
 
         // Promote the layout's ink/glass into the shared Modal lanes.
         let modal = model
@@ -329,35 +729,17 @@ impl App {
         // Pre-size for the menu's ~6 short CJK labels (a handful of glyphs each)
         // so the loop doesn't trigger reallocations.
         let mut glyphs: Vec<GlyphQuad> = Vec::with_capacity(items.len() * 8);
-        let opacity = self.context_menu.content_opacity();
-        let content_scale = self.context_menu.content_scale().max(0.0);
         if opacity > crate::features::context_menu::CONTENT_VISIBILITY_THRESHOLD {
             if let Some(text) = self.text.as_mut() {
-                // cosmic-text includes the exact f32 font size in its cache
-                // key. The menu animates `content_scale` every frame, so pass
-                // a physical-pixel-quantized scale to keep repeated open/close
-                // animations from manufacturing unbounded glyph variants.
-                let text_scale = quantize_menu_text_scale(content_scale, scale);
-                for (item, row) in items.iter().zip(model.rows.iter()) {
-                    let left = row.label_rect.x;
-                    let center_y = row.label_rect.y;
-                    let color = menu_text_color(*item, opacity);
-                    // Scale the font with content_scale so the text shrinks/grows
-                    // in sync with the glass + ink during open/close morph.
-                    // Labels are derived from the cached items via `label()`
-                    // rather than carried as a parallel slice.
-                    push_menu_text(
-                        text,
-                        &mut glyphs,
-                        item.label(),
-                        left,
-                        center_y,
-                        MENU_FONT_SIZE * text_scale,
-                        MENU_LINE_HEIGHT * text_scale,
-                        color,
-                        scale,
-                    );
-                }
+                cache.glyphs_for_frame(
+                    text,
+                    items,
+                    &model.rows,
+                    opacity,
+                    scale,
+                    content_scale,
+                    &mut glyphs,
+                );
             }
         }
 
@@ -420,6 +802,7 @@ impl App {
         self.render_model.context_menu_tiles = Some(Vec::new());
         self.render_model.context_menu_icons = Some(Vec::new());
         self.context_menu_layout = None;
+        self.context_menu_layout_cache = None;
         self.context_menu_target_key = None;
     }
 
@@ -832,5 +1215,262 @@ mod tests {
         assert!(!App::should_pass_context_menu_dismissal_through(
             false, true
         ));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn roundtrip_input(
+        pos: (f32, f32),
+        size: (f32, f32),
+        radius: f32,
+        content_scale: f32,
+        content_opacity: f32,
+        content_blur: f32,
+        activation: f32,
+        focus: [f32; 8],
+        items: &[context_menu::ContextMenuItem],
+    ) -> ContextMenuInput<'_> {
+        ContextMenuInput {
+            viewport: (1280, 800),
+            scale_factor: 1.25,
+            target: "app:qa-roundtrip",
+            pos,
+            size,
+            open_size: (325.0, 450.0),
+            radius,
+            content_scale,
+            content_opacity,
+            content_blur,
+            activation,
+            focus_amounts: focus,
+            items,
+        }
+    }
+
+    /// The cached open-panel-space derivation must reproduce the layout's own
+    /// `build` bit for bit across the whole animation (seed, mid-reveal, rest,
+    /// close, focus cross-fade).
+    #[test]
+    fn derived_model_matches_layout_build_across_the_animation() {
+        let items = context_menu::menu_rows(false, false);
+        let cache = ContextMenuLayoutCache::build(
+            &items,
+            (325.0, 450.0),
+            1.25,
+            ContextMenuLayoutKey {
+                target: "app:qa-roundtrip".to_string(),
+                open_size: (325.0, 450.0),
+                scale_bits: 1.25f32.to_bits(),
+                font_px: 18,
+            },
+        );
+        let mut focus = [0.0f32; 8];
+        focus[1] = 1.0;
+        let mut partial_focus = [0.0f32; 8];
+        partial_focus[0] = 0.5;
+        partial_focus[2] = 0.5;
+        let states: Vec<ContextMenuInput<'_>> = vec![
+            // Seed: collapsed disc, content scaled up, blurred, opaque body.
+            roundtrip_input(
+                (1000.0, 500.0),
+                (50.0, 50.0),
+                130.0,
+                2.0,
+                0.0,
+                8.0,
+                1.0,
+                [0.0; 8],
+                &items,
+            ),
+            // Mid-reveal.
+            roundtrip_input(
+                (1030.0, 510.0),
+                (180.0, 240.0),
+                88.0,
+                1.6,
+                0.3,
+                4.0,
+                0.6,
+                [0.0; 8],
+                &items,
+            ),
+            // Rest with the hover pill on row 1.
+            roundtrip_input(
+                (1060.0, 520.0),
+                (325.0, 450.0),
+                70.0,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                focus,
+                &items,
+            ),
+            // Mid-close with partial focus cross-fade.
+            roundtrip_input(
+                (1050.0, 515.0),
+                (300.0, 420.0),
+                80.0,
+                1.2,
+                0.8,
+                2.0,
+                0.3,
+                partial_focus,
+                &items,
+            ),
+            // Fully open at rest.
+            roundtrip_input(
+                (1060.0, 520.0),
+                (325.0, 450.0),
+                70.0,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                [0.0; 8],
+                &items,
+            ),
+        ];
+        for input in states {
+            let reference = context_menu::build(&input);
+            let derived = cache.derive_model(&input);
+            assert_eq!(derived.panel_rect, reference.panel_rect);
+            assert_eq!(derived.rows.len(), reference.rows.len());
+            for (a, b) in derived.rows.iter().zip(reference.rows.iter()) {
+                assert_eq!(a.rect, b.rect);
+                assert_eq!(a.icon_center, b.icon_center);
+                assert_eq!(a.label_rect, b.label_rect);
+            }
+            assert_eq!(derived.result.render, reference.result.render);
+            assert_eq!(derived.result.hits, reference.result.hits);
+            assert_eq!(derived.scale, reference.scale);
+        }
+    }
+
+    /// Steady frames translate the cached label quads instead of re-shaping:
+    /// the atlas gains no new glyphs between two frames in the same font
+    /// bucket, and the x anchor stays exact (the layout rounds it).
+    #[test]
+    fn context_menu_glyphs_are_shaped_once_and_translated_on_hits() {
+        let items = context_menu::menu_rows(false, false);
+        let build_cache = |target: &str| {
+            ContextMenuLayoutCache::build(
+                &items,
+                (325.0, 450.0),
+                1.25,
+                ContextMenuLayoutKey {
+                    target: target.to_string(),
+                    open_size: (325.0, 450.0),
+                    scale_bits: 1.25f32.to_bits(),
+                    font_px: 18,
+                },
+            )
+        };
+        let mut text = TextRenderer::new();
+        let mut cache = build_cache("app:qa-glyph-hit");
+        let input1 = roundtrip_input(
+            (1060.0, 520.0),
+            (325.0, 450.0),
+            70.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            [0.0; 8],
+            &items,
+        );
+        let model1 = cache.derive_model(&input1);
+        let mut first = Vec::new();
+        cache.glyphs_for_frame(&mut text, &items, &model1.rows, 1.0, 1.25, 1.0, &mut first);
+        assert!(!first.is_empty());
+        let misses_after_shape = text.atlas_stats().cache_misses;
+
+        // Same font bucket, animation moved the panel: translate, don't shape.
+        let input2 = roundtrip_input(
+            (1062.5, 521.25),
+            (325.0, 450.0),
+            70.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            [0.0; 8],
+            &items,
+        );
+        let model2 = cache.derive_model(&input2);
+        let mut second = Vec::new();
+        cache.glyphs_for_frame(&mut text, &items, &model2.rows, 1.0, 1.25, 1.0, &mut second);
+        assert_eq!(
+            text.atlas_stats().cache_misses,
+            misses_after_shape,
+            "hit frames must not rasterize new glyphs"
+        );
+        assert_eq!(second.len(), first.len());
+        // The x translation is exact: the layout rounds the label anchor, and
+        // the cached quads embed the shape-time rounded anchor.
+        let dx = model2.rows[0].label_rect.x.round() - model1.rows[0].label_rect.x.round();
+        for (a, b) in first.iter().zip(second.iter()) {
+            assert_eq!(a.x + dx, b.x, "x anchor translation must be exact");
+        }
+
+        // A third, further-animated frame must translate from the *stored*
+        // (shape-time) anchors, not from the previous frame's position:
+        // mutating the cache in place would compound the deltas and drift the
+        // text away from the live anchors.
+        let input3 = roundtrip_input(
+            (1070.0, 525.0),
+            (325.0, 450.0),
+            70.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            [0.0; 8],
+            &items,
+        );
+        let model3 = cache.derive_model(&input3);
+        let mut third = Vec::new();
+        cache.glyphs_for_frame(&mut text, &items, &model3.rows, 1.0, 1.25, 1.0, &mut third);
+        assert_eq!(third.len(), first.len());
+        let dx2 = model3.rows[0].label_rect.x.round() - model1.rows[0].label_rect.x.round();
+        for (a, b) in first.iter().zip(third.iter()) {
+            assert_eq!(
+                a.x + dx2,
+                b.x,
+                "translation must anchor on the stored quads"
+            );
+        }
+
+        // A new font bucket (the reveal animation stepped) re-shapes: the
+        // cache key includes the quantized physical font px, and a bucket
+        // change re-runs the shaping at the new size.
+        let mut stepped = build_cache("app:qa-glyph-hit");
+        stepped.key.font_px = 19;
+        let step_scale = 19.0 / 17.5;
+        let input3 = roundtrip_input(
+            (1062.5, 521.25),
+            (325.0, 450.0),
+            70.0,
+            step_scale,
+            1.0,
+            0.0,
+            0.0,
+            [0.0; 8],
+            &items,
+        );
+        let model3 = stepped.derive_model(&input3);
+        let mut third = Vec::new();
+        stepped.glyphs_for_frame(
+            &mut text,
+            &items,
+            &model3.rows,
+            1.0,
+            1.25,
+            step_scale,
+            &mut third,
+        );
+        assert!(
+            text.atlas_stats().cache_misses > misses_after_shape,
+            "a new quantized font size must re-shape the labels"
+        );
     }
 }

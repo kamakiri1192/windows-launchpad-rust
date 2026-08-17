@@ -307,6 +307,11 @@ pub struct LiquidGlassRenderer {
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
     backdrop_mapping: BackdropMapping,
+    /// Monotonic counters feeding the renderer's scene-content epoch: any
+    /// change to glass params/debug state, or any newly consumed desktop
+    /// capture frame, invalidates caches derived from the rendered scene.
+    content_epoch: u64,
+    capture_sequence: u64,
     gpu_backdrop_texture: Option<wgpu::Texture>,
     using_gpu_backdrop: bool,
     gpu_backdrop_is_copy_target: bool,
@@ -479,6 +484,24 @@ fn rounded_rect_sdf(point: [f32; 2], shape: GlassShape) -> f32 {
         (point[1] - shape.center[1]).abs() - half[1] + radius,
     ];
     q[0].max(q[1]).min(0.0) + q[0].max(0.0).hypot(q[1].max(0.0)) - radius
+}
+
+fn shapes_hash(shapes: &[GlassShape]) -> u64 {
+    let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+    let mix = |value: u64, key: &mut u64| {
+        *key ^= value;
+        *key = key.wrapping_mul(0x100_0000_01b3);
+    };
+    mix(shapes.len() as u64, &mut key);
+    for shape in shapes {
+        mix(shape.center[0].to_bits() as u64, &mut key);
+        mix(shape.center[1].to_bits() as u64, &mut key);
+        mix(shape.size[0].to_bits() as u64, &mut key);
+        mix(shape.size[1].to_bits() as u64, &mut key);
+        mix(shape.radius.to_bits() as u64, &mut key);
+        mix(shape.shape_type as u64, &mut key);
+    }
+    key
 }
 
 fn capture_region_for_shapes(
@@ -1340,6 +1363,8 @@ impl LiquidGlassRenderer {
             auto_darkness_reset_state: true,
             backdrop_stats_dirty: true,
             blur_dirty: true,
+            content_epoch: 0,
+            capture_sequence: 0,
             last_geometry_key: None,
             stats: RenderStats::new(),
         }
@@ -1876,6 +1901,7 @@ impl LiquidGlassRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        profiler: &mut crate::renderer::gpu_profile::GpuProfilerState,
         frame: EphemeralGpuCaptureFrame,
     ) -> bool {
         let EphemeralGpuCaptureFrame {
@@ -1943,6 +1969,7 @@ impl LiquidGlassRenderer {
         let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass IOSurface copy encoder"),
         });
+        let copy_scope = profiler.begin("backdrop_capture_copy", &mut copy_encoder);
         copy_encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -1962,6 +1989,8 @@ impl LiquidGlassRenderer {
                 depth_or_array_layers: 1,
             },
         );
+        profiler.end(&mut copy_encoder, copy_scope);
+        profiler.resolve(&mut copy_encoder);
         queue.submit(std::iter::once(copy_encoder.finish()));
         queue.on_submitted_work_done(move || drop(release_after_submit));
         true
@@ -2300,6 +2329,10 @@ impl LiquidGlassRenderer {
     /// a settings surface. Folder panels reuse that buffer but must not cause a
     /// settings checkpoint.
     pub fn set_settings_panel_completed_scene_enabled(&mut self, enabled: bool) {
+        if self.settings_panel_completed_scene_enabled == enabled {
+            return;
+        }
+        self.bump_content_epoch();
         self.settings_panel_completed_scene_enabled = enabled;
     }
 
@@ -2412,11 +2445,13 @@ impl LiquidGlassRenderer {
     }
 
     pub fn notify_window_moved(&mut self, x: i32, y: i32, scale_factor: f64) {
+        self.bump_content_epoch();
         self.capture.on_window_moved(x, y, scale_factor);
         self.last_capture_at = None;
     }
 
     pub fn set_capture_active(&mut self, active: bool) {
+        self.bump_content_epoch();
         self.capture.set_active(active);
         if active {
             self.last_capture_at = None;
@@ -2424,6 +2459,7 @@ impl LiquidGlassRenderer {
     }
 
     pub fn handle_debug_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
+        self.bump_content_epoch();
         use winit::keyboard::KeyCode;
 
         match key {
@@ -2557,6 +2593,39 @@ impl LiquidGlassRenderer {
     // `domain` layer; the `App` bridges between the two.
 
     /// Snapshot of the current Liquid Glass parameters.
+    /// Hash the checkpoint lane's own shapes. The completed-scene chain is
+    /// cached across frames while the scene below is unchanged, but its blur
+    /// texture only covers the surface bounds captured at chain time, so a
+    /// changed surface rect must invalidate the cache.
+    pub fn context_menu_shapes_hash(&self) -> u64 {
+        shapes_hash(&self.context_menu_shapes)
+    }
+
+    /// Settings-lane counterpart of [`Self::context_menu_shapes_hash`].
+    pub fn settings_panel_shapes_hash(&self) -> u64 {
+        shapes_hash(&self.settings_panel_shapes)
+    }
+
+    /// Current glass-content epoch (params/debug changes).
+    pub fn content_epoch(&self) -> u64 {
+        self.content_epoch
+    }
+
+    /// Number of desktop capture frames consumed so far.
+    pub fn capture_sequence(&self) -> u64 {
+        self.capture_sequence
+    }
+
+    /// Whether auto-darkness classification is active (time-varying glass
+    /// output that scene caches must not ignore).
+    pub fn auto_darkness_enabled(&self) -> bool {
+        self.params.auto_darkness_enabled
+    }
+
+    fn bump_content_epoch(&mut self) {
+        self.content_epoch = self.content_epoch.wrapping_add(1);
+    }
+
     pub fn params(&self) -> LiquidGlassParams {
         self.params
     }
@@ -2569,6 +2638,7 @@ impl LiquidGlassRenderer {
 
     /// Master switch for the Liquid Glass effect (keyboard equivalent: `V`).
     pub fn set_enabled(&mut self, enabled: bool) {
+        self.bump_content_epoch();
         if self.params.enabled != enabled {
             self.params.enabled = enabled;
             self.blur_dirty = true;
@@ -2576,6 +2646,7 @@ impl LiquidGlassRenderer {
     }
 
     pub fn set_auto_darkness_enabled(&mut self, enabled: bool) {
+        self.bump_content_epoch();
         if self.params.auto_darkness_enabled != enabled {
             self.params.auto_darkness_enabled = enabled;
             self.backdrop_stats_dirty = true;
@@ -2590,6 +2661,7 @@ impl LiquidGlassRenderer {
     }
 
     pub fn set_auto_darkness_update_mode(&mut self, mode: AutoDarknessUpdateMode) {
+        self.bump_content_epoch();
         if self.auto_darkness_update_mode != mode {
             self.auto_darkness_update_mode = mode;
             self.backdrop_stats_dirty = true;
@@ -2597,6 +2669,7 @@ impl LiquidGlassRenderer {
     }
 
     pub fn set_auto_darkness_max(&mut self, value: f32) {
+        self.bump_content_epoch();
         let value = value.clamp(0.0, 1.0);
         if self.params.auto_darkness_max != value {
             self.params.auto_darkness_max = value;
@@ -2605,30 +2678,36 @@ impl LiquidGlassRenderer {
     }
 
     pub fn set_thickness(&mut self, value: f32) {
+        self.bump_content_epoch();
         self.params.thickness = value.clamp(6.0, 48.0);
         self.blur_dirty = true;
     }
 
     pub fn set_refractive_index(&mut self, value: f32) {
+        self.bump_content_epoch();
         self.params.refractive_index = value.clamp(1.02, 1.75);
         self.blur_dirty = true;
     }
 
     pub fn set_saturation(&mut self, value: f32) {
+        self.bump_content_epoch();
         self.params.saturation = value.clamp(0.5, 2.0);
         self.blur_dirty = true;
     }
 
     pub fn set_glass_darkness(&mut self, value: f32) {
+        self.bump_content_epoch();
         self.params.glass_darkness = value.clamp(0.0, 1.0);
     }
 
     pub fn set_chromatic_aberration(&mut self, value: f32) {
+        self.bump_content_epoch();
         self.params.chromatic_aberration = value.clamp(0.0, 0.18);
         self.blur_dirty = true;
     }
 
     pub fn set_blur_radius(&mut self, value: f32) {
+        self.bump_content_epoch();
         self.params.blur_radius = value.clamp(0.0, 40.0);
         self.blur_dirty = true;
     }
@@ -2637,6 +2716,7 @@ impl LiquidGlassRenderer {
     /// (overlays + disable flags) are left untouched — those are session-only
     /// and the user may still want them on while tuning.
     pub fn reset_params_to_defaults(&mut self) {
+        self.bump_content_epoch();
         let default = LiquidGlassParams::default();
         self.params.enabled = default.enabled;
         self.params.auto_darkness_enabled = default.auto_darkness_enabled;
@@ -2671,6 +2751,7 @@ impl LiquidGlassRenderer {
         chromatic_aberration: f32,
         blur_radius: f32,
     ) {
+        self.bump_content_epoch();
         self.params.enabled = enabled;
         if auto_darkness_enabled && !self.params.auto_darkness_enabled {
             self.auto_darkness_reset_state = true;
@@ -2692,6 +2773,7 @@ impl LiquidGlassRenderer {
     /// Toggle one of the B/G/D/A/F debug-view overlays or the C/E/L disable
     /// flags from the settings panel. Session-only — never persisted.
     pub fn toggle_debug_flag(&mut self, flag: SettingsDebugFlag) {
+        self.bump_content_epoch();
         match flag {
             SettingsDebugFlag::ShowBackdropTexture => {
                 self.debug.show_backdrop_texture = !self.debug.show_backdrop_texture

@@ -287,6 +287,11 @@ impl FocusBlurRenderer {
     }
 
     /// Run a strong three-level Dual-Kawase blur over the completed lower scene.
+    ///
+    /// Each pass stays in its own command encoder — wgpu forbids reading and
+    /// writing the same texture inside one encoder's usage scope — but all six
+    /// encoders are submitted together so the GPU sees one batch instead of
+    /// six submissions with synchronization gaps between them.
     pub(super) fn blur(
         &self,
         device: &wgpu::Device,
@@ -303,6 +308,7 @@ impl FocusBlurRenderer {
             "focus_blur_upsample_2",
             "focus_blur_upsample_3",
         ];
+        let mut commands = Vec::with_capacity(6);
         for (i, label) in DOWN_LABELS.into_iter().enumerate() {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("focus blur downsample encoder"),
@@ -331,7 +337,7 @@ impl FocusBlurRenderer {
             }
             profiler.end(&mut encoder, profile_scope);
             profiler.resolve(&mut encoder);
-            queue.submit(std::iter::once(encoder.finish()));
+            commands.push(encoder.finish());
         }
         for (j, label) in UP_LABELS.into_iter().enumerate() {
             let destination = if j == 2 {
@@ -366,8 +372,9 @@ impl FocusBlurRenderer {
             }
             profiler.end(&mut encoder, profile_scope);
             profiler.resolve(&mut encoder);
-            queue.submit(std::iter::once(encoder.finish()));
+            commands.push(encoder.finish());
         }
+        queue.submit(commands);
     }
 
     pub(super) fn composite(
