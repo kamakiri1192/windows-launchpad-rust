@@ -704,7 +704,7 @@ fn settings_panel_copy<'a>(
     hidden_count_label: &'a str,
 ) -> layout::settings_panel::SettingsPanelCopy<'a> {
     layout::settings_panel::SettingsPanelCopy {
-        title: SETTINGS_TITLE,
+        dismiss_label: "完了",
         categories: [
             (
                 layout::settings_panel::SettingsCategoryId::Apps,
@@ -923,7 +923,6 @@ fn debug_flag_from_key(key: &str) -> LiquidGlassDebugFlag {
     }
 }
 
-const SETTINGS_TITLE: &str = "設定";
 /// Title font for the settings panel.
 const SETTINGS_TITLE_FONT: &str = text::UI_FONT_FAMILY;
 

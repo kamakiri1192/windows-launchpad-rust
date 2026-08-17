@@ -8,7 +8,7 @@ use crate::scroll::ContinuousScroller;
 use crate::ui::context::Ui;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::color_from_array;
-use crate::ui::widgets::{Button, ButtonStyle, IconButton, Label, Slider, Toggle};
+use crate::ui::widgets::{Button, ButtonStyle, Label, Slider, Toggle};
 use crate::ui_model::geometry::{Insets, Point, Rect};
 use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
@@ -21,14 +21,6 @@ use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextWeight};
 pub const TITLE_FONT: &str = ".SF NS";
 #[cfg(not(target_os = "macos"))]
 pub const TITLE_FONT: &str = "Yu Gothic UI";
-pub const TITLE_SIZE: f32 = 20.0;
-pub const TITLE_LINE: f32 = 24.0;
-pub const CLOSE_HALF: f32 = 10.0;
-/// Half-size of the invisible close-button hit circle. The visible × glyph is
-/// only `CLOSE_HALF` (radius 10 logical px), which is too tight to tap/click
-/// reliably. We keep the visible size small but enlarge the hit target to the
-/// Windows-recommended minimum touch size (diameter 32 px).
-pub const CLOSE_HIT_HALF: f32 = 16.0;
 pub const HEADER_SIZE: f32 = 20.0;
 pub const HEADER_LINE: f32 = 26.0;
 pub const LABEL_SIZE: f32 = 14.0;
@@ -43,15 +35,19 @@ const PANEL_H: f32 = 540.0;
 const PANEL_OUTER_MARGIN: f32 = 24.0;
 const PANEL_RADIUS: f32 = 26.0;
 const HEADER_TOP: f32 = 20.0;
-const DIVIDER_TOP: f32 = 64.0;
+const DISMISS_BUTTON_W: f32 = 52.0;
+const DISMISS_BUTTON_H: f32 = 28.0;
+const DISMISS_BUTTON_TOP: f32 = 16.0;
+const DISMISS_BUTTON_RIGHT: f32 = 18.0;
+const DISMISS_LABEL_SIZE: f32 = 13.0;
+const DIVIDER_TOP: f32 = 12.0;
 const DIVIDER_BOTTOM: f32 = 28.0;
 const SIDEBAR_W: f32 = 192.0;
-const SIDEBAR_TOP: f32 = 72.0;
+const SIDEBAR_TOP: f32 = 12.0;
 const SIDEBAR_ROW_H: f32 = 36.0;
-const SIDEBAR_STEP: f32 = 44.0;
-const SIDEBAR_SECONDARY_GROUP_GAP: f32 = 12.0;
+const SIDEBAR_STEP: f32 = 38.0;
 const CONTENT_PAD: f32 = 32.0;
-const CONTENT_TOP: f32 = 83.0;
+const CONTENT_TOP: f32 = 68.0;
 const ROW_H: f32 = 46.0;
 const ROW_STEP: f32 = 58.0;
 const SEGMENT_H: f32 = 32.0;
@@ -398,12 +394,19 @@ impl SettingsPanelLayout {
         (self.content_right(scale) - left, ROW_H * scale)
     }
 
-    pub fn close_center(&self, scale: f32) -> (f32, f32) {
-        let button_radius = CLOSE_HALF * scale;
-        (
-            self.left + self.hw * 2.0 - button_radius * 2.0,
-            self.top + (HEADER_TOP + TITLE_SIZE * 0.5) * scale,
+    pub fn dismiss_rect(&self, scale: f32) -> Rect {
+        let width = DISMISS_BUTTON_W * scale;
+        Rect::new(
+            self.panel_right() - DISMISS_BUTTON_RIGHT * scale - width,
+            self.top + DISMISS_BUTTON_TOP * scale,
+            width,
+            DISMISS_BUTTON_H * scale,
         )
+    }
+
+    pub fn close_center(&self, scale: f32) -> (f32, f32) {
+        let center = self.dismiss_rect(scale).center();
+        (center.x, center.y)
     }
 }
 
@@ -532,7 +535,7 @@ impl LiquidGlassDebugState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsPanelCopy<'a> {
-    pub title: &'a str,
+    pub dismiss_label: &'a str,
     pub categories: [(SettingsCategoryId, &'a str); SettingsCategoryId::COUNT],
     pub sort_orders: [(SortOrderId, &'a str); 4],
     pub sort_label: &'a str,
@@ -630,12 +633,7 @@ pub fn panel_layout(viewport: (u32, u32), scale_factor: f32) -> SettingsPanelLay
 }
 
 fn sidebar_row_top(layout: &SettingsPanelLayout, index: usize, scale: f32) -> f32 {
-    let secondary_group_gap = if index >= SettingsCategoryId::About.index() {
-        SIDEBAR_SECONDARY_GROUP_GAP * scale
-    } else {
-        0.0
-    };
-    layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale + secondary_group_gap
+    layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale
 }
 
 pub fn contains(layout: &SettingsPanelLayout, point: Point) -> bool {
@@ -647,11 +645,7 @@ pub fn contains(layout: &SettingsPanelLayout, point: Point) -> bool {
 
 pub fn hit_close(layout: &SettingsPanelLayout, scale_factor: f32, point: Point) -> bool {
     let scale = sanitize_scale(scale_factor);
-    let hit_radius = CLOSE_HIT_HALF * scale;
-    let (button_x, button_y) = layout.close_center(scale);
-    let dx = point.x - button_x;
-    let dy = point.y - button_y;
-    dx * dx + dy * dy <= hit_radius * hit_radius
+    layout.dismiss_rect(scale).contains(point)
 }
 
 /// Build the settings panel using the new Liquid Glass UI foundation
@@ -749,41 +743,6 @@ pub fn build_with_ui(
         },
         Z_PANEL,
     ));
-
-    // ------------------------------------------------------------------
-    // Title
-    // ------------------------------------------------------------------
-    ui.begin_absolute_placement();
-    ui.set_cursor(layout.left + 28.0 * scale, layout.top + HEADER_TOP * scale);
-    ui.set_available_width(layout.hw * 2.0 - 48.0 * scale);
-    ui.label(
-        &Label::new(copy.title)
-            .id(UiId::settings_row("text-title"))
-            .style(TextStyle::new(
-                TextRole::SettingsTitle,
-                TITLE_SIZE,
-                color_from_array(INK),
-                TextWeight::Medium,
-                TextAlign::Start,
-            ))
-            .color(INK),
-    );
-
-    // ------------------------------------------------------------------
-    // Close button
-    // ------------------------------------------------------------------
-    let (close_cx, close_cy) = layout.close_center(scale);
-    let close_hit_r = CLOSE_HIT_HALF * scale;
-    ui.begin_absolute_placement();
-    ui.set_cursor(close_cx - close_hit_r, close_cy - close_hit_r);
-    ui.icon_button(
-        &IconButton::new(ControlKind::CloseButton)
-            .id(UiId::settings_close())
-            .visual_radius(CLOSE_HALF)
-            .hit_radius(CLOSE_HIT_HALF)
-            .tint(INK)
-            .hit_target(SettingsPanelHit::Close.target()),
-    );
 
     // ------------------------------------------------------------------
     // Sidebar vertical divider (InkView directly — Divider widget is
@@ -909,6 +868,74 @@ pub fn build_with_ui(
                 TextAlign::Start,
             ))
             .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
+    );
+
+    // This surface is an in-app modal, not a native macOS window. A faux
+    // window-close glyph would imply window chrome that is not present, so use
+    // the familiar modal completion action instead. Escape and backdrop click
+    // remain available as secondary dismissal paths.
+    let dismiss_rect = layout.dismiss_rect(scale);
+    let dismiss_hovered = input
+        .pointer_pos
+        .is_some_and(|point| dismiss_rect.contains(point));
+    let dismiss_opacity = if dismiss_hovered && input.pointer_pressed {
+        0.18
+    } else if dismiss_hovered {
+        0.10
+    } else {
+        0.0
+    };
+    ui.push_ink(InkView {
+        id: UiId::settings_row("dismiss-background"),
+        center: dismiss_rect.center(),
+        extent: dismiss_rect.height * 0.5,
+        opacity: dismiss_opacity,
+        scene_blur: 0.0,
+        stroke: dismiss_rect.width * 0.5,
+        corner_radius: 8.0 * scale,
+        color: Color::rgba(
+            SYSTEM_BLUE_RGB[0],
+            SYSTEM_BLUE_RGB[1],
+            SYSTEM_BLUE_RGB[2],
+            1.0,
+        ),
+        kind: ControlKind::RowBackground,
+        z: Z_CONTROL,
+        clip: None,
+    });
+    ui.push_hit(HitRegion::new(
+        UiId::settings_close(),
+        dismiss_rect,
+        SettingsPanelHit::Close.target(),
+        Z_CONTROL + 2,
+    ));
+    ui.begin_absolute_placement();
+    ui.set_cursor(
+        dismiss_rect.x,
+        dismiss_rect.y + (dismiss_rect.height - DISMISS_LABEL_SIZE * scale) * 0.5,
+    );
+    ui.set_available_width(dismiss_rect.width);
+    ui.label(
+        &Label::new(copy.dismiss_label)
+            .id(UiId::settings_row("dismiss-label"))
+            .style(TextStyle::new(
+                TextRole::SettingsRow,
+                DISMISS_LABEL_SIZE,
+                Color::rgba(
+                    SYSTEM_BLUE_RGB[0],
+                    SYSTEM_BLUE_RGB[1],
+                    SYSTEM_BLUE_RGB[2],
+                    1.0,
+                ),
+                TextWeight::Medium,
+                TextAlign::Center,
+            ))
+            .color([
+                SYSTEM_BLUE_RGB[0],
+                SYSTEM_BLUE_RGB[1],
+                SYSTEM_BLUE_RGB[2],
+                1.0,
+            ]),
     );
 
     match input.category {
@@ -1617,7 +1644,7 @@ mod tests {
 
     fn copy<'a>(hidden_count_label: &'a str) -> SettingsPanelCopy<'a> {
         SettingsPanelCopy {
-            title: "Settings",
+            dismiss_label: "Done",
             categories: [
                 (SettingsCategoryId::Apps, "Apps"),
                 (SettingsCategoryId::Search, "Search"),
@@ -1926,7 +1953,7 @@ mod tests {
     }
 
     #[test]
-    fn header_and_first_section_follow_shared_alignment_lines() {
+    fn navigation_heading_and_dismiss_action_follow_shared_alignment_lines() {
         let inp = input(SettingsCategoryId::Apps);
         let c = copy("0");
         let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
@@ -1938,17 +1965,27 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing settings text: {id}"))
         };
 
-        let title = find_text("text-title");
         let heading = find_text("category-heading");
         let sidebar_apps = find_text("category-apps");
         let sort_label = find_text("text-sort-label");
-        let (_, close_cy) = model.layout.close_center(1.0);
+        let dismiss_label = find_text("dismiss-label");
 
-        assert_eq!(title.rect.y, heading.rect.y);
-        assert_eq!(title.rect.x, sidebar_apps.rect.x);
-        assert_eq!(sidebar_apps.rect.y, sort_label.rect.y);
+        assert_eq!(sidebar_apps.rect.center().y, heading.rect.center().y);
+        assert_eq!(dismiss_label.rect.center().y, heading.rect.center().y);
         assert_eq!(heading.rect.x, sort_label.rect.x);
-        assert!((close_cy - CLOSE_HALF - title.rect.y).abs() < f32::EPSILON);
+        assert!(!text
+            .iter()
+            .any(|view| view.id == UiId::settings_row("text-title")));
+    }
+
+    #[test]
+    fn sidebar_categories_use_one_continuous_row_rhythm() {
+        let layout = layout();
+        for index in 1..SettingsCategoryId::COUNT {
+            let previous = sidebar_row_top(&layout, index - 1, 1.0);
+            let current = sidebar_row_top(&layout, index, 1.0);
+            assert!((current - previous - SIDEBAR_STEP).abs() < f32::EPSILON);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2278,44 +2315,30 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Close button
+    // Dismiss button
     // ------------------------------------------------------------------
 
     #[test]
-    fn hit_close_enlarges_target_beyond_visible_glyph() {
+    fn hit_close_matches_the_visible_done_button() {
         let layout = layout();
-        let (cx, cy) = layout.close_center(1.0);
-        let dirs = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
-        for (dx, dy) in dirs {
-            let on_glyph = Point::new(cx + dx * CLOSE_HALF, cy + dy * CLOSE_HALF);
-            assert!(
-                hit_close(&layout, 1.0, on_glyph),
-                "glyph boundary should hit: ({dx}, {dy})"
-            );
-            let in_slop = Point::new(
-                cx + dx * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
-                cy + dy * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
-            );
-            assert!(
-                hit_close(&layout, 1.0, in_slop),
-                "slop ring should hit: ({dx}, {dy})"
-            );
-            let beyond = Point::new(
-                cx + dx * (CLOSE_HIT_HALF + 0.5),
-                cy + dy * (CLOSE_HIT_HALF + 0.5),
-            );
-            assert!(
-                !hit_close(&layout, 1.0, beyond),
-                "point beyond hit radius should miss: ({dx}, {dy})"
-            );
-        }
+        let rect = layout.dismiss_rect(1.0);
+
+        assert!(hit_close(&layout, 1.0, rect.center()));
+        assert!(hit_close(&layout, 1.0, Point::new(rect.x, rect.center().y)));
+        assert!(!hit_close(
+            &layout,
+            1.0,
+            Point::new(rect.x - 0.5, rect.center().y)
+        ));
     }
 
     #[test]
-    fn hit_close_scales_hit_radius_with_dpi() {
+    fn hit_close_scales_done_button_with_dpi() {
         let layout = layout();
-        let (cx, cy) = layout.close_center(1.5);
-        assert!(hit_close(&layout, 1.5, Point::new(cx + 20.0, cy)));
+        let rect = layout.dismiss_rect(1.5);
+        assert_eq!(rect.width, DISMISS_BUTTON_W * 1.5);
+        assert_eq!(rect.height, DISMISS_BUTTON_H * 1.5);
+        assert!(hit_close(&layout, 1.5, rect.center()));
     }
 
     // ------------------------------------------------------------------
