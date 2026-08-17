@@ -703,6 +703,15 @@ impl App {
             self.request_redraw();
             return;
         }
+        // A close initiated moments ago (× / Esc / blur) detaches the input
+        // method only when the collapse finishes; macOS then flushes the
+        // leftover composition as trailing Preedit/Commit events. Treating
+        // those as fresh input re-opens the field right after the user closed
+        // it, and they can also pollute the collapsing field (wants_keyboard
+        // is still true mid-animation). Ignore IME during the grace window.
+        if self.control.closed_recently() {
+            return;
+        }
         if !self.control.wants_keyboard() {
             // IME input with the search field closed: auto-open it so Japanese
             // composition (preedit/commit) can drive instant search too.

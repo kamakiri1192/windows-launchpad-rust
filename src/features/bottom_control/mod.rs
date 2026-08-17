@@ -50,7 +50,7 @@ use crate::layout::control_geometry::{
     close_button_x_scaled, hit_test_scaled, resolve_scaled_with_edit_width,
 };
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // ---- tunables (edit-mode label width constants used only here) -------------
 
@@ -62,6 +62,13 @@ pub const DONE_HORIZONTAL_PADDING: f32 = 18.0;
 pub const NOMINAL_DONE_LABEL_WIDTH: f32 = 28.0;
 /// Vertical gap from the bottom of the fixed page frame to the capsule.
 pub const BOTTOM_MARGIN: f32 = 30.0;
+
+/// How long after a user-initiated close (× / Esc / blur) arriving IME events
+/// are ignored. Closing detaches the input method only when the collapse
+/// animation (0.34 s) finishes, and macOS then flushes the leftover
+/// composition as trailing Preedit/Commit events; without this grace those
+/// events re-open the field ("closes, then bounces open again").
+pub const IME_CLOSE_GRACE: Duration = Duration::from_millis(400);
 
 /// The morphing bottom-center control.
 ///
@@ -76,6 +83,8 @@ pub struct BottomControl {
     pub indicator: f32,
     /// Instant when the transient indicator should retire back to the pill.
     indicator_until: Option<Instant>,
+    /// When the user last initiated a field close; arms the IME grace.
+    closed_at: Option<Instant>,
     /// Clock for `tick`. Held so callers don't need to track dt themselves.
     last_time: Option<Instant>,
     /// Caret blink phase accumulator (seconds). Wraps every ~1s.
@@ -102,6 +111,7 @@ impl BottomControl {
             expand: 0.0,
             indicator: 0.0,
             indicator_until: None,
+            closed_at: None,
             last_time: None,
             caret_phase: 0.0,
             query: String::new(),
@@ -152,6 +162,14 @@ impl BottomControl {
             return;
         }
         self.mode = Mode::Collapsing;
+        self.closed_at = Some(Instant::now());
+    }
+
+    /// Whether a user-initiated close happened so recently that trailing IME
+    /// events should be ignored (see [`IME_CLOSE_GRACE`]).
+    pub fn closed_recently(&self) -> bool {
+        self.closed_at
+            .is_some_and(|at| at.elapsed() < IME_CLOSE_GRACE)
     }
 
     /// Press the close affordance (× button): clear the query and collapse.
@@ -582,6 +600,26 @@ mod tests {
         assert_eq!(c.caret, 0);
         assert_eq!(c.preedit, "");
         assert_eq!(c.mode, Mode::Collapsing);
+    }
+
+    #[test]
+    fn user_close_arms_ime_grace_and_it_expires() {
+        let mut c = bc();
+        c.mode = Mode::Field;
+        assert!(!c.closed_recently());
+        c.press_close();
+        assert!(c.closed_recently());
+        // Expired grace: age the timestamp past the window.
+        c.closed_at = Some(Instant::now() - IME_CLOSE_GRACE - Duration::from_millis(1));
+        assert!(!c.closed_recently());
+    }
+
+    #[test]
+    fn no_op_close_does_not_arm_ime_grace() {
+        let mut c = bc();
+        c.mode = Mode::Pill;
+        c.close_search();
+        assert!(!c.closed_recently());
     }
 
     #[test]
