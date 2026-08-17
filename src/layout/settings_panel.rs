@@ -42,13 +42,16 @@ const PANEL_W: f32 = 800.0;
 const PANEL_H: f32 = 540.0;
 const PANEL_OUTER_MARGIN: f32 = 24.0;
 const PANEL_RADIUS: f32 = 26.0;
+const HEADER_TOP: f32 = 20.0;
+const DIVIDER_TOP: f32 = 64.0;
+const DIVIDER_BOTTOM: f32 = 28.0;
 const SIDEBAR_W: f32 = 192.0;
 const SIDEBAR_TOP: f32 = 72.0;
 const SIDEBAR_ROW_H: f32 = 36.0;
 const SIDEBAR_STEP: f32 = 44.0;
 const SIDEBAR_SECONDARY_GROUP_GAP: f32 = 12.0;
 const CONTENT_PAD: f32 = 32.0;
-const CONTENT_TOP: f32 = 86.0;
+const CONTENT_TOP: f32 = 83.0;
 const ROW_H: f32 = 46.0;
 const ROW_STEP: f32 = 58.0;
 const SEGMENT_H: f32 = 32.0;
@@ -399,7 +402,7 @@ impl SettingsPanelLayout {
         let button_radius = CLOSE_HALF * scale;
         (
             self.left + self.hw * 2.0 - button_radius * 2.0,
-            self.top + button_radius * 2.0,
+            self.top + (HEADER_TOP + TITLE_SIZE * 0.5) * scale,
         )
     }
 }
@@ -751,7 +754,7 @@ pub fn build_with_ui(
     // Title
     // ------------------------------------------------------------------
     ui.begin_absolute_placement();
-    ui.set_cursor(layout.left + 24.0 * scale, layout.top + 20.0 * scale);
+    ui.set_cursor(layout.left + 28.0 * scale, layout.top + HEADER_TOP * scale);
     ui.set_available_width(layout.hw * 2.0 - 48.0 * scale);
     ui.label(
         &Label::new(copy.title)
@@ -786,10 +789,12 @@ pub fn build_with_ui(
     // Sidebar vertical divider (InkView directly — Divider widget is
     // horizontal only)
     // ------------------------------------------------------------------
+    let divider_top = layout.top + DIVIDER_TOP * scale;
+    let divider_bottom = layout.panel_bottom() - DIVIDER_BOTTOM * scale;
     let sidebar_div = InkView {
         id: UiId::settings_row("sidebar-divider"),
-        center: Point::new(layout.right_left, layout.cy),
-        extent: layout.hh - 28.0 * scale,
+        center: Point::new(layout.right_left, (divider_top + divider_bottom) * 0.5),
+        extent: (divider_bottom - divider_top) * 0.5,
         opacity: DIM[3],
         scene_blur: 0.0,
         stroke: 0.55 * scale,
@@ -891,7 +896,7 @@ pub fn build_with_ui(
         .find_map(|(cat, lbl)| (*cat == input.category).then_some(*lbl))
         .unwrap_or(input.category.key());
     ui.begin_absolute_placement();
-    ui.set_cursor(content_left, layout.top + 26.0 * scale);
+    ui.set_cursor(content_left, layout.top + HEADER_TOP * scale);
     ui.set_available_width(content_w);
     ui.label(
         &Label::new(cat_label)
@@ -1905,13 +1910,45 @@ mod tests {
             .find(|view| view.id == UiId::settings_row("sidebar-divider"))
             .expect("sidebar divider");
         let expected_layout = layout();
+        let divider_top = sidebar_divider.center.y - sidebar_divider.extent;
+        let divider_bottom = sidebar_divider.center.y + sidebar_divider.extent;
 
-        assert!((sidebar_divider.extent - (expected_layout.hh - 28.0)).abs() < f32::EPSILON);
+        assert!((divider_top - (expected_layout.top + DIVIDER_TOP)).abs() < f32::EPSILON);
+        assert!(
+            (divider_bottom - (expected_layout.panel_bottom() - DIVIDER_BOTTOM)).abs()
+                < f32::EPSILON
+        );
         assert!((sidebar_divider.stroke - 0.55).abs() < f32::EPSILON);
         assert!(!settings_ink
             .views
             .iter()
             .any(|view| view.id == UiId::settings_row("bottom-divider")));
+    }
+
+    #[test]
+    fn header_and_first_section_follow_shared_alignment_lines() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let text = &model.result.render.text;
+        let find_text = |id: &str| {
+            text.iter()
+                .find(|view| view.id == UiId::settings_row(id))
+                .unwrap_or_else(|| panic!("missing settings text: {id}"))
+        };
+
+        let title = find_text("text-title");
+        let heading = find_text("category-heading");
+        let sidebar_apps = find_text("category-apps");
+        let sort_label = find_text("text-sort-label");
+        let (_, close_cy) = model.layout.close_center(1.0);
+
+        assert_eq!(title.rect.y, heading.rect.y);
+        assert_eq!(title.rect.x, sidebar_apps.rect.x);
+        assert_eq!(sidebar_apps.rect.y, sort_label.rect.y);
+        assert_eq!(heading.rect.x, sort_label.rect.x);
+        assert!((close_cy - CLOSE_HALF - title.rect.y).abs() < f32::EPSILON);
     }
 
     // ------------------------------------------------------------------
