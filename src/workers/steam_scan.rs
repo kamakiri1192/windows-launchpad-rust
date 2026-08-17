@@ -1,6 +1,6 @@
 //! Discover locally installed Steam apps from Steam library manifests.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -240,8 +240,13 @@ fn find_steam_icon(steam_root: &Path, library: &Path, manifest: &SteamManifest) 
 
     #[cfg(target_os = "macos")]
     {
-        let _ = (library, manifest);
-        find_small_client_icon(steam_root, &manifest.app_id)
+        // Steam's library cache only contains the small client artwork
+        // (usually 32px). Prefer the installed game's .app bundle so the
+        // icon worker can ask Launch Services for the same high-resolution
+        // representation Finder uses. Keep the cache image as a fallback for
+        // games without a macOS app bundle.
+        find_macos_app_bundle(library, manifest)
+            .or_else(|| find_small_client_icon(steam_root, &manifest.app_id))
     }
 }
 
@@ -397,6 +402,74 @@ fn normalized_executable_name(value: &str) -> String {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
+fn find_macos_app_bundle(library: &Path, manifest: &SteamManifest) -> Option<PathBuf> {
+    if manifest.install_dir.is_empty() {
+        return None;
+    }
+
+    let install_root = library
+        .join("steamapps")
+        .join("common")
+        .join(&manifest.install_dir);
+    if !install_root.is_dir() {
+        return None;
+    }
+
+    // A Steam game may put its app bundle directly in the install directory
+    // or one level below it. A small bounded walk also covers common layouts
+    // such as `Game.app/Contents/...` without descending into an app bundle's
+    // resources or traversing an entire library.
+    let mut pending = VecDeque::from([(install_root, 0usize)]);
+    let mut candidates = Vec::new();
+    while let Some((directory, depth)) = pending.pop_front() {
+        let Ok(children) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let path = child.path();
+            if path.extension().is_some_and(|ext| ext == "app") {
+                if path.join("Contents/Info.plist").is_file() {
+                    candidates.push(path);
+                }
+                continue;
+            }
+            if depth < 3 && child.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push_back((path, depth + 1));
+            }
+        }
+    }
+
+    let wanted_name = normalize_macos_bundle_name(&manifest.name);
+    let wanted_dir = normalize_macos_bundle_name(&manifest.install_dir);
+    candidates.sort_by_key(|path| {
+        let stem = path
+            .file_stem()
+            .map(|value| normalize_macos_bundle_name(&value.to_string_lossy()))
+            .unwrap_or_default();
+        let match_rank = if stem == wanted_name || stem == wanted_dir {
+            0
+        } else if (!wanted_name.is_empty() && stem.contains(&wanted_name))
+            || (!wanted_dir.is_empty() && stem.contains(&wanted_dir))
+        {
+            1
+        } else {
+            2
+        };
+        (match_rank, path.components().count(), path.clone())
+    });
+    candidates.into_iter().next()
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_macos_bundle_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn find_small_client_icon(steam_root: &Path, app_id: &str) -> Option<PathBuf> {
     let cache = steam_root.join("appcache").join("librarycache");
     for extension in ["jpg", "png", "jpeg"] {
@@ -514,6 +587,27 @@ mod tests {
             parse_library_paths(text),
             vec![PathBuf::from("/Volumes/Games/SteamLibrary")]
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn prefers_matching_installed_game_bundle_for_macos_icons() {
+        let library = temporary_directory("steam-macos-bundle");
+        let bundle = library.join("steamapps/common/Portal 2/Portal 2.app/Contents");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("Info.plist"), b"placeholder").unwrap();
+
+        let manifest = SteamManifest {
+            app_id: "620".to_string(),
+            name: "Portal 2".to_string(),
+            install_dir: "Portal 2".to_string(),
+        };
+        assert_eq!(
+            find_macos_app_bundle(&library, &manifest),
+            Some(library.join("steamapps/common/Portal 2/Portal 2.app"))
+        );
+
+        std::fs::remove_dir_all(library).unwrap();
     }
 
     #[test]
