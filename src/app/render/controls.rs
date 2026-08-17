@@ -195,7 +195,7 @@ impl App {
         let Some(r) = self.renderer.as_ref() else {
             return;
         };
-        let want_ime = self.folders.rename.is_some() || self.control.wants_keyboard();
+        let want_ime = self.folders.rename.is_some() || self.control.ime_attached();
         r.window.set_ime_allowed(want_ime);
         if want_ime {
             // Park the IME composition window at the caret so Japanese/IME

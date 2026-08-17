@@ -172,6 +172,16 @@ impl BottomControl {
             .is_some_and(|at| at.elapsed() < IME_CLOSE_GRACE)
     }
 
+    /// Whether the input method should stay attached right now. Unlike
+    /// [`Self::wants_keyboard`] this excludes [`Mode::Collapsing`]: keeping
+    /// the IME attached through the close animation leaves the conversion
+    /// candidate panel on screen after the field is gone. Detaching at close
+    /// time cancels the composition; trailing events are covered by
+    /// [`IME_CLOSE_GRACE`].
+    pub fn ime_attached(&self) -> bool {
+        matches!(self.mode, Mode::Field | Mode::Expanding)
+    }
+
     /// Press the close affordance (× button): clear the query and collapse.
     pub fn press_close(&mut self) {
         self.query.clear();
@@ -612,6 +622,16 @@ mod tests {
         // Expired grace: age the timestamp past the window.
         c.closed_at = Some(Instant::now() - IME_CLOSE_GRACE - Duration::from_millis(1));
         assert!(!c.closed_recently());
+    }
+
+    #[test]
+    fn ime_attached_excludes_collapsing() {
+        let mut c = bc();
+        c.mode = Mode::Field;
+        assert!(c.ime_attached());
+        c.press_close();
+        assert_eq!(c.mode, Mode::Collapsing);
+        assert!(!c.ime_attached());
     }
 
     #[test]
