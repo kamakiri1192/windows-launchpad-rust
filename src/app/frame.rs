@@ -251,10 +251,9 @@ impl App {
         // point at the wrong texels and render garbled this frame. The opening
         // check at the top of `tick_frame` only catches growth from the
         // *previous* frame; rebuild the retained Grid lane once more here so
-        // no stale quads reach the GPU this frame. (Transient lanes are
-        // regenerated every frame, so any pre-grow UVs they carry self-correct
-        // next frame — at worst a single imperceptible frame on a short-lived
-        // surface.)
+        // no stale quads reach the GPU this frame. Text lanes with retained
+        // caches are rebuilt in the same frame below — a fix that crosses a
+        // frame boundary shows one garbled frame first (flicker).
         if self
             .text
             .as_mut()
@@ -262,6 +261,20 @@ impl App {
         {
             self.relayout();
             self.invalidate_text_quads_caches();
+            // Dropping the caches alone would leave the pre-growth quads on
+            // screen for one frame and snap to the rebuilt text on the next —
+            // visible flicker. Re-run every text-bearing lane builder now, in
+            // this same frame, so the model handed to prepare() already uses
+            // post-growth UVs. The builders read current state and are
+            // idempotent, so a second pass is safe.
+            let control_shape = self.render_bottom_control();
+            self.render_gear(control_shape);
+            self.render_settings_panel();
+            self.render_folder_panel();
+            if self.context_menu.is_active() {
+                self.render_context_menu();
+            }
+            self.render_debug_overlay();
         }
 
         // Submit one complete renderer-neutral frame model. Renderer-side
