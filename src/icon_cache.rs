@@ -51,8 +51,10 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// v7: macOS FullBleedアイコンの影を本体のサイズ・中心計算から除外。
 /// v7: prefers high-resolution icons from installed macOS Steam app bundles
 /// instead of Steam's small library-cache artwork.
+/// v8: crops macOS FullBleed icons to the hard-alpha body envelope so cached
+/// soft-fringe pixels from the previous normalizer are regenerated.
 #[cfg(target_os = "macos")]
-pub const EXTRACTION_VERSION: u32 = 7;
+pub const EXTRACTION_VERSION: u32 = 8;
 #[cfg(not(target_os = "macos"))]
 pub const EXTRACTION_VERSION: u32 = 5;
 

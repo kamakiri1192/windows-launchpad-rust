@@ -112,9 +112,27 @@ dy = (S - new_h) / 2
 
 配置: 幾何学中央配置（現行の `dx`, `dy` 計算を維持）。v1 では光学補正なし。
 
-### 4.2 FullBleed の特別扱い（不変保証）
+### 4.2 macOS `.app` の FullBleed 本体crop
 
-`scale = 1.0` で現行 normalize と完全同等。Safari, App Store 等は 1 ピクセルも変わらない。ただし現行は `crop_to_opaque_bounds` を全アイコンに適用するが、FullBleed も crop される点は現行同等（squircle の透明角が crop 対象）。実は FullBleed の bbox は squircle 内接矩形になり、これを S に fit すると現行と同じ結果になる。
+macOSの `NSWorkspace.iconForFile` から得る128×128画像には、アプリ本体の外側にOS合成の影・半透明縁が含まれる。通常の `alpha >= 11` 外接矩形を拡大すると、その影も一緒に拡大され、App Store等で本体の右辺・下辺がタイル端まで届かない。
+
+このため、次のすべてを満たすmacOS `.app` だけは、不透明な本体の正方形をcropして128×128へ拡大する。
+
+- 分類が `FullBleed`
+- `alpha >= 224` の外接矩形が縦横5%以内のほぼ正方形
+- その外接矩形内の `alpha >= 224` 充填率が90%以上
+- `alpha >= 224` マスクの左右対称度・上下対称度が各99%以上
+- 短辺を使った中央正方形化で失う `alpha >= 224` 画素が2%以下
+
+条件を満たさない場合は従来の汎用normalizeへfallbackする。これにより、Preview、Migration Assistant、縦長・横長本体など、`solid_fill`だけではFullBleedになった自由形アイコンを正方形cropしない。Windows、Steamの画像ファイル経路、macOSでも `.app` 以外の画像はこの分岐に入らない。
+
+### 4.3 閾値の検証範囲
+
+2026-08-24時点のmacOS 15.7.7実機で257個の `.app` を本番と同じNSWorkspace経路から抽出した。分類はFullBleed 206、Solid 45、ThinLine 6。候補判定はFullBleedのうち175件に適用され、Solid/ThinLine 51件の出力は変更ゼロだった。
+
+GitHub Actionsに保存されたmacOS 14.8.7、15.7.7、26.5.2のApp Store／Activity Monitor原画像でも確認した。3 OSとも `alpha >= 224` 外接矩形は104×104@(12,12)、対称度は99%以上で、macOS 26の最低充填率は93.05%だったため上記条件を満たす。
+
+ただし、多数アプリの分布検証はmacOS 15.7.7の1実機に限る。取得画像はOSとNSWorkspaceの描画結果に依存するため、別OSで全アプリへ一般化できたとは扱わない。互換性CIのmetadataでは `alpha >= 224` 外接矩形・充填率・対称度も記録し、OS更新時に判定根拠を比較する。
 
 ## 5. 影響範囲と変更点
 
@@ -128,6 +146,7 @@ dy = (S - new_h) / 2
 | `src/icon_cache.rs` | `CachedIcon` に `category`, `scale` 追加。`SCHEMA_VERSION` 1→2。`EXTRACTION_VERSION` バンプ（Win4→5, mac5→6） |
 | `src/workers/icon_worker.rs` | normalize が返す情報（`category`, `scale`）をキャッシュ書込に渡す。※ normalize のシグネチャ変更に追随 |
 | `examples/icon_audit.rs`（新規） | 検証ツール。`Cargo.toml` に `[[example]]` 追加 |
+| `examples/macos_icon_normalization_audit.rs` | PR #201、alpha>=128案、最終候補を全件比較し、JSON/TSV/コンタクトシートを出力 |
 
 ### 5.2 変更しないもの
 
@@ -164,8 +183,9 @@ pub const SCALE_SOLID: f64 = 0.74;
 ## 7. 検証戦略
 
 - `examples/icon_audit.rs`: 全 `.app` から原画像取得→分類→スケール適用→コンタクトシート PNG 出力
+- `examples/macos_icon_normalization_audit.rs`: 同一の実機抽出集合に現行・候補を適用し、分類数、変更件数、fallback理由、外れ値コンタクトシートを出力
 - ユニットテスト（`sizing.rs`）: 合成画像で `classify` の回帰
-- `normalize.rs` 既存テスト: FullBleed は現行と同等であることを保証（`scale=1.0` の出力が現行と同じ）
+- `normalize.rs` テスト: 影の上下左右・全周方向に依存せず同じ本体出力になること、非対称・低充填・非正方形・非FullBleedがfallbackすることを保証
 - `cargo test` 全通過 + QA scenario（`qa/*.json`）が影響受けないこと（QA fixture は 128px solid を直接 atlas 書き込みで normalize 未経由）
 
 ## 8. 実装フェーズ
