@@ -963,6 +963,27 @@ mod tests {
     }
 
     #[test]
+    fn child_label_is_panel_space_instead_of_a_child_hit() {
+        let value = model(1, 1.0, 1.0);
+        let label = value
+            .result
+            .render
+            .text
+            .iter()
+            .find(|text| text.style.role == TextRole::FolderItemLabel)
+            .expect("folder child label should render");
+
+        assert!(matches!(
+            value
+                .result
+                .hits
+                .hit_test(label.rect.center())
+                .map(|hit| &hit.target),
+            Some(HitTarget::FolderPanel { .. })
+        ));
+    }
+
+    #[test]
     fn title_panel_and_backdrop_follow_modal_z_order() {
         let value = model(4, 1.0, 1.0);
         let title = value

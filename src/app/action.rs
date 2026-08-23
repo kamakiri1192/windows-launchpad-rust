@@ -764,7 +764,7 @@ impl App {
                 self.pressed_on_control = true;
             }
             PressAction::EditGrid => {
-                let hit = self.grid_hit_at_pointer(px, py);
+                let hit = self.edit_grid_hit_at_pointer(px, py);
                 let badge_hit = matches!(hit, crate::layout::grid::GridHit::App(idx)
                     if matches!(self.visible_launcher_items().get(idx),
                         Some(crate::domain::launcher_item::LauncherItem::App(_)))

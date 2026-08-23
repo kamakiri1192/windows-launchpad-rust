@@ -63,6 +63,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `move`: pointer をセマンティックな対象へ移動する。
 - `right_click`: 現在のpointer位置でproduction input routerを通して右クリックする。
 - `pointer_down` / `pointer_up`: production と同じ press/release classifier を通す。
+- `long_press`: 現在のトップレベル項目またはフォルダ子要素を押し、production と同じ長押し閾値・編集モード遷移を決定的な時刻で評価する。
 - `type_text` / `commit_rename`: フォルダ名入力を検証する。
 - `escape` / `exit_edit_mode`: 状態の優先順位を検証する。
 - `scroll_sample`: platform adapterで正規化済みのscroll sampleをproduction
@@ -72,7 +73,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
   `direction_inverted_from_device`をproduction `ScrollSampleAdapter`へ渡す。
   `expected_canonical_dx/dy`によりOSが設定反映済みの符号を二重反転していないことを検証する。
 
-`move.target` は絶対座標のほか、`grid_item`、`folder_child`、`folder_title`、フォルダパネル内の相対位置を指定できます。レイアウト変更後も固定座標を書き直さずに同じ意図を再生できます。
+`move.target` は絶対座標のほか、`grid_item`、`grid_item_point`、`grid_item_label`、`folder_child`、`folder_child_label`、`folder_title`、フォルダパネル内の相対位置を指定できます。レイアウト変更後も固定座標を書き直さずに同じ意図を再生できます。`grid_item_label` と `folder_child_label` は、編集モード中にラベルがドラッグ対象にならず終了用の空き領域として働くことを確認するためのセマンティック座標です。
 
 `scroll_sample`の`canonical_dx > 0`はvisible gridが右へ動くproduction内部座標です。
 `scroll_sample`単独ではnative deltaやnatural scrolling設定を検証せず、platform
@@ -170,6 +171,7 @@ dismissし、メニューだけ閉じてフォルダーが開いたままにな�
 - `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして通常アプリと別フォルダの上へ順に移動します。Liquid Glass面と小アイコンが共通中心を保つ一体のプレビューとして最前面で拡大・wiggle・追従し、下のアプリアイコンへ潜らず、別フォルダのLiquid Glassとは融合しないことを確認します。
 - `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず対象行へ縦方向に25%入った時点でライブ並べ替えが成立することを確認します。
 - `qa/edit_drag_wiggle_continuity.json`: 先に編集モードへ入り、wiggleが進んだ状態でフォルダと通常アプリを順に持ち上げます。pointer downの前後で回転・上下動の位相が0へ戻らず、ドラッグ中も同じ波形を継続することを60fps連番で確認します。
+- `qa/edit_mode_label_exit.json`: トップレベルとフォルダ内でアイコンを長押しして編集モードへ入り、それぞれのアプリ名をクリックすると項目を持ち上げず編集モードが終了することを確認します。
 - `qa/trackpad_reversal_main.json`: 3ページmain gridで、2ページ目から
   `+0.020P → -0.015P → +0.010P → -0.450P`をreleaseせず入力し、その後
   `+0.700P → -0.850P → -0.300P`のdeep reverseを再生します。

@@ -8,6 +8,8 @@
 //! - the edit badge center / radius / slop (shared by the renderer's badge
 //!   source geometry and the pointer hit-test, so a visible badge always clicks
 //!   where it renders);
+//! - the edit press hit, which lets only an icon/tile square start a drag and
+//!   treats its label as empty page space for exiting edit mode;
 //! - the empty-cell drop hit (a thin wrapper over
 //!   [`GridLayout::hit_test_tile_cell`] that explicitly excludes the label
 //!   area, mirroring the rule that app *launch* includes the label slop but
@@ -32,7 +34,7 @@
 //! reached through [`BottomControlPointerIntent::EditGear`]; edit mode reuses
 //! that boundary rather than duplicating the gear geometry.
 
-use crate::layout::grid::GridLayout;
+use crate::layout::grid::{GridHit, GridLayout};
 use crate::ui_model::geometry::{Point, Rect};
 
 /// Configured (pre-gutter-clamp) width of the edit-mode edge-autoscroll zone,
@@ -160,6 +162,30 @@ pub fn badge_hit(
     let (tx, ty) = layout.tile_position(viewport_w, idx);
     let geom = EditBadgeGeometry::for_tile(layout, tx + scroll_x, ty);
     geom.contains_point(x, y)
+}
+
+/// Classify an edit-mode press against visible launcher items.
+///
+/// Normal launch clicks intentionally include the label band below an icon,
+/// but edit mode reserves that band as empty page space so clicking an app name
+/// exits editing. Only the rendered icon/tile square can start a drag or own
+/// the delete badge. The same rule applies to app and folder tiles because
+/// both occupy the visible launcher-item stream.
+pub fn press_hit_at(
+    layout: &GridLayout,
+    viewport_w: f32,
+    x: f32,
+    y: f32,
+    scroll_x: f32,
+    item_count: usize,
+) -> GridHit {
+    if !layout.frame_contains_point(viewport_w, x, y) {
+        return GridHit::OutsideFrame;
+    }
+    match layout.hit_test_tile_cell(viewport_w, x, y, scroll_x, item_count) {
+        Some(index) => GridHit::App(index),
+        None => GridHit::EmptyInFrame,
+    }
 }
 
 /// Resolve the drop cell (visible index) under a screen-space pointer for an
@@ -443,6 +469,63 @@ mod tests {
         // Just outside the hit radius misses.
         let off_edge = cx + g.edit_badge_radius() + g.edit_badge_hit_slop() * 1.1;
         assert!(!badge_hit(&g, 1280.0, off_edge, cy, 0.0, 0));
+    }
+
+    // ---- edit press hit (icon-only; labels exit editing) -------------------
+
+    #[test]
+    fn edit_press_hits_the_visible_icon_square() {
+        let g = layout();
+        let (x, y) = g.tile_position(1280.0, 0);
+        assert_eq!(
+            press_hit_at(
+                &g,
+                1280.0,
+                x + g.tile_size * 0.5,
+                y + g.tile_size * 0.5,
+                0.0,
+                1,
+            ),
+            GridHit::App(0)
+        );
+    }
+
+    #[test]
+    fn edit_press_treats_the_app_label_as_empty_page_space() {
+        let g = layout();
+        let (x, y) = g.tile_position(1280.0, 0);
+        let label_x = x + g.tile_size * 0.5;
+        let label_y = y + g.tile_size + g.scaled(24.0);
+
+        assert_eq!(
+            g.hit_test_app(1280.0, label_x, label_y, 0.0, 1),
+            Some(0),
+            "normal launch clicks must keep accepting the label"
+        );
+        assert_eq!(
+            press_hit_at(&g, 1280.0, label_x, label_y, 0.0, 1),
+            GridHit::EmptyInFrame,
+            "edit-mode label clicks must exit instead of starting a drag"
+        );
+    }
+
+    #[test]
+    fn edit_press_respects_scroll_and_visible_item_count() {
+        let g = layout();
+        let per_page = g.cols * g.rows;
+        let scroll_x = -g.page_width(1280.0);
+        let (content_x, y) = g.tile_position(1280.0, per_page);
+        let x = content_x + scroll_x + g.tile_size * 0.5;
+        let y = y + g.tile_size * 0.5;
+
+        assert_eq!(
+            press_hit_at(&g, 1280.0, x, y, scroll_x, per_page + 1),
+            GridHit::App(per_page)
+        );
+        assert_eq!(
+            press_hit_at(&g, 1280.0, x, y, scroll_x, per_page),
+            GridHit::EmptyInFrame
+        );
     }
 
     // ---- drop cell hit (empty cell / rightmost / label area) ----------------

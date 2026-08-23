@@ -677,8 +677,10 @@ pub enum QaTarget {
     Point { x: f32, y: f32 },
     GridItem { index: usize },
     GridItemPoint { index: usize, x: f32, y: f32 },
+    GridItemLabel { index: usize },
     ContextMenuRow { index: usize },
     FolderChild { index: usize },
+    FolderChildLabel { index: usize },
     FolderTitle,
     FolderPanel { x: f32, y: f32 },
 }
@@ -1545,6 +1547,15 @@ impl App {
                     // runner speed while exercising the production long-press
                     // threshold, slop, and edit-entry path.
                     self.maybe_long_press_into_edit(ready_at);
+                } else if let Some(ready_at) = self
+                    .folders
+                    .pressed_child
+                    .as_ref()
+                    .map(|press| press.start + crate::features::edit_mode::LONG_PRESS_THRESHOLD)
+                {
+                    // Folder children use their own press state but the same
+                    // production long-press threshold and transition.
+                    self.begin_folder_child_edit_drag_if_ready(ready_at);
                 }
             }
             QaAction::PointerUp => {
@@ -1754,6 +1765,14 @@ impl App {
                         rect.y + rect.height * y.clamp(0.0, 1.0),
                     )
                 }),
+            QaTarget::GridItemLabel { index } => {
+                self.visible_launcher_items().get(*index)?;
+                let (viewport_w, _viewport_h) = self.viewport_phys();
+                let scroll_x = self.scroller.as_ref().map_or(0.0, |s| s.position);
+                let (x, y, width, height) =
+                    crate::layout::grid::label_rect(&self.layout, viewport_w as f32, *index);
+                Some(Point::new(x + scroll_x + width * 0.5, y + height * 0.5))
+            }
             QaTarget::ContextMenuRow { index } => self
                 .context_menu_layout
                 .as_ref()?
@@ -1766,6 +1785,16 @@ impl App {
                 .child_rects
                 .get(*index)
                 .map(|rect| rect.center()),
+            QaTarget::FolderChildLabel { index } => self
+                .folder_layout
+                .as_ref()?
+                .result
+                .render
+                .text
+                .iter()
+                .filter(|text| text.style.role == crate::ui_model::text::TextRole::FolderItemLabel)
+                .nth(*index)
+                .map(|text| text.rect.center()),
             QaTarget::FolderTitle => self
                 .folder_layout
                 .as_ref()
@@ -1918,6 +1947,33 @@ mod tests {
             }
         ));
         assert!(matches!(scenario.actions[3].action, QaAction::LongPress));
+    }
+
+    #[test]
+    fn edit_mode_label_exit_scenario_covers_grid_and_folder_labels() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/edit_mode_label_exit.json")).unwrap();
+
+        assert!(scenario.actions.iter().any(|action| matches!(
+            action.action,
+            QaAction::Move {
+                target: QaTarget::GridItemLabel { .. }
+            }
+        )));
+        assert!(scenario.actions.iter().any(|action| matches!(
+            action.action,
+            QaAction::Move {
+                target: QaTarget::FolderChildLabel { .. }
+            }
+        )));
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::LongPress))
+                .count(),
+            2
+        );
     }
 
     #[test]
