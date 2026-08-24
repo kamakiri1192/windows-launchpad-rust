@@ -304,7 +304,11 @@ Current behavior to preserve:
   `frame_contains_point` returns `None` even if it is geometrically over a tile.
 - **Label area click behavior.** A click in the label slop band below a tile
   resolves to that tile's app (the slop widens the cell rectangle, not a
-  separate target).
+  separate target) in normal mode. While editing,
+  `layout::edit_mode::press_hit_at` uses the icon/tile square only, so the same
+  label band is empty page space and clicking it exits edit mode instead of
+  starting a drag. Folder-child hit regions follow the same icon-only editing
+  contract; their labels resolve to the folder panel.
 - **Gaps and empty slots.** Points between cells (gaps, inter-page gutters)
   return `None`. Empty slots past the last visible app return `None` for
   `hit_test_app` (app-count-bounded) but `Some` for `hit_test_tile_cell`

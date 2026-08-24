@@ -1,0 +1,43 @@
+{
+  "name": "edit-mode-label-exit",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 2400,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      { "id": "qa-label-child-0", "name": "フォルダ内の長いアプリ名" },
+      { "id": "qa-label-child-1", "name": "Folder Child Two" },
+      { "id": "qa-label-top-0", "name": "トップレベルの長いアプリ名" },
+      { "id": "qa-label-top-1", "name": "Top Level Two" }
+    ],
+    "folders": [
+      {
+        "id": "qa-label-folder",
+        "name": "ラベル判定",
+        "children": ["qa-label-child-0", "qa-label-child-1"]
+      }
+    ],
+    "items": [
+      { "kind": "folder", "id": "qa-label-folder" },
+      { "kind": "app", "id": "qa-label-top-0" },
+      { "kind": "app", "id": "qa-label-top-1" }
+    ]
+  },
+  "actions": [
+    { "at_ms": 50, "type": "move", "target": { "kind": "grid_item", "index": 1 } },
+    { "at_ms": 100, "type": "long_press" },
+    { "at_ms": 250, "type": "pointer_up" },
+    { "at_ms": 450, "type": "move", "target": { "kind": "grid_item_label", "index": 1 } },
+    { "at_ms": 500, "type": "pointer_down" },
+    { "at_ms": 550, "type": "pointer_up" },
+    { "at_ms": 750, "type": "open_folder", "id": "qa-label-folder" },
+    { "at_ms": 1300, "type": "move", "target": { "kind": "folder_child", "index": 0 } },
+    { "at_ms": 1350, "type": "long_press" },
+    { "at_ms": 1500, "type": "pointer_up" },
+    { "at_ms": 1750, "type": "move", "target": { "kind": "folder_child_label", "index": 0 } },
+    { "at_ms": 1800, "type": "pointer_down" },
+    { "at_ms": 1850, "type": "pointer_up" },
+    { "at_ms": 2200, "type": "escape" }
+  ]
+}

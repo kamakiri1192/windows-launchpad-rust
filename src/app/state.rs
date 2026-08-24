@@ -1009,6 +1009,23 @@ impl App {
             .classify(w as f32, x, y, scroll_x, visible_count)
     }
 
+    /// Classify an edit-mode press using only each visible item's icon square.
+    /// Labels remain launchable in normal mode, but count as empty page space
+    /// while editing so clicking a name exits edit mode.
+    pub(crate) fn edit_grid_hit_at_pointer(&self, x: f32, y: f32) -> crate::layout::grid::GridHit {
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let visible_count = self.visible_launcher_items().len();
+        crate::layout::edit_mode::press_hit_at(
+            &self.layout,
+            w as f32,
+            x,
+            y,
+            scroll_x,
+            visible_count,
+        )
+    }
+
     pub(crate) fn pointer_over_page_glass(&self, x: f32, y: f32) -> bool {
         let (w, _h) = self.viewport_phys();
         self.layout.frame_contains_point(w as f32, x, y)

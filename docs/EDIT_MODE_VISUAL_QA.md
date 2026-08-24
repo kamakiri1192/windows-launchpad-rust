@@ -24,6 +24,10 @@ click tests:
 - Dragging to the rightmost two columns works.
 - Holding a dragged icon near the page-frame edge autoscrolls by one page.
 - Clicking Done exits edit mode and removes badges/wiggle.
+- Clicking a top-level app name exits edit mode; only its icon image starts a
+  drag or owns its delete badge.
+- The same icon-only press rule applies to apps inside an open folder: clicking
+  a child name exits edit mode without lifting that child.
 - Clicking a delete badge hides that app from the visible grid.
 - Reorder and hidden-app state survive a full process restart.
 
@@ -298,6 +302,12 @@ Before considering an edit-mode visual change complete:
 - Capture an edge-hold screenshot showing page autoscroll.
 - Confirm no `launchpad-windows.exe` process is left running from temporary
   QA unless intentionally relaunched for the user.
+
+For the icon-only edit press regression, run `qa/edit_mode_label_exit.json` as
+described in [GPU_SEQUENCE_QA.md](GPU_SEQUENCE_QA.md). In its manifest and
+frames, confirm `editing` becomes `true` after each icon long-press and becomes
+`false` after clicking `grid_item_label` and `folder_child_label`, without a
+new top-level or folder-child drag starting on either label.
 
 ## Phase 8 Folder QA
 
