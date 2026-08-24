@@ -164,6 +164,7 @@ pub(crate) struct OwnedGridItem {
     pub key: String,
     pub name: String,
     pub uv: Option<crate::icons::UvRect>,
+    pub hide_fill: bool,
     /// Ordered first-page preview slots. `None` retains an undiscovered
     /// child's position without drawing it.
     pub preview_uvs: Vec<Option<crate::icons::UvRect>>,
@@ -901,6 +902,7 @@ impl App {
                         item,
                         name: record.name.clone(),
                         uv: record.uv,
+                        hide_fill: record.uv.is_some() && record.hide_tile_fill,
                         preview_uvs: Vec::new(),
                     }
                 })
@@ -921,6 +923,7 @@ impl App {
                         key: item.stable_key(),
                         name: record.name.clone(),
                         uv: record.uv,
+                        hide_fill: record.uv.is_some() && record.hide_tile_fill,
                         preview_uvs: Vec::new(),
                     })
                 }
@@ -950,6 +953,7 @@ impl App {
                         key: item.stable_key(),
                         name: folder.name.clone(),
                         uv: None,
+                        hide_fill: false,
                         preview_uvs,
                     })
                 }

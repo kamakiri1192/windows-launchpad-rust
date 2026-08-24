@@ -898,8 +898,12 @@ impl App {
         };
         for msg in messages {
             match msg {
-                WorkerMessage::Icon(IconResult::Loaded { app_id, image }) => {
-                    self.apply_icon(&app_id, image, false);
+                WorkerMessage::Icon(IconResult::Loaded {
+                    app_id,
+                    image,
+                    hide_tile_fill,
+                }) => {
+                    self.apply_icon(&app_id, image, hide_tile_fill, false);
                 }
                 WorkerMessage::Icon(IconResult::Failed { app_id, error }) => {
                     self.fail_icon(&app_id, error);

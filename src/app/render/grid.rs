@@ -50,6 +50,7 @@ impl App {
                 key: entry.key.as_str(),
                 name: entry.name.as_str(),
                 uv: entry.uv,
+                hide_fill: entry.hide_fill,
                 preview_uvs: &entry.preview_uvs,
             })
             .collect();
@@ -436,6 +437,7 @@ impl App {
                 key: entry.key.as_str(),
                 name: entry.name.as_str(),
                 uv: entry.uv,
+                hide_fill: entry.hide_fill,
                 preview_uvs: &entry.preview_uvs,
             })
             .collect();

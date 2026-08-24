@@ -14,6 +14,9 @@ pub struct GridItem<'a> {
     pub key: &'a str,
     pub name: &'a str,
     pub uv: Option<UvRect>,
+    /// Suppress the colored backing tile after a complete FullBleed icon has
+    /// loaded. Missing icons and freeform categories keep the backing tile.
+    pub hide_fill: bool,
     pub preview_uvs: &'a [Option<UvRect>],
 }
 

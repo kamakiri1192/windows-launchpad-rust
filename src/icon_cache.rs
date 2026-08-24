@@ -53,8 +53,10 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// instead of Steam's small library-cache artwork.
 /// v8: crops macOS FullBleed icons to the hard-alpha body envelope so cached
 /// soft-fringe pixels from the previous normalizer are regenerated.
+/// v9: recognizes dense, symmetric translucent macOS tile bodies when the
+/// opaque envelope contains only non-square foreground artwork.
 #[cfg(target_os = "macos")]
-pub const EXTRACTION_VERSION: u32 = 8;
+pub const EXTRACTION_VERSION: u32 = 9;
 #[cfg(not(target_os = "macos"))]
 pub const EXTRACTION_VERSION: u32 = 5;
 

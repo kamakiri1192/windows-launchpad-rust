@@ -164,16 +164,18 @@ impl App {
                     app_id.as_str().to_owned(),
                     record.name.clone(),
                     record.uv,
+                    record.uv.is_some() && record.hide_tile_fill,
                     Color::rgba(r, g, b, 1.0),
                 ))
             })
             .collect();
         let children: Vec<_> = owned
             .iter()
-            .map(|(key, label, uv, color)| FolderChildInput {
+            .map(|(key, label, uv, hide_fill, color)| FolderChildInput {
                 key,
                 label,
                 uv: *uv,
+                hide_fill: *hide_fill,
                 color: *color,
             })
             .collect();
@@ -269,7 +271,13 @@ impl App {
                         phase: 0.0,
                         lift: 18.0 * self.scale_factor,
                         scale: 1.12,
-                        flags: TileAnim::FLAG_FIXED | TileAnim::FLAG_DRAG,
+                        flags: TileAnim::FLAG_FIXED
+                            | TileAnim::FLAG_DRAG
+                            | if record.uv.is_some() && record.hide_tile_fill {
+                                TileAnim::FLAG_NO_FILL
+                            } else {
+                                0
+                            },
                     };
                     let (r, g, b) = crate::layout::grid::app_color(children.len());
                     model

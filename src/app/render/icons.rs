@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use crate::domain::app_diff::{AppDiff, SnapshotEntry};
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::{AppRecord, IconState};
-use crate::grid;
 use crate::icon_cache::{CacheProbe, CachedIcon};
 use crate::icons::normalize::DecodedIcon;
 use crate::startup_timer::prefix;
@@ -40,7 +39,13 @@ impl App {
     /// Apply one freshly-extracted (or cached) icon: write it into the slot,
     /// update the registry UV + state, push the cell to the GPU, and refresh
     /// the icon instance buffer so the new UV is picked up.
-    pub(crate) fn apply_icon(&mut self, app_id: &AppId, image: DecodedIcon, from_cache: bool) {
+    pub(crate) fn apply_icon(
+        &mut self,
+        app_id: &AppId,
+        image: DecodedIcon,
+        hide_tile_fill: bool,
+        from_cache: bool,
+    ) {
         let Some(slot) = self.registry.get(app_id).map(|r| r.slot) else {
             return;
         };
@@ -86,6 +91,7 @@ impl App {
         self.registry.update(app_id, |rec| {
             rec.uv = Some(new_uv);
             rec.icon_state = state;
+            rec.hide_tile_fill = hide_tile_fill;
         });
         // Refresh icon instances so the new UVs are uploaded. Cheap (hundreds
         // of f32s) and keeps the draw call in sync with the atlas.
@@ -113,26 +119,11 @@ impl App {
         }
     }
 
-    /// Rebuild the icon-instance buffer from the current registry + layout and
-    /// push it to the GPU. Called whenever any app's UV may have changed.
+    /// Rebuild the grid instance buffers after an icon or its category changes.
+    /// FullBleed classification affects both the icon UV and the backing-tile
+    /// visibility, so refreshing only the icon buffer would leave a stale fill.
     pub(crate) fn rebuild_icon_instances(&mut self) {
-        let owned = self.grid_items_owned();
-        let items: Vec<grid::GridItem<'_>> = owned
-            .iter()
-            .map(|entry| grid::GridItem {
-                key: entry.key.as_str(),
-                name: entry.name.as_str(),
-                uv: entry.uv,
-                preview_uvs: &entry.preview_uvs,
-            })
-            .collect();
-        let (w, _h) = self.viewport_phys();
-        let visible_items = self.visible_launcher_items();
-        let anim = self.edit_anim(&visible_items);
-        let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
-        self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
-        self.suppress_active_folder_grid_icons(&mut icon_instances);
-        self.render_model.icons = Some(icon_instances);
+        self.refresh_spring_instances();
     }
 
     /// Mark an app's icon as failed (placeholder stays), logging the error.
@@ -180,6 +171,7 @@ impl App {
             self.registry.update(id, |rec| {
                 rec.uv = None;
                 rec.icon_state = IconState::Missing;
+                rec.hide_tile_fill = false;
             });
         }
         self.rebuild_icon_instances();
@@ -250,6 +242,7 @@ impl App {
                     slot,
                     icon_state: IconState::Missing,
                     uv: None,
+                    hide_tile_fill: false,
                     version: entry.version.clone(),
                     publisher: entry.publisher.clone(),
                     identifier: entry.identifier.clone(),
@@ -391,7 +384,8 @@ impl App {
 
     /// Apply a cache-served icon without going through the worker.
     pub(crate) fn apply_cached_icon(&mut self, app_id: &AppId, cached: CachedIcon) {
-        self.apply_icon(app_id, cached.image, true);
+        let hide_tile_fill = cached.category == crate::icons::IconCategory::FullBleed;
+        self.apply_icon(app_id, cached.image, hide_tile_fill, true);
     }
 
     /// Apply a refresh diff: add new apps, update changed ones (re-extracting
@@ -447,6 +441,7 @@ impl App {
                     slot,
                     icon_state: IconState::Missing,
                     uv: None,
+                    hide_tile_fill: false,
                     version: entry.version.clone(),
                     publisher: entry.publisher.clone(),
                     identifier: entry.identifier.clone(),

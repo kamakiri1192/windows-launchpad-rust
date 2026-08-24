@@ -116,15 +116,17 @@ dy = (S - new_h) / 2
 
 macOSの `NSWorkspace.iconForFile` から得る128×128画像には、アプリ本体の外側にOS合成の影・半透明縁が含まれる。通常の `alpha >= 11` 外接矩形を拡大すると、その影も一緒に拡大され、App Store等で本体の右辺・下辺がタイル端まで届かない。
 
-このため、次のすべてを満たすmacOS `.app` だけは、不透明な本体の正方形をcropして128×128へ拡大する。
+このため、次のすべてを満たすmacOS `.app` だけは、本体の正方形をcropして128×128へ拡大する。まず `alpha >= 224` の不透明本体を試し、形状条件を満たさない場合に限り `alpha >= 128` の半透明本体を試す。後者は、半透明の角丸タイル内に縦長の不透明アートワークを持つiPhone Mirroringのようなアイコンを対象にする。
 
 - 分類が `FullBleed`
-- `alpha >= 224` の外接矩形が縦横5%以内のほぼ正方形
-- その外接矩形内の `alpha >= 224` 充填率が90%以上
-- `alpha >= 224` マスクの左右対称度・上下対称度が各99%以上
-- 短辺を使った中央正方形化で失う `alpha >= 224` 画素が2%以下
+- 対象alpha閾値の外接矩形が縦横5%以内のほぼ正方形
+- その外接矩形内の対象alpha画素の充填率が90%以上
+- 対象alphaマスクの左右対称度・上下対称度が各99%以上
+- 短辺を使った中央正方形化で失う対象alpha画素が2%以下
 
 条件を満たさない場合は従来の汎用normalizeへfallbackする。これにより、Preview、Migration Assistant、縦長・横長本体など、`solid_fill`だけではFullBleedになった自由形アイコンを正方形cropしない。Windows、Steamの画像ファイル経路、macOSでも `.app` 以外の画像はこの分岐に入らない。
+
+macOS 15.7.7実機の257件では、`alpha >= 224` でfallbackしたFullBleed 31件のうち、同じ安全条件を `alpha >= 128` で満たしたのはiPhone MirroringとLaunchpadの2件だった。Preview、Contacts、Migration Assistantなどは半透明fallbackでも条件を満たさない。
 
 ### 4.3 閾値の検証範囲
 
@@ -133,6 +135,18 @@ macOSの `NSWorkspace.iconForFile` から得る128×128画像には、アプリ�
 GitHub Actionsに保存されたmacOS 14.8.7、15.7.7、26.5.2のApp Store／Activity Monitor原画像でも確認した。3 OSとも `alpha >= 224` 外接矩形は104×104@(12,12)、対称度は99%以上で、macOS 26の最低充填率は93.05%だったため上記条件を満たす。
 
 ただし、多数アプリの分布検証はmacOS 15.7.7の1実機に限る。取得画像はOSとNSWorkspaceの描画結果に依存するため、別OSで全アプリへ一般化できたとは扱わない。互換性CIのmetadataでは `alpha >= 224` 外接矩形・充填率・対称度も記録し、OS更新時に判定根拠を比較する。
+
+### 4.4 背景タイルの表示
+
+アイコンの分類と取得状態に応じ、色付き背景タイルを次のように表示する。
+
+- 取得済みの `FullBleed`: 非表示。完成された角丸アイコンの半透明な四隅から、別形状の背景色が透ける二重輪郭を防ぐ。
+- `Solid` / `ThinLine`: 表示。不定形アイコンを色付きタイルに載せる見た目は現行仕様として維持する。
+- アイコン未取得・取得失敗: 表示。従来のfallbackとしてアプリの場所が空白にならないようにする。
+- フォルダ本体: 表示。閉じたフォルダの背景とプレビューアイコンの構造は変更しない。
+- 開いたフォルダ内の子アイコン: トップレベルと同じ規則を適用し、取得済み `FullBleed` の子だけ背景タイルを非表示にする。
+
+この判定は、ワーカーまたはキャッシュから取得した `IconCategory` をアプリレコードへ伝播し、グリッド生成時に既存の `FLAG_NO_FILL` を設定して行う。alpha画像そのものやタイル形状の数式は変更しない。
 
 ## 5. 影響範囲と変更点
 
@@ -144,16 +158,17 @@ GitHub Actionsに保存されたmacOS 14.8.7、15.7.7、26.5.2のApp Store／Act
 | `src/icons/normalize.rs` | `normalize_to` で sizing モジュールを呼び出し、crop→scale→中央配置を実装 |
 | `src/icons/mod.rs` | `sizing` モジュールの `pub use` 追加 |
 | `src/icon_cache.rs` | `CachedIcon` に `category`, `scale` 追加。`SCHEMA_VERSION` 1→2。`EXTRACTION_VERSION` バンプ（Win4→5, mac5→6） |
-| `src/workers/icon_worker.rs` | normalize が返す情報（`category`, `scale`）をキャッシュ書込に渡す。※ normalize のシグネチャ変更に追随 |
+| `src/workers/icon_worker.rs` | normalize が返す情報（`category`, `scale`）をキャッシュ書込に渡し、FullBleedの背景タイル非表示情報をUIへ伝える |
+| `src/domain/app_registry.rs`, `src/app/state.rs`, `src/grid.rs` | 取得済みFullBleedだけ既存の `FLAG_NO_FILL` を付与し、色付き背景タイルを非表示にする |
 | `examples/icon_audit.rs`（新規） | 検証ツール。`Cargo.toml` に `[[example]]` 追加 |
 | `examples/macos_icon_normalization_audit.rs` | PR #201、alpha>=128案、最終候補を全件比較し、JSON/TSV/コンタクトシートを出力 |
 
 ### 5.2 変更しないもの
 
 - アイコン抽出経路（`src/icons/extract.rs`, `src/platform/macos/apps.rs`）— 一切触らない
-- シェーダ（`src/shader_icon.wgsl`, `src/renderer/prepare.rs`, `IconInstance`）
+- シェーダ（既存の `FLAG_NO_FILL` を利用し、新しい描画式は追加しない）
 - アトラス（`src/renderer/icon_atlas.rs`）— `CELL=130`, スロット方式そのまま
-- グリッドレイアウト（`src/grid.rs`, `src/layout/grid.rs`）
+- グリッドの位置・寸法計算（`src/layout/grid.rs`）
 - タイル角丸マスク（normalize で焼き込むので、シェーダ側のマスクはそのまま）
 
 ### 5.3 パラメータ定数（確定値・Visual QA で微調整可能性）

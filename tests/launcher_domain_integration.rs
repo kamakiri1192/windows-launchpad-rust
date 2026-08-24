@@ -55,6 +55,7 @@ fn insert_app(reg: &mut AppRegistry, id: &str, name: &str) {
         version: String::new(),
         publisher: String::new(),
         identifier: String::new(),
+        hide_tile_fill: false,
     };
     r.slot = reg.alloc_slot();
     reg.insert(r);
