@@ -50,6 +50,7 @@ struct ShapeComparison {
     mask_changed_pixels_alpha_gt_0: u64,
     mask_changed_pixels_alpha_ge_11: u64,
     mask_changed_pixels_alpha_ge_128: u64,
+    mask_changed_pixels_alpha_ge_224: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +58,7 @@ struct AlphaGeometry {
     bbox_alpha_gt_0: Option<BoundingBox>,
     bbox_alpha_ge_11: Option<BoundingBox>,
     bbox_alpha_ge_128: Option<BoundingBox>,
+    bbox_alpha_ge_224: Option<BoundingBox>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -337,6 +339,7 @@ fn compare_shapes(baseline: &RgbaImage, candidate: &RgbaImage) -> ShapeCompariso
         mask_changed_pixels_alpha_gt_0: changed_alpha_mask_pixels(baseline, candidate, 1),
         mask_changed_pixels_alpha_ge_11: changed_alpha_mask_pixels(baseline, candidate, 11),
         mask_changed_pixels_alpha_ge_128: changed_alpha_mask_pixels(baseline, candidate, 128),
+        mask_changed_pixels_alpha_ge_224: changed_alpha_mask_pixels(baseline, candidate, 224),
     }
 }
 
@@ -345,6 +348,7 @@ fn alpha_geometry(image: &RgbaImage) -> AlphaGeometry {
         bbox_alpha_gt_0: alpha_bounding_box(image, 1),
         bbox_alpha_ge_11: alpha_bounding_box(image, 11),
         bbox_alpha_ge_128: alpha_bounding_box(image, 128),
+        bbox_alpha_ge_224: alpha_bounding_box(image, 224),
     }
 }
 
@@ -411,27 +415,30 @@ fn render_report(baseline: &str, comparisons: &[AppComparison]) -> String {
     }
     report.push_str("\n## Outer shape comparison\n\n");
     report.push_str(
-        "`bbox` is shown as `width×height at (x,y)`. `alpha ≥ 11` is the visible outer shape used by the current crop, and `alpha ≥ 128` is the opaque core. Mask differences count pixels whose threshold membership changed.\n\n",
+        "`bbox` is shown as `width×height at (x,y)`. `alpha ≥ 11` is the visible outer fringe, `alpha ≥ 128` is the classification core, and `alpha ≥ 224` is the opaque body candidate used by macOS normalization. Mask differences count pixels whose threshold membership changed.\n\n",
     );
     report.push_str(
-        "| App | Candidate OS | Source outer bbox (α≥11) | Source core bbox (α≥128) | Source mask diff (α≥11) | Normalized outer bbox (α≥11) | Normalized core bbox (α≥128) | Normalized mask diff (α≥11) |\n",
+        "| App | Candidate OS | Source outer bbox (α≥11) | Source core bbox (α≥128) | Source body bbox (α≥224) | Source mask diff (α≥224) | Normalized outer bbox (α≥11) | Normalized core bbox (α≥128) | Normalized body bbox (α≥224) | Normalized mask diff (α≥224) |\n",
     );
-    report.push_str("| --- | --- | --- | --- | ---: | --- | --- | ---: |\n");
+    report.push_str("| --- | --- | --- | --- | --- | ---: | --- | --- | --- | ---: |\n");
     for comparison in comparisons {
         report.push_str(&format!(
-            "| `{}` | `{}` | {} | {} | {} | {} | {} | {} |\n",
+            "| `{}` | `{}` | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             comparison.app,
             comparison.candidate_os,
             shape_bbox_pair(&comparison.source, |geometry| &geometry.bbox_alpha_ge_11),
             shape_bbox_pair(&comparison.source, |geometry| &geometry.bbox_alpha_ge_128),
+            shape_bbox_pair(&comparison.source, |geometry| &geometry.bbox_alpha_ge_224),
             shape_mask_diff(&comparison.source, |shape| shape
-                .mask_changed_pixels_alpha_ge_11),
+                .mask_changed_pixels_alpha_ge_224),
             shape_bbox_pair(&comparison.normalized, |geometry| &geometry
                 .bbox_alpha_ge_11,),
             shape_bbox_pair(&comparison.normalized, |geometry| &geometry
                 .bbox_alpha_ge_128,),
+            shape_bbox_pair(&comparison.normalized, |geometry| &geometry
+                .bbox_alpha_ge_224,),
             shape_mask_diff(&comparison.normalized, |shape| shape
-                .mask_changed_pixels_alpha_ge_11,),
+                .mask_changed_pixels_alpha_ge_224,),
         ));
     }
     report

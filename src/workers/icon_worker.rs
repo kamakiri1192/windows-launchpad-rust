@@ -23,6 +23,7 @@ use crate::icons::extract::{self, ComScope};
 #[cfg(target_os = "macos")]
 use crate::icons::normalize::normalize_macos_app_icon;
 use crate::icons::normalize::{normalize, DecodedIcon};
+use crate::icons::IconCategory;
 use crate::startup_timer::{self, prefix};
 
 /// Why we're asking for an icon. Drives logging only.
@@ -56,7 +57,11 @@ pub struct IconRequest {
 #[derive(Debug)]
 pub enum IconResult {
     /// Icon extracted (and written to the cache). `image` is normalized RGBA.
-    Loaded { app_id: AppId, image: DecodedIcon },
+    Loaded {
+        app_id: AppId,
+        image: DecodedIcon,
+        hide_tile_fill: bool,
+    },
     /// Extraction failed; UI should keep the placeholder.
     Failed { app_id: AppId, error: String },
 }
@@ -123,9 +128,10 @@ fn worker_loop(rx: Receiver<IconRequest>, cache: Arc<IconCache>, results: Sender
                 batch_count += 1;
 
                 let result = match outcome {
-                    Ok(Ok(image)) => IconResult::Loaded {
+                    Ok(Ok((image, hide_tile_fill))) => IconResult::Loaded {
                         app_id: req.app_id.clone(),
                         image,
+                        hide_tile_fill,
                     },
                     Ok(Err(err)) => IconResult::Failed {
                         app_id: req.app_id.clone(),
@@ -171,7 +177,7 @@ fn process_one(
     req: &IconRequest,
     cache: &IconCache,
     timer: &startup_timer::StartupTimer,
-) -> Result<DecodedIcon, String> {
+) -> Result<(DecodedIcon, bool), String> {
     // (1) Extraction: Shell/GDI/COM → raw RGBA. This is the expensive part.
     let extract_start = std::time::Instant::now();
     let raw = extract_request_icon(req).ok_or_else(|| {
@@ -231,7 +237,8 @@ fn process_one(
         eprintln!("icon-cache: write failed for app_id={}: {e}", req.app_id);
     }
 
-    Ok(image.image)
+    let hide_tile_fill = image.category == IconCategory::FullBleed;
+    Ok((image.image, hide_tile_fill))
 }
 
 fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {

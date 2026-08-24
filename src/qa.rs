@@ -1458,6 +1458,7 @@ impl App {
                 slot,
                 icon_state: IconState::Loaded,
                 uv: Some(uv),
+                hide_tile_fill: false,
                 version: String::new(),
                 publisher: String::new(),
                 identifier: String::new(),

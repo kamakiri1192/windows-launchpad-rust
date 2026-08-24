@@ -17,10 +17,24 @@
 
 use image::{imageops, Rgba, RgbaImage};
 
-use super::sizing::{self, IconCategory, IconMetrics};
+use super::sizing::{self, IconCategory};
 
 /// Edge length (px) of a single normalized icon cell.
 pub const TARGET: u32 = 128;
+
+/// Alpha threshold used to locate the visually opaque body of a macOS app
+/// icon. This is intentionally stricter than [`sizing::ALPHA_HARD`], which is
+/// tuned for broad category classification and still includes visibly
+/// translucent antialiasing in some app icons.
+const MACOS_BODY_ALPHA: u8 = 224;
+/// Fallback threshold for macOS icons whose rounded-rectangle body is
+/// intentionally translucent. For example, iPhone Mirroring has an opaque,
+/// portrait phone inside a semi-transparent square tile, so the stricter
+/// threshold sees only the artwork rather than the tile body.
+const MACOS_TRANSLUCENT_BODY_ALPHA: u8 = sizing::ALPHA_HARD;
+const MACOS_BODY_MIN_FILL_PERCENT: u64 = 90;
+const MACOS_BODY_MAX_TRIM_PERCENT: u64 = 2;
+const MACOS_BODY_MIN_SYMMETRY_PERCENT: u64 = 99;
 
 /// A decoded icon: tightly-packed RGBA8, row-major, `w * h * 4` bytes.
 ///
@@ -97,9 +111,10 @@ pub fn normalize_to(src: &DecodedIcon, target: u32) -> NormalizedIcon {
 /// macOS app representations commonly include a faint, asymmetric drop shadow
 /// outside the opaque app tile. The generic normalizer treats that shadow as
 /// part of the geometry, which leaves the tile body visually high in the output.
-/// For square full-bleed icons this path uses the hard-alpha body for scale and
-/// centering while still resampling the original soft edge once. Pixels outside
-/// the centered body naturally clip at the TARGET canvas boundary.
+/// For square full-bleed icons this path uses the hard-alpha body for the crop,
+/// scale, and centering geometry. This deliberately drops the asymmetric soft
+/// fringe outside the body envelope instead of enlarging it together with the
+/// icon and relying on canvas clipping.
 #[cfg(any(target_os = "macos", test))]
 pub fn normalize_macos_app_icon(src: &DecodedIcon) -> NormalizedIcon {
     normalize_macos_app_icon_to(src, TARGET)
@@ -156,7 +171,7 @@ fn normalize_to_with_geometry(
         RgbaImage::from_raw(src.w, src.h, src.rgba.clone()).unwrap_or_else(|| blank_image(target));
 
     if geometry_mode == GeometryMode::MacosFullBleedBody && category == IconCategory::FullBleed {
-        if let Some(canvas) = normalize_macos_fullbleed_body(&src_img, &metrics, target, scale) {
+        if let Some(canvas) = normalize_macos_fullbleed_body(&src_img, target, scale) {
             return normalized_from_canvas(canvas, category, scale);
         }
     }
@@ -231,15 +246,6 @@ struct AlphaBounds {
 }
 
 impl AlphaBounds {
-    fn from_metrics(metrics: &IconMetrics) -> Self {
-        Self {
-            min_x: metrics.bbox_min_x,
-            min_y: metrics.bbox_min_y,
-            max_x: metrics.bbox_max_x,
-            max_y: metrics.bbox_max_y,
-        }
-    }
-
     fn width(self) -> u32 {
         self.max_x - self.min_x + 1
     }
@@ -253,11 +259,22 @@ impl AlphaBounds {
         self.width().abs_diff(self.height()) * 20 <= longest
     }
 
-    fn contains(self, other: Self) -> bool {
-        self.min_x <= other.min_x
-            && self.min_y <= other.min_y
-            && self.max_x >= other.max_x
-            && self.max_y >= other.max_y
+    /// Largest integer square centred on this rectangle and contained by it.
+    ///
+    /// macOS app bodies are designed on a square canvas, but alpha thresholding
+    /// can make the measured width and height differ by one or two pixels. Using
+    /// the shorter side avoids reintroducing a translucent strip from outside
+    /// the hard body while preserving the body's original square aspect ratio.
+    fn centered_inner_square(self) -> Self {
+        let side = self.width().min(self.height());
+        let min_x = (self.min_x + self.max_x - (side - 1)) / 2;
+        let min_y = (self.min_y + self.max_y - (side - 1)) / 2;
+        Self {
+            min_x,
+            min_y,
+            max_x: min_x + side - 1,
+            max_y: min_y + side - 1,
+        }
     }
 }
 
@@ -302,53 +319,94 @@ fn crop_to_bounds(src: &RgbaImage, bounds: AlphaBounds) -> RgbaImage {
     .to_image()
 }
 
-fn normalize_macos_fullbleed_body(
-    src: &RgbaImage,
-    metrics: &IconMetrics,
-    target: u32,
-    scale: f64,
-) -> Option<RgbaImage> {
-    let body_bounds = AlphaBounds::from_metrics(metrics);
-    if !body_bounds.is_nearly_square() {
-        return None;
-    }
+fn normalize_macos_fullbleed_body(src: &RgbaImage, target: u32, scale: f64) -> Option<RgbaImage> {
+    // Prefer the visually opaque envelope. Only if it fails the body-shape
+    // guards do we consider the classification threshold, which can recover a
+    // deliberately translucent tile without weakening the guards for Preview,
+    // Contacts, and other irregular FullBleed classifications.
+    let crop_bounds = [MACOS_BODY_ALPHA, MACOS_TRANSLUCENT_BODY_ALPHA]
+        .into_iter()
+        .find_map(|min_alpha| macos_body_crop_bounds(src, min_alpha))?;
 
-    let soft_bounds = alpha_bounds(src, 11)?;
-    if !soft_bounds.contains(body_bounds) {
-        return None;
-    }
-
-    let body_longest = body_bounds.width().max(body_bounds.height());
-    let requested_body_longest = ((target as f64 * scale).round() as u32).max(1);
-    let resize_ratio = requested_body_longest as f64 / body_longest as f64;
-    let resized_w = ((soft_bounds.width() as f64 * resize_ratio).round() as u32).max(1);
-    let resized_h = ((soft_bounds.height() as f64 * resize_ratio).round() as u32).max(1);
-
-    let cropped = crop_to_bounds(src, soft_bounds);
+    let cropped = crop_to_bounds(src, crop_bounds);
+    let requested_side = ((target as f64 * scale).round() as u32).max(1);
     let resized = imageops::resize(
         &cropped,
-        resized_w,
-        resized_h,
+        requested_side,
+        requested_side,
         imageops::FilterType::Lanczos3,
     );
 
-    // Use the actual post-rounding resize ratios so the hard-alpha body's
-    // geometric centre lands on the target centre even when one dimension
-    // rounded by a pixel.
-    let resize_x = resized_w as f64 / soft_bounds.width() as f64;
-    let resize_y = resized_h as f64 / soft_bounds.height() as f64;
-    let body_center_x = (f64::from(body_bounds.min_x - soft_bounds.min_x)
-        + f64::from(body_bounds.width()) * 0.5)
-        * resize_x;
-    let body_center_y = (f64::from(body_bounds.min_y - soft_bounds.min_y)
-        + f64::from(body_bounds.height()) * 0.5)
-        * resize_y;
-    let dx = (target as f64 * 0.5 - body_center_x).round() as i64;
-    let dy = (target as f64 * 0.5 - body_center_y).round() as i64;
+    let dx = (i64::from(target) - i64::from(requested_side)) / 2;
+    let dy = (i64::from(target) - i64::from(requested_side)) / 2;
 
     let mut canvas = blank_image(target);
     imageops::overlay(&mut canvas, &resized, dx, dy);
     Some(canvas)
+}
+
+fn macos_body_crop_bounds(src: &RgbaImage, min_alpha: u8) -> Option<AlphaBounds> {
+    let body_bounds = alpha_bounds(src, min_alpha)?;
+    if !body_bounds.is_nearly_square() {
+        return None;
+    }
+
+    let crop_bounds = body_bounds.centered_inner_square();
+    let (body_pixels, trimmed_body_pixels) =
+        alpha_population_inside_and_outside(src, body_bounds, crop_bounds, min_alpha);
+    let body_area = u64::from(body_bounds.width()) * u64::from(body_bounds.height());
+    let (horizontal_mismatches, vertical_mismatches) =
+        alpha_mask_symmetry_mismatches(src, body_bounds, min_alpha);
+    if body_pixels * 100 < body_area * MACOS_BODY_MIN_FILL_PERCENT
+        || trimmed_body_pixels * 100 > body_pixels * MACOS_BODY_MAX_TRIM_PERCENT
+        || horizontal_mismatches * 100 > body_area * (100 - MACOS_BODY_MIN_SYMMETRY_PERCENT)
+        || vertical_mismatches * 100 > body_area * (100 - MACOS_BODY_MIN_SYMMETRY_PERCENT)
+    {
+        return None;
+    }
+    Some(crop_bounds)
+}
+
+fn alpha_population_inside_and_outside(
+    src: &RgbaImage,
+    bounds: AlphaBounds,
+    inner: AlphaBounds,
+    min_alpha: u8,
+) -> (u64, u64) {
+    let mut total = 0u64;
+    let mut outside = 0u64;
+    for y in bounds.min_y..=bounds.max_y {
+        for x in bounds.min_x..=bounds.max_x {
+            if src.get_pixel(x, y)[3] < min_alpha {
+                continue;
+            }
+            total += 1;
+            outside +=
+                u64::from(x < inner.min_x || x > inner.max_x || y < inner.min_y || y > inner.max_y);
+        }
+    }
+    (total, outside)
+}
+
+fn alpha_mask_symmetry_mismatches(
+    src: &RgbaImage,
+    bounds: AlphaBounds,
+    min_alpha: u8,
+) -> (u64, u64) {
+    let mut horizontal = 0u64;
+    let mut vertical = 0u64;
+    for local_y in 0..bounds.height() {
+        for local_x in 0..bounds.width() {
+            let x = bounds.min_x + local_x;
+            let y = bounds.min_y + local_y;
+            let opaque = src.get_pixel(x, y)[3] >= min_alpha;
+            let mirrored_x = bounds.max_x - local_x;
+            let mirrored_y = bounds.max_y - local_y;
+            horizontal += u64::from(opaque != (src.get_pixel(mirrored_x, y)[3] >= min_alpha));
+            vertical += u64::from(opaque != (src.get_pixel(x, mirrored_y)[3] >= min_alpha));
+        }
+    }
+    (horizontal, vertical)
 }
 
 fn blank_image(target: u32) -> RgbaImage {
@@ -494,6 +552,123 @@ mod tests {
         assert!(macos_top_margin <= 1);
         assert!(macos_bottom_margin <= 1);
         assert!(macos_top_margin.abs_diff(macos_bottom_margin) <= 1);
+
+        // The hard-body crop removes the soft-only strip before resampling.
+        // At the centre of every edge, the body is therefore fully opaque;
+        // the launcher's fallback tile cannot tint one side of the icon.
+        for (x, y) in [(0, 64), (127, 64), (64, 0), (64, 127)] {
+            assert_eq!(macos_image.get_pixel(x, y)[3], 255, "edge ({x}, {y})");
+        }
+        assert!(macos_image.pixels().all(|pixel| pixel[3] == 255));
+    }
+
+    #[test]
+    fn macos_fullbleed_output_is_independent_of_shadow_direction() {
+        fn icon_with_shadow(shadow_rect: (usize, usize, usize, usize)) -> DecodedIcon {
+            let mut rgba = vec![0u8; 128 * 128 * 4];
+            let (min_x, min_y, max_x, max_y) = shadow_rect;
+            for y in min_y..max_y {
+                for x in min_x..max_x {
+                    let idx = (y * 128 + x) * 4;
+                    rgba[idx..idx + 4].copy_from_slice(&[10, 50, 100, 48]);
+                }
+            }
+            for y in 12..116usize {
+                for x in 12..116usize {
+                    let idx = (y * 128 + x) * 4;
+                    rgba[idx..idx + 4].copy_from_slice(&[30, 140, 250, 255]);
+                }
+            }
+            DecodedIcon {
+                rgba,
+                w: 128,
+                h: 128,
+            }
+        }
+
+        let bottom = normalize_macos_app_icon(&icon_with_shadow((10, 12, 118, 120)));
+        let top = normalize_macos_app_icon(&icon_with_shadow((10, 8, 118, 116)));
+        let left = normalize_macos_app_icon(&icon_with_shadow((8, 10, 116, 118)));
+        let all_around = normalize_macos_app_icon(&icon_with_shadow((8, 8, 120, 120)));
+        assert_eq!(bottom.image.rgba, top.image.rgba);
+        assert_eq!(bottom.image.rgba, left.image.rgba);
+        assert_eq!(bottom.image.rgba, all_around.image.rgba);
+    }
+
+    #[test]
+    fn macos_fullbleed_uses_centered_square_for_small_bbox_asymmetry() {
+        let mut rgba = vec![0u8; 128 * 128 * 4];
+
+        // A nearly-square body where thresholding found two extra hard pixels
+        // horizontally. The surrounding fringe must not become a one-sided
+        // strip after normalization.
+        for y in 12..116usize {
+            for x in 11..117usize {
+                let idx = (y * 128 + x) * 4;
+                rgba[idx..idx + 4].copy_from_slice(&[20, 140, 240, 255]);
+            }
+        }
+        for y in 10..120usize {
+            for x in 9..119usize {
+                let idx = (y * 128 + x) * 4;
+                if rgba[idx + 3] == 0 {
+                    rgba[idx..idx + 4].copy_from_slice(&[10, 60, 100, 48]);
+                }
+            }
+        }
+        let source = DecodedIcon {
+            rgba,
+            w: 128,
+            h: 128,
+        };
+
+        let normalized = normalize_macos_app_icon_to(&source, 128);
+        let image = RgbaImage::from_raw(128, 128, normalized.image.rgba).unwrap();
+        assert_eq!(normalized.category, IconCategory::FullBleed);
+        assert!(image.pixels().all(|pixel| pixel[3] == 255));
+        assert_eq!(image.get_pixel(0, 64)[3], image.get_pixel(127, 64)[3]);
+        assert_eq!(image.get_pixel(64, 0)[3], image.get_pixel(64, 127)[3]);
+    }
+
+    #[test]
+    fn macos_translucent_fullbleed_uses_mid_alpha_tile_body() {
+        let mut rgba = vec![0u8; 128 * 128 * 4];
+        for y in 10..120usize {
+            for x in 10..118usize {
+                let idx = (y * 128 + x) * 4;
+                rgba[idx..idx + 4].copy_from_slice(&[20, 30, 40, 48]);
+            }
+        }
+        for y in 12..116usize {
+            for x in 12..116usize {
+                let idx = (y * 128 + x) * 4;
+                rgba[idx..idx + 4].copy_from_slice(&[220, 230, 210, 180]);
+            }
+        }
+        for y in 20..108usize {
+            for x in 44..84usize {
+                let idx = (y * 128 + x) * 4;
+                rgba[idx..idx + 4].copy_from_slice(&[30, 80, 160, 255]);
+            }
+        }
+        let source = DecodedIcon {
+            rgba,
+            w: 128,
+            h: 128,
+        };
+
+        let generic = normalize(&source);
+        let normalized = normalize_macos_app_icon(&source);
+        let generic_image = RgbaImage::from_raw(128, 128, generic.image.rgba).unwrap();
+        let image = RgbaImage::from_raw(128, 128, normalized.image.rgba).unwrap();
+        let generic_body = alpha_bounds(&generic_image, sizing::ALPHA_HARD).unwrap();
+        let body = alpha_bounds(&image, sizing::ALPHA_HARD).unwrap();
+
+        assert_eq!(normalized.category, IconCategory::FullBleed);
+        assert!(generic_body.width() < 128 || generic_body.height() < 128);
+        assert_eq!((body.width(), body.height()), (128, 128));
+        assert!(image.get_pixel(0, 64)[3] >= sizing::ALPHA_HARD);
+        assert!(image.get_pixel(127, 64)[3] >= sizing::ALPHA_HARD);
     }
 
     #[test]
@@ -518,6 +693,59 @@ mod tests {
         assert_eq!(generic.category, IconCategory::Solid);
         assert_eq!(macos.category, generic.category);
         assert_eq!(macos.scale, generic.scale);
+        assert_eq!(macos.image.rgba, generic.image.rgba);
+    }
+
+    #[test]
+    fn macos_geometry_falls_back_for_sparse_fullbleed_silhouette() {
+        let mut rgba = vec![0u8; 128 * 128 * 4];
+        for y in 12..116usize {
+            for x in 12..116usize {
+                // Keep the hard-alpha fill above FullBleed's 80% threshold,
+                // but below the 90% opaque tile-body requirement.
+                if (x + y) % 6 != 0 {
+                    let idx = (y * 128 + x) * 4;
+                    rgba[idx..idx + 4].copy_from_slice(&[80, 120, 200, 255]);
+                }
+            }
+        }
+        let source = DecodedIcon {
+            rgba,
+            w: 128,
+            h: 128,
+        };
+
+        let generic = normalize(&source);
+        let macos = normalize_macos_app_icon(&source);
+        assert_eq!(generic.category, IconCategory::FullBleed);
+        assert_eq!(macos.image.rgba, generic.image.rgba);
+    }
+
+    #[test]
+    fn macos_geometry_falls_back_for_asymmetric_dense_silhouette() {
+        let mut rgba = vec![0u8; 128 * 128 * 4];
+        for y in 12..116usize {
+            for x in 12..116usize {
+                if !(x < 20 && y < 20) {
+                    let idx = (y * 128 + x) * 4;
+                    rgba[idx..idx + 4].copy_from_slice(&[80, 120, 200, 255]);
+                }
+            }
+        }
+        // Keep the measured bounds square while retaining the asymmetric notch.
+        for &(x, y) in &[(12usize, 12usize), (115, 115)] {
+            let idx = (y * 128 + x) * 4;
+            rgba[idx..idx + 4].copy_from_slice(&[80, 120, 200, 255]);
+        }
+        let source = DecodedIcon {
+            rgba,
+            w: 128,
+            h: 128,
+        };
+
+        let generic = normalize(&source);
+        let macos = normalize_macos_app_icon(&source);
+        assert_eq!(generic.category, IconCategory::FullBleed);
         assert_eq!(macos.image.rgba, generic.image.rgba);
     }
 

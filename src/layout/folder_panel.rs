@@ -96,6 +96,9 @@ pub struct FolderChildInput<'a> {
     pub key: &'a str,
     pub label: &'a str,
     pub uv: Option<UvRect>,
+    /// Suppress the colored backing tile for a loaded FullBleed icon while
+    /// keeping the tile instance for edit badges and motion.
+    pub hide_fill: bool,
     pub color: Color,
 }
 
@@ -313,7 +316,12 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 } else {
                     0
                 }
-                | if dragged { TileAnim::FLAG_DRAG } else { 0 },
+                | if dragged { TileAnim::FLAG_DRAG } else { 0 }
+                | if child.hide_fill && child.uv.is_some() {
+                    TileAnim::FLAG_NO_FILL
+                } else {
+                    0
+                },
         };
         let fill_scale = child_fill_scale(progress);
         if fill_scale > 0.001 {
@@ -646,6 +654,7 @@ mod tests {
                 key: id,
                 label,
                 uv: None,
+                hide_fill: false,
                 color: Color::rgba(0.4, 0.5, 0.7, 1.0),
             })
             .collect();
@@ -718,6 +727,61 @@ mod tests {
         let open = model(4, 1.0, 1.0);
         let tile = &open.result.render.modal_tiles.as_ref().unwrap()[0];
         assert_eq!(tile.rect, open.child_rects[0]);
+    }
+
+    #[test]
+    fn open_folder_hides_backing_only_for_loaded_fullbleed_children() {
+        let uv = UvRect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 0.1,
+            v1: 0.1,
+        };
+        let children = [
+            FolderChildInput {
+                key: "fullbleed",
+                label: "FullBleed",
+                uv: Some(uv),
+                hide_fill: true,
+                color: Color::rgba(0.4, 0.5, 0.7, 1.0),
+            },
+            FolderChildInput {
+                key: "freeform",
+                label: "Freeform",
+                uv: Some(uv),
+                hide_fill: false,
+                color: Color::rgba(0.4, 0.5, 0.7, 1.0),
+            },
+            FolderChildInput {
+                key: "missing",
+                label: "Missing",
+                uv: None,
+                hide_fill: true,
+                color: Color::rgba(0.4, 0.5, 0.7, 1.0),
+            },
+        ];
+        let value = build(FolderPanelInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            folder_key: "folder-0",
+            name: "Folder",
+            rename_text: None,
+            source_rect: Rect::new(100.0, 120.0, 84.0, 84.0),
+            source_radius: 19.0,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0,
+            children: &children,
+            page: 0,
+            page_scroll_x: 0.0,
+            progress: 1.0,
+            editing: false,
+            dragged_child_key: None,
+        });
+        let tiles = value.result.render.modal_tiles.unwrap();
+
+        assert_ne!(tiles[0].motion.flags & TileAnim::FLAG_NO_FILL, 0);
+        assert_eq!(tiles[1].motion.flags & TileAnim::FLAG_NO_FILL, 0);
+        assert_eq!(tiles[2].motion.flags & TileAnim::FLAG_NO_FILL, 0);
     }
 
     #[test]
@@ -1012,6 +1076,7 @@ mod tests {
                 key: id,
                 label,
                 uv: None,
+                hide_fill: false,
                 color: Color::rgba(0.4, 0.5, 0.7, 1.0),
             })
             .collect();
