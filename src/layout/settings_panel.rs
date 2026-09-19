@@ -886,13 +886,14 @@ pub fn build_with_ui(
         // Apps
         // ==============================================================
         SettingsCategoryId::Apps => {
-            let segment_top = first_top + 44.0 * scale;
             let gap = SEGMENT_GAP * scale;
             let each_w = (content_w - gap * 3.0) / 4.0;
 
-            // Sort label
+            // Sort label occupies the first row slot; the segment buttons get
+            // their own full-height slot below it so they clear the toggle
+            // rows that follow.
             ui.begin_absolute_placement();
-            ui.set_cursor(content_left, first_top - 8.0 * scale);
+            ui.set_cursor(content_left, first_top + 8.0 * scale);
             ui.set_available_width(content_w);
             ui.label(
                 &Label::new(copy.sort_label)
@@ -901,6 +902,7 @@ pub fn build_with_ui(
             );
 
             // Sort segment buttons
+            let segment_top = first_top + ROW_STEP * scale;
             for (seg_idx, (order, label)) in copy.sort_orders.iter().copied().enumerate() {
                 let left = content_left + seg_idx as f32 * (each_w + gap);
                 ui.begin_absolute_placement();
@@ -920,7 +922,7 @@ pub fn build_with_ui(
             }
 
             // Frequent apps toggle
-            let y = first_top + ROW_STEP * scale;
+            let y = first_top + ROW_STEP * 2.0 * scale;
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, y);
             ui.set_available_width(content_w);
@@ -933,7 +935,7 @@ pub fn build_with_ui(
             );
 
             // Steam apps toggle
-            let y = first_top + ROW_STEP * 2.0 * scale;
+            let y = first_top + ROW_STEP * 3.0 * scale;
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, y);
             ui.set_available_width(content_w);
@@ -946,7 +948,7 @@ pub fn build_with_ui(
             );
 
             // Hidden apps row (chevron, no toggle)
-            let y = first_top + ROW_STEP * 3.0 * scale;
+            let y = first_top + ROW_STEP * 4.0 * scale;
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, y);
             ui.set_available_width(content_w);
@@ -1943,9 +1945,34 @@ mod tests {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         let content_left = layout.content_left(1.0);
-        let segment_y = layout.first_row_top(1.0) + 44.0 + SEGMENT_H * 0.5;
+        let segment_y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
         let target = hit_settings_target(&hm, Point::new(content_left + 10.0, segment_y)).unwrap();
         assert_eq!(target, SettingsTarget::SortOption { key: "name".into() });
+    }
+
+    /// Regression: the sort segment row once overlapped the frequent-apps
+    /// toggle row because the segments kept the full `ROW_H` height but were
+    /// placed only 44 px below the first row top (the next row starts at
+    /// `ROW_STEP` = 62 px).
+    #[test]
+    fn sort_segments_clear_the_frequent_toggle_row() {
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let segment = hm
+            .regions()
+            .iter()
+            .find(|r| r.target == HitTarget::settings_sort_option("name"))
+            .expect("sort segment hit region");
+        let frequent = hm
+            .regions()
+            .iter()
+            .find(|r| r.target == HitTarget::settings_toggle("frequent-apps"))
+            .expect("frequent toggle hit region");
+        assert!(
+            segment.rect.max_y() <= frequent.rect.min_y(),
+            "sort segment row (max_y={}) must sit above the frequent toggle row (min_y={})",
+            segment.rect.max_y(),
+            frequent.rect.min_y()
+        );
     }
 
     #[test]
@@ -1953,7 +1980,7 @@ mod tests {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         let x = layout.content_left(1.0) + 10.0;
-        let y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
+        let y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
         let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
         assert_eq!(
             target,
@@ -1968,7 +1995,7 @@ mod tests {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         let x = layout.content_left(1.0) + 10.0;
-        let y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
+        let y = layout.first_row_top(1.0) + ROW_STEP * 3.0 + ROW_H * 0.5;
         let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
         assert_eq!(
             target,
@@ -1976,6 +2003,38 @@ mod tests {
                 key: "steam-apps".into()
             }
         );
+    }
+
+    /// Regression: `Label::align(TextAlign::End)` used to be ignored because
+    /// `Ui::label()` copied the style's alignment into the TextView, so the
+    /// hidden-apps count and the version value overflowed to the right of
+    /// their intended right edge instead of ending there.
+    #[test]
+    fn right_aligned_labels_keep_end_alignment() {
+        let cases: [(SettingsCategoryId, &[&str]); 2] = [
+            (SettingsCategoryId::Apps, &["text-hidden-apps-count"]),
+            (SettingsCategoryId::About, &["text-version-value"]),
+        ];
+        for (category, ids) in cases {
+            let inp = input(category);
+            let c = copy("3");
+            let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+            let model = build_with_ui(inp, &c, &mut scroll);
+            for id in ids {
+                let view = model
+                    .result
+                    .render
+                    .text
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row(id))
+                    .unwrap_or_else(|| panic!("{id} label missing in {category:?} category"));
+                assert_eq!(
+                    view.style.align,
+                    TextAlign::End,
+                    "{id} must carry TextAlign::End into its TextView"
+                );
+            }
+        }
     }
 
     #[test]

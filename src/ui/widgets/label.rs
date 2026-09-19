@@ -145,6 +145,9 @@ impl Ui {
             style: TextStyle {
                 size: d.style.size,
                 color: color_from_array(d.color),
+                // The top-level `align` field wins so `.align()` keeps working
+                // even when the style was built with a different alignment.
+                align: d.align,
                 ..d.style
             },
             z: Z_CONTROL + 1,
