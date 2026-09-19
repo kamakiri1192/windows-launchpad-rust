@@ -37,7 +37,7 @@
         "surface": "folder",
         "min_filtered_velocity": -6000.0,
         "max_filtered_velocity": -3000.0,
-        "target_x": -624.5989,
+        "target_x": -786.5320,
         "target_tolerance": 0.5
       },
       {
@@ -61,7 +61,7 @@
       {
         "prefix": "qa-folder-multi",
         "name_prefix": "Multi Folder Child",
-        "count": 40,
+        "count": 30,
         "top_level": false
       },
       {
@@ -90,12 +90,7 @@
           "qa-folder-multi-022", "qa-folder-multi-023",
           "qa-folder-multi-024", "qa-folder-multi-025",
           "qa-folder-multi-026", "qa-folder-multi-027",
-          "qa-folder-multi-028", "qa-folder-multi-029",
-          "qa-folder-multi-030", "qa-folder-multi-031",
-          "qa-folder-multi-032", "qa-folder-multi-033",
-          "qa-folder-multi-034", "qa-folder-multi-035",
-          "qa-folder-multi-036", "qa-folder-multi-037",
-          "qa-folder-multi-038", "qa-folder-multi-039"
+          "qa-folder-multi-028", "qa-folder-multi-029"
         ]
       },
       {
@@ -158,7 +153,6 @@
       "canonical_dy": 0.0,
       "contact_phase": "ended"
     },
-
     {
       "at_ms": 1100,
       "type": "scroll_sample",
@@ -231,7 +225,6 @@
       "canonical_dy": 0.0,
       "contact_phase": "ended"
     },
-
     {
       "at_ms": 3200,
       "type": "open_folder",
@@ -291,7 +284,6 @@
       "canonical_dy": 0.0,
       "contact_phase": "ended"
     },
-
     { "at_ms": 7500, "type": "escape" },
     {
       "at_ms": 9500,

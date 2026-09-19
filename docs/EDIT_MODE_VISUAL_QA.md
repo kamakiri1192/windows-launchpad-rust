@@ -316,7 +316,7 @@ opt-in, and GPU self-capture trigger described above. Seed the temporary
 cache's `kv.launcher_state` JSON with at least these cases so the result is
 repeatable without changing the user's real layout:
 
-- a 22-child folder for pagination and a two-item final page;
+- a 17-child folder for pagination and a two-item final page;
 - a 3-child folder for the centered incomplete row and narrow dynamic panel;
 - a long Japanese folder name for title fitting;
 - normal app items before, between, and after folder items.
@@ -332,8 +332,8 @@ Validate the following on screen:
    converge exactly at both endpoints.
 4. Press `Esc` during opening and capture the next frames. The spring must
    reverse from its current position, with no snap to an endpoint.
-5. Confirm a full page has five columns and four rows (20 children). Switch a
-   22-child folder to its second page. Confirm the final two children
+5. Confirm a full page has five columns and three rows (15 children). Switch a
+   17-child folder to its second page. Confirm the final two children
    are centered and the page indicator changes; return to page one.
 6. Open the 3-child folder and confirm its panel uses a centered single row.
 7. Rename the folder, press Enter, close/reopen, and inspect
@@ -347,7 +347,7 @@ Validate the following on screen:
 10. Long-press and drag to cover app-on-app creation, app-into-folder,
     child reorder, child-to-folder, and child-to-top-level. Verify one-child
     folders dissolve in their original slot.
-11. Verify the fifth column and fourth row can be clicked and reordered, and
+11. Verify the fifth column and third row can be clicked and reordered, and
     hold a child at the side edge to move it onto page two. Repeat at high DPI
     and with a narrow window; the panel, icons and labels must fit on both axes.
 

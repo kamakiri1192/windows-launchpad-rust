@@ -35,17 +35,7 @@
       { "id": "qa-folder-page-26", "name": "Folder Child 26" },
       { "id": "qa-folder-page-27", "name": "Folder Child 27" },
       { "id": "qa-folder-page-28", "name": "Folder Child 28" },
-      { "id": "qa-folder-page-29", "name": "Folder Child 29" },
-      { "id": "qa-folder-page-30", "name": "Folder Child 30" },
-      { "id": "qa-folder-page-31", "name": "Folder Child 31" },
-      { "id": "qa-folder-page-32", "name": "Folder Child 32" },
-      { "id": "qa-folder-page-33", "name": "Folder Child 33" },
-      { "id": "qa-folder-page-34", "name": "Folder Child 34" },
-      { "id": "qa-folder-page-35", "name": "Folder Child 35" },
-      { "id": "qa-folder-page-36", "name": "Folder Child 36" },
-      { "id": "qa-folder-page-37", "name": "Folder Child 37" },
-      { "id": "qa-folder-page-38", "name": "Folder Child 38" },
-      { "id": "qa-folder-page-39", "name": "Folder Child 39" }
+      { "id": "qa-folder-page-29", "name": "Folder Child 29" }
     ],
     "folders": [
       {
@@ -61,11 +51,7 @@
           "qa-folder-page-18", "qa-folder-page-19", "qa-folder-page-20",
           "qa-folder-page-21", "qa-folder-page-22", "qa-folder-page-23",
           "qa-folder-page-24", "qa-folder-page-25", "qa-folder-page-26",
-          "qa-folder-page-27", "qa-folder-page-28", "qa-folder-page-29",
-          "qa-folder-page-30", "qa-folder-page-31", "qa-folder-page-32",
-          "qa-folder-page-33", "qa-folder-page-34", "qa-folder-page-35",
-          "qa-folder-page-36", "qa-folder-page-37", "qa-folder-page-38",
-          "qa-folder-page-39"
+          "qa-folder-page-27", "qa-folder-page-28", "qa-folder-page-29"
         ]
       }
     ],

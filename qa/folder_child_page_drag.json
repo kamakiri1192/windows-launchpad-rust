@@ -23,12 +23,7 @@
       { "id": "qa-page-14", "name": "Child 14" },
       { "id": "qa-page-15", "name": "Child 15" },
       { "id": "qa-page-16", "name": "Child 16" },
-      { "id": "qa-page-17", "name": "Child 17" },
-      { "id": "qa-page-18", "name": "Child 18" },
-      { "id": "qa-page-19", "name": "Child 19" },
-      { "id": "qa-page-20", "name": "Child 20" },
-      { "id": "qa-page-21", "name": "Child 21" },
-      { "id": "qa-page-22", "name": "Child 22" }
+      { "id": "qa-page-17", "name": "Child 17" }
     ],
     "folders": [
       {
@@ -39,8 +34,7 @@
           "qa-page-04", "qa-page-05", "qa-page-06", "qa-page-07",
           "qa-page-08", "qa-page-09", "qa-page-10", "qa-page-11",
           "qa-page-12", "qa-page-13", "qa-page-14", "qa-page-15",
-          "qa-page-16", "qa-page-17", "qa-page-18", "qa-page-19",
-          "qa-page-20", "qa-page-21", "qa-page-22"
+          "qa-page-16", "qa-page-17"
         ]
       }
     ],
