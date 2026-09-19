@@ -1798,7 +1798,7 @@ impl App {
     }
 
     /// Update the held child's preview order for either an occupied child cell
-    /// or an empty 3x3 cell on the current page. Returns `(valid, changed)` so
+    /// or an empty 5x4 cell on the current page. Returns `(valid, changed)` so
     /// release can distinguish a real empty-cell drop from panel chrome.
     fn reorder_folder_child_drag_at(&mut self, x: f32, y: f32) -> (bool, bool) {
         let target_child = match self.folder_hit_target(x, y) {
@@ -1833,7 +1833,7 @@ impl App {
         crate::layout::folder_panel::child_drop_index(
             layout.target_panel_rect,
             crate::ui_model::geometry::Point::new(x, y),
-            self.folders.page,
+            layout.hit_page,
             child_count,
             layout.effective_scale,
         )

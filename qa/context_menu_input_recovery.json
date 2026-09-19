@@ -25,9 +25,9 @@
         "surface": "folder",
         "min_filtered_velocity": -6000.0,
         "max_filtered_velocity": -3000.0,
-        "target_x": -490.2357,
+        "target_x": -624.5989,
         "target_tolerance": 0.5,
-        "settled_position_x": -490.2357,
+        "settled_position_x": -624.5989,
         "max_settle_duration_ms": 1800
       }
     ],
@@ -44,7 +44,7 @@
       {
         "prefix": "qa-context-folder",
         "name_prefix": "Context Folder Child",
-        "count": 18,
+        "count": 40,
         "top_level": false
       }
     ],
@@ -61,7 +61,18 @@
           "qa-context-folder-010", "qa-context-folder-011",
           "qa-context-folder-012", "qa-context-folder-013",
           "qa-context-folder-014", "qa-context-folder-015",
-          "qa-context-folder-016", "qa-context-folder-017"
+          "qa-context-folder-016", "qa-context-folder-017",
+          "qa-context-folder-018", "qa-context-folder-019",
+          "qa-context-folder-020", "qa-context-folder-021",
+          "qa-context-folder-022", "qa-context-folder-023",
+          "qa-context-folder-024", "qa-context-folder-025",
+          "qa-context-folder-026", "qa-context-folder-027",
+          "qa-context-folder-028", "qa-context-folder-029",
+          "qa-context-folder-030", "qa-context-folder-031",
+          "qa-context-folder-032", "qa-context-folder-033",
+          "qa-context-folder-034", "qa-context-folder-035",
+          "qa-context-folder-036", "qa-context-folder-037",
+          "qa-context-folder-038", "qa-context-folder-039"
         ]
       }
     ],
@@ -158,7 +169,7 @@
       "contact_phase": "ended"
     },
 
-    { "at_ms": 6100, "type": "move", "target": { "kind": "folder_child", "index": 9 } },
+    { "at_ms": 6100, "type": "move", "target": { "kind": "folder_child", "index": 20 } },
     { "at_ms": 6150, "type": "right_click" },
     { "at_ms": 6500, "type": "move", "target": { "kind": "point", "x": 5.0, "y": 5.0 } },
     { "at_ms": 6550, "type": "pointer_down" },
