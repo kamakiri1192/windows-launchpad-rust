@@ -317,7 +317,7 @@ cache's `kv.launcher_state` JSON with at least these cases so the result is
 repeatable without changing the user's real layout:
 
 - a 17-child folder for pagination and a two-item final page;
-- a 3-child folder for the centered incomplete row and narrow dynamic panel;
+- a 3-child folder for the left-aligned incomplete row and narrow dynamic panel;
 - a long Japanese folder name for title fitting;
 - normal app items before, between, and after folder items.
 
@@ -334,8 +334,9 @@ Validate the following on screen:
    reverse from its current position, with no snap to an endpoint.
 5. Confirm a full page has five columns and three rows (15 children). Switch a
    17-child folder to its second page. Confirm the final two children
-   are centered and the page indicator changes; return to page one.
-6. Open the 3-child folder and confirm its panel uses a centered single row.
+   start at the same top-left cell as page one and the page indicator changes;
+   return to page one.
+6. Open the 3-child folder and confirm its row starts at the panel's left padding.
 7. Rename the folder, press Enter, close/reopen, and inspect
    `kv.launcher_state` to confirm persistence. Start another rename and press
    `Esc`; the committed name must remain unchanged. Exercise Japanese text and

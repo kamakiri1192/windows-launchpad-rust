@@ -79,8 +79,7 @@ pub fn child_drop_index(
     let scale = sanitize_scale(scale_factor);
     let pitch_x = (CELL_SIZE + CELL_GAP_X) * scale;
     let pitch_y = (CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y) * scale;
-    let grid_width = (COLS as f32 * CELL_SIZE + (COLS - 1) as f32 * CELL_GAP_X) * scale;
-    let grid_left = panel.center().x - grid_width * 0.5;
+    let grid_left = panel.x + PANEL_PADDING_X * scale;
     let first_center = Point::new(
         grid_left + CELL_SIZE * scale * 0.5,
         panel.y + PANEL_PADDING_TOP * scale + CELL_SIZE * scale * 0.5,
@@ -286,16 +285,10 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     for (global_index, child) in input.children.iter().enumerate() {
         let child_page = global_index / PAGE_SIZE;
         let local_index = global_index % PAGE_SIZE;
-        let page_start = child_page * PAGE_SIZE;
-        let page_child_count = (input.children.len() - page_start).min(PAGE_SIZE);
         let row = local_index / COLS;
         let col = local_index % COLS;
-        let row_start = row * COLS;
-        let row_count = (page_child_count - row_start).min(COLS);
-        let row_width = row_count as f32 * CELL_SIZE * scale
-            + row_count.saturating_sub(1) as f32 * CELL_GAP_X * scale;
         let page_origin = child_page as f32 * target.width + input.page_scroll_x;
-        let grid_left = target.x + page_origin + (target.width - row_width) * 0.5;
+        let grid_left = target.x + page_origin + PANEL_PADDING_X * scale;
         let final_rect = Rect::new(
             grid_left + col as f32 * (CELL_SIZE + CELL_GAP_X) * scale,
             grid_top + row as f32 * (CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y) * scale,
@@ -812,17 +805,30 @@ mod tests {
     }
 
     #[test]
-    fn sparse_panels_shrink_and_incomplete_rows_are_centered() {
+    fn sparse_panels_shrink_and_every_row_starts_at_left_padding() {
         let one = model(1, 1.0, 1.0);
         let six = model(6, 1.0, 1.0);
         let seven = model(7, 1.0, 1.0);
         assert!(one.target_panel_rect.width < six.target_panel_rect.width);
         assert!(one.target_panel_rect.height < six.target_panel_rect.height);
-        let last_six = six.child_rects[5];
-        assert!((last_six.center().x - six.target_panel_rect.center().x).abs() < 0.01);
-        let last_seven_center =
-            (seven.child_rects[5].center().x + seven.child_rects[6].center().x) * 0.5;
-        assert!((last_seven_center - seven.target_panel_rect.center().x).abs() < 0.01);
+        for value in [&one, &six, &seven] {
+            assert!(
+                (value.child_rects[0].x - value.target_panel_rect.x - PANEL_PADDING_X).abs() < 0.01
+            );
+            for (index, rect) in value.child_rects.iter().enumerate() {
+                assert_eq!(rect.x, value.child_rects[index % COLS].x);
+                assert_eq!(
+                    child_drop_index(
+                        value.target_panel_rect,
+                        rect.center(),
+                        0,
+                        value.child_rects.len(),
+                        value.effective_scale
+                    ),
+                    Some(index)
+                );
+            }
+        }
     }
 
     #[test]
@@ -861,9 +867,7 @@ mod tests {
         assert!(first.child_rects[15].center().x > first.target_panel_rect.max_x());
 
         let second = model_with_page(16, 1.0, 1.0, source, 1, -page_width);
-        assert!(
-            (second.child_rects[15].center().x - second.target_panel_rect.center().x).abs() < 0.01
-        );
+        assert!((second.child_rects[15].x - first.child_rects[0].x).abs() < 0.01);
         assert!(second.child_rects[0].center().x < second.target_panel_rect.x);
         assert!(matches!(
             second
@@ -909,8 +913,7 @@ mod tests {
     #[test]
     fn empty_cell_drop_on_second_page_resolves_to_that_page() {
         let panel = Rect::new(370.0, 44.0, 540.0, 712.0);
-        let grid_width = COLS as f32 * CELL_SIZE + (COLS - 1) as f32 * CELL_GAP_X;
-        let grid_left = panel.center().x - grid_width * 0.5;
+        let grid_left = panel.x + PANEL_PADDING_X;
         let second_row_center = Point::new(
             grid_left + CELL_SIZE * 0.5,
             panel.y + PANEL_PADDING_TOP + CELL_SIZE * 0.5 + CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y,
@@ -995,9 +998,10 @@ mod tests {
         let first = model_with_page(17, 1.0, 1.0, source, 0, 0.0);
         let second = model_with_page(17, 1.0, 1.0, source, 1, -first.target_panel_rect.width);
         assert_eq!(first.target_panel_rect, second.target_panel_rect);
-        let last_row_center =
-            (second.child_rects[15].center().x + second.child_rects[16].center().x) * 0.5;
-        assert!((last_row_center - second.target_panel_rect.center().x).abs() < 0.01);
+        for index in 0..2 {
+            assert!((second.child_rects[15 + index].x - first.child_rects[index].x).abs() < 0.01);
+            assert_eq!(second.child_rects[15 + index].y, first.child_rects[index].y);
+        }
     }
 
     #[test]
