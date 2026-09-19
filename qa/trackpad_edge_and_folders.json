@@ -23,21 +23,21 @@
         "surface": "main",
         "min_filtered_velocity": -50000.0,
         "max_filtered_velocity": -25000.0,
-        "target_x": -1440.0
+        "target_x": -1208.0
       },
       {
         "gesture_id": 12,
         "surface": "main",
         "min_filtered_velocity": -5000.0,
         "max_filtered_velocity": -2000.0,
-        "target_x": -1440.0
+        "target_x": -1208.0
       },
       {
         "gesture_id": 13,
         "surface": "folder",
         "min_filtered_velocity": -6000.0,
         "max_filtered_velocity": -3000.0,
-        "target_x": -490.2357,
+        "target_x": -786.5320,
         "target_tolerance": 0.5
       },
       {
@@ -61,7 +61,7 @@
       {
         "prefix": "qa-folder-multi",
         "name_prefix": "Multi Folder Child",
-        "count": 18,
+        "count": 30,
         "top_level": false
       },
       {
@@ -84,7 +84,13 @@
           "qa-folder-multi-010", "qa-folder-multi-011",
           "qa-folder-multi-012", "qa-folder-multi-013",
           "qa-folder-multi-014", "qa-folder-multi-015",
-          "qa-folder-multi-016", "qa-folder-multi-017"
+          "qa-folder-multi-016", "qa-folder-multi-017",
+          "qa-folder-multi-018", "qa-folder-multi-019",
+          "qa-folder-multi-020", "qa-folder-multi-021",
+          "qa-folder-multi-022", "qa-folder-multi-023",
+          "qa-folder-multi-024", "qa-folder-multi-025",
+          "qa-folder-multi-026", "qa-folder-multi-027",
+          "qa-folder-multi-028", "qa-folder-multi-029"
         ]
       },
       {
@@ -147,7 +153,6 @@
       "canonical_dy": 0.0,
       "contact_phase": "ended"
     },
-
     {
       "at_ms": 1100,
       "type": "scroll_sample",
@@ -220,7 +225,6 @@
       "canonical_dy": 0.0,
       "contact_phase": "ended"
     },
-
     {
       "at_ms": 3200,
       "type": "open_folder",
@@ -280,7 +284,6 @@
       "canonical_dy": 0.0,
       "contact_phase": "ended"
     },
-
     { "at_ms": 7500, "type": "escape" },
     {
       "at_ms": 9500,

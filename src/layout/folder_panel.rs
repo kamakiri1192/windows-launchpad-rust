@@ -14,8 +14,9 @@ use crate::ui_model::render_model::{
 };
 use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextView, TextWeight};
 
-pub const PAGE_SIZE: usize = 9;
-pub const COLS: usize = 3;
+pub const COLS: usize = 5;
+pub const ROWS: usize = 3;
+pub const PAGE_SIZE: usize = COLS * ROWS;
 const VIEWPORT_MARGIN: f32 = 28.0;
 const PANEL_MIN_WIDTH: f32 = 250.0;
 const PANEL_PADDING_X: f32 = 34.0;
@@ -40,10 +41,15 @@ pub fn resolved_geometry_scale(
     requested_scale: f32,
     child_count: usize,
 ) -> f32 {
+    let viewport_w = viewport.0.max(1) as f32;
     let viewport_h = viewport.1.max(1) as f32;
     let page_count = child_count.div_ceil(PAGE_SIZE).max(1);
     let layout_count = child_count.min(PAGE_SIZE);
+    let cols = layout_count.clamp(1, COLS);
     let rows = layout_count.div_ceil(COLS);
+    let base_content_width = cols as f32 * CELL_SIZE + cols.saturating_sub(1) as f32 * CELL_GAP_X;
+    let base_required_width =
+        (base_content_width + PANEL_PADDING_X * 2.0).max(PANEL_MIN_WIDTH) + VIEWPORT_MARGIN * 2.0;
     let base_content_height = if rows == 0 {
         20.0
     } else {
@@ -55,7 +61,9 @@ pub fn resolved_geometry_scale(
         + base_indicator_height
         + PANEL_PADDING_BOTTOM
         + VIEWPORT_MARGIN * 2.0;
-    sanitize_scale(requested_scale).min(viewport_h / base_required_height.max(1.0))
+    sanitize_scale(requested_scale)
+        .min(viewport_w / base_required_width)
+        .min(viewport_h / base_required_height)
 }
 
 /// Resolve an insertion slot on the current folder page, including empty
@@ -71,8 +79,7 @@ pub fn child_drop_index(
     let scale = sanitize_scale(scale_factor);
     let pitch_x = (CELL_SIZE + CELL_GAP_X) * scale;
     let pitch_y = (CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y) * scale;
-    let grid_width = (COLS as f32 * CELL_SIZE + (COLS - 1) as f32 * CELL_GAP_X) * scale;
-    let grid_left = panel.center().x - grid_width * 0.5;
+    let grid_left = panel.x + PANEL_PADDING_X * scale;
     let first_center = Point::new(
         grid_left + CELL_SIZE * scale * 0.5,
         panel.y + PANEL_PADDING_TOP * scale + CELL_SIZE * scale * 0.5,
@@ -82,12 +89,12 @@ pub fn child_drop_index(
     if !col_position.is_finite()
         || !row_position.is_finite()
         || !(-0.5..=COLS as f32 - 0.5).contains(&col_position)
-        || !(-0.5..=COLS as f32 - 0.5).contains(&row_position)
+        || !(-0.5..=ROWS as f32 - 0.5).contains(&row_position)
     {
         return None;
     }
     let col = col_position.round().clamp(0.0, (COLS - 1) as f32) as usize;
-    let row = row_position.round().clamp(0.0, (COLS - 1) as f32) as usize;
+    let row = row_position.round().clamp(0.0, (ROWS - 1) as f32) as usize;
     Some((page * PAGE_SIZE + row * COLS + col).min(child_count))
 }
 
@@ -136,7 +143,10 @@ pub struct FolderPanelModel {
     pub child_rects: Vec<Rect>,
     pub page: usize,
     pub page_count: usize,
-    /// Effective physical geometry scale after fitting the complete 3×3
+    /// Page owning child hits and empty-cell drops. While dragging a child,
+    /// this follows the visible destination before the pager settles.
+    pub hit_page: usize,
+    /// Effective physical geometry scale after fitting the complete 5×3
     /// content. App-level drop/edge logic must use this, not the requested
     /// backing scale.
     pub effective_scale: f32,
@@ -150,12 +160,10 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     let layout_count = input.children.len().min(PAGE_SIZE);
     let cols = layout_count.clamp(1, COLS);
     let rows = layout_count.div_ceil(COLS);
-    // A physical 800px-tall QA viewport is only 400pt at 2x. Scaling every
-    // 3x3 metric by backing scale would make the third row intrinsically
-    // taller than the viewport, then merely clamp the glass panel while
-    // leaving its children outside. Compress the folder's geometry as one
-    // coherent unit when necessary; text still receives the real backing
-    // scale for raster sharpness.
+    // Fit the complete 5x3 grid on both axes, including at high DPI and in
+    // narrow windows. Scale the panel, cells and hit geometry together so
+    // clamping the panel cannot leave children outside its bounds. Text uses
+    // the same effective scale so labels also fit when the panel shrinks.
     let scale = resolved_geometry_scale(input.viewport, input.scale_factor, input.children.len());
     let content_width =
         cols as f32 * CELL_SIZE * scale + cols.saturating_sub(1) as f32 * CELL_GAP_X * scale;
@@ -277,16 +285,10 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
     for (global_index, child) in input.children.iter().enumerate() {
         let child_page = global_index / PAGE_SIZE;
         let local_index = global_index % PAGE_SIZE;
-        let page_start = child_page * PAGE_SIZE;
-        let page_child_count = (input.children.len() - page_start).min(PAGE_SIZE);
         let row = local_index / COLS;
         let col = local_index % COLS;
-        let row_start = row * COLS;
-        let row_count = (page_child_count - row_start).min(COLS);
-        let row_width = row_count as f32 * CELL_SIZE * scale
-            + row_count.saturating_sub(1) as f32 * CELL_GAP_X * scale;
         let page_origin = child_page as f32 * target.width + input.page_scroll_x;
-        let grid_left = target.x + page_origin + (target.width - row_width) * 0.5;
+        let grid_left = target.x + page_origin + PANEL_PADDING_X * scale;
         let final_rect = Rect::new(
             grid_left + col as f32 * (CELL_SIZE + CELL_GAP_X) * scale,
             grid_top + row as f32 * (CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y) * scale,
@@ -429,6 +431,15 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         HitTarget::folder_panel(input.folder_key),
         100,
     ));
+    // Drawing includes neighboring pages during tracking and settling.
+    // Ordinary hits stay on the durable page. Child drags follow the visible
+    // destination, including empty-cell drops before the first idle frame.
+    let hit_page = if input.dragged_child_key.is_some() {
+        ((-input.page_scroll_x / target.width.max(1.0)).round() as isize)
+            .clamp(0, page_count.saturating_sub(1) as isize) as usize
+    } else {
+        page
+    };
     if progress > 0.9 {
         hits.push(HitRegion::new(
             UiId::folder_title(input.folder_key),
@@ -436,17 +447,6 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
             HitTarget::folder_title(input.folder_key),
             130,
         ));
-        // Drawing intentionally includes neighboring pages during tracking and
-        // settling, but ordinary hit ownership remains on the durable page.
-        // A child drag is the sole exception: edge-dwell paging must be able
-        // to drop onto the visually selected destination before persistence
-        // catches up on the first idle frame.
-        let hit_page = if input.dragged_child_key.is_some() {
-            ((-input.page_scroll_x / target.width.max(1.0)).round() as isize)
-                .clamp(0, page_count.saturating_sub(1) as isize) as usize
-        } else {
-            page
-        };
         for (global_index, (child, rect)) in input.children.iter().zip(&child_rects).enumerate() {
             if global_index / PAGE_SIZE != hit_page {
                 continue;
@@ -524,6 +524,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
         child_rects,
         page,
         page_count,
+        hit_page,
         effective_scale: scale,
     }
 }
@@ -795,7 +796,7 @@ mod tests {
 
     #[test]
     fn panel_scales_and_clamps_for_empty_and_many_children() {
-        for count in [0, 1, 4, 5, 18] {
+        for count in [0, 1, 4, 5, 15, 16, 30] {
             let value = model(count, 1.0, 1.5);
             assert!(value.target_panel_rect.min_x() >= 0.0);
             assert!(value.target_panel_rect.max_x() <= 1280.0);
@@ -804,17 +805,30 @@ mod tests {
     }
 
     #[test]
-    fn sparse_panels_shrink_and_incomplete_rows_are_centered() {
+    fn sparse_panels_shrink_and_every_row_starts_at_left_padding() {
         let one = model(1, 1.0, 1.0);
-        let four = model(4, 1.0, 1.0);
-        let five = model(5, 1.0, 1.0);
-        assert!(one.target_panel_rect.width < four.target_panel_rect.width);
-        assert!(one.target_panel_rect.height < four.target_panel_rect.height);
-        let last_four = four.child_rects[3];
-        assert!((last_four.center().x - four.target_panel_rect.center().x).abs() < 0.01);
-        let last_five_center =
-            (five.child_rects[3].center().x + five.child_rects[4].center().x) * 0.5;
-        assert!((last_five_center - five.target_panel_rect.center().x).abs() < 0.01);
+        let six = model(6, 1.0, 1.0);
+        let seven = model(7, 1.0, 1.0);
+        assert!(one.target_panel_rect.width < six.target_panel_rect.width);
+        assert!(one.target_panel_rect.height < six.target_panel_rect.height);
+        for value in [&one, &six, &seven] {
+            assert!(
+                (value.child_rects[0].x - value.target_panel_rect.x - PANEL_PADDING_X).abs() < 0.01
+            );
+            for (index, rect) in value.child_rects.iter().enumerate() {
+                assert_eq!(rect.x, value.child_rects[index % COLS].x);
+                assert_eq!(
+                    child_drop_index(
+                        value.target_panel_rect,
+                        rect.center(),
+                        0,
+                        value.child_rects.len(),
+                        value.effective_scale
+                    ),
+                    Some(index)
+                );
+            }
+        }
     }
 
     #[test]
@@ -825,16 +839,18 @@ mod tests {
     }
 
     #[test]
-    fn nine_children_fit_one_page_and_ten_require_two() {
-        assert_eq!(model(9, 1.0, 1.0).page_count, 1);
-        assert_eq!(model(10, 1.0, 1.0).page_count, 2);
+    fn fifteen_children_fit_one_page_and_sixteen_require_two() {
+        assert_eq!(model(15, 1.0, 1.0).page_count, 1);
+        assert_eq!(model(16, 1.0, 1.0).page_count, 2);
+        assert_eq!(model(30, 1.0, 1.0).page_count, 2);
+        assert_eq!(model(31, 1.0, 1.0).page_count, 3);
     }
 
     #[test]
-    fn ten_children_create_two_pages_and_indicator() {
-        let value = model(10, 1.0, 1.0);
+    fn sixteen_children_create_two_pages_and_indicator() {
+        let value = model(16, 1.0, 1.0);
         assert_eq!(value.page_count, 2);
-        assert_eq!(value.child_rects.len(), 10);
+        assert_eq!(value.child_rects.len(), 16);
         assert!(value
             .result
             .render
@@ -846,34 +862,32 @@ mod tests {
     #[test]
     fn horizontal_scroll_moves_the_next_page_into_the_same_panel() {
         let source = Rect::new(100.0, 120.0, 84.0, 84.0);
-        let first = model_with_page(10, 1.0, 1.0, source, 0, 0.0);
+        let first = model_with_page(16, 1.0, 1.0, source, 0, 0.0);
         let page_width = first.target_panel_rect.width;
-        assert!(first.child_rects[9].center().x > first.target_panel_rect.max_x());
+        assert!(first.child_rects[15].center().x > first.target_panel_rect.max_x());
 
-        let second = model_with_page(10, 1.0, 1.0, source, 1, -page_width);
-        assert!(
-            (second.child_rects[9].center().x - second.target_panel_rect.center().x).abs() < 0.01
-        );
+        let second = model_with_page(16, 1.0, 1.0, source, 1, -page_width);
+        assert!((second.child_rects[15].x - first.child_rects[0].x).abs() < 0.01);
         assert!(second.child_rects[0].center().x < second.target_panel_rect.x);
         assert!(matches!(
             second
                 .result
                 .hits
-                .hit_test(second.child_rects[9].center())
+                .hit_test(second.child_rects[15].center())
                 .map(|hit| &hit.target),
-            Some(HitTarget::FolderChild { child, index: 9, .. }) if child == "id-9"
+            Some(HitTarget::FolderChild { child, index: 15, .. }) if child == "id-15"
         ));
     }
 
     #[test]
     fn half_page_draws_neighbor_but_hits_only_committed_page_until_settle_commit() {
         let source = Rect::new(100.0, 120.0, 84.0, 84.0);
-        let first = model_with_page(18, 1.0, 1.0, source, 0, 0.0);
+        let first = model_with_page(30, 1.0, 1.0, source, 0, 0.0);
         let page_width = first.target_panel_rect.width;
-        let halfway = model_with_page(18, 1.0, 1.0, source, 0, -page_width * 0.5);
-        let neighbor_point = halfway.child_rects[9].center();
+        let halfway = model_with_page(30, 1.0, 1.0, source, 0, -page_width * 0.5);
+        let neighbor_point = halfway.child_rects[15].center();
         assert!(
-            intersect_rect(halfway.child_rects[9], halfway.target_panel_rect).is_some(),
+            intersect_rect(halfway.child_rects[15], halfway.target_panel_rect).is_some(),
             "neighbor must remain visible while tracking"
         );
         assert!(!matches!(
@@ -882,39 +896,38 @@ mod tests {
                 .hits
                 .hit_test(neighbor_point)
                 .map(|hit| &hit.target),
-            Some(HitTarget::FolderChild { index: 9, .. })
+            Some(HitTarget::FolderChild { index: 15, .. })
         ));
 
-        let committed = model_with_page(18, 1.0, 1.0, source, 1, -page_width);
+        let committed = model_with_page(30, 1.0, 1.0, source, 1, -page_width);
         assert!(matches!(
             committed
                 .result
                 .hits
-                .hit_test(committed.child_rects[9].center())
+                .hit_test(committed.child_rects[15].center())
                 .map(|hit| &hit.target),
-            Some(HitTarget::FolderChild { index: 9, .. })
+            Some(HitTarget::FolderChild { index: 15, .. })
         ));
     }
 
     #[test]
     fn empty_cell_drop_on_second_page_resolves_to_that_page() {
         let panel = Rect::new(370.0, 44.0, 540.0, 712.0);
-        let grid_width = 3.0 * CELL_SIZE + 2.0 * CELL_GAP_X;
-        let grid_left = panel.center().x - grid_width * 0.5;
+        let grid_left = panel.x + PANEL_PADDING_X;
         let second_row_center = Point::new(
             grid_left + CELL_SIZE * 0.5,
             panel.y + PANEL_PADDING_TOP + CELL_SIZE * 0.5 + CELL_SIZE + LABEL_HEIGHT + CELL_GAP_Y,
         );
         assert_eq!(
-            child_drop_index(panel, second_row_center, 1, 12, 1.0),
-            Some(12)
+            child_drop_index(panel, second_row_center, 1, 18, 1.0),
+            Some(18)
         );
         assert_eq!(
             child_drop_index(
                 panel,
                 Point::new(panel.center().x, panel.y + 12.0),
                 1,
-                12,
+                18,
                 1.0
             ),
             None
@@ -922,18 +935,80 @@ mod tests {
     }
 
     #[test]
-    fn panel_geometry_stays_fixed_across_sparse_last_page() {
-        let source = Rect::new(100.0, 120.0, 84.0, 84.0);
-        let first = model_with_page(10, 1.0, 1.0, source, 0, 0.0);
-        let second = model_with_page(10, 1.0, 1.0, source, 1, -first.target_panel_rect.width);
-        assert_eq!(first.target_panel_rect, second.target_panel_rect);
+    fn child_drag_hits_and_empty_slots_share_destination_before_page_commit() {
+        let owned = children(18);
+        let children: Vec<_> = owned
+            .iter()
+            .map(|(id, label)| FolderChildInput {
+                key: id,
+                label,
+                uv: None,
+                hide_fill: false,
+                color: Color::rgba(0.4, 0.5, 0.7, 1.0),
+            })
+            .collect();
+        let first = model(18, 1.0, 1.0);
+        let value = build(FolderPanelInput {
+            viewport: (1280, 800),
+            scale_factor: 1.0,
+            folder_key: "folder-0",
+            name: "Folder",
+            rename_text: None,
+            source_rect: Rect::new(100.0, 120.0, 84.0, 84.0),
+            source_radius: 19.0,
+            page_frame_rect: Rect::new(80.0, 60.0, 1120.0, 680.0),
+            page_frame_radius: 54.0,
+            children: &children,
+            page: 0,
+            page_scroll_x: -first.target_panel_rect.width * 0.98,
+            progress: 1.0,
+            editing: true,
+            dragged_child_key: Some("id-0"),
+        });
+        assert_eq!(value.page, 0, "the durable page has not committed yet");
+        assert_eq!(value.hit_page, 1);
+        assert!(matches!(
+            value
+                .result
+                .hits
+                .hit_test(value.child_rects[15].center())
+                .map(|hit| &hit.target),
+            Some(HitTarget::FolderChild { index: 15, .. })
+        ));
+        let empty_cell = Point::new(
+            value.target_panel_rect.center().x,
+            first.child_rects[5].center().y,
+        );
+        assert_eq!(
+            child_drop_index(
+                value.target_panel_rect,
+                empty_cell,
+                value.hit_page,
+                18,
+                value.effective_scale
+            ),
+            Some(18),
+            "an empty second-row slot must append on the visible destination page",
+        );
     }
 
     #[test]
-    fn three_by_three_labels_fit_at_common_hidpi_scales_in_800px_viewport() {
+    fn panel_geometry_stays_fixed_across_sparse_last_page() {
+        let source = Rect::new(100.0, 120.0, 84.0, 84.0);
+        let first = model_with_page(17, 1.0, 1.0, source, 0, 0.0);
+        let second = model_with_page(17, 1.0, 1.0, source, 1, -first.target_panel_rect.width);
+        assert_eq!(first.target_panel_rect, second.target_panel_rect);
+        for index in 0..2 {
+            assert!((second.child_rects[15 + index].x - first.child_rects[index].x).abs() < 0.01);
+            assert_eq!(second.child_rects[15 + index].y, first.child_rects[index].y);
+        }
+    }
+
+    #[test]
+    fn five_by_three_labels_fit_at_common_hidpi_scales_in_800px_viewport() {
         for scale in [1.0, 1.5, 2.0] {
             let value = model_with_page_in_viewport(
-                18,
+                30,
                 1.0,
                 scale,
                 Rect::new(100.0, 120.0, 84.0 * scale, 84.0 * scale),
@@ -953,7 +1028,7 @@ mod tests {
                     text.rect.center().x >= panel.x && text.rect.center().x <= panel.max_x()
                 })
                 .collect();
-            assert_eq!(labels.len(), 9);
+            assert_eq!(labels.len(), 15);
             assert!(labels
                 .iter()
                 .all(|label| { label.rect.y >= panel.y && label.rect.max_y() <= panel.max_y() }));
@@ -984,10 +1059,10 @@ mod tests {
     }
 
     #[test]
-    fn resolved_scale_maps_all_nine_rendered_cell_centers_to_their_drop_index() {
+    fn resolved_scale_maps_all_fifteen_rendered_cell_centers_to_their_drop_index() {
         for requested_scale in [1.0, 1.5, 2.0] {
             let value = model_with_page_in_viewport(
-                9,
+                15,
                 1.0,
                 requested_scale,
                 Rect::new(100.0, 120.0, 84.0 * requested_scale, 84.0 * requested_scale),
@@ -997,15 +1072,15 @@ mod tests {
             );
             assert_eq!(
                 value.effective_scale,
-                resolved_geometry_scale((1280, 800), requested_scale, 9)
+                resolved_geometry_scale((1280, 800), requested_scale, 15)
             );
-            for (index, rect) in value.child_rects.iter().take(9).enumerate() {
+            for (index, rect) in value.child_rects.iter().enumerate() {
                 assert_eq!(
                     child_drop_index(
                         value.target_panel_rect,
                         rect.center(),
                         0,
-                        9,
+                        15,
                         value.effective_scale,
                     ),
                     Some(index),
@@ -1014,6 +1089,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn narrow_and_short_viewports_fit_every_cell_and_label_on_both_pages() {
+        for viewport in [(320, 800), (800, 320), (1280, 800)] {
+            for scale in [1.0, 1.5, 2.0] {
+                let source = Rect::new(100.0, 120.0, 84.0 * scale, 84.0 * scale);
+                let first = model_with_page_in_viewport(30, 1.0, scale, source, 0, 0.0, viewport);
+                for page in 0..2 {
+                    let value = model_with_page_in_viewport(
+                        30,
+                        1.0,
+                        scale,
+                        source,
+                        page,
+                        -(page as f32) * first.target_panel_rect.width,
+                        viewport,
+                    );
+                    let panel = value.target_panel_rect;
+                    assert_eq!(panel, first.target_panel_rect);
+                    assert!(panel.x >= 0.0 && panel.max_x() <= viewport.0 as f32);
+                    assert!(panel.y >= 0.0 && panel.max_y() <= viewport.1 as f32);
+                    for index in page * 15..(page + 1) * 15 {
+                        let rect = value.child_rects[index];
+                        assert!(rect.x >= panel.x && rect.max_x() <= panel.max_x());
+                        assert!(rect.y >= panel.y && rect.max_y() <= panel.max_y());
+                        assert_eq!(
+                            child_drop_index(panel, rect.center(), page, 30, value.effective_scale),
+                            Some(index),
+                            "viewport={viewport:?}, scale={scale}, index={index}",
+                        );
+                        assert!(matches!(
+                            value.result.hits.hit_test(rect.center()).map(|hit| &hit.target),
+                            Some(HitTarget::FolderChild { index: hit_index, .. }) if *hit_index == index
+                        ));
+                    }
+                    for label in value.result.render.text.iter().filter(|text| {
+                        text.style.role == TextRole::FolderItemLabel
+                            && text.rect.center().x >= panel.x
+                            && text.rect.center().x <= panel.max_x()
+                    }) {
+                        assert!(label.rect.x >= panel.x && label.rect.max_x() <= panel.max_x());
+                        assert!(label.rect.y >= panel.y && label.rect.max_y() <= panel.max_y());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_page_has_five_columns_three_rows_and_no_fourth_drop_row() {
+        let value = model(15, 1.0, 1.0);
+        for row in 0..3 {
+            for col in 0..5 {
+                let rect = value.child_rects[row * 5 + col];
+                assert_eq!(rect.x, value.child_rects[col].x);
+                assert_eq!(rect.y, value.child_rects[row * 5].y);
+            }
+        }
+        let first = value.child_rects[0].center();
+        let row_pitch = value.child_rects[5].y - value.child_rects[0].y;
+        assert_eq!(
+            child_drop_index(
+                value.target_panel_rect,
+                Point::new(first.x, first.y + 3.0 * row_pitch),
+                0,
+                15,
+                value.effective_scale,
+            ),
+            None,
+        );
     }
 
     #[test]

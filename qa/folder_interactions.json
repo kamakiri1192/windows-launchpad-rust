@@ -15,11 +15,17 @@
       { "id": "qa-app-06", "name": "Maps" },
       { "id": "qa-app-07", "name": "Weather" },
       { "id": "qa-app-08", "name": "Books" },
-      { "id": "qa-app-09", "name": "Second Page One" },
-      { "id": "qa-app-10", "name": "2ページ目のアプリ" },
+      { "id": "qa-app-09", "name": "Child 09" },
+      { "id": "qa-app-10", "name": "Child 10" },
       { "id": "qa-app-11", "name": "Top Level A" },
       { "id": "qa-app-12", "name": "Top Level B" },
-      { "id": "qa-app-13", "name": "Top Level C" }
+      { "id": "qa-app-13", "name": "Top Level C" },
+      { "id": "qa-app-14", "name": "Child 14" },
+      { "id": "qa-app-15", "name": "Child 15" },
+      { "id": "qa-app-16", "name": "Child 16" },
+      { "id": "qa-app-17", "name": "Child 17" },
+      { "id": "qa-app-23", "name": "Second Page One" },
+      { "id": "qa-app-24", "name": "2ページ目のアプリ" }
     ],
     "folders": [
       {
@@ -28,7 +34,8 @@
         "children": [
           "qa-app-00", "qa-app-01", "qa-app-02", "qa-app-03", "qa-app-04",
           "qa-app-05", "qa-app-06", "qa-app-07", "qa-app-08", "qa-app-09",
-          "qa-app-10"
+          "qa-app-10", "qa-app-14", "qa-app-15", "qa-app-16", "qa-app-17",
+          "qa-app-23", "qa-app-24"
         ]
       }
     ],

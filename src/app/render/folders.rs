@@ -313,6 +313,9 @@ impl App {
             }
         }
 
+        // Font metrics and the rename caret must fit the same scaled cells
+        // as the icons, including viewport-constrained high-DPI panels.
+        let text_scale = model.effective_scale;
         let mut glyphs = Vec::new();
         if let Some(text) = self.text.as_mut() {
             let labels: Vec<_> = model
@@ -334,7 +337,7 @@ impl App {
                     ],
                 })
                 .collect();
-            glyphs.extend(text.layout_labels(&labels, self.scale_factor));
+            glyphs.extend(text.layout_labels(&labels, text_scale));
 
             for view in model
                 .result
@@ -343,14 +346,14 @@ impl App {
                 .iter()
                 .filter(|view| view.style.role == TextRole::FolderTitle)
             {
-                let line_height = view.rect.height / self.scale_factor.max(0.01);
+                let line_height = view.rect.height / text_scale.max(0.01);
                 let fitted = fit_centered_text(
                     text,
                     &view.text,
                     view.rect.width,
                     view.style.size,
                     line_height,
-                    self.scale_factor,
+                    text_scale,
                     cosmic_weight(view.style.weight),
                 );
                 glyphs.append(&mut text.layout_centered_line_weighted_with_shadow(
@@ -366,7 +369,7 @@ impl App {
                             view.style.color.a,
                         ],
                         center: (view.rect.center().x, view.rect.center().y),
-                        scale_factor: self.scale_factor,
+                        scale_factor: text_scale,
                     },
                     cosmic_weight(view.style.weight),
                 ));
@@ -383,7 +386,7 @@ impl App {
                 let visible = editor.visible_text();
                 let mut caret_prefix = editor.text[..editor.cursor].to_owned();
                 caret_prefix.push_str(&editor.preedit);
-                let line_height = title_view.rect.height / self.scale_factor.max(0.01);
+                let line_height = title_view.rect.height / text_scale.max(0.01);
                 let visible_spec = CenteredLineSpec {
                     text: &visible,
                     font_size: title_view.style.size,
@@ -391,7 +394,7 @@ impl App {
                     family: UI_FONT_FAMILY,
                     color: [1.0; 4],
                     center: (0.0, 0.0),
-                    scale_factor: self.scale_factor,
+                    scale_factor: text_scale,
                 };
                 let prefix_spec = CenteredLineSpec {
                     text: &caret_prefix,
@@ -400,13 +403,13 @@ impl App {
                     family: UI_FONT_FAMILY,
                     color: [1.0; 4],
                     center: (0.0, 0.0),
-                    scale_factor: self.scale_factor,
+                    scale_factor: text_scale,
                 };
                 let weight = cosmic_weight(title_view.style.weight);
                 let total_width = text.measure_text_weighted(&visible_spec, weight);
                 let prefix_width = text.measure_text_weighted(&prefix_spec, weight);
                 let text_gap = if prefix_width > 0.0 {
-                    1.5 * self.scale_factor
+                    1.5 * text_scale
                 } else {
                     0.0
                 };
@@ -427,11 +430,11 @@ impl App {
                             caret_x,
                             title_view.rect.center().y,
                         ),
-                        extent: 10.0 * self.scale_factor,
+                        extent: 10.0 * text_scale,
                         opacity: 0.95 * caret_opacity,
                         scene_blur: 0.0,
-                        stroke: 1.0 * self.scale_factor,
-                        corner_radius: 1.0 * self.scale_factor,
+                        stroke: 1.0 * text_scale,
+                        corner_radius: 1.0 * text_scale,
                         color: Color::rgba(1.0, 1.0, 1.0, 1.0),
                         kind: ControlKind::Caret,
                         z: 131,
