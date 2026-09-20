@@ -3,10 +3,9 @@
 //! Architecture:
 //! - **Track**: `InkView` (round-rect capsule). Colour interpolates between
 //!   OFF (white, low alpha) and ON (green/tint) via `tint_progress`.
-//! - **Thumb**: `GlassSurface` (a compact lens that stretches while active).
-//!   Position follows
-//!   `thumb_progress` with spring physics. `glass_activation` controls glass
-//!   effect intensity: idle ≈ 0, pressed/dragging → 1, settling → decays.
+//! - **Thumb**: solid `InkView` at rest, becoming one Liquid Glass lens only
+//!   while pressed or dragged. Position follows `thumb_progress` with spring
+//!   physics, and the active lens has bounded elastic deformation.
 //! - **HitRegion**: full row (or switch-only area when no label), large enough
 //!   for touch (≥44×44 logical px).
 //! - **State machine**: `ToggleInteractionPhase` with Spring-driven animation.
@@ -388,14 +387,14 @@ impl Ui {
                         vs.drag_velocity = 0.0;
                     } else if hovered {
                         vs.phase = ToggleInteractionPhase::Hovered;
-                        vs.glass_activation.glide_to(0.15);
+                        vs.glass_activation.glide_to(0.0);
                         vs.press_amount.glide_to(0.0);
                     } else {
                         vs.phase = ToggleInteractionPhase::Idle;
                     }
                 }
                 ToggleInteractionPhase::Hovered => {
-                    vs.glass_activation.glide_to(0.15);
+                    vs.glass_activation.glide_to(0.0);
                     vs.press_amount.glide_to(0.0);
 
                     if pointer_pressed && hovered {
@@ -547,19 +546,27 @@ impl Ui {
 
         // The reference switch does not turn into a separate glass track. Its
         // thumb becomes a short, horizontal lens while pressed, with the
-        // extension trailing the direction of travel. Keep the velocity term
-        // deliberately small; the press deformation is what makes a simple
-        // tap read correctly at 60 Hz as well as during a drag.
-        let directional_stretch = if theme.reduce_motion {
-            0.0
-        } else {
-            let v_clamped = vs.drag_velocity.clamp(-2000.0, 2000.0);
-            (v_clamped / 2000.0) * motion.max_directional_stretch
-        };
+        // extension trailing the direction of travel. Drag deformation is
+        // derived from the bounded pointer displacement as well as velocity;
+        // both terms are capped so a long hold cannot stretch without limit.
+        let drag_deformation =
+            if theme.reduce_motion || vs.phase != ToggleInteractionPhase::Dragging {
+                0.0
+            } else {
+                let displacement = pointer
+                    .map(|p| (p.x - vs.drag_start_pointer_x).abs())
+                    .unwrap_or(0.0);
+                let displacement_amount =
+                    (displacement / (THUMB_OFFSET * scale * 1.5).max(1.0)).clamp(0.0, 1.0);
+                let v_clamped = vs.drag_velocity.abs().clamp(0.0, 2000.0);
+                let velocity_amount = v_clamped / 2000.0;
+                (displacement_amount.max(velocity_amount) * motion.max_directional_stretch)
+                    .min(motion.max_directional_stretch)
+            };
         let press_deformation = if theme.reduce_motion {
             0.0
         } else {
-            press_a * 0.75 + directional_stretch.abs() * 0.75
+            (press_a * 0.75 + drag_deformation).min(0.95)
         };
         let thumb_width = thumb_display_r * 2.0 * (1.0 + press_deformation);
         let thumb_height = thumb_display_r * 2.0 * (1.0 + press_a * 0.06);
@@ -716,9 +723,9 @@ impl Ui {
         }
 
         // ------------------------------------------------------------------
-        // Thumb: GlassSurface (compact at rest, horizontally stretched while
-        // pressed or dragged). Track ink remains behind this single lens so
-        // the active green/neutral tint is visible through its interior.
+        // Thumb: a solid ink capsule at rest. It becomes a single Liquid
+        // Glass lens only while the pointer is held, so idle toggles never
+        // pay for or visually expose a glass surface.
         // ------------------------------------------------------------------
         let thumb_rect = Rect::new(
             thumb_cx - thumb_width * 0.5 + trailing_offset,
@@ -727,23 +734,41 @@ impl Ui {
             thumb_height,
         );
 
-        // Thumb: always a Liquid Glass lens. The clip region inherited from
-        // the clip_stack (set by ScrollView) is pushed into the GlassSurface
-        // and the renderer must honour it (see GlassShape clip handling).
-        let thumb_glass = GlassSurface {
-            id: t.id.clone(),
-            rect: thumb_rect,
-            radius: thumb_height * 0.5,
-            material: GlassMaterial::Regular,
-            behavior: GlassBehavior::Control,
-            z: Z_CONTROL + 2,
-            clip: None,
-            activation: glass_a,
-            blur_radius: None,
-            backdrop_replacement: 0.0,
-            tint: None,
-        };
-        self.push_glass(GlassLayer::Overlay, thumb_glass);
+        let pressed_glass = matches!(
+            vs.phase,
+            ToggleInteractionPhase::Pressed | ToggleInteractionPhase::Dragging
+        );
+        if pressed_glass {
+            let thumb_glass = GlassSurface {
+                id: t.id.clone(),
+                rect: thumb_rect,
+                radius: thumb_height * 0.5,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: Z_CONTROL + 2,
+                clip: None,
+                activation: glass_a.max(0.01),
+                blur_radius: None,
+                backdrop_replacement: 0.0,
+                tint: None,
+            };
+            self.push_glass(GlassLayer::Overlay, thumb_glass);
+        } else {
+            let thumb_alpha = if t.enabled { 0.96 } else { 0.42 };
+            self.push_ink(InkView {
+                id: t.id.clone(),
+                center: thumb_rect.center(),
+                extent: thumb_height * 0.5,
+                opacity: thumb_alpha,
+                scene_blur: 0.0,
+                stroke: thumb_width * 0.5,
+                corner_radius: thumb_height * 0.5,
+                color: Color::rgba(1.0, 1.0, 1.0, thumb_alpha),
+                kind: ControlKind::Toggle,
+                z: Z_CONTROL + 2,
+                clip: None,
+            });
+        }
 
         // ------------------------------------------------------------------
         // Hit region
@@ -867,12 +892,11 @@ mod tests {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(false));
         let (render, _hits, _reg) = ui.take();
-        // Thumb is always a Liquid Glass surface.
-        let glass = render
-            .glass
+        let thumb = render
+            .ink
             .iter()
-            .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Toggle)
             .unwrap();
         let ink = render
             .ink
@@ -881,9 +905,14 @@ mod tests {
             .find(|v| v.kind == ControlKind::RowBackground)
             .unwrap();
         assert!(
-            glass.rect.center().x < ink.center.x,
+            thumb.center.x < ink.center.x,
             "OFF thumb should be left of track center"
         );
+        assert!(render
+            .glass
+            .iter()
+            .flat_map(|b| &b.surfaces)
+            .all(|s| s.behavior != GlassBehavior::Control));
     }
 
     #[test]
@@ -891,11 +920,11 @@ mod tests {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(true));
         let (render, _hits, _reg) = ui.take();
-        let glass = render
-            .glass
+        let thumb = render
+            .ink
             .iter()
-            .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Toggle)
             .unwrap();
         let ink = render
             .ink
@@ -904,9 +933,14 @@ mod tests {
             .find(|v| v.kind == ControlKind::RowBackground)
             .unwrap();
         assert!(
-            glass.rect.center().x > ink.center.x,
+            thumb.center.x > ink.center.x,
             "ON thumb should be right of track center"
         );
+        assert!(render
+            .glass
+            .iter()
+            .flat_map(|b| &b.surfaces)
+            .all(|s| s.behavior != GlassBehavior::Control));
     }
 
     // ------------------------------------------------------------------
@@ -1031,20 +1065,20 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn toggle_off_has_low_glass_activation() {
+    fn toggle_off_is_plain_ink_at_rest() {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(false));
         let (render, _hits, _reg) = ui.take();
-        let glass = render
+        assert!(render
             .glass
             .iter()
             .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
-            .unwrap();
-        assert!(
-            glass.activation < 0.2,
-            "idle activation should be near zero"
-        );
+            .all(|s| s.behavior != GlassBehavior::Control));
+        assert!(render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .any(|v| v.kind == ControlKind::Toggle));
     }
 
     #[test]
@@ -1060,13 +1094,16 @@ mod tests {
             .flat_map(|b| &b.surfaces)
             .find(|s| s.behavior == GlassBehavior::Control)
             .unwrap();
-        // With press, glass_activation target is 1.0; first frame may still be
-        // near initial 0.0 depending on spring, so check it's > idle threshold.
         assert!(
-            glass.activation >= 0.0,
+            glass.activation > 0.0,
             "pressed activation should be non-zero, got {}",
             glass.activation
         );
+        assert!(render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .all(|v| v.kind != ControlKind::Toggle));
     }
 
     // ------------------------------------------------------------------

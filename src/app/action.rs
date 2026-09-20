@@ -759,6 +759,7 @@ impl App {
             PressAction::ContextMenu => self.handle_context_menu_pointer_press(px, py),
             PressAction::Settings(target) => {
                 self.pressed_on_settings = Some(target);
+                self.begin_settings_toggle_drag(target);
             }
             PressAction::Control => {
                 self.pressed_on_control = true;
@@ -817,6 +818,10 @@ impl App {
         if self.settings_panel_active() {
             self.update_settings_category_hover(x, y);
         }
+        if self.settings_toggle_drag.is_some() {
+            self.update_settings_toggle_drag(x);
+            return;
+        }
         // Settings overlay slider drag: follow the pointer live.
         if self.settings_slider_drag.is_some() {
             self.update_settings_slider_drag(x);
@@ -862,10 +867,15 @@ impl App {
         // setting. Clear them before the release side effect so the next
         // frame can show the thumb settling back to its resting glass state.
         self.pressed_on_settings = None;
+        let settings_toggle_drag = self.settings_toggle_drag.take();
         match release_action {
             ReleaseAction::Folder => self.handle_folder_pointer_release(px, py),
             ReleaseAction::ContextMenu => self.handle_context_menu_pointer_release(px, py),
             ReleaseAction::Settings { pressed, released } => {
+                if let Some(drag) = settings_toggle_drag.filter(|drag| drag.dragging) {
+                    self.finish_settings_toggle_drag(drag);
+                    return;
+                }
                 if pressed == SettingsPressTarget::Outside
                     && released == SettingsPressTarget::Outside
                 {

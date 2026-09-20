@@ -13,7 +13,9 @@ use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
 
 use crate::app::render::settings_press_target_from_hit_target;
-use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
+use crate::app::state::{
+    App, PendingPress, SettingsPressTarget, SettingsToggleDrag, WorkerMessage, CLICK_SLOP_PHYS,
+};
 
 impl App {
     pub(crate) fn input_region_at(&self, x: f32, y: f32) -> crate::input_routing::InputRegion {
@@ -381,6 +383,86 @@ impl App {
         match region {
             None => SettingsPressTarget::Outside,
             Some(r) => settings_press_target_from_hit_target(&r.target),
+        }
+    }
+
+    fn settings_toggle_value(&self, target: SettingsPressTarget) -> Option<bool> {
+        Some(match target {
+            SettingsPressTarget::FrequentToggle => self.settings.frequent_apps_enabled,
+            SettingsPressTarget::SteamToggle => self.settings.show_steam_apps,
+            SettingsPressTarget::SearchHiddenToggle => self.settings.search_includes_hidden,
+            SettingsPressTarget::DebugToggle => self.settings.debug_keys_enabled,
+            SettingsPressTarget::FpsToggle => self.settings.show_fps,
+            SettingsPressTarget::AutoDarknessValueToggle => self.settings.show_auto_darkness_value,
+            SettingsPressTarget::LiquidGlassEnabled => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_enabled())
+                .unwrap_or(self.settings.liquid_glass.enabled),
+            SettingsPressTarget::LiquidGlassAutoDarkness => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_auto_darkness_enabled())
+                .unwrap_or(self.settings.liquid_glass.auto_darkness_enabled),
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(mode) => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_auto_darkness_update_mode() == mode)
+                .unwrap_or(false),
+            SettingsPressTarget::LiquidGlassDebug(flag) => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_debug_flag(debug_flag_to_renderer(flag)))
+                .unwrap_or(false),
+            SettingsPressTarget::WindowDecorations => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.decorated())
+                .unwrap_or(false),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn begin_settings_toggle_drag(&mut self, target: SettingsPressTarget) {
+        let Some(value) = self.settings_toggle_value(target) else {
+            self.settings_toggle_drag = None;
+            return;
+        };
+        let progress = f32::from(value);
+        self.settings_toggle_drag = Some(SettingsToggleDrag {
+            target,
+            start_pointer_x: self.pointer_phys_x,
+            start_progress: progress,
+            current_progress: progress,
+            dragging: false,
+        });
+    }
+
+    pub(crate) fn update_settings_toggle_drag(&mut self, pointer_phys_x: f32) {
+        let Some(drag) = self.settings_toggle_drag.as_mut() else {
+            return;
+        };
+        let delta = pointer_phys_x - drag.start_pointer_x;
+        let threshold =
+            crate::ui::Theme::default().toggle_motion.drag_threshold * self.scale_factor.max(0.1);
+        if delta.abs() >= threshold {
+            drag.dragging = true;
+        }
+        drag.current_progress = settings_toggle_drag_progress(
+            drag.start_progress,
+            drag.start_pointer_x,
+            pointer_phys_x,
+            self.scale_factor,
+        );
+        self.request_redraw();
+    }
+
+    pub(crate) fn finish_settings_toggle_drag(&mut self, drag: SettingsToggleDrag) {
+        let target_value = drag.current_progress >= 0.5;
+        if self.settings_toggle_value(drag.target) != Some(target_value) {
+            self.handle_settings_click(drag.target);
+        } else {
+            self.request_redraw();
         }
     }
 
@@ -1138,6 +1220,8 @@ impl App {
         }
         self.pending_press = None;
         self.pressed_on_control = false;
+        self.pressed_on_settings = None;
+        self.settings_toggle_drag = None;
         self.reset_settings_category_hover();
         self.settings_open = true;
         debug_log!("settings: opened");
@@ -1150,10 +1234,12 @@ impl App {
             return;
         }
         self.settings_open = false;
+        self.pressed_on_settings = None;
         self.reset_settings_category_hover();
         // Drop any in-flight slider drag and reset the per-category scroll so
         // the next open starts at the top.
         self.settings_slider_drag = None;
+        self.settings_toggle_drag = None;
         self.reset_settings_scroll();
         debug_log!("settings: closed");
         self.request_redraw();
@@ -2065,6 +2151,19 @@ impl App {
     }
 }
 
+/// Map a captured settings-toggle pointer displacement onto the thumb's
+/// 0..=1 travel. The physical travel is intentionally bounded to the same
+/// 20-logical-pixel span used by the switch geometry.
+fn settings_toggle_drag_progress(
+    start_progress: f32,
+    start_pointer_x: f32,
+    pointer_phys_x: f32,
+    scale_factor: f32,
+) -> f32 {
+    let travel = 20.0 * scale_factor.max(0.1);
+    (start_progress + (pointer_phys_x - start_pointer_x) / travel).clamp(0.0, 1.0)
+}
+
 fn folder_page_commit_after_settle(
     position: f32,
     extent: f32,
@@ -2144,6 +2243,14 @@ fn debug_flag_to_renderer(
 #[cfg(test)]
 mod folder_page_commit_tests {
     use super::*;
+
+    #[test]
+    fn settings_toggle_drag_progress_is_bounded() {
+        assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 100.0, 1.0), 0.0);
+        assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 1000.0, 1.0), 1.0);
+        assert_eq!(settings_toggle_drag_progress(1.0, 100.0, -1000.0, 1.0), 0.0);
+        assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 110.0, 2.0), 0.25);
+    }
 
     #[test]
     fn half_page_preview_does_not_change_durable_page() {

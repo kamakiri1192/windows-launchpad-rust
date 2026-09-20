@@ -118,6 +118,18 @@ pub enum SettingsPressTarget {
     Outside,
 }
 
+/// Pointer-capture state for a settings switch. The retained settings layout
+/// does not receive pointer state, so this small shell-owned record carries
+/// the drag origin into the per-frame visual overlay and release handler.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SettingsToggleDrag {
+    pub(crate) target: SettingsPressTarget,
+    pub(crate) start_pointer_x: f32,
+    pub(crate) start_progress: f32,
+    pub(crate) current_progress: f32,
+    pub(crate) dragging: bool,
+}
+
 impl PendingPress {
     /// True if `(release - start)` is within the click slop radius. A quick
     /// stationary release is a click; a drag past slop is not. Mirrors the
@@ -340,6 +352,9 @@ pub struct App {
     pub pressed_on_control: bool,
     /// Settings overlay target pressed by the current pointer down, if any.
     pub pressed_on_settings: Option<SettingsPressTarget>,
+    /// Captured drag state for a settings toggle, if the pointer moved past
+    /// the toggle's drag threshold while held.
+    pub(crate) settings_toggle_drag: Option<SettingsToggleDrag>,
     /// True while the settings overlay panel is shown on top of the grid.
     pub settings_open: bool,
     /// 0..1 presentation progress for the settings panel open/close animation.
@@ -501,6 +516,7 @@ impl App {
             pointer_over_control: false,
             pressed_on_control: false,
             pressed_on_settings: None,
+            settings_toggle_drag: None,
             settings_open: false,
             settings_panel_progress: 0.0,
             settings_category_hover: [crate::spring_anim::Channel::rest(0.0);
