@@ -136,7 +136,8 @@ fn resolved_center(shape: GlassShape) -> vec2<f32> {
         let travel = min(shape.motion.z, shape.motion.w) * u.presentation_start_offset;
         center = center + direction * travel * (1.0 - u.presentation_progress);
     }
-    if shape.shape_type == 0u || shape.shape_type == 4u || shape.shape_type == 5u {
+    if shape.shape_type == 0u || shape.shape_type == 4u || shape.shape_type == 5u
+        || shape.shape_type == 7u {
         center.x = center.x + u.scroll_x;
     }
     return center;

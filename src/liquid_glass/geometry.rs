@@ -201,7 +201,7 @@ impl GlassShape {
     pub(crate) fn is_scrolling(self) -> bool {
         matches!(
             self.shape_type,
-            SHAPE_SCROLLING | SHAPE_ANIMATED_BADGE | SHAPE_ANIMATED_SCROLLING
+            SHAPE_SCROLLING | SHAPE_ANIMATED_BADGE | SHAPE_ANIMATED_SCROLLING | SHAPE_LAUNCH_GATHER
         )
     }
 
@@ -337,5 +337,22 @@ mod tests {
         let fixed = GlassShape::fixed_rounded_rect([50.0, 60.0], [20.0, 30.0], 5.0);
         assert_eq!(scrolling.screen_bounds(-15.0), [25.0, 45.0, 45.0, 75.0]);
         assert_eq!(fixed.screen_bounds(-15.0), [40.0, 45.0, 60.0, 75.0]);
+    }
+
+    #[test]
+    fn launch_gather_bounds_follow_page_scroll() {
+        let launch = GlassShape::launch_gather_rounded_rect(
+            [120.0, 180.0],
+            [84.0, 84.0],
+            19.0,
+            [640.0, 400.0],
+            [480.0, 300.0],
+        );
+        let at_rest = launch.screen_bounds(0.0);
+        let scrolled = launch.screen_bounds(-15.0);
+
+        assert!(launch.is_scrolling());
+        assert_eq!(scrolled[0], at_rest[0] - 15.0);
+        assert_eq!(scrolled[2], at_rest[2] - 15.0);
     }
 }
