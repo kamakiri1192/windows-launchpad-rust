@@ -200,24 +200,43 @@ impl App {
         if self.renderer.is_none() {
             return;
         }
-        // Arm the transition before making the native window visible. That
-        // guarantees the first presented frame is the beginning of the reveal,
-        // rather than one frame of the settled scene flashing before it.
+        let was_visible = self.visible;
+        // Arm the transition before the native window becomes visible. The
+        // first summon frame is rendered while the window is still hidden so
+        // a resident window cannot expose its old settled swapchain buffer
+        // before the new reveal has reached the compositor.
         self.launch_presentation.begin();
         // Do not let the hidden interval contribute to the first animation
         // delta when the launcher is summoned again.
         self.last_redraw = None;
-        let Some(r) = self.renderer.as_mut() else {
-            return;
-        };
-        debug_log!("summon: showing window (visible was {})", self.visible);
-        r.window.set_visible(true);
-        r.set_backdrop_capture_active(true);
+        debug_log!("summon: preparing window (visible was {})", was_visible);
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_backdrop_capture_active(true);
+        }
         #[cfg(target_os = "macos")]
         {
             self.awaiting_initial_focus = true;
             self.window_focused = false;
         }
+        self.visible = true;
+        // Record the summon time before the first staged frame. This keeps
+        // the focus grace period aligned with the user's summon action even
+        // though native visibility is intentionally delayed by one frame.
+        self.last_summon = Some(Instant::now());
+
+        if !was_visible {
+            // A hidden native window may retain the last fully-rendered frame
+            // in DWM/CoreAnimation. Render the animation's first frame before
+            // showing it, otherwise the compositor can briefly present the
+            // settled scene and then jump back to the animation's transparent
+            // start state (the visible whole-window flash reported on reopen).
+            self.tick_frame();
+        }
+
+        let Some(r) = self.renderer.as_mut() else {
+            return;
+        };
+        r.window.set_visible(true);
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
         // so we also allow-set-foreground + re-assert focus. If it still fails
@@ -238,10 +257,6 @@ impl App {
         #[cfg(target_os = "macos")]
         crate::platform::macos::integration::activate_application();
         r.window.focus_window();
-        self.visible = true;
-        // Record the summon time so a focus-transition artifact in the next
-        // SUMMON_FOCUS_GRACE is ignored instead of instantly hiding us.
-        self.last_summon = Some(Instant::now());
         self.request_redraw();
         debug_log!("summon: window shown + focus requested");
     }
