@@ -613,7 +613,7 @@ impl LiquidGlassRenderer {
             .iter()
             .map(|s| s.activation)
             .fold(0.0f32, f32::max);
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -623,6 +623,10 @@ impl LiquidGlassRenderer {
             control_activation,
             self.backdrop_mapping,
         );
+        // Toggle lenses live in the control lane. Keep this interactive glass
+        // transparent even when the global/automatic darkness setting is on.
+        uniforms.auto_darkness_enabled = 0;
+        uniforms.glass_darkness = 0.0;
         queue.write_buffer(
             &self.control_uniform_buffer,
             0,
@@ -736,6 +740,10 @@ impl LiquidGlassRenderer {
             uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
             uniforms.glass_darkness = self.settings_panel_glass_darkness;
         }
+        // Settings Toggle lenses are interactive controls, not part of the
+        // panel's darkness treatment. Preserve their transparent backdrop.
+        uniforms.auto_darkness_enabled = 0;
+        uniforms.glass_darkness = 0.0;
         queue.write_buffer(
             &self.settings_control_uniform_buffer,
             0,

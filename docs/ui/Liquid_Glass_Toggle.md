@@ -146,6 +146,8 @@ Toggle
 * エッジハイライトを強める
 * レンズ効果と屈折を有効化する
 * Thumbを中心にぷっくり膨張させ、単色Inkから単一のLiquid Glassレンズへ切り替える
+* 横方向は移動先側へ約80%、反対側へ約20%の割合で膨らませる
+* 上下方向もトラックから少しはみ出す程度に、ばねでぽよんと膨張させる
 * 押下位置に応じてハイライト中心を移動する
 
 押下反応が遅れて見えないようにしてください。
@@ -163,7 +165,7 @@ Thumb上、またはToggleの有効ヒット領域内で水平方向へドラッ
 * 押下レンズはトラック端へ到達するまでは横方向へほぼ伸びない
 * トラック端を超えて引っ張った超過距離だけ、内側へ弾性変形する
 * 弾性変形には最大値を設け、長くドラッグしても無制限に伸びない
-* 変形量はドラッグ速度と追従誤差に応じて調整する
+* 変形量は端からの超過距離に応じて調整する
 * 方向を反転した場合は変形方向も滑らかに反転する
 * ポインターをToggle外へ動かしても、リリースまではPointer Captureを維持する
 
@@ -263,7 +265,7 @@ pub struct ToggleVisualState {
     pub press_amount: Spring,
     pub glass_activation: Spring,
     pub tint_progress: Spring,
-    pub drag_velocity: f32,
+    pub drag_overflow: f32,
     pub light_origin: Point,
     pub phase: ToggleInteractionPhase,
     pub value_at_press_start: bool,
@@ -288,7 +290,7 @@ pub struct ToggleVisualState {
 * エッジハイライト
 * 内部照明
 * 背景に応じた影の強度
-* 背景に応じた明暗切り替え
+* 背景に応じた明暗切り替え（Toggleレンズでは無効化し、透明感を優先）
 * Tint
 * 軽い形状変形
 * シマー

@@ -43,6 +43,17 @@ const THUMB_RADIUS: f32 = 8.0;
 /// Thumb offset from track center (matches `toggle_instances`: 10.0).
 const THUMB_OFFSET: f32 = 10.0;
 
+/// Extra vertical room makes the active lens visibly spill just beyond the
+/// track, like a soft liquid capsule being squeezed.
+const PRESS_VERTICAL_EXPANSION: f32 = 0.50;
+/// A 0.30 center offset over the added width yields an 80/20 directional
+/// split: 80% of the press expansion faces the toggle's destination.
+const PRESS_DIRECTIONAL_BIAS: f32 = 0.30;
+/// Feed a little spring velocity into the geometry so press/release has a
+/// visible, bounded "poyo" rather than a purely linear scale change.
+const PRESS_POYO_VELOCITY_GAIN: f32 = 0.012;
+const PRESS_POYO_MAX: f32 = 1.18;
+
 /// Progress overscroll at which the elastic stretch reaches its cap.
 const OVERDRAG_SATURATION_PROGRESS: f32 = 0.75;
 
@@ -71,6 +82,24 @@ pub(crate) fn inward_bulge_sign(overdrag_progress: f32) -> f32 {
     } else {
         0.0
     }
+}
+
+/// Add a small, bounded velocity overshoot to the press amount for the soft
+/// vertical bounce of the active lens.
+pub(crate) fn poyo_press_amount(value: f32, velocity: f32) -> f32 {
+    (value + velocity * PRESS_POYO_VELOCITY_GAIN).clamp(0.0, PRESS_POYO_MAX)
+}
+
+/// Offset a pressed lens so most of its added width faces the destination,
+/// while retaining a smaller amount of material on the opposite side.
+pub(crate) fn directional_press_offset(extra_width: f32, value_at_press_start: bool) -> f32 {
+    let direction = if value_at_press_start { -1.0 } else { 1.0 };
+    direction * extra_width * PRESS_DIRECTIONAL_BIAS
+}
+
+/// Return the vertically expanded active-lens height.
+pub(crate) fn poyo_thumb_height(base_height: f32, value: f32, velocity: f32) -> f32 {
+    base_height * (1.0 + poyo_press_amount(value, velocity) * PRESS_VERTICAL_EXPANSION)
 }
 
 /// Row height used when a label is present.
@@ -554,6 +583,11 @@ impl Ui {
         let tint_p = vs.tint_progress.value;
         let glass_a = vs.glass_activation.value;
         let press_a = vs.press_amount.value;
+        let poyo_a = if theme.reduce_motion {
+            0.0
+        } else {
+            poyo_press_amount(press_a, vs.press_amount.velocity)
+        };
 
         // Thumb position.
         let thumb_offset = THUMB_OFFSET * scale;
@@ -569,12 +603,12 @@ impl Ui {
         let press_scale = if theme.reduce_motion {
             1.0
         } else {
-            1.0 + (motion.press_scale - 1.0) * press_a
+            1.0 + (motion.press_scale - 1.0) * poyo_a
         };
         let thumb_display_r = thumb_r * press_scale;
 
-        // The reference switch does not turn into a separate glass track. Its
-        // The thumb stays at the endpoint while the pointer is still inside
+        // The reference switch does not turn into a separate glass track. The
+        // thumb stays at the endpoint while the pointer is still inside
         // the travel range. Only the excess drag beyond that endpoint becomes
         // the bounded elastic part of the glass lens.
         let drag_deformation =
@@ -586,17 +620,24 @@ impl Ui {
         let press_deformation = if theme.reduce_motion {
             0.0
         } else {
-            (press_a * 0.75 + drag_deformation).min(0.95)
+            (poyo_a * 0.75 + drag_deformation).min(0.95)
         };
         let thumb_width = thumb_display_r * 2.0 * (1.0 + press_deformation);
-        let thumb_height = thumb_display_r * 2.0 * (1.0 + press_a * 0.06);
+        let thumb_height = if theme.reduce_motion {
+            thumb_display_r * 2.0
+        } else {
+            poyo_thumb_height(thumb_display_r * 2.0, press_a, vs.press_amount.velocity)
+        };
         // Once an endpoint is pinned, grow the extra length toward the track
         // interior so the outer edge remains anchored at the endpoint.
-        let trailing_offset = if drag_deformation > 0.0 {
+        let press_extra_width = thumb_display_r * 2.0 * (poyo_a * 0.75).min(0.95);
+        let press_offset = directional_press_offset(press_extra_width, vs.value_at_press_start);
+        let drag_offset = if drag_deformation > 0.0 {
             inward_bulge_sign(vs.drag_overflow) * thumb_display_r * drag_deformation
         } else {
             0.0
         };
+        let trailing_offset = press_offset + drag_offset;
 
         // ------------------------------------------------------------------
         // a11y adjustments
@@ -925,6 +966,14 @@ mod tests {
         assert_eq!(inward_bulge_sign(-0.2), 1.0);
         assert_eq!(inward_bulge_sign(0.2), -1.0);
         assert_eq!(inward_bulge_sign(0.0), 0.0);
+    }
+
+    #[test]
+    fn pressed_lens_biases_eighty_twenty_toward_destination() {
+        assert!((directional_press_offset(10.0, false) - 3.0).abs() < f32::EPSILON);
+        assert!((directional_press_offset(10.0, true) + 3.0).abs() < f32::EPSILON);
+        assert!(poyo_thumb_height(16.0, 1.0, 0.0) > 22.0);
+        assert!(poyo_press_amount(1.0, 100.0) <= 1.18);
     }
 
     // ------------------------------------------------------------------

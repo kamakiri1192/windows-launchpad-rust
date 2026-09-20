@@ -17,7 +17,8 @@ use crate::ui_model::render_model::{
 use super::helpers::advance_unit_toward;
 use crate::app::state::{App, SettingsPressTarget, SettingsToggleDrag};
 use crate::ui::widgets::toggle::{
-    drag_stretch_from_overdrag, inward_bulge_sign, ToggleInteractionPhase, ToggleVisualState,
+    directional_press_offset, drag_stretch_from_overdrag, inward_bulge_sign, poyo_press_amount,
+    poyo_thumb_height, ToggleInteractionPhase, ToggleVisualState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -785,6 +786,7 @@ fn apply_settings_toggle_visuals(
         };
         let base_radius = base_height * 0.5;
         let press = state.press_amount.value;
+        let poyo_press = poyo_press_amount(press, state.press_amount.velocity);
         let drag_deformation = if dragging {
             let drag = context
                 .toggle_drag
@@ -793,11 +795,13 @@ fn apply_settings_toggle_visuals(
         } else {
             0.0
         };
-        let deformation = (press * 0.75 + drag_deformation).min(0.95);
+        let deformation = (poyo_press * 0.75 + drag_deformation).min(0.95);
         let width = base_height * (1.0 + deformation);
-        let height = base_height * (1.0 + press * 0.06);
+        let height = poyo_thumb_height(base_height, press, state.press_amount.velocity);
         let thumb_x = track.x + (state.thumb_progress.value - 0.5) * 2.0 * travel;
-        let trailing_offset = if drag_deformation > 0.0 {
+        let press_extra_width = base_height * (poyo_press * 0.75).min(0.95);
+        let press_offset = directional_press_offset(press_extra_width, state.value_at_press_start);
+        let drag_offset = if drag_deformation > 0.0 {
             // Keep the endpoint pinned and grow the pulled lens toward the
             // track interior.
             let drag = context
@@ -807,6 +811,7 @@ fn apply_settings_toggle_visuals(
         } else {
             0.0
         };
+        let trailing_offset = press_offset + drag_offset;
         let thumb_rect = Rect::new(
             thumb_x - width * 0.5 + trailing_offset,
             track.y - height * 0.5,
