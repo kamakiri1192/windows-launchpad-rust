@@ -3,7 +3,8 @@
 //! Architecture:
 //! - **Track**: `InkView` (round-rect capsule). Colour interpolates between
 //!   OFF (white, low alpha) and ON (green/tint) via `tint_progress`.
-//! - **Thumb**: `GlassSurface` (circular glass lens). Position follows
+//! - **Thumb**: `GlassSurface` (a compact lens that stretches while active).
+//!   Position follows
 //!   `thumb_progress` with spring physics. `glass_activation` controls glass
 //!   effect intensity: idle ≈ 0, pressed/dragging → 1, settling → decays.
 //! - **HitRegion**: full row (or switch-only area when no label), large enough
@@ -37,8 +38,9 @@ const TRACK_OFF: [f32; 4] = [1.0, 1.0, 1.0, 0.14];
 const TRACK_HALF_W: f32 = 22.0;
 /// Logical track half-height (matches `toggle_instances`: 11.0).
 const TRACK_HALF_H: f32 = 11.0;
-/// Thumb radius (matches `toggle_instances`: 6.0).
-const THUMB_RADIUS: f32 = 6.0;
+/// Resting thumb radius. The iOS-style switch thumb nearly fills the track
+/// height; the active lens adds width rather than scaling into a large disk.
+const THUMB_RADIUS: f32 = 8.0;
 /// Thumb offset from track center (matches `toggle_instances`: 10.0).
 const THUMB_OFFSET: f32 = 10.0;
 
@@ -543,13 +545,33 @@ impl Ui {
         };
         let thumb_display_r = thumb_r * press_scale;
 
-        // Directional stretch (drag). Currently unused but reserved for
-        // future glass deformation rendering.
-        let _stretch = if theme.reduce_motion {
+        // The reference switch does not turn into a separate glass track. Its
+        // thumb becomes a short, horizontal lens while pressed, with the
+        // extension trailing the direction of travel. Keep the velocity term
+        // deliberately small; the press deformation is what makes a simple
+        // tap read correctly at 60 Hz as well as during a drag.
+        let directional_stretch = if theme.reduce_motion {
             0.0
         } else {
             let v_clamped = vs.drag_velocity.clamp(-2000.0, 2000.0);
             (v_clamped / 2000.0) * motion.max_directional_stretch
+        };
+        let press_deformation = if theme.reduce_motion {
+            0.0
+        } else {
+            press_a * 0.75 + directional_stretch.abs() * 0.75
+        };
+        let thumb_width = thumb_display_r * 2.0 * (1.0 + press_deformation);
+        let thumb_height = thumb_display_r * 2.0 * (1.0 + press_a * 0.06);
+        // When an ON thumb is being released toward OFF, the glass trails to
+        // the right; when an OFF thumb is being pressed toward ON, it trails
+        // to the left. This is the characteristic asymmetric capsule seen in
+        // the reference recording.
+        let trailing_sign = if vs.value_at_press_start { 1.0 } else { -1.0 };
+        let trailing_offset = if press_deformation > 0.0 {
+            trailing_sign * (thumb_width - thumb_display_r * 2.0) * 0.5
+        } else {
+            0.0
         };
 
         // ------------------------------------------------------------------
@@ -694,14 +716,15 @@ impl Ui {
         }
 
         // ------------------------------------------------------------------
-        // Thumb: GlassSurface (circular glass lens)
+        // Thumb: GlassSurface (compact at rest, horizontally stretched while
+        // pressed or dragged). Track ink remains behind this single lens so
+        // the active green/neutral tint is visible through its interior.
         // ------------------------------------------------------------------
-        let thumb_diam = thumb_display_r * 2.0;
         let thumb_rect = Rect::new(
-            thumb_cx - thumb_display_r,
-            track_cy - thumb_display_r,
-            thumb_diam,
-            thumb_diam,
+            thumb_cx - thumb_width * 0.5 + trailing_offset,
+            track_cy - thumb_height * 0.5,
+            thumb_width,
+            thumb_height,
         );
 
         // Thumb: always a Liquid Glass lens. The clip region inherited from
@@ -710,7 +733,7 @@ impl Ui {
         let thumb_glass = GlassSurface {
             id: t.id.clone(),
             rect: thumb_rect,
-            radius: thumb_display_r,
+            radius: thumb_height * 0.5,
             material: GlassMaterial::Regular,
             behavior: GlassBehavior::Control,
             z: Z_CONTROL + 2,

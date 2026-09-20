@@ -7,14 +7,15 @@ use crate::layout;
 use crate::layout::hit_map::HitMap;
 use crate::renderer::text_engine as text;
 use crate::ui_model;
-use crate::ui_model::geometry::{Rect, UvRect};
+use crate::ui_model::geometry::{Point, Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
     Color, GlassLayer, GlassSurface, GlyphLane, GlyphView, InkLane, InkView,
 };
 
 use super::helpers::advance_unit_toward;
-use crate::app::state::App;
+use crate::app::state::{App, SettingsPressTarget};
+use crate::ui::widgets::toggle::{ToggleInteractionPhase, ToggleVisualState};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct SettingsRenderCacheKey {
@@ -263,9 +264,6 @@ impl App {
         } else {
             None
         };
-        let pointer_pressed = self.pressed_on_settings.is_some()
-            || self.pending_press.is_some()
-            || self.settings_slider_drag.is_some();
         let input = layout::settings_panel::SettingsPanelInput {
             viewport,
             scale_factor: scale,
@@ -406,12 +404,28 @@ impl App {
         // the live pointer against the cached hit map. Everything else — ink,
         // text, geometry — is pointer-independent, so the retained cache key
         // stays valid across pointer moves.
-        apply_settings_toggle_hover(
+        let settings_ink = self
+            .render_model
+            .ink
+            .iter_mut()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .map(|batch| batch.views.as_mut_slice())
+            .unwrap_or(&mut []);
+        let toggles_animating = apply_settings_toggle_visuals(
+            &mut self.settings_toggle_visual_states,
             &mut settings_overlay,
-            self.cached_settings_hit_map.as_ref(),
-            pointer_logical,
-            pointer_pressed,
+            settings_ink,
+            SettingsToggleVisualContext {
+                input,
+                hits: self.cached_settings_hit_map.as_ref(),
+                pointer: pointer_logical,
+                pressed_target: self.pressed_on_settings,
+                dt_ms: self.last_frame_dt_ms,
+            },
         );
+        if toggles_animating {
+            self.request_redraw();
+        }
         // Count existing overlay glass (from bottom control etc.). Settings
         // toggle glass is kept in its own post-panel lane below.
         let existing_overlay = self
@@ -603,6 +617,224 @@ fn toggle_one_tick_spring_value(target: f32) -> f32 {
     spring.value
 }
 
+fn settings_toggle_id(target: Option<SettingsPressTarget>) -> Option<UiId> {
+    let key = match target? {
+        SettingsPressTarget::FrequentToggle => "toggle-frequent-apps".to_owned(),
+        SettingsPressTarget::SteamToggle => "toggle-steam-apps".to_owned(),
+        SettingsPressTarget::SearchHiddenToggle => "toggle-search-hidden".to_owned(),
+        SettingsPressTarget::DebugToggle => "toggle-debug".to_owned(),
+        SettingsPressTarget::FpsToggle => "toggle-show-fps".to_owned(),
+        SettingsPressTarget::AutoDarknessValueToggle => {
+            "toggle-show-auto-darkness-value".to_owned()
+        }
+        SettingsPressTarget::LiquidGlassEnabled => "toggle-lg-enabled".to_owned(),
+        SettingsPressTarget::LiquidGlassAutoDarkness => "toggle-lg-auto-darkness".to_owned(),
+        SettingsPressTarget::LiquidGlassAutoDarknessMode(mode) => {
+            format!("toggle-lg-auto-darkness-mode-{}", mode.key())
+        }
+        SettingsPressTarget::LiquidGlassDebug(flag) => {
+            let prefix = match flag {
+                LiquidGlassDebugFlag::DisableChromaticAberration
+                | LiquidGlassDebugFlag::DisableEdgeLighting
+                | LiquidGlassDebugFlag::DisableBlur => "toggle-lg-disable-",
+                LiquidGlassDebugFlag::ShowBackdropTexture
+                | LiquidGlassDebugFlag::ShowGeometryTexture
+                | LiquidGlassDebugFlag::ShowDisplacement
+                | LiquidGlassDebugFlag::ShowAlphaMask
+                | LiquidGlassDebugFlag::ShowFinalGlassOnly => "toggle-lg-view-",
+            };
+            format!("{prefix}{}", flag.key())
+        }
+        SettingsPressTarget::WindowDecorations => "toggle-window-decorations".to_owned(),
+        _ => return None,
+    };
+    Some(UiId::settings_row(key))
+}
+
+fn settings_toggle_value(
+    input: layout::settings_panel::SettingsPanelInput,
+    id: &UiId,
+) -> Option<bool> {
+    let key = id.as_str().strip_prefix("settings-row:")?;
+    Some(match key {
+        "toggle-frequent-apps" => input.frequent_apps_enabled,
+        "toggle-steam-apps" => input.show_steam_apps,
+        "toggle-search-hidden" => input.search_includes_hidden,
+        "toggle-debug" => input.debug_keys_enabled,
+        "toggle-show-fps" => input.show_fps,
+        "toggle-show-auto-darkness-value" => input.show_auto_darkness_value,
+        "toggle-lg-enabled" => input.liquid_glass.enabled,
+        "toggle-lg-auto-darkness" => input.liquid_glass.auto_darkness_enabled,
+        "toggle-window-decorations" => input.window_decorated,
+        key if key.starts_with("toggle-lg-auto-darkness-mode-") => {
+            input.liquid_glass.auto_darkness_mode.key()
+                == &key["toggle-lg-auto-darkness-mode-".len()..]
+        }
+        key if key.starts_with("toggle-lg-disable-") => match &key["toggle-lg-disable-".len()..] {
+            "disable-chromatic-aberration" => input.liquid_glass_debug.disable_chromatic_aberration,
+            "disable-edge-lighting" => input.liquid_glass_debug.disable_edge_lighting,
+            "disable-blur" => input.liquid_glass_debug.disable_blur,
+            _ => return None,
+        },
+        key if key.starts_with("toggle-lg-view-") => match &key["toggle-lg-view-".len()..] {
+            "show-backdrop-texture" => input.liquid_glass_debug.show_backdrop_texture,
+            "show-geometry-texture" => input.liquid_glass_debug.show_geometry_texture,
+            "show-displacement" => input.liquid_glass_debug.show_displacement,
+            "show-alpha-mask" => input.liquid_glass_debug.show_alpha_mask,
+            "show-final-glass-only" => input.liquid_glass_debug.show_final_glass_only,
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
+fn toggle_track_geometry(views: &[InkView], id: &UiId) -> Option<(Point, f32)> {
+    views
+        .iter()
+        .find(|view| {
+            view.id == *id
+                && view.kind == crate::ui_model::render_model::ControlKind::RowBackground
+                && view.corner_radius > 0.0
+                && (view.corner_radius - view.extent).abs() < 0.5
+                && view.stroke > view.extent
+        })
+        .map(|view| (view.center, (view.stroke - view.extent).max(1.0)))
+}
+
+fn is_toggle_track(view: &InkView) -> bool {
+    view.kind == crate::ui_model::render_model::ControlKind::RowBackground
+        && view.corner_radius > 0.0
+        && (view.corner_radius - view.extent).abs() < 0.5
+        && view.stroke > view.extent
+}
+
+struct SettingsToggleVisualContext<'a> {
+    input: layout::settings_panel::SettingsPanelInput,
+    hits: Option<&'a HitMap>,
+    pointer: Option<Point>,
+    pressed_target: Option<SettingsPressTarget>,
+    dt_ms: f32,
+}
+
+/// Animate the cached settings toggle presentations independently of the
+/// retained layout build. The track stays normal ink, while the thumb becomes
+/// one wider glass lens over it during a press.
+fn apply_settings_toggle_visuals(
+    states: &mut std::collections::HashMap<UiId, ToggleVisualState>,
+    surfaces: &mut [GlassSurface],
+    ink: &mut [InkView],
+    context: SettingsToggleVisualContext<'_>,
+) -> bool {
+    let hovered_id = context
+        .pointer
+        .and_then(|point| context.hits.and_then(|map| map.hit_test(point)))
+        .map(|region| region.id.clone())
+        .filter(|id| id.as_str().starts_with("settings-row:toggle-"));
+    let pressed_id = settings_toggle_id(context.pressed_target);
+    let motion = crate::ui::Theme::default().toggle_motion;
+    let spring_cfg = crate::scroll::PhysicsConfig {
+        spring_omega: motion.thumb_spring_omega,
+        spring_zeta: motion.thumb_spring_zeta,
+        ..Default::default()
+    };
+    let dt = (context.dt_ms / 1000.0).clamp(1.0 / 240.0, 0.05);
+    let mut animating = false;
+
+    for surface in surfaces.iter_mut() {
+        let id = surface.id.clone();
+        if !id.as_str().starts_with("settings-row:toggle-") {
+            continue;
+        }
+        let Some(target_value) = settings_toggle_value(context.input, &id) else {
+            continue;
+        };
+        let state = states
+            .entry(id.clone())
+            .or_insert_with(|| ToggleVisualState::new(target_value));
+        let target = f32::from(target_value);
+        if (state.thumb_progress.target - target).abs() > f32::EPSILON {
+            state.thumb_progress.glide_to(target);
+            state.tint_progress.glide_to(target);
+            if pressed_id.as_ref().is_none_or(|pressed| pressed != &id) {
+                state.phase = ToggleInteractionPhase::Settling;
+            }
+        }
+
+        let pressed = pressed_id.as_ref().is_some_and(|pressed| pressed == &id);
+        let hovered = hovered_id.as_ref().is_some_and(|hovered| hovered == &id);
+        if pressed {
+            if !matches!(
+                state.phase,
+                ToggleInteractionPhase::Pressed | ToggleInteractionPhase::Dragging
+            ) {
+                state.value_at_press_start = target_value;
+            }
+            state.phase = ToggleInteractionPhase::Pressed;
+            state.glass_activation.glide_to(1.0);
+            state.press_amount.glide_to(1.0);
+        } else if hovered {
+            state.phase = ToggleInteractionPhase::Hovered;
+            state.glass_activation.glide_to(0.15);
+            state.press_amount.glide_to(0.0);
+        } else {
+            if state.phase != ToggleInteractionPhase::Idle {
+                state.phase = ToggleInteractionPhase::Settling;
+            }
+            state.glass_activation.glide_to(0.0);
+            state.press_amount.glide_to(0.0);
+        }
+        animating |= state.tick(dt, &spring_cfg, false);
+
+        let Some((track, travel)) = toggle_track_geometry(ink, &id) else {
+            continue;
+        };
+        let base_height = surface.rect.height.max(1.0);
+        let base_radius = base_height * 0.5;
+        let press = state.press_amount.value;
+        let hover_scale = if hovered && !pressed { 1.01 } else { 1.0 };
+        let deformation = press * 0.80;
+        let width = base_height * hover_scale * (1.0 + deformation);
+        let height = base_height * hover_scale * (1.0 + press * 0.06);
+        let thumb_x = track.x + (state.thumb_progress.value - 0.5) * 2.0 * travel;
+        let trailing_offset = if pressed {
+            let sign = if state.value_at_press_start {
+                1.0
+            } else {
+                -1.0
+            };
+            sign * (width - base_radius * 2.0) * 0.5
+        } else {
+            0.0
+        };
+        surface.rect = Rect::new(
+            thumb_x - width * 0.5 + trailing_offset,
+            track.y - height * 0.5,
+            width,
+            height,
+        );
+        surface.radius = height * 0.5;
+        surface.activation = state.glass_activation.value;
+
+        for view in ink
+            .iter_mut()
+            .filter(|view| view.id == id && is_toggle_track(view))
+        {
+            let t = state.tint_progress.value.clamp(0.0, 1.0);
+            let off = [1.0, 1.0, 1.0, 0.14];
+            let on = layout::settings_panel::GREEN;
+            let color = [
+                off[0] + (on[0] - off[0]) * t,
+                off[1] + (on[1] - off[1]) * t,
+                off[2] + (on[2] - off[2]) * t,
+                off[3] + (on[3] - off[3]) * t,
+            ];
+            view.opacity = color[3];
+            view.color = Color::rgba(color[0], color[1], color[2], color[3]);
+        }
+    }
+    animating
+}
+
 /// Re-apply the toggle hover/press visuals the retained layout was built
 /// without (pointer kept out of the cache key). The only pointer-sensitive
 /// output of the settings panel is the hovered toggle thumb's glass surface:
@@ -644,10 +876,20 @@ fn apply_settings_toggle_hover(
     let press_scale = 1.0 + (motion.press_scale - 1.0) * press_a;
     let cx = thumb.rect.x + thumb.rect.width * 0.5;
     let cy = thumb.rect.y + thumb.rect.height * 0.5;
-    let half_w = thumb.rect.width * 0.5 * press_scale;
-    let half_h = thumb.rect.height * 0.5 * press_scale;
-    thumb.rect = Rect::new(cx - half_w, cy - half_h, half_w * 2.0, half_h * 2.0);
-    thumb.radius *= press_scale;
+    let base_diameter = thumb.rect.height;
+    let display_diameter = base_diameter * press_scale;
+    let width = display_diameter * (1.0 + press_a * 0.75);
+    let height = display_diameter * (1.0 + press_a * 0.06);
+    // The test fixture is the OFF switch, whose destination is ON; the lens
+    // trails to the left as in the live widget path.
+    let trailing_offset = -(width - display_diameter) * 0.5;
+    thumb.rect = Rect::new(
+        cx - width * 0.5 + trailing_offset,
+        cy - height * 0.5,
+        width,
+        height,
+    );
+    thumb.radius = height * 0.5;
     thumb.activation = press_a;
 }
 

@@ -858,6 +858,10 @@ impl App {
         // otherwise subsequent grid presses would be misclassified through the
         // stale control branch.
         self.pressed_on_control = false;
+        // Settings presses are pointer-capture state, not a persistent
+        // setting. Clear them before the release side effect so the next
+        // frame can show the thumb settling back to its resting glass state.
+        self.pressed_on_settings = None;
         match release_action {
             ReleaseAction::Folder => self.handle_folder_pointer_release(px, py),
             ReleaseAction::ContextMenu => self.handle_context_menu_pointer_release(px, py),
