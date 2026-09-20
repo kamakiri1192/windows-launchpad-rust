@@ -434,6 +434,7 @@ impl App {
             start_pointer_x: self.pointer_phys_x,
             start_progress: progress,
             current_progress: progress,
+            overdrag_progress: 0.0,
             dragging: false,
         });
     }
@@ -448,12 +449,14 @@ impl App {
         if delta.abs() >= threshold {
             drag.dragging = true;
         }
-        drag.current_progress = settings_toggle_drag_progress(
+        let (progress, overdrag_progress) = settings_toggle_drag_projection(
             drag.start_progress,
             drag.start_pointer_x,
             pointer_phys_x,
             self.scale_factor,
         );
+        drag.current_progress = progress;
+        drag.overdrag_progress = overdrag_progress;
         self.request_redraw();
     }
 
@@ -2160,8 +2163,25 @@ fn settings_toggle_drag_progress(
     pointer_phys_x: f32,
     scale_factor: f32,
 ) -> f32 {
+    settings_toggle_drag_projection(
+        start_progress,
+        start_pointer_x,
+        pointer_phys_x,
+        scale_factor,
+    )
+    .0
+}
+
+fn settings_toggle_drag_projection(
+    start_progress: f32,
+    start_pointer_x: f32,
+    pointer_phys_x: f32,
+    scale_factor: f32,
+) -> (f32, f32) {
     let travel = 20.0 * scale_factor.max(0.1);
-    (start_progress + (pointer_phys_x - start_pointer_x) / travel).clamp(0.0, 1.0)
+    crate::ui::widgets::toggle::clamp_drag_progress(
+        start_progress + (pointer_phys_x - start_pointer_x) / travel,
+    )
 }
 
 fn folder_page_commit_after_settle(
@@ -2250,6 +2270,22 @@ mod folder_page_commit_tests {
         assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 1000.0, 1.0), 1.0);
         assert_eq!(settings_toggle_drag_progress(1.0, 100.0, -1000.0, 1.0), 0.0);
         assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 110.0, 2.0), 0.25);
+    }
+
+    #[test]
+    fn settings_toggle_drag_projection_reports_only_endpoint_overdrag() {
+        assert_eq!(
+            settings_toggle_drag_projection(0.0, 100.0, 110.0, 1.0),
+            (0.5, 0.0)
+        );
+        assert_eq!(
+            settings_toggle_drag_projection(0.0, 100.0, 130.0, 1.0),
+            (1.0, 0.5)
+        );
+        assert_eq!(
+            settings_toggle_drag_projection(1.0, 100.0, 70.0, 1.0),
+            (0.0, -0.5)
+        );
     }
 
     #[test]

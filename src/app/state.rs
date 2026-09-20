@@ -127,6 +127,7 @@ pub(crate) struct SettingsToggleDrag {
     pub(crate) start_pointer_x: f32,
     pub(crate) start_progress: f32,
     pub(crate) current_progress: f32,
+    pub(crate) overdrag_progress: f32,
     pub(crate) dragging: bool,
 }
 

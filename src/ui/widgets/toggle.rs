@@ -43,6 +43,36 @@ const THUMB_RADIUS: f32 = 8.0;
 /// Thumb offset from track center (matches `toggle_instances`: 10.0).
 const THUMB_OFFSET: f32 = 10.0;
 
+/// Progress overscroll at which the elastic stretch reaches its cap.
+const OVERDRAG_SATURATION_PROGRESS: f32 = 0.75;
+
+/// Clamp a raw drag progress to the switch travel and retain the signed
+/// amount that was pulled beyond either endpoint.
+pub(crate) fn clamp_drag_progress(raw_progress: f32) -> (f32, f32) {
+    let progress = raw_progress.clamp(0.0, 1.0);
+    (progress, raw_progress - progress)
+}
+
+/// Convert endpoint overscroll into a bounded, eased stretch amount.
+pub(crate) fn drag_stretch_from_overdrag(overdrag_progress: f32, max_stretch: f32) -> f32 {
+    let amount = (overdrag_progress.abs() / OVERDRAG_SATURATION_PROGRESS).clamp(0.0, 1.0);
+    let eased = amount * (2.0 - amount);
+    eased * max_stretch
+}
+
+/// Return the offset direction that keeps the pulled lens inside the track.
+/// Negative progress is beyond the left edge and therefore grows right; a
+/// positive overshoot is beyond the right edge and grows left.
+pub(crate) fn inward_bulge_sign(overdrag_progress: f32) -> f32 {
+    if overdrag_progress < 0.0 {
+        1.0
+    } else if overdrag_progress > 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
 /// Row height used when a label is present.
 const ROW_H: f32 = 46.0;
 
@@ -202,8 +232,6 @@ pub struct ToggleVisualState {
     pub glass_activation: Spring,
     /// Track tint progress (0..1, mirrors thumb_progress target).
     pub tint_progress: Spring,
-    /// Current drag velocity (px/s).
-    pub drag_velocity: f32,
     /// Pointer position when press began.
     pub light_origin: Point,
     /// Current interaction phase.
@@ -214,6 +242,8 @@ pub struct ToggleVisualState {
     pub drag_start_pointer_x: f32,
     /// Drag tracking: thumb progress at drag start.
     pub drag_start_thumb_progress: f32,
+    /// Signed drag progress beyond the left/right endpoint.
+    pub drag_overflow: f32,
     /// True while pressed but drag threshold not yet exceeded.
     pub pending_drag: bool,
 }
@@ -226,12 +256,12 @@ impl ToggleVisualState {
             press_amount: Spring::at(0.0),
             glass_activation: Spring::at(0.0),
             tint_progress: Spring::at(initial),
-            drag_velocity: 0.0,
             light_origin: Point::new(0.0, 0.0),
             phase: ToggleInteractionPhase::Idle,
             value_at_press_start: value,
             drag_start_pointer_x: 0.0,
             drag_start_thumb_progress: initial,
+            drag_overflow: 0.0,
             pending_drag: false,
         }
     }
@@ -367,6 +397,7 @@ impl Ui {
                 vs.glass_activation.glide_to(0.0);
                 vs.press_amount.glide_to(0.0);
                 vs.phase = ToggleInteractionPhase::Settling;
+                vs.drag_overflow = 0.0;
                 vs.pending_drag = false;
             }
             match vs.phase {
@@ -384,7 +415,7 @@ impl Ui {
                         vs.pending_drag = true;
                         vs.drag_start_pointer_x = pointer.map(|p| p.x).unwrap_or(0.0);
                         vs.drag_start_thumb_progress = vs.thumb_progress.value;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     } else if hovered {
                         vs.phase = ToggleInteractionPhase::Hovered;
                         vs.glass_activation.glide_to(0.0);
@@ -406,7 +437,7 @@ impl Ui {
                         vs.pending_drag = true;
                         vs.drag_start_pointer_x = pointer.map(|p| p.x).unwrap_or(0.0);
                         vs.drag_start_thumb_progress = vs.thumb_progress.value;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     } else if !hovered {
                         vs.phase = ToggleInteractionPhase::Idle;
                     }
@@ -424,7 +455,6 @@ impl Ui {
                                 // Transition to dragging.
                                 vs.phase = ToggleInteractionPhase::Dragging;
                                 vs.pending_drag = false;
-                                vs.drag_velocity = 0.0;
                             }
                         }
                     } else {
@@ -449,11 +479,10 @@ impl Ui {
                             // Track half-width maps to thumb travel range.
                             let thumb_travel = THUMB_OFFSET * scale;
                             let progress_delta = dx / (thumb_travel * 2.0);
-                            let mut new_progress = vs.drag_start_thumb_progress + progress_delta;
-                            new_progress = new_progress.clamp(0.0, 1.0);
+                            let raw_progress = vs.drag_start_thumb_progress + progress_delta;
+                            let (new_progress, drag_overflow) = clamp_drag_progress(raw_progress);
+                            vs.drag_overflow = drag_overflow;
 
-                            // Estimate velocity from progress change.
-                            vs.drag_velocity = progress_delta / 0.016; // approximate
                             vs.thumb_progress.snap_to(new_progress);
                             vs.tint_progress.snap_to(new_progress);
                             vs.glass_activation.snap_to(1.0);
@@ -468,7 +497,7 @@ impl Ui {
                         vs.glass_activation.glide_to(0.0);
                         vs.press_amount.glide_to(0.0);
                         vs.phase = ToggleInteractionPhase::Settling;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     }
                 }
                 ToggleInteractionPhase::Settling => {
@@ -484,7 +513,7 @@ impl Ui {
                         vs.pending_drag = true;
                         vs.drag_start_pointer_x = pointer.map(|p| p.x).unwrap_or(0.0);
                         vs.drag_start_thumb_progress = vs.thumb_progress.value;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     }
                 }
                 ToggleInteractionPhase::Disabled => {
@@ -545,24 +574,14 @@ impl Ui {
         let thumb_display_r = thumb_r * press_scale;
 
         // The reference switch does not turn into a separate glass track. Its
-        // thumb becomes a short, horizontal lens while pressed, with the
-        // extra volume staying inside the track toward the destination.
-        // Drag deformation is
-        // derived from the bounded pointer displacement as well as velocity;
-        // both terms are capped so a long hold cannot stretch without limit.
+        // The thumb stays at the endpoint while the pointer is still inside
+        // the travel range. Only the excess drag beyond that endpoint becomes
+        // the bounded elastic part of the glass lens.
         let drag_deformation =
             if theme.reduce_motion || vs.phase != ToggleInteractionPhase::Dragging {
                 0.0
             } else {
-                let displacement = pointer
-                    .map(|p| (p.x - vs.drag_start_pointer_x).abs())
-                    .unwrap_or(0.0);
-                let displacement_amount =
-                    (displacement / (THUMB_OFFSET * scale * 1.5).max(1.0)).clamp(0.0, 1.0);
-                let v_clamped = vs.drag_velocity.abs().clamp(0.0, 2000.0);
-                let velocity_amount = v_clamped / 2000.0;
-                (displacement_amount.max(velocity_amount) * motion.max_directional_stretch)
-                    .min(motion.max_directional_stretch)
+                drag_stretch_from_overdrag(vs.drag_overflow, motion.max_directional_stretch)
             };
         let press_deformation = if theme.reduce_motion {
             0.0
@@ -571,12 +590,10 @@ impl Ui {
         };
         let thumb_width = thumb_display_r * 2.0 * (1.0 + press_deformation);
         let thumb_height = thumb_display_r * 2.0 * (1.0 + press_a * 0.06);
-        // Keep the asymmetric capsule inside the track: an ON thumb moving
-        // toward OFF bulges left, while an OFF thumb moving toward ON bulges
-        // right.
-        let trailing_sign = if vs.value_at_press_start { -1.0 } else { 1.0 };
-        let trailing_offset = if press_deformation > 0.0 {
-            trailing_sign * (thumb_width - thumb_display_r * 2.0) * 0.5
+        // Once an endpoint is pinned, grow the extra length toward the track
+        // interior so the outer edge remains anchored at the endpoint.
+        let trailing_offset = if drag_deformation > 0.0 {
+            inward_bulge_sign(vs.drag_overflow) * thumb_display_r * drag_deformation
         } else {
             0.0
         };
@@ -881,6 +898,33 @@ mod tests {
 
     fn new_ui() -> Ui {
         Ui::new(Theme::default(), 800.0, 600.0)
+    }
+
+    #[test]
+    fn drag_stretch_starts_only_after_an_endpoint() {
+        let (progress, overdrag) = clamp_drag_progress(0.4);
+        assert!((progress - 0.4).abs() < f32::EPSILON);
+        assert!(overdrag.abs() < f32::EPSILON);
+        let (progress, overdrag) = clamp_drag_progress(1.0);
+        assert!((progress - 1.0).abs() < f32::EPSILON);
+        assert!(overdrag.abs() < f32::EPSILON);
+        let (progress, overdrag) = clamp_drag_progress(1.2);
+        assert!((progress - 1.0).abs() < f32::EPSILON);
+        assert!((overdrag - 0.2).abs() < 1e-6);
+        let (progress, overdrag) = clamp_drag_progress(-0.2);
+        assert!(progress.abs() < f32::EPSILON);
+        assert!((overdrag + 0.2).abs() < 1e-6);
+
+        assert_eq!(drag_stretch_from_overdrag(0.0, 0.28), 0.0);
+        assert!(drag_stretch_from_overdrag(0.2, 0.28) > 0.0);
+        assert_eq!(drag_stretch_from_overdrag(10.0, 0.28), 0.28);
+    }
+
+    #[test]
+    fn endpoint_overdrag_bulges_toward_track_interior() {
+        assert_eq!(inward_bulge_sign(-0.2), 1.0);
+        assert_eq!(inward_bulge_sign(0.2), -1.0);
+        assert_eq!(inward_bulge_sign(0.0), 0.0);
     }
 
     // ------------------------------------------------------------------

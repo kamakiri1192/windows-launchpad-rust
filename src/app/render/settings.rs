@@ -16,7 +16,9 @@ use crate::ui_model::render_model::{
 
 use super::helpers::advance_unit_toward;
 use crate::app::state::{App, SettingsPressTarget, SettingsToggleDrag};
-use crate::ui::widgets::toggle::{ToggleInteractionPhase, ToggleVisualState};
+use crate::ui::widgets::toggle::{
+    drag_stretch_from_overdrag, inward_bulge_sign, ToggleInteractionPhase, ToggleVisualState,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct SettingsRenderCacheKey {
@@ -702,7 +704,8 @@ struct SettingsToggleVisualContext {
 
 /// Animate the cached settings toggle presentations independently of the
 /// retained layout build. The track stays normal ink, while the thumb becomes
-/// one wider glass lens over it during a press.
+/// one glass lens over it during a press. Its elastic width only grows after
+/// the captured pointer has pulled beyond a track endpoint.
 fn apply_settings_toggle_visuals(
     states: &mut std::collections::HashMap<UiId, ToggleVisualState>,
     surfaces: &mut Vec<GlassSurface>,
@@ -786,8 +789,7 @@ fn apply_settings_toggle_visuals(
             let drag = context
                 .toggle_drag
                 .expect("dragging settings toggle must carry drag state");
-            ((drag.current_progress - drag.start_progress).abs() / 0.75).clamp(0.0, 1.0)
-                * motion.max_directional_stretch
+            drag_stretch_from_overdrag(drag.overdrag_progress, motion.max_directional_stretch)
         } else {
             0.0
         };
@@ -795,15 +797,13 @@ fn apply_settings_toggle_visuals(
         let width = base_height * (1.0 + deformation);
         let height = base_height * (1.0 + press * 0.06);
         let thumb_x = track.x + (state.thumb_progress.value - 0.5) * 2.0 * travel;
-        let trailing_offset = if pressed || dragging {
-            // Grow toward the track interior: OFF -> ON extends right, while
-            // ON -> OFF extends left.
-            let sign = if state.value_at_press_start {
-                -1.0
-            } else {
-                1.0
-            };
-            sign * (width - base_radius * 2.0) * 0.5
+        let trailing_offset = if drag_deformation > 0.0 {
+            // Keep the endpoint pinned and grow the pulled lens toward the
+            // track interior.
+            let drag = context
+                .toggle_drag
+                .expect("dragging settings toggle must carry drag state");
+            inward_bulge_sign(drag.overdrag_progress) * base_radius * drag_deformation
         } else {
             0.0
         };
