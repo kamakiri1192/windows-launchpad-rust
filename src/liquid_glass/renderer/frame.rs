@@ -697,6 +697,108 @@ impl LiquidGlassRenderer {
         }
     }
 
+    /// Render settings-panel control glass after the panel surface. The
+    /// settings thumb lenses use the completed pre-panel scene as their
+    /// backdrop, so they remain distinct from (and readable above) the
+    /// panel's own glass instead of being composited underneath it.
+    pub fn render_settings_controls(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) {
+        if !self.params.enabled || self.settings_control_shape_count == 0 {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let control_activation = self
+            .settings_control_shapes
+            .iter()
+            .map(|shape| shape.activation)
+            .fold(0.0f32, f32::max);
+        let mut uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            (width, height),
+            0.0,
+            self.settings_control_shape_count,
+            0.0,
+            control_activation,
+            self.backdrop_mapping,
+        );
+        if self.settings_panel_completed_scene_enabled && !self.debug.disable_blur {
+            uniforms.blur_radius = self
+                .settings_panel_blur_radius
+                .unwrap_or(self.params.blur_radius);
+        }
+        if self.settings_panel_completed_scene_enabled {
+            uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
+            uniforms.glass_darkness = self.settings_panel_glass_darkness;
+        }
+        queue.write_buffer(
+            &self.settings_control_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        if self.settings_control_geometry_dirty {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("liquid glass settings control geometry pass"),
+                    color_attachments: &[
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &self.settings_control_geometry_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &self.settings_control_tint_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                    ],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.geometry_pipeline);
+                pass.set_bind_group(0, &self.settings_control_geometry_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.settings_control_geometry_dirty = false;
+        }
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("liquid glass settings control final pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.final_pipeline);
+        pass.set_bind_group(0, &self.settings_control_final_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
     /// Render the settings/folder modal glass from the shared modal-shape
     /// buffer. Settings uses the completed-scene bind group; folders use their
     /// ordinary backdrop path so they do not sample an unprepared settings

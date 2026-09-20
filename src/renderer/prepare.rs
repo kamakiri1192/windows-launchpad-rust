@@ -265,7 +265,7 @@ impl Renderer {
             return true;
         }
         let glass_keep = |layer: GlassLayer| match layer {
-            GlassLayer::ContextMenu => false,
+            GlassLayer::ContextMenu | GlassLayer::SettingsOverlay => false,
             GlassLayer::Settings | GlassLayer::Modal => for_menu,
             _ => true,
         };
@@ -438,6 +438,14 @@ impl Renderer {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
                         .set_overlay_shapes(&self.device, &self.queue, &shapes);
+                }
+                GlassLayer::SettingsOverlay => {
+                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    self.liquid_glass.set_settings_control_shapes(
+                        &self.device,
+                        &self.queue,
+                        &shapes,
+                    );
                 }
                 // Settings and Modal are resolved together above because
                 // they share the same GPU shape buffer.
@@ -800,6 +808,19 @@ mod tests {
     #[test]
     fn non_modal_surfaces_are_not_submitted_to_modal_lane() {
         assert!(highest_shape(&[]).is_none());
+    }
+
+    #[test]
+    fn settings_control_lane_stays_above_completed_scene_checkpoints() {
+        let mut model = RenderModel::new();
+        model.set_glass_batch(
+            GlassLayer::SettingsOverlay,
+            vec![surface("settings-toggle", 102, 640.0)],
+        );
+        let prepared = RenderModel::new();
+
+        assert!(!Renderer::below_lanes_differ(&model, &prepared, false));
+        assert!(!Renderer::below_lanes_differ(&model, &prepared, true));
     }
 
     #[test]

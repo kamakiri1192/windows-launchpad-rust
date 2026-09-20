@@ -233,8 +233,8 @@ pub struct LiquidGlassRenderer {
     debug: DebugOptions,
     capture: Box<dyn BackdropCapture>,
     capture_status: CaptureStatus,
-    // Base, grid-overlay, drag-overlay, badge, control, and settings passes are
-    // encoded into one frame.
+    // Base, grid-overlay, drag-overlay, badge, control, settings-control, and
+    // settings passes are encoded into one frame.
     // Keep their uniforms separate because queued buffer writes are not a
     // per-render-pass state snapshot.
     uniform_buffer: wgpu::Buffer,
@@ -278,6 +278,18 @@ pub struct LiquidGlassRenderer {
     control_tint_view: wgpu::TextureView,
     last_control_geometry_key: u64,
     control_geometry_rendered_key: u64,
+    settings_control_uniform_buffer: wgpu::Buffer,
+    settings_control_shape_buffer: wgpu::Buffer,
+    settings_control_shape_count: u32,
+    settings_control_shape_capacity: usize,
+    settings_control_shapes: Vec<GlassShape>,
+    settings_control_geometry_texture: wgpu::Texture,
+    settings_control_geometry_view: wgpu::TextureView,
+    settings_control_tint_texture: wgpu::Texture,
+    settings_control_tint_view: wgpu::TextureView,
+    settings_control_geometry_bind_group: wgpu::BindGroup,
+    settings_control_final_bind_group: wgpu::BindGroup,
+    settings_control_geometry_dirty: bool,
     settings_panel_shapes: Vec<GlassShape>,
     settings_panel_shape_count: u32,
     settings_panel_shape_capacity: usize,
@@ -630,6 +642,8 @@ impl LiquidGlassRenderer {
             create_uniform_buffer(device, "liquid glass modal badge uniforms", &uniforms);
         let control_uniform_buffer =
             create_uniform_buffer(device, "liquid glass control uniforms", &uniforms);
+        let settings_control_uniform_buffer =
+            create_uniform_buffer(device, "liquid glass settings control uniforms", &uniforms);
         let settings_panel_uniform_buffer =
             create_uniform_buffer(device, "liquid glass settings panel uniforms", &uniforms);
         let context_menu_uniform_buffer =
@@ -697,6 +711,12 @@ impl LiquidGlassRenderer {
         );
         let control_shape_buffer =
             create_shape_buffer_with_capacity(device, 2, "liquid glass control shape buffer");
+        let settings_control_shape_capacity = 1;
+        let settings_control_shape_buffer = create_shape_buffer_with_capacity(
+            device,
+            settings_control_shape_capacity,
+            "liquid glass settings control shape buffer",
+        );
         let settings_panel_shape_buffer =
             create_shape_buffer_with_capacity(device, 1, "liquid glass settings shape buffer");
         let context_menu_shape_buffer =
@@ -714,6 +734,14 @@ impl LiquidGlassRenderer {
             create_geometry_texture(device, width, height);
         let (control_tint_texture, control_tint_view) =
             create_tint_texture(device, width, height, "liquid glass control tint texture");
+        let (settings_control_geometry_texture, settings_control_geometry_view) =
+            create_geometry_texture(device, width, height);
+        let (settings_control_tint_texture, settings_control_tint_view) = create_tint_texture(
+            device,
+            width,
+            height,
+            "liquid glass settings control tint texture",
+        );
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         // Final blur output is full-res: the final shader samples it without
         // any resolution-mismatch stretch.
@@ -849,6 +877,12 @@ impl LiquidGlassRenderer {
             &control_uniform_buffer,
             &control_shape_buffer,
         );
+        let settings_control_geometry_bind_group = create_geometry_bind_group(
+            device,
+            &geometry_bind_group_layout,
+            &settings_control_uniform_buffer,
+            &settings_control_shape_buffer,
+        );
         let settings_panel_geometry_bind_group = create_geometry_bind_group(
             device,
             &geometry_bind_group_layout,
@@ -930,6 +964,18 @@ impl LiquidGlassRenderer {
             &control_geometry_view,
             &control_tint_view,
             &blur_view,
+            &auto_darkness_state_buffer,
+            &auto_darkness_uniform_buffer,
+        );
+        let settings_control_final_bind_group = create_final_bind_group(
+            device,
+            &final_bind_group_layout,
+            &settings_control_uniform_buffer,
+            &context_menu_source_view,
+            &sampler,
+            &settings_control_geometry_view,
+            &settings_control_tint_view,
+            &context_menu_blur_view,
             &auto_darkness_state_buffer,
             &auto_darkness_uniform_buffer,
         );
@@ -1272,6 +1318,18 @@ impl LiquidGlassRenderer {
             control_tint_view,
             last_control_geometry_key: 0,
             control_geometry_rendered_key: 0,
+            settings_control_uniform_buffer,
+            settings_control_shape_buffer,
+            settings_control_shape_count: 0,
+            settings_control_shape_capacity,
+            settings_control_shapes: Vec::new(),
+            settings_control_geometry_texture,
+            settings_control_geometry_view,
+            settings_control_tint_texture,
+            settings_control_tint_view,
+            settings_control_geometry_bind_group,
+            settings_control_final_bind_group,
+            settings_control_geometry_dirty: false,
             settings_panel_shapes: Vec::new(),
             settings_panel_shape_count: 0,
             settings_panel_shape_capacity: 1,
@@ -1388,6 +1446,14 @@ impl LiquidGlassRenderer {
             create_geometry_texture(device, width, height);
         let (control_tint_texture, control_tint_view) =
             create_tint_texture(device, width, height, "liquid glass control tint texture");
+        let (settings_control_geometry_texture, settings_control_geometry_view) =
+            create_geometry_texture(device, width, height);
+        let (settings_control_tint_texture, settings_control_tint_view) = create_tint_texture(
+            device,
+            width,
+            height,
+            "liquid glass settings control tint texture",
+        );
         let (backdrop_texture, backdrop_view) = create_backdrop_texture(device, width, height);
         let (blur_texture, blur_view) =
             create_blur_texture_raw(device, width, height, 0, "blur texture");
@@ -1421,6 +1487,10 @@ impl LiquidGlassRenderer {
         self.control_geometry_view = control_geometry_view;
         self.control_tint_texture = control_tint_texture;
         self.control_tint_view = control_tint_view;
+        self.settings_control_geometry_texture = settings_control_geometry_texture;
+        self.settings_control_geometry_view = settings_control_geometry_view;
+        self.settings_control_tint_texture = settings_control_tint_texture;
+        self.settings_control_tint_view = settings_control_tint_view;
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
         self.backdrop_stats_dirty = true;
@@ -1442,6 +1512,7 @@ impl LiquidGlassRenderer {
         self.last_geometry_key = None;
         self.last_control_geometry_key = 0;
         self.control_geometry_rendered_key = 0;
+        self.settings_control_geometry_dirty = true;
         let (down, up) = create_blur_pyramid_bind_groups(
             device,
             &self.blur_bind_group_layout,
@@ -1753,6 +1824,18 @@ impl LiquidGlassRenderer {
             &self.auto_darkness_state_buffer,
             &self.auto_darkness_uniform_buffer,
         );
+        self.settings_control_final_bind_group = create_final_bind_group(
+            device,
+            &self.final_bind_group_layout,
+            &self.settings_control_uniform_buffer,
+            &self.context_menu_source_view,
+            &self.sampler,
+            &self.settings_control_geometry_view,
+            &self.settings_control_tint_view,
+            &self.context_menu_blur_view,
+            &self.auto_darkness_state_buffer,
+            &self.auto_darkness_uniform_buffer,
+        );
         self.modal_final_bind_group = create_final_bind_group(
             device,
             &self.final_bind_group_layout,
@@ -1802,13 +1885,14 @@ impl LiquidGlassRenderer {
         if self.debug.show_backdrop_texture {
             return CaptureRegion::full(width, height);
         }
-        let groups: [&[GlassShape]; 8] = [
+        let groups: [&[GlassShape]; 9] = [
             &self.base_shapes,
             &self.grid_overlay_shapes,
             &self.drag_overlay_shapes,
             &self.badge_shapes,
             &self.modal_badge_shapes,
             &self.control_shapes,
+            &self.settings_control_shapes,
             &self.settings_panel_shapes,
             &self.context_menu_shapes,
         ];
@@ -2192,6 +2276,48 @@ impl LiquidGlassRenderer {
             );
         }
         self.last_control_geometry_key = self.last_control_geometry_key.wrapping_add(1);
+    }
+
+    /// Replace the settings-panel control lane. It has dedicated shape,
+    /// geometry, and uniform resources so it can be rendered after the
+    /// settings surface without changing the already-submitted control pass.
+    pub fn set_settings_control_shapes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shapes: &[GlassShape],
+    ) {
+        if self.settings_control_shapes.as_slice() == shapes {
+            return;
+        }
+        self.settings_control_shapes.clear();
+        self.settings_control_shapes.extend_from_slice(shapes);
+        self.settings_control_shape_count = self.settings_control_shapes.len() as u32;
+        if self.settings_control_shapes.len() > self.settings_control_shape_capacity {
+            self.settings_control_shape_capacity = next_shape_capacity(
+                self.settings_control_shape_capacity,
+                self.settings_control_shapes.len(),
+            );
+            self.settings_control_shape_buffer = create_shape_buffer_with_capacity(
+                device,
+                self.settings_control_shape_capacity,
+                "liquid glass settings control shape buffer",
+            );
+            self.settings_control_geometry_bind_group = create_geometry_bind_group(
+                device,
+                &self.geometry_bind_group_layout,
+                &self.settings_control_uniform_buffer,
+                &self.settings_control_shape_buffer,
+            );
+        }
+        if !self.settings_control_shapes.is_empty() {
+            queue.write_buffer(
+                &self.settings_control_shape_buffer,
+                0,
+                bytemuck::cast_slice(&self.settings_control_shapes),
+            );
+        }
+        self.settings_control_geometry_dirty = true;
     }
 
     /// Replace the modal glass lane atomically.

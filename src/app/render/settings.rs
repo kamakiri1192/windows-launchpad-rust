@@ -205,6 +205,8 @@ impl App {
             self.render_model
                 .set_glass_batch(GlassLayer::Settings, Vec::new());
             self.render_model
+                .set_glass_batch(GlassLayer::SettingsOverlay, Vec::new());
+            self.render_model
                 .set_ink_batch(InkLane::Backdrop, Vec::new());
             self.render_model
                 .set_ink_batch(InkLane::Settings, Vec::new());
@@ -387,10 +389,11 @@ impl App {
             self.profiler.record_settings_apply(clone_start.elapsed());
         }
 
-        // `render_gear` refreshes the shared Overlay lane every frame, so
-        // retained settings toggle lenses are merged back each frame. No
-        // panel-AABB culling is used: every settings surface remains available
-        // to the renderer and its own clip contract controls visibility.
+        // `render_gear` refreshes the shared Overlay lane every frame. Settings
+        // toggle lenses use their own later lane so the panel surface cannot
+        // cover them. No panel-AABB culling is used: every settings surface
+        // remains available to the renderer and its own clip contract controls
+        // visibility.
         let mut settings_overlay = self
             .settings_render_cache
             .as_ref()
@@ -409,7 +412,8 @@ impl App {
             pointer_logical,
             pointer_pressed,
         );
-        // Count existing overlay glass that's merged in (from bottom control etc.)
+        // Count existing overlay glass (from bottom control etc.). Settings
+        // toggle glass is kept in its own post-panel lane below.
         let existing_overlay = self
             .render_model
             .glass
@@ -448,20 +452,10 @@ impl App {
             counts.glyphs,
             counts.text,
         );
-        if !settings_overlay.is_empty() {
-            let merged: Vec<_> = self
-                .render_model
-                .glass
-                .iter()
-                .find(|batch| batch.layer == GlassLayer::Overlay)
-                .map(|batch| batch.surfaces.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .chain(settings_overlay)
-                .collect();
-            self.render_model
-                .set_glass_batch(GlassLayer::Overlay, merged);
-        }
+        self.render_model.set_glass_batch(
+            GlassLayer::SettingsOverlay,
+            std::mem::take(&mut settings_overlay),
+        );
 
         if let (Some(renderer), Some(text)) = (self.renderer.as_mut(), self.text.as_ref()) {
             if text.atlas_dirty {

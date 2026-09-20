@@ -509,6 +509,16 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        // Settings toggle lenses are deliberately composited after the panel
+        // surface. Their final pass samples the completed pre-panel scene,
+        // keeping each thumb readable as a separate interactive glass element.
+        let profile_scope = self
+            .gpu_profiler
+            .begin("settings_control_glass", &mut encoder);
+        self.liquid_glass
+            .render_settings_controls(&self.queue, &mut encoder, &view);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
         // Generic fixed modal content, plus settings-specific content, on top
         // of the modal glass.
         let profile_scope = self.gpu_profiler.begin("modal_content", &mut encoder);
