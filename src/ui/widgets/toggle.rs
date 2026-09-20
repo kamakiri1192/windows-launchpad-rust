@@ -71,14 +71,14 @@ pub(crate) fn drag_stretch_from_overdrag(overdrag_progress: f32, max_stretch: f3
     eased * max_stretch
 }
 
-/// Return the offset direction that keeps the pulled lens inside the track.
-/// Negative progress is beyond the left edge and therefore grows right; a
-/// positive overshoot is beyond the right edge and grows left.
-pub(crate) fn inward_bulge_sign(overdrag_progress: f32) -> f32 {
+/// Return the offset direction that follows the pull beyond the endpoint.
+/// Negative progress is beyond the left edge and therefore grows left; a
+/// positive overshoot is beyond the right edge and grows right.
+pub(crate) fn overdrag_pull_sign(overdrag_progress: f32) -> f32 {
     if overdrag_progress < 0.0 {
-        1.0
-    } else if overdrag_progress > 0.0 {
         -1.0
+    } else if overdrag_progress > 0.0 {
+        1.0
     } else {
         0.0
     }
@@ -628,12 +628,12 @@ impl Ui {
         } else {
             poyo_thumb_height(thumb_display_r * 2.0, press_a, vs.press_amount.velocity)
         };
-        // Once an endpoint is pinned, grow the extra length toward the track
-        // interior so the outer edge remains anchored at the endpoint.
+        // Once an endpoint is pinned, grow the extra length in the pull
+        // direction to create a bounded rubber-band tail.
         let press_extra_width = thumb_display_r * 2.0 * (poyo_a * 0.75).min(0.95);
         let press_offset = directional_press_offset(press_extra_width, vs.value_at_press_start);
         let drag_offset = if drag_deformation > 0.0 {
-            inward_bulge_sign(vs.drag_overflow) * thumb_display_r * drag_deformation
+            overdrag_pull_sign(vs.drag_overflow) * thumb_display_r * drag_deformation
         } else {
             0.0
         };
@@ -962,10 +962,10 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_overdrag_bulges_toward_track_interior() {
-        assert_eq!(inward_bulge_sign(-0.2), 1.0);
-        assert_eq!(inward_bulge_sign(0.2), -1.0);
-        assert_eq!(inward_bulge_sign(0.0), 0.0);
+    fn endpoint_overdrag_follows_pull_direction() {
+        assert_eq!(overdrag_pull_sign(-0.2), -1.0);
+        assert_eq!(overdrag_pull_sign(0.2), 1.0);
+        assert_eq!(overdrag_pull_sign(0.0), 0.0);
     }
 
     #[test]

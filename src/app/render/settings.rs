@@ -17,7 +17,7 @@ use crate::ui_model::render_model::{
 use super::helpers::advance_unit_toward;
 use crate::app::state::{App, SettingsPressTarget, SettingsToggleDrag};
 use crate::ui::widgets::toggle::{
-    directional_press_offset, drag_stretch_from_overdrag, inward_bulge_sign, poyo_press_amount,
+    directional_press_offset, drag_stretch_from_overdrag, overdrag_pull_sign, poyo_press_amount,
     poyo_thumb_height, ToggleInteractionPhase, ToggleVisualState,
 };
 
@@ -802,12 +802,12 @@ fn apply_settings_toggle_visuals(
         let press_extra_width = base_height * (poyo_press * 0.75).min(0.95);
         let press_offset = directional_press_offset(press_extra_width, state.value_at_press_start);
         let drag_offset = if drag_deformation > 0.0 {
-            // Keep the endpoint pinned and grow the pulled lens toward the
-            // track interior.
+            // Keep the endpoint pinned and grow the pulled lens in the
+            // direction of the overdrag.
             let drag = context
                 .toggle_drag
                 .expect("dragging settings toggle must carry drag state");
-            inward_bulge_sign(drag.overdrag_progress) * base_radius * drag_deformation
+            overdrag_pull_sign(drag.overdrag_progress) * base_radius * drag_deformation
         } else {
             0.0
         };
