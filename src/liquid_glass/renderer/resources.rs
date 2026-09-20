@@ -183,6 +183,24 @@ pub(super) fn create_context_menu_scene_texture(
     )
 }
 
+pub(super) fn create_settings_control_scene_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    surface_format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    // Keep the surface's sRGB format: resampling an sRGB scene through an
+    // Unorm view would encode it twice and wash out the toggle's green track.
+    create_texture(
+        device,
+        "settings toggle sharp scene",
+        width,
+        height,
+        surface_format,
+        wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
 pub(super) fn create_gpu_backdrop_texture(
     device: &wgpu::Device,
     width: u32,

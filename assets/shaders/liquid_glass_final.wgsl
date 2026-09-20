@@ -140,6 +140,37 @@ fn luminance(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
 }
 
+// Settings thumb only: binding 1 is the sharp, completed in-app scene (including
+// the green track), and binding 4 is the desktop for any transparent pixels.
+// Do not reuse the panel material's blur, adaptive tint, or darkness here.
+@fragment
+fn fs_toggle(in: VsOut) -> @location(0) vec4<f32> {
+    let geometry = textureLoad(geometry_texture, vec2<i32>(in.position.xy), 0);
+    if geometry.a < 0.01 {
+        return vec4<f32>(0.0);
+    }
+    let height = clamp(geometry.b, 0.0, 1.0);
+    let rim = sqrt(max(1.0 - height * height, 0.0));
+    let displacement = decode_displacement(geometry.rg);
+    // Panel optics can displace hundreds of pixels. Keep this small lens local
+    // to the track, with a clear, undistorted interior and only a refracting rim.
+    let offset = displacement / max(length(displacement), 1.0)
+        * min(length(displacement), 2.5) * rim;
+    let uv = clamp((in.position.xy + offset) / u.viewport,
+        vec2<f32>(0.0), vec2<f32>(1.0));
+    let scene = textureSampleLevel(backdrop_texture, backdrop_sampler, uv, 0.0);
+    let desktop = textureSampleLevel(blur_texture, backdrop_sampler,
+        clamp(backdrop_uv(uv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
+    var rgb = scene.rgb + desktop.rgb * (1.0 - scene.a);
+    let normal = normalize(displacement + vec2<f32>(0.001));
+    let light = max(dot(normal, normalize(vec2<f32>(-0.6, -0.8))), 0.0);
+    // A narrow light/dark rim keeps the deforming silhouette readable without
+    // laying a white film across the clear interior.
+    rgb *= 1.0 - rim * 0.20 * (1.0 - light);
+    rgb = mix(rgb, vec3<f32>(1.0), rim * light * 0.30);
+    return vec4<f32>(rgb * geometry.a, geometry.a);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frag_coord = in.position;

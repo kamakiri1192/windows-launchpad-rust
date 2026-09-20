@@ -289,6 +289,9 @@ pub struct LiquidGlassRenderer {
     settings_control_tint_view: wgpu::TextureView,
     settings_control_geometry_bind_group: wgpu::BindGroup,
     settings_control_final_bind_group: wgpu::BindGroup,
+    settings_control_scene_texture: wgpu::Texture,
+    settings_control_scene_view: wgpu::TextureView,
+    settings_control_final_pipeline: wgpu::RenderPipeline,
     settings_control_geometry_dirty: bool,
     settings_panel_shapes: Vec<GlassShape>,
     settings_panel_shape_count: u32,
@@ -967,15 +970,17 @@ impl LiquidGlassRenderer {
             &auto_darkness_state_buffer,
             &auto_darkness_uniform_buffer,
         );
+        let (settings_control_scene_texture, settings_control_scene_view) =
+            create_settings_control_scene_texture(device, width, height, surface_format);
         let settings_control_final_bind_group = create_final_bind_group(
             device,
             &final_bind_group_layout,
             &settings_control_uniform_buffer,
-            &context_menu_source_view,
+            &settings_control_scene_view,
             &sampler,
             &settings_control_geometry_view,
             &settings_control_tint_view,
-            &context_menu_blur_view,
+            &backdrop_view,
             &auto_darkness_state_buffer,
             &auto_darkness_uniform_buffer,
         );
@@ -1274,6 +1279,28 @@ impl LiquidGlassRenderer {
             cache: None,
         });
 
+        let settings_control_final_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("settings toggle clear lens pipeline"),
+                layout: Some(&final_pipeline_layout),
+                vertex: fullscreen_vertex_state(&final_shader),
+                fragment: Some(wgpu::FragmentState {
+                    module: &final_shader,
+                    entry_point: Some("fs_toggle"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(premultiplied_blend()),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: fullscreen_primitive_state(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
         Self {
             params,
             debug,
@@ -1329,6 +1356,9 @@ impl LiquidGlassRenderer {
             settings_control_tint_view,
             settings_control_geometry_bind_group,
             settings_control_final_bind_group,
+            settings_control_scene_texture,
+            settings_control_scene_view,
+            settings_control_final_pipeline,
             settings_control_geometry_dirty: false,
             settings_panel_shapes: Vec::new(),
             settings_panel_shape_count: 0,
@@ -1491,6 +1521,10 @@ impl LiquidGlassRenderer {
         self.settings_control_geometry_view = settings_control_geometry_view;
         self.settings_control_tint_texture = settings_control_tint_texture;
         self.settings_control_tint_view = settings_control_tint_view;
+        (
+            self.settings_control_scene_texture,
+            self.settings_control_scene_view,
+        ) = create_settings_control_scene_texture(device, width, height, self.surface_format);
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
         self.backdrop_stats_dirty = true;
@@ -1828,11 +1862,11 @@ impl LiquidGlassRenderer {
             device,
             &self.final_bind_group_layout,
             &self.settings_control_uniform_buffer,
-            &self.context_menu_source_view,
+            &self.settings_control_scene_view,
             &self.sampler,
             &self.settings_control_geometry_view,
             &self.settings_control_tint_view,
-            &self.context_menu_blur_view,
+            backdrop_view,
             &self.auto_darkness_state_buffer,
             &self.auto_darkness_uniform_buffer,
         );

@@ -546,19 +546,8 @@ impl Renderer {
         // surface and its underlay content. Capture that completed scene now
         // so each thumb can refract the actual green/white track below it.
         if self.liquid_glass.has_settings_control_glass() {
-            self.gpu_profiler.resolve(&mut encoder);
-            self.queue.submit(std::iter::once(encoder.finish()));
-            self.liquid_glass.prepare_settings_control_scene_blur(
-                &self.device,
-                &self.queue,
-                &mut self.gpu_profiler,
-                frame.texture(),
-            );
-            encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("settings control encoder"),
-                });
+            self.liquid_glass
+                .prepare_settings_control_scene(&mut encoder, frame.texture());
         }
 
         let profile_scope = self

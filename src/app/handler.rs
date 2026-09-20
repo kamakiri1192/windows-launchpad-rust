@@ -159,7 +159,11 @@ impl ApplicationHandler<UserEvent> for App {
                 // deterministic viewport.
                 .with_min_inner_size(PhysicalSize::new(1, 1))
                 .with_inner_size(PhysicalSize::new(viewport[0], viewport[1]));
-            self.visible = false;
+            // Replay a logically visible launcher while keeping its native
+            // window hidden. Otherwise visibility-gated controls (the edit
+            // gear) disappear from GPU QA, and opening settings summons a
+            // real window and re-enables desktop capture mid-scenario.
+            self.visible = true;
         } else if std::env::var_os(crate::input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some() {
             attrs = attrs
                 .with_min_inner_size(PhysicalSize::new(1, 1))

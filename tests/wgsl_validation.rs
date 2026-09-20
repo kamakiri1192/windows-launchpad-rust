@@ -14,6 +14,224 @@ const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 16;
 const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
 
+#[test]
+fn toggle_lens_preserves_sharp_scene_colors_even_with_panel_effects_enabled() {
+    use wgpu::util::DeviceExt;
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("toggle lens color regression"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../assets/shaders/liquid_glass_final.wgsl").into(),
+            ),
+        });
+        for format in [
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        ] {
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("toggle lens regression pipeline"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_toggle"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(color_target(format, None))],
+                }),
+                primitive: triangle_list_no_cull(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            let size = wgpu::Extent3d {
+                width: 8,
+                height: 1,
+                depth_or_array_layers: 1,
+            };
+            let make_texture = |label, format, usage| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+            };
+            let source = make_texture(
+                "sharp green track",
+                format,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            );
+            let geometry = make_texture(
+                "flat lens interior",
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            );
+            let desktop = make_texture(
+                "wrong desktop source",
+                format,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            );
+            let target = make_texture(
+                "toggle output",
+                format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            );
+            // Alternating one-pixel stripes catch blur as well as whitening,
+            // double sRGB encoding, and accidental desktop sampling.
+            let colors: Vec<u8> = (0..8)
+                .flat_map(|i| {
+                    if i % 2 == 0 {
+                        [42, 174, 73, 255]
+                    } else {
+                        [18, 38, 61, 255]
+                    }
+                })
+                .collect();
+            for (texture, bytes) in [
+                (&source, colors.clone()),
+                (&geometry, [128, 128, 255, 255].repeat(8)),
+                (&desktop, [255, 0, 255, 255].repeat(8)),
+            ] {
+                queue.write_texture(
+                    texture.as_image_copy(),
+                    &bytes,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(32),
+                        rows_per_image: Some(1),
+                    },
+                    size,
+                );
+            }
+            // GlassUniforms is 128 bytes. Set intentionally hostile shared
+            // panel parameters: blur 30, saturation .1, manual darkness 1,
+            // automatic darkness enabled, and a cropped desktop mapping.
+            let mut uniforms = [0.0f32; 32];
+            uniforms[0] = 8.0;
+            uniforms[1] = 1.0;
+            uniforms[3] = 3.0;
+            uniforms[6] = 30.0;
+            uniforms[7] = 0.1;
+            uniforms[17] = 30.0;
+            uniforms[23] = f32::from_bits(1);
+            uniforms[24] = -16.0;
+            uniforms[26] = 32.0;
+            uniforms[27] = 32.0;
+            uniforms[28] = 1.0;
+            let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("toggle regression uniforms"),
+                contents: bytemuck::cast_slice(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let source_view = source.create_view(&Default::default());
+            let geometry_view = geometry.create_view(&Default::default());
+            let desktop_view = desktop.create_view(&Default::default());
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let bindings = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("toggle regression bindings"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&source_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&geometry_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(&desktop_view),
+                    },
+                ],
+            });
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("toggle regression readback"),
+                size: 256,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let view = target.create_view(&Default::default());
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("toggle regression draw"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bindings, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: Some(1),
+                    },
+                },
+                size,
+            );
+            queue.submit([encoder.finish()]);
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, |result| result.unwrap());
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
+            let pixels = readback.slice(..).get_mapped_range();
+            for (actual, expected) in pixels[..32].iter().zip(&colors) {
+                assert!(
+                    actual.abs_diff(*expected) <= 1,
+                    "{format:?}: color changed: {actual} != {expected}"
+                );
+            }
+            drop(pixels);
+            readback.unmap();
+        }
+    });
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TestAutoDarknessUniforms {

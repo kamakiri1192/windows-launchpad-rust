@@ -613,7 +613,7 @@ impl LiquidGlassRenderer {
             .iter()
             .map(|s| s.activation)
             .fold(0.0f32, f32::max);
-        let mut uniforms = uniforms_from_params(
+        let uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -623,10 +623,6 @@ impl LiquidGlassRenderer {
             control_activation,
             self.backdrop_mapping,
         );
-        // Toggle lenses live in the control lane. Keep this interactive glass
-        // transparent even when the global/automatic darkness setting is on.
-        uniforms.auto_darkness_enabled = 0;
-        uniforms.glass_darkness = 0.0;
         queue.write_buffer(
             &self.control_uniform_buffer,
             0,
@@ -736,10 +732,14 @@ impl LiquidGlassRenderer {
         // the green/white track into a milky white pill and hides the colour
         // change the lens is meant to reveal.
         uniforms.blur_radius = 0.0;
-        if self.settings_panel_completed_scene_enabled {
-            uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
-            uniforms.glass_darkness = self.settings_panel_glass_darkness;
-        }
+        // Scale the rim to this small lens instead of using page-panel optics.
+        uniforms.thickness = self
+            .settings_control_shapes
+            .iter()
+            .map(|shape| shape.size[1] * 0.12)
+            .fold(f32::INFINITY, f32::min)
+            .clamp(1.0, 6.0);
+        uniforms.max_displacement = uniforms.thickness * 10.0;
         // Settings Toggle lenses are interactive controls, not part of the
         // panel's replacement/darkness treatment. Preserve their transparent
         // backdrop so the captured track and desktop remain visible through it.
@@ -804,7 +804,7 @@ impl LiquidGlassRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.final_pipeline);
+        pass.set_pipeline(&self.settings_control_final_pipeline);
         pass.set_bind_group(0, &self.settings_control_final_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
@@ -987,29 +987,24 @@ impl LiquidGlassRenderer {
     /// Capture the scene immediately below the interactive settings thumbs.
     /// This checkpoint is deliberately later than the settings underlay pass,
     /// so the switch track itself participates in the lens backdrop.
-    pub fn prepare_settings_control_scene_blur(
+    pub fn prepare_settings_control_scene(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        profiler: &mut GpuProfilerState,
+        encoder: &mut wgpu::CommandEncoder,
         pre_settings_control_scene: &wgpu::Texture,
     ) {
         if !self.has_settings_control_glass() {
             return;
         }
-        let bounds = completed_scene_screen_bounds(
-            &self.settings_control_shapes,
-            self.texture_size.0,
-            self.texture_size.1,
-        );
-        self.prepare_completed_scene_blur(
-            device,
-            queue,
-            profiler,
-            pre_settings_control_scene,
-            self.settings_panel_blur_radius
-                .unwrap_or(self.params.blur_radius),
-            bounds,
+        // The settings/menu completed-scene cache must never be overwritten
+        // by the post-track checkpoint. No blur/flatten pass is needed here.
+        encoder.copy_texture_to_texture(
+            pre_settings_control_scene.as_image_copy(),
+            self.settings_control_scene_texture.as_image_copy(),
+            wgpu::Extent3d {
+                width: self.texture_size.0,
+                height: self.texture_size.1,
+                depth_or_array_layers: 1,
+            },
         );
     }
 

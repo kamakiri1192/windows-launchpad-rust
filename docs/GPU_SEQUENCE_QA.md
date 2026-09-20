@@ -110,6 +110,30 @@ scenario load errorです。`scroll_sample`があるのに契約がないscenari
 target page 0を一度だけ選び、release位置から700 ms以内にposition 0 / Idleへ戻ることを
 GPU frameとmanifestで検証します。
 
+## 設定トグルと bottom glass の回帰QA
+
+`qa/settings_toggle_glass.json` は検索・編集モードの歯車を darkness 0 / 0.8
+で比較し、設定の「FPSを表示」を押下・左右ドラッグ・端から超過ドラッグ・解放・
+再オープンします。設定の操作は production の入力経路を通し、
+`glass_darkness` だけは自動darknessを止めてrendererの値をメモリ上で指定します。
+`settings_category` はカテゴリのhit map、`settings_toggle` は実際のトラックから
+座標を解決します。`progress` はつまみの移動範囲（0〜1）で、範囲外は超過ドラッグです。
+
+manifestの `settings_toggle_lenses` / `bottom_glass_rects` は各面の物理座標
+`[x, y, width, height]` を記録します。検証スクリプトは押下時だけのレンズ、
+bottomのdarkness、レンズ中央の緑・透明性、伸長の可視性、設定パネルのキャッシュ汚染を
+画素と状態からチェックします。PythonとPillowが必要です。
+
+```powershell
+$env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\settings_toggle_glass.json).Path
+.\target\release\launchpad-windows.exe
+python scripts/verify_settings_toggle_glass.py target/qa-sequences/settings-toggle-glass-<timestamp>
+```
+
+非表示QAではOSウィンドウだけを隠し、アプリ内部の表示状態は表示中として再生します。
+これにより歯車も通常どおり描画され、設定を開いても実ウィンドウの表示や
+デスクトップ取り込みの再開は行いません。
+
 ## コンテキストメニューの開閉QA
 
 `qa/context_menu_open.json`は、fixtureのアプリへproduction input router経由で右クリックし、
