@@ -46,7 +46,11 @@ pub(super) struct GlassUniforms {
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
     glass_darkness: f32,
-    _uniform_pad: [f32; 3],
+    presentation_alpha: f32,
+    presentation_start_offset: f32,
+    presentation_grid: u32,
+    presentation: [f32; 4],
+    presentation_frame: [f32; 4],
 }
 
 #[repr(C)]
@@ -594,6 +598,13 @@ fn capture_sampling_padding(
 }
 
 impl LiquidGlassRenderer {
+    pub fn set_presentation(&mut self, timing: [f32; 4], frame: [f32; 4], start_offset: f32) {
+        self.params.presentation_alpha = timing[1];
+        self.params.presentation = timing;
+        self.params.presentation_frame = frame;
+        self.params.presentation_start_offset = start_offset;
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1006,7 +1017,12 @@ impl LiquidGlassRenderer {
         let geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("liquid glass geometry shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../assets/shaders/liquid_glass_geometry.wgsl").into(),
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../../assets/shaders/liquid_glass_geometry.wgsl"),
+                ]
+                .concat()
+                .into(),
             ),
         });
         let badge_geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2871,7 +2887,11 @@ fn uniforms_from_params(
         auto_darkness_enabled: u32::from(params.auto_darkness_enabled),
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
-        _uniform_pad: [0.0; 3],
+        presentation_alpha: params.presentation_alpha,
+        presentation_start_offset: params.presentation_start_offset,
+        presentation_grid: 0,
+        presentation: params.presentation,
+        presentation_frame: params.presentation_frame,
     }
 }
 
@@ -2936,7 +2956,7 @@ mod shape_capacity_tests {
 
     #[test]
     fn glass_uniform_layout_matches_wgsl() {
-        assert_eq!(std::mem::size_of::<GlassUniforms>(), 128);
+        assert_eq!(std::mem::size_of::<GlassUniforms>(), 160);
         assert_eq!(std::mem::align_of::<GlassUniforms>(), 4);
         assert_eq!(std::mem::size_of::<SceneFlattenUniforms>(), 32);
     }

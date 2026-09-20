@@ -962,6 +962,7 @@ fn glyph_views(quads: &[GlyphQuad]) -> Vec<crate::ui_model::render_model::GlyphV
     quads
         .iter()
         .map(|q| crate::ui_model::render_model::GlyphView {
+            presentation_pivot: None,
             id: crate::ui_model::ids::UiId::named("context-menu-glyph"),
             rect: crate::ui_model::geometry::Rect::new(q.x, q.y, q.w, q.h),
             uv: crate::ui_model::geometry::UvRect {

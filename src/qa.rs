@@ -25,6 +25,13 @@ pub const HEADLESS_ENV: &str = "LAUNCHPAD_QA_HEADLESS";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QaScenario {
     pub name: String,
+    /// Exercise the same reveal clock used by summon without showing a
+    /// native QA window. Default off for existing interaction scenarios.
+    #[serde(default)]
+    pub launch_reveal: bool,
+    /// Optional physical/logical scale for portable geometry assertions.
+    #[serde(default)]
+    pub scale_factor: Option<f64>,
     #[serde(default = "default_viewport")]
     pub viewport: [u32; 2],
     #[serde(default = "default_fps")]
@@ -928,6 +935,12 @@ impl QaRunner {
         self.scenario.viewport
     }
 
+    pub fn scale_factor(&self) -> Option<f64> {
+        self.scenario
+            .scale_factor
+            .filter(|value| value.is_finite() && *value > 0.0)
+    }
+
     pub fn fixture(&self) -> &QaFixture {
         &self.scenario.fixture
     }
@@ -1497,6 +1510,9 @@ impl App {
 
     pub(crate) fn start_qa(&mut self, now: Instant) {
         if let Some(runner) = self.qa_runner.as_mut() {
+            if runner.scenario.launch_reveal {
+                self.launch_presentation.begin();
+            }
             runner.start(now);
         }
     }
@@ -1986,6 +2002,8 @@ mod tests {
     fn slow_wall_clock_cannot_overtake_the_fixed_step_scenario_clock() {
         let mut runner = QaRunner {
             scenario: QaScenario {
+                launch_reveal: false,
+                scale_factor: None,
                 name: "fixed-step-clock".to_owned(),
                 viewport: [1280, 800],
                 fps: 30,

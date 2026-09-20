@@ -67,4 +67,9 @@ pub(super) struct Uniforms {
     /// Pointer position (screen px) the dragged icon follows. Only meaningful
     /// while `drag_active` is 1.0.
     pub(super) drag_pos: [f32; 2],
+    /// Open-transition values: `(gather_progress, opacity, start_scale,
+    /// max_stagger)`.
+    pub(super) presentation: [f32; 4],
+    /// Open-transition motion values: `(start_offset_fraction, _, _, _)`.
+    pub(super) presentation_motion: [f32; 4],
 }

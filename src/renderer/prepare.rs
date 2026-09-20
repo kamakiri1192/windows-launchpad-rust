@@ -205,7 +205,9 @@ fn glyph_quad(view: &GlyphView) -> GlyphQuad {
         v1: view.uv.v1,
         color: [view.color.r, view.color.g, view.color.b, view.color.a],
         clip_rect: clip.0,
-        clip_radius: clip.1,
+        clip_radius: view
+            .presentation_pivot
+            .map_or(clip.1, |pivot| [clip.1[0], pivot.x, pivot.y, 1.0]),
     }
 }
 
@@ -894,6 +896,30 @@ mod tests {
     }
 
     #[test]
+    fn closed_folder_retains_scrolling_wiggle_geometry() {
+        use crate::ui_model::grid::TileAnim;
+        let mut source = surface("folder", 0, 240.0);
+        source.behavior = GlassBehavior::Scrolling;
+        let tile = TileView {
+            id: source.id.clone(),
+            rect: source.rect,
+            radius: source.radius,
+            color: Color::rgba(0.0, 0.0, 0.0, 0.0),
+            has_icon: false,
+            z: 0,
+            motion: TileAnim {
+                flags: TileAnim::FLAG_NO_FILL | TileAnim::FLAG_NO_BADGE | TileAnim::FLAG_WIGGLE,
+                phase: 1.75,
+                ..TileAnim::IDLE
+            },
+        };
+        let shape = grid_overlay_shape(&source, &[tile]);
+        assert!(shape.is_scrolling());
+        assert_eq!(shape.shape_type, 5);
+        assert_eq!(shape.motion[2], 1.75);
+    }
+
+    #[test]
     fn neutral_ink_is_packed_only_inside_renderer() {
         let view = InkView {
             id: UiId::bottom_control_close(),
@@ -918,6 +944,7 @@ mod tests {
     #[test]
     fn neutral_glyph_preserves_geometry_uv_and_color() {
         let view = GlyphView {
+            presentation_pivot: None,
             id: UiId::settings_panel(),
             rect: Rect::new(1.0, 2.0, 3.0, 4.0),
             uv: UvRect {

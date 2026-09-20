@@ -209,7 +209,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
         }
-        self.scale_factor = window.scale_factor() as f32;
+        self.scale_factor = self
+            .qa_runner
+            .as_ref()
+            .and_then(|runner| runner.scale_factor())
+            .unwrap_or_else(|| window.scale_factor()) as f32;
         let (w, _h) = (window.inner_size().width, window.inner_size().height);
         self.layout = grid::GridLayout::default()
             .with_scale_factor(self.scale_factor)

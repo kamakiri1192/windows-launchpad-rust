@@ -96,4 +96,6 @@ pub(super) struct ControlUniforms {
     pub(super) viewport_scroll: [f32; 4],
     pub(super) frame_center_radius: [f32; 4],
     pub(super) frame_half_size: [f32; 4],
+    pub(super) presentation: [f32; 4],
+    pub(super) presentation_motion: [f32; 4],
 }

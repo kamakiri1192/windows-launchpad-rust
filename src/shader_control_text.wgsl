@@ -6,7 +6,13 @@
 // per-glyph tint (which already carries the layer alpha) composites correctly.
 
 struct Uniforms {
-    viewport: vec2<f32>,
+    viewport_scroll: vec4<f32>,
+    frame_center_radius: vec4<f32>,
+    frame_half_size: vec4<f32>,
+    presentation: vec4<f32>,
+    // Open-transition motion: (start_offset_fraction, _, _, _). The control
+    // remains fixed in place but shares the full uniform block layout.
+    presentation_motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -44,7 +50,7 @@ fn vs_main(
     // No scroll offset: control text is fixed on screen.
     let world = vec2<f32>(xywh.x + c.x * xywh.z, xywh.y + (1.0 - c.y) * xywh.w);
 
-    let half_vp = u.viewport * 0.5;
+    let half_vp = u.viewport_scroll.xy * 0.5;
     let clip = vec2<f32>(
         (world.x / half_vp.x) - 1.0,
         1.0 - (world.y / half_vp.y),
@@ -95,5 +101,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let sampled = textureSample(atlas, atlas_sampler, in.uv);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied.
-    return vec4<f32>(in.color.rgb, sampled.a * in.color.a);
+    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * u.presentation.y);
 }
