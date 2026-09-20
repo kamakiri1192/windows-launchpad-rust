@@ -131,6 +131,7 @@ impl App {
             .map(|runner| runner.animation_dt())
             .unwrap_or(wall_anim_dt);
         let anim_dt = wall_anim_dt;
+        let launch_animating = self.launch_presentation.tick(anim_dt);
         if self.editing {
             self.wiggle_phase += anim_dt;
         }
@@ -322,6 +323,7 @@ impl App {
                     0.0
                 },
                 drag_pos: (self.drag_x, self.drag_y),
+                presentation: self.launch_presentation.shader_values(),
             });
         }
         self.profiler.record_render(render_start.elapsed());
@@ -344,6 +346,7 @@ impl App {
             || folder_child_springs_animating
             || folder_child_page_started
             || folder_scroller_animating
+            || launch_animating
             || self.editing
             || self.profile_scroll.is_some()
             // Debug HUD drives a continuous redraw, but only while the

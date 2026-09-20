@@ -144,6 +144,7 @@ impl App {
         self.context_menu = crate::features::context_menu::ContextMenuState::default();
         self.clear_context_menu_presentation();
         self.pending_press = None;
+        self.launch_presentation.cancel();
         self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
@@ -196,6 +197,16 @@ impl App {
     /// Re-centers on the primary monitor so a multi-monitor move doesn't
     /// strand the launcher on the wrong screen.
     pub(crate) fn summon(&mut self) {
+        if self.renderer.is_none() {
+            return;
+        }
+        // Arm the transition before making the native window visible. That
+        // guarantees the first presented frame is the beginning of the reveal,
+        // rather than one frame of the settled scene flashing before it.
+        self.launch_presentation.begin();
+        // Do not let the hidden interval contribute to the first animation
+        // delta when the launcher is summoned again.
+        self.last_redraw = None;
         let Some(r) = self.renderer.as_mut() else {
             return;
         };

@@ -46,7 +46,8 @@ pub(super) struct GlassUniforms {
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
     glass_darkness: f32,
-    _uniform_pad: [f32; 3],
+    presentation_alpha: f32,
+    _uniform_pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -594,6 +595,10 @@ fn capture_sampling_padding(
 }
 
 impl LiquidGlassRenderer {
+    pub fn set_presentation_alpha(&mut self, alpha: f32) {
+        self.params.presentation_alpha = alpha.clamp(0.0, 1.0);
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -2871,7 +2876,8 @@ fn uniforms_from_params(
         auto_darkness_enabled: u32::from(params.auto_darkness_enabled),
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
-        _uniform_pad: [0.0; 3],
+        presentation_alpha: params.presentation_alpha,
+        _uniform_pad: [0.0; 2],
     }
 }
 

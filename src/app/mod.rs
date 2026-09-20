@@ -38,6 +38,7 @@ pub mod command;
 pub mod event;
 pub mod frame;
 pub mod handler;
+pub mod launch_presentation;
 pub mod render;
 pub mod state;
 pub mod update;

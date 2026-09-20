@@ -229,6 +229,7 @@ impl Renderer {
                 frame_radius: frame.4,
                 drag_active: 0.0,
                 drag_pos: [0.0, 0.0],
+                presentation: [1.0, 1.0, 0.92, 0.10],
             }),
         );
 

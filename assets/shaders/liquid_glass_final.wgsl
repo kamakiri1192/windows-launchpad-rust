@@ -27,6 +27,8 @@ struct GlassUniforms {
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
     glass_darkness: f32,
+    presentation_alpha: f32,
+    _uniform_pad: vec2<f32>,
 };
 
 struct AutoDarknessUniforms {
@@ -150,16 +152,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     if has_flag(0u) {
         let bg = sample_backdrop(screen_uv);
-        return vec4<f32>(bg.rgb, 1.0);
+        return vec4<f32>(bg.rgb * u.presentation_alpha, u.presentation_alpha);
     }
     if has_flag(1u) {
-        return vec4<f32>(geometry_data.rgb, max(geometry_data.a, 0.35));
+        return vec4<f32>(geometry_data.rgb * u.presentation_alpha, max(geometry_data.a, 0.35) * u.presentation_alpha);
     }
     if has_flag(2u) {
-        return vec4<f32>(geometry_data.rg, 0.5, max(geometry_data.a, 0.35));
+        return vec4<f32>(geometry_data.rg * u.presentation_alpha, 0.5 * u.presentation_alpha, max(geometry_data.a, 0.35) * u.presentation_alpha);
     }
     if has_flag(3u) {
-        return vec4<f32>(vec3<f32>(geometry_data.a), geometry_data.a);
+        return vec4<f32>(vec3<f32>(geometry_data.a) * u.presentation_alpha, geometry_data.a * u.presentation_alpha);
     }
 
     if geometry_data.a < 0.01 {
@@ -199,7 +201,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // ordinary lanes bind the captured desktop. Geometry alpha still
         // provides antialiased edge coverage.
         let interior_alpha = mix(translucent_alpha, alpha, replacement);
-        return vec4<f32>(interior_rgb * interior_alpha, interior_alpha);
+        return vec4<f32>(interior_rgb * interior_alpha * u.presentation_alpha, interior_alpha * u.presentation_alpha);
     }
 
     let refract_uv = screen_uv + displacement * inv_viewport;
@@ -299,8 +301,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let glass_alpha = mix(translucent_alpha, alpha, replacement);
 
     if has_flag(4u) {
-        return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
+        return vec4<f32>(final_rgb * glass_alpha * u.presentation_alpha, glass_alpha * u.presentation_alpha);
     }
 
-    return vec4<f32>(final_rgb * glass_alpha, glass_alpha);
+    return vec4<f32>(final_rgb * glass_alpha * u.presentation_alpha, glass_alpha * u.presentation_alpha);
 }

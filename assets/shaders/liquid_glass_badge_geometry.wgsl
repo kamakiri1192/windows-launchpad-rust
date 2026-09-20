@@ -24,6 +24,7 @@ struct GlassUniforms {
     pad2: f32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
+    presentation_alpha: f32,
 };
 
 struct GlassShape {

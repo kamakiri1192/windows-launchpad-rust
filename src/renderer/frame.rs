@@ -56,6 +56,8 @@ impl RenderFrame {
 impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
+        self.liquid_glass
+            .set_presentation_alpha(args.presentation[1]);
         // Update uniforms (tiny, every frame).
         let clip = self.frame_clip;
         self.queue.write_buffer(
@@ -70,6 +72,7 @@ impl Renderer {
                 frame_radius: clip.4,
                 drag_active: args.drag_active,
                 drag_pos: [args.drag_pos.0, args.drag_pos.1],
+                presentation: args.presentation,
             }),
         );
 
@@ -279,6 +282,7 @@ impl Renderer {
                 ],
                 frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
+                presentation: args.presentation,
             }),
         );
         let profile_scope = self.gpu_profiler.begin("edit_badge_glass", &mut encoder);

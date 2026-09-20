@@ -1,6 +1,9 @@
 #[derive(Debug, Clone, Copy)]
 pub struct LiquidGlassParams {
     pub enabled: bool,
+    /// Runtime-only alpha used by the launcher's open transition. It is not
+    /// persisted with the user-facing Liquid Glass settings.
+    pub presentation_alpha: f32,
     pub auto_darkness_enabled: bool,
     /// Maximum black tint contributed by backdrop-aware darkness.
     pub auto_darkness_max: f32,
@@ -23,6 +26,7 @@ impl Default for LiquidGlassParams {
     fn default() -> Self {
         Self {
             enabled: true,
+            presentation_alpha: 1.0,
             auto_darkness_enabled: false,
             auto_darkness_max: 0.16,
             thickness: 26.0,

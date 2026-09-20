@@ -215,6 +215,7 @@ pub struct App {
     pub timer: StartupTimer,
     pub qa_runner: Option<crate::qa::QaRunner>,
     pub(crate) profile_scroll: Option<ProfileScroll>,
+    pub(crate) launch_presentation: crate::app::launch_presentation::LaunchPresentation,
 
     // ---- app + icon state ----
     pub registry: AppRegistry,
@@ -447,6 +448,7 @@ impl App {
             timer,
             qa_runner: crate::qa::QaRunner::from_env(),
             profile_scroll: ProfileScroll::from_env(),
+            launch_presentation: crate::app::launch_presentation::LaunchPresentation::default(),
             registry: AppRegistry::new(),
             launcher_state: LauncherState::new(),
             atlas: IconAtlas::new(64),

@@ -20,6 +20,8 @@ struct Uniforms {
     drag_active: f32,
     // Pointer position (screen px) the dragged icon follows while dragging.
     drag_pos: vec2<f32>,
+    // Open-transition values: (progress, opacity, start_scale, max_stagger).
+    presentation: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -30,7 +32,25 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) presentation_alpha: f32,
 };
+
+fn presentation_item_progress(center: vec2<f32>) -> f32 {
+    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
+    let radial = clamp(length(normalized), 0.0, 1.0);
+    let delay = radial * u.presentation.w;
+    let local = clamp((u.presentation.x - delay) / max(1.0 - delay, 0.001), 0.0, 1.0);
+    return smoothstep(0.0, 1.0, local);
+}
+
+fn presentation_center(center: vec2<f32>, reveal_scale: f32, half_extent: f32) -> vec2<f32> {
+    var shift = (center - u.frame_center) * (1.0 - reveal_scale);
+    let max_shift = half_extent * (1.0 - reveal_scale);
+    if length(shift) > max_shift && max_shift > 0.0 {
+        shift = normalize(shift) * max_shift;
+    }
+    return center - shift;
+}
 
 @vertex
 fn vs_main(
@@ -55,7 +75,17 @@ fn vs_main(
     let c = corners[vi];
 
     let origin = vec2<f32>(xywh.x + u.scroll_x, xywh.y);
-    let world = vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w);
+    let glyph_center = vec2<f32>(origin.x + xywh.z * 0.5, origin.y + xywh.w * 0.5);
+    let item_progress = presentation_item_progress(glyph_center);
+    let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
+    let reveal_center = presentation_center(
+        glyph_center,
+        reveal_scale,
+        min(xywh.z, xywh.w) * 0.5,
+    );
+    let world = reveal_center
+        + (vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w) - glyph_center)
+            * reveal_scale;
 
     let half_vp = u.viewport * 0.5;
     let clip = vec2<f32>(
@@ -72,6 +102,7 @@ fn vs_main(
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.color = color;
+    out.presentation_alpha = u.presentation.y * item_progress;
     return out;
 }
 
@@ -91,5 +122,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frame_alpha = smoothstep(1.0, -1.0, fd);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
     // the pipeline's standard alpha blending.
-    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha);
+    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha * in.presentation_alpha);
 }

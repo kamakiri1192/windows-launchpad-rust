@@ -16,6 +16,7 @@ struct Uniforms {
     viewport_scroll: vec4<f32>,
     frame_center_radius: vec4<f32>,
     frame_half_size: vec4<f32>,
+    presentation: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -554,5 +555,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if a <= 0.001 {
         discard;
     }
-    return vec4<f32>(in.color.rgb * a, a);
+    let presentation_a = u.presentation.y;
+    return vec4<f32>(in.color.rgb * a * presentation_a, a * presentation_a);
 }

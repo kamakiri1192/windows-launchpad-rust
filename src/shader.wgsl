@@ -22,6 +22,8 @@ struct Uniforms {
     drag_active: f32,
     // Pointer position (screen px) the dragged icon follows while dragging.
     drag_pos: vec2<f32>,
+    // Open-transition values: (progress, opacity, start_scale, max_stagger).
+    presentation: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -44,6 +46,7 @@ struct VsOut {
     // Copy of the instance flags so the fragment shader can bypass the frame
     // clip for a dragged (lifted) icon.
     @location(3) flags: f32,
+    @location(4) presentation_alpha: f32,
 };
 
 // Flag bit set in `extra.w` while edit mode is active (icon should wiggle).
@@ -52,6 +55,23 @@ const FLAG_WIGGLE: f32 = 1.0;
 const FLAG_DRAG: f32 = 2.0;
 const FLAG_FIXED: f32 = 4.0;
 const FLAG_NO_FILL: f32 = 16.0;
+
+fn presentation_item_progress(center: vec2<f32>) -> f32 {
+    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
+    let radial = clamp(length(normalized), 0.0, 1.0);
+    let delay = radial * u.presentation.w;
+    let local = clamp((u.presentation.x - delay) / max(1.0 - delay, 0.001), 0.0, 1.0);
+    return smoothstep(0.0, 1.0, local);
+}
+
+fn presentation_center(center: vec2<f32>, reveal_scale: f32, half_extent: f32) -> vec2<f32> {
+    var shift = (center - u.frame_center) * (1.0 - reveal_scale);
+    let max_shift = half_extent * (1.0 - reveal_scale);
+    if length(shift) > max_shift && max_shift > 0.0 {
+        shift = normalize(shift) * max_shift;
+    }
+    return center - shift;
+}
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -128,7 +148,12 @@ fn vs_main(
     let cosr = cos(wiggle_rot);
     let sinr = sin(wiggle_rot);
     let rotated = vec2<f32>(rel.x * cosr - rel.y * sinr, rel.x * sinr + rel.y * cosr);
-    let world = vec2<f32>(center.x + rotated.x, center.y + rotated.y - wiggle_dy - lift);
+    var world = vec2<f32>(center.x + rotated.x, center.y + rotated.y - wiggle_dy - lift);
+
+    let item_progress = presentation_item_progress(center);
+    let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
+    let reveal_center = presentation_center(center, reveal_scale, eff_size * 0.5);
+    world = reveal_center + (world - center) * reveal_scale;
 
     // Physical px → clip space. Y is flipped so that content origin is
     // top-left (matches our layout math).
@@ -140,10 +165,11 @@ fn vs_main(
 
     var out: VsOut;
     out.pos = vec4<f32>(clip, 0.0, 1.0);
-    out.uv = local;
-    out.size_r = vec2<f32>(eff_size, size_r.y);
+    out.uv = local * reveal_scale;
+    out.size_r = vec2<f32>(eff_size * reveal_scale, size_r.y * reveal_scale);
     out.color = color;
     out.flags = flags;
+    out.presentation_alpha = u.presentation.y * item_progress;
     return out;
 }
 
@@ -177,7 +203,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if !dragged && !fixed {
         frame_a = frame_alpha(in.pos.xy);
     }
-    let body_a = alpha * frame_a;
+    let body_a = alpha * frame_a * in.presentation_alpha;
     // Subtle top→bottom sheen for a touch of depth.
     let sheen = mix(1.08, 0.86, clamp(in.uv.y / in.size_r.x + 0.5, 0.0, 1.0));
     var col = in.color * sheen;
