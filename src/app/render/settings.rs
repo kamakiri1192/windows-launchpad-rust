@@ -796,10 +796,12 @@ fn apply_settings_toggle_visuals(
         let height = base_height * (1.0 + press * 0.06);
         let thumb_x = track.x + (state.thumb_progress.value - 0.5) * 2.0 * travel;
         let trailing_offset = if pressed || dragging {
+            // Grow toward the track interior: OFF -> ON extends right, while
+            // ON -> OFF extends left.
             let sign = if state.value_at_press_start {
-                1.0
-            } else {
                 -1.0
+            } else {
+                1.0
             };
             sign * (width - base_radius * 2.0) * 0.5
         } else {

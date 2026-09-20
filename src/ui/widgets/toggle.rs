@@ -546,7 +546,8 @@ impl Ui {
 
         // The reference switch does not turn into a separate glass track. Its
         // thumb becomes a short, horizontal lens while pressed, with the
-        // extension trailing the direction of travel. Drag deformation is
+        // extra volume staying inside the track toward the destination.
+        // Drag deformation is
         // derived from the bounded pointer displacement as well as velocity;
         // both terms are capped so a long hold cannot stretch without limit.
         let drag_deformation =
@@ -570,11 +571,10 @@ impl Ui {
         };
         let thumb_width = thumb_display_r * 2.0 * (1.0 + press_deformation);
         let thumb_height = thumb_display_r * 2.0 * (1.0 + press_a * 0.06);
-        // When an ON thumb is being released toward OFF, the glass trails to
-        // the right; when an OFF thumb is being pressed toward ON, it trails
-        // to the left. This is the characteristic asymmetric capsule seen in
-        // the reference recording.
-        let trailing_sign = if vs.value_at_press_start { 1.0 } else { -1.0 };
+        // Keep the asymmetric capsule inside the track: an ON thumb moving
+        // toward OFF bulges left, while an OFF thumb moving toward ON bulges
+        // right.
+        let trailing_sign = if vs.value_at_press_start { -1.0 } else { 1.0 };
         let trailing_offset = if press_deformation > 0.0 {
             trailing_sign * (thumb_width - thumb_display_r * 2.0) * 0.5
         } else {
