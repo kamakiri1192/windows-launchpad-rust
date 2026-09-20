@@ -543,8 +543,24 @@ impl Renderer {
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // Settings toggle lenses are deliberately composited after the panel
-        // surface. Their final pass samples the completed pre-panel scene,
-        // keeping each thumb readable as a separate interactive glass element.
+        // surface and its underlay content. Capture that completed scene now
+        // so each thumb can refract the actual green/white track below it.
+        if self.liquid_glass.has_settings_control_glass() {
+            self.gpu_profiler.resolve(&mut encoder);
+            self.queue.submit(std::iter::once(encoder.finish()));
+            self.liquid_glass.prepare_settings_control_scene_blur(
+                &self.device,
+                &self.queue,
+                &mut self.gpu_profiler,
+                frame.texture(),
+            );
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("settings control encoder"),
+                });
+        }
+
         let profile_scope = self
             .gpu_profiler
             .begin("settings_control_glass", &mut encoder);

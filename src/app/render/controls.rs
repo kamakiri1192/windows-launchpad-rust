@@ -12,6 +12,8 @@ use crate::ui_model::render_model::{
 use super::helpers::{advance_unit_toward, mul_alpha};
 use crate::app::state::App;
 
+const BOTTOM_CONTROL_GLASS_TINT: Color = Color::rgba(0.92, 0.95, 1.0, 0.14);
+
 impl App {
     pub(crate) fn render_bottom_control(&mut self) -> Option<GlassSurface> {
         // Gather all the immutable data first (avoid overlapping borrows with
@@ -402,7 +404,7 @@ fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSu
         activation: 0.0,
         blur_radius: None,
         backdrop_replacement: 0.0,
-        tint: None,
+        tint: Some(BOTTOM_CONTROL_GLASS_TINT),
     })
 }
 
@@ -423,7 +425,7 @@ fn edit_gear_glass_shape(geom: &crate::layout::control_geometry::EditGearGeometr
         activation: 0.0,
         blur_radius: None,
         backdrop_replacement: 0.0,
-        tint: None,
+        tint: Some(BOTTOM_CONTROL_GLASS_TINT),
     }
 }
 

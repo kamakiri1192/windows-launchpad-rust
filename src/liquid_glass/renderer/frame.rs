@@ -702,9 +702,9 @@ impl LiquidGlassRenderer {
     }
 
     /// Render settings-panel control glass after the panel surface. The
-    /// settings thumb lenses use the completed pre-panel scene as their
-    /// backdrop, so they remain distinct from (and readable above) the
-    /// panel's own glass instead of being composited underneath it.
+    /// settings thumb lenses use a completed scene that includes the current
+    /// toggle track, so the green/white underlay remains visible through the
+    /// transparent lens.
     pub fn render_settings_controls(
         &mut self,
         queue: &wgpu::Queue,
@@ -731,17 +731,19 @@ impl LiquidGlassRenderer {
             control_activation,
             self.backdrop_mapping,
         );
-        if self.settings_panel_completed_scene_enabled && !self.debug.disable_blur {
-            uniforms.blur_radius = self
-                .settings_panel_blur_radius
-                .unwrap_or(self.params.blur_radius);
-        }
+        // A pressed toggle is a transparent lens over the already-composited
+        // track. Do not feed it the panel's completed-scene blur: that turns
+        // the green/white track into a milky white pill and hides the colour
+        // change the lens is meant to reveal.
+        uniforms.blur_radius = 0.0;
         if self.settings_panel_completed_scene_enabled {
             uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
             uniforms.glass_darkness = self.settings_panel_glass_darkness;
         }
         // Settings Toggle lenses are interactive controls, not part of the
-        // panel's darkness treatment. Preserve their transparent backdrop.
+        // panel's replacement/darkness treatment. Preserve their transparent
+        // backdrop so the captured track and desktop remain visible through it.
+        uniforms.backdrop_replacement = 0.0;
         uniforms.auto_darkness_enabled = 0;
         uniforms.glass_darkness = 0.0;
         queue.write_buffer(
@@ -911,6 +913,10 @@ impl LiquidGlassRenderer {
         }
     }
 
+    pub fn has_settings_control_glass(&self) -> bool {
+        self.params.enabled && self.settings_control_shape_count > 0
+    }
+
     pub fn has_context_menu_glass(&self) -> bool {
         self.params.enabled && self.context_menu_shape_count > 0
     }
@@ -972,6 +978,35 @@ impl LiquidGlassRenderer {
             queue,
             profiler,
             pre_settings_scene,
+            self.settings_panel_blur_radius
+                .unwrap_or(self.params.blur_radius),
+            bounds,
+        );
+    }
+
+    /// Capture the scene immediately below the interactive settings thumbs.
+    /// This checkpoint is deliberately later than the settings underlay pass,
+    /// so the switch track itself participates in the lens backdrop.
+    pub fn prepare_settings_control_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
+        pre_settings_control_scene: &wgpu::Texture,
+    ) {
+        if !self.has_settings_control_glass() {
+            return;
+        }
+        let bounds = completed_scene_screen_bounds(
+            &self.settings_control_shapes,
+            self.texture_size.0,
+            self.texture_size.1,
+        );
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            profiler,
+            pre_settings_control_scene,
             self.settings_panel_blur_radius
                 .unwrap_or(self.params.blur_radius),
             bounds,
