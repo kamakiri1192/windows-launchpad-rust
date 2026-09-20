@@ -45,6 +45,7 @@ capture, or the full launcher event flow.
 - `F`: show final glass only.
 - `C`: toggle chromatic aberration.
 - `L`: toggle blur.
+- `T`: cycle auto-darkness strategy (current / coverage-tuned / contrast-perceptual).
 - `R`: reset defaults.
 - `Esc`: quit.
 

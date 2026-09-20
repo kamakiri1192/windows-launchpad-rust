@@ -61,6 +61,12 @@ struct AutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    strategy: u32,
+    // 戦略D local-region judgment fields; the studio always keeps
+    // use_region = 0 so the global path is unchanged.
+    use_region: u32,
+    region_origin: [f32; 2],
+    region_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -504,6 +510,7 @@ struct StudioRenderer {
     uniform_buffer: wgpu::Buffer,
     auto_darkness_uniform_buffer: wgpu::Buffer,
     auto_darkness_state_buffer: wgpu::Buffer,
+    auto_darkness_strategy: u32,
     blur_uniform_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     geometry_texture: wgpu::Texture,
@@ -600,14 +607,18 @@ impl StudioRenderer {
                     mode: 1,
                     flags: 0,
                     max_darkness: 0.0,
+                    strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 }),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
         let auto_darkness_state_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("studio liquid glass auto darkness state"),
                 contents: bytemuck::bytes_of(&AutoDarknessState::default()),
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
         let blur_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("studio liquid glass blur uniforms"),
@@ -904,6 +915,7 @@ impl StudioRenderer {
             uniform_buffer,
             auto_darkness_uniform_buffer,
             auto_darkness_state_buffer,
+            auto_darkness_strategy: 0,
             blur_uniform_buffer,
             shape_buffer,
             geometry_texture,
@@ -1264,13 +1276,44 @@ impl StudioRenderer {
 
     fn update_title(&mut self) {
         self.last_title_update = Instant::now();
+        let strategy = match self.auto_darkness_strategy {
+            0 => "current",
+            1 => "coverage-tuned",
+            2 => "contrast-perceptual",
+            _ => "unknown",
+        };
         self.window.set_title(&format!(
-            "Liquid Glass Studio | sliders: thickness {:.0}  merge {:.0}  blur {:.0}  chroma {:.3}  U panel  Space anchor  R reset",
+            "Liquid Glass Studio | sliders: thickness {:.0}  merge {:.0}  blur {:.0}  chroma {:.3}  U panel  Space anchor  T auto-darkness: {strategy}  R reset",
             self.params.thickness,
             self.params.blend,
             self.params.blur_radius,
             self.params.chromatic_aberration,
         ));
+    }
+
+    fn cycle_auto_darkness_strategy(&mut self) {
+        self.auto_darkness_strategy = (self.auto_darkness_strategy + 1) % 3;
+        // Mirror the renderer: a strategy switch restarts the transition
+        // state so formulas never interpolate across each other.
+        self.queue.write_buffer(
+            &self.auto_darkness_state_buffer,
+            0,
+            bytemuck::bytes_of(&AutoDarknessState::default()),
+        );
+        self.queue.write_buffer(
+            &self.auto_darkness_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&AutoDarknessUniforms {
+                now: 0.0,
+                mode: 1,
+                flags: 0,
+                max_darkness: 0.0,
+                strategy: self.auto_darkness_strategy,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
+            }),
+        );
     }
 }
 
@@ -1317,6 +1360,7 @@ fn handle_key(
                 !renderer.debug.disable_chromatic_aberration;
         }
         KeyCode::KeyL => renderer.debug.disable_blur = !renderer.debug.disable_blur,
+        KeyCode::KeyT => renderer.cycle_auto_darkness_strategy(),
         KeyCode::KeyR => {
             renderer.params = StudioParams::default();
             renderer.debug = DebugOptions::default();

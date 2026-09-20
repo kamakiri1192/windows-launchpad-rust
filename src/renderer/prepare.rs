@@ -128,6 +128,42 @@ fn modal_surfaces_from_model(
         .unwrap_or_default()
 }
 
+/// The active modal surface rect (texture pixels `[min_x, min_y, width,
+/// height]`) used by the modal-local darkness judgment (戦略D). The app only
+/// ever shows one modal at a time; layer priority mirrors the compositing
+/// order (context menu composites above settings, settings above folder
+/// modal). Within the batch, the highest-z surface owns the rect, matching
+/// the shared modal shape-buffer selection. `None` when no modal is open.
+fn active_modal_region_from_model(model: &RenderModel) -> Option<[f32; 4]> {
+    for layer in [
+        GlassLayer::ContextMenu,
+        GlassLayer::Settings,
+        GlassLayer::Modal,
+    ] {
+        let Some(batch) = model.glass.iter().find(|batch| batch.layer == layer) else {
+            continue;
+        };
+        let Some(surface) = batch
+            .surfaces
+            .iter()
+            .enumerate()
+            .max_by_key(|(index, surface)| (surface.z, *index))
+            .map(|(_, surface)| surface)
+        else {
+            continue;
+        };
+        if surface.rect.width > 0.0 && surface.rect.height > 0.0 {
+            return Some([
+                surface.rect.x,
+                surface.rect.y,
+                surface.rect.width,
+                surface.rect.height,
+            ]);
+        }
+    }
+    None
+}
+
 /// Select the content clip for the modal pass from the same owner surface
 /// that is uploaded to the shared modal shape buffer.
 fn modal_clip_from_model(model: &RenderModel) -> Option<(Rect, f32)> {
@@ -301,6 +337,12 @@ impl Renderer {
 
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
+        // 戦略D: keep the liquid-glass renderer's modal-local darkness region
+        // in sync with the current modal surface (context menu > settings >
+        // folder modal). The renderer resets its modal state internally when
+        // the rect appears, moves, or disappears.
+        self.liquid_glass
+            .set_modal_darkness_region(active_modal_region_from_model(model));
         // Diff the lanes composited below each completed-scene checkpoint
         // BEFORE prepare updates `prepared_model`, so the checkpoint caches
         // are not invalidated by the checkpoint's own animated lanes.
@@ -831,6 +873,61 @@ mod tests {
         assert_eq!(
             modal_clip_from_model(&model),
             Some((settings.rect, settings.radius))
+        );
+    }
+
+    #[test]
+    fn active_modal_region_prefers_context_menu_then_settings_then_modal() {
+        // No modal at all -> no region.
+        let mut model = RenderModel::new();
+        model.set_glass_batch(GlassLayer::Settings, Vec::new());
+        model.set_glass_batch(GlassLayer::Modal, Vec::new());
+        assert_eq!(active_modal_region_from_model(&model), None);
+
+        // Folder modal only -> its rect wins.
+        let folder = surface("folder", 100, 320.0);
+        model.set_glass_batch(GlassLayer::Modal, vec![folder.clone()]);
+        assert_eq!(
+            active_modal_region_from_model(&model),
+            Some([
+                folder.rect.x,
+                folder.rect.y,
+                folder.rect.width,
+                folder.rect.height
+            ])
+        );
+
+        // Settings panel above the folder -> settings rect wins.
+        let settings = surface("settings", 90, 640.0);
+        model.set_glass_batch(GlassLayer::Settings, vec![settings.clone()]);
+        assert_eq!(
+            active_modal_region_from_model(&model),
+            Some([
+                settings.rect.x,
+                settings.rect.y,
+                settings.rect.width,
+                settings.rect.height
+            ])
+        );
+
+        // Context menu above everything -> menu rect wins.
+        let menu = surface("context-menu", 80, 900.0);
+        model.set_glass_batch(GlassLayer::ContextMenu, vec![menu.clone()]);
+        assert_eq!(
+            active_modal_region_from_model(&model),
+            Some([menu.rect.x, menu.rect.y, menu.rect.width, menu.rect.height])
+        );
+    }
+
+    #[test]
+    fn active_modal_region_uses_highest_z_surface_within_batch() {
+        let mut model = RenderModel::new();
+        let low = surface("low", 10, 100.0);
+        let high = surface("high", 20, 200.0);
+        model.set_glass_batch(GlassLayer::Modal, vec![low.clone(), high.clone()]);
+        assert_eq!(
+            active_modal_region_from_model(&model),
+            Some([high.rect.x, high.rect.y, high.rect.width, high.rect.height])
         );
     }
 

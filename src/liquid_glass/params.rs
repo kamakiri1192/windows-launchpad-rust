@@ -82,6 +82,40 @@ impl AutoDarknessUpdateMode {
     }
 }
 
+/// Session-only backdrop classification formula compared for issue #186.
+/// Changing the strategy resets the auto-darkness GPU state so each formula
+/// starts from a clean transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoDarknessStrategy {
+    /// PR #184 white-coverage heuristic (baseline, unchanged behavior).
+    #[default]
+    Current,
+    /// Same coverage pipeline with visually recalibrated constants.
+    CoverageTuned,
+    /// Perceptual-luminance percentile inverted into a target contrast.
+    ContrastPerceptual,
+}
+
+impl AutoDarknessStrategy {
+    pub const ALL: [Self; 3] = [Self::Current, Self::CoverageTuned, Self::ContrastPerceptual];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::CoverageTuned => "coverage-tuned",
+            Self::ContrastPerceptual => "contrast-perceptual",
+        }
+    }
+
+    pub const fn shader_value(self) -> u32 {
+        match self {
+            Self::Current => 0,
+            Self::CoverageTuned => 1,
+            Self::ContrastPerceptual => 2,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DebugOptions {
     pub show_backdrop_texture: bool,

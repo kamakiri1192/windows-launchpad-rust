@@ -11,7 +11,7 @@ const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 16;
+const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 40;
 const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
 
 #[repr(C)]
@@ -21,6 +21,12 @@ struct TestAutoDarknessUniforms {
     mode: u32,
     flags: u32,
     max_darkness: f32,
+    strategy: u32,
+    // 戦略D local-region fields; existing tests keep use_region = 0 (the
+    // global path) exactly as before.
+    use_region: u32,
+    region_origin: [f32; 2],
+    region_extent: [f32; 2],
 }
 
 #[repr(C)]
@@ -220,109 +226,29 @@ fn auto_darkness_uses_parallel_reduction_and_per_frame_interpolation() {
 fn auto_darkness_compute_respects_maximum_and_update_modes() {
     pollster::block_on(async {
         let (device, queue) = create_device().await;
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("auto darkness execution test shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../assets/shaders/liquid_glass_backdrop_stats.wgsl").into(),
-            ),
-        });
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("auto darkness execution test bgl"),
-            entries: &[
-                texture_entry_for(0, true, wgpu::ShaderStages::COMPUTE),
-                sampler_entry_for(1, wgpu::ShaderStages::COMPUTE),
-                uniform_entry(2, wgpu::ShaderStages::COMPUTE, AUTO_DARKNESS_UNIFORMS_SIZE),
-                storage_entry(
-                    3,
-                    wgpu::ShaderStages::COMPUTE,
-                    false,
-                    AUTO_DARKNESS_STATE_SIZE,
-                ),
-            ],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("auto darkness execution test pipeline layout"),
-            bind_group_layouts: &[Some(&bgl)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("auto darkness execution test pipeline"),
-            layout: Some(&layout),
-            module: &shader,
-            entry_point: Some("cs_main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let (pipeline, bind_group_layout) = create_auto_darkness_test_pipeline(&device).await;
+        let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
+        write_test_backdrop(&queue, &resources.texture, 255);
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("auto darkness execution test backdrop"),
-            size: wgpu::Extent3d {
-                width: 16,
-                height: 16,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        write_test_backdrop(&queue, &texture, 255);
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("auto darkness execution test uniforms"),
-            size: AUTO_DARKNESS_UNIFORMS_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("auto darkness execution test state"),
-            size: AUTO_DARKNESS_STATE_SIZE,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("auto darkness execution test bind group"),
-            layout: &bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: state.as_entire_binding(),
-                },
-            ],
-        });
-
-        reset_test_auto_darkness_state(&queue, &state);
+        reset_test_auto_darkness_state(&queue, &resources.state);
         dispatch_test_auto_darkness(
             &device,
             &queue,
             &pipeline,
-            &bind_group,
-            &uniforms,
+            &resources.bind_group,
+            &resources.uniforms,
             TestAutoDarknessUniforms {
                 now: 0.0,
                 mode: 1,
                 flags: 1,
                 max_darkness: 0.42,
+                strategy: 0,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
-        let initial = read_test_auto_darkness_state(&device, &queue, &state);
+        let initial = read_test_auto_darkness_state(&device, &queue, &resources.state);
         assert_eq!(initial.classification_count, 1);
         assert!((initial.target_darkness - 0.42).abs() < 0.0001);
 
@@ -333,79 +259,489 @@ fn auto_darkness_compute_respects_maximum_and_update_modes() {
                 &device,
                 &queue,
                 &pipeline,
-                &bind_group,
-                &uniforms,
+                &resources.bind_group,
+                &resources.uniforms,
                 TestAutoDarknessUniforms {
                     now,
                     mode: 1,
                     flags: 0,
                     max_darkness: 0.42,
+                    strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
-        let adaptive = read_test_auto_darkness_state(&device, &queue, &state);
+        let adaptive = read_test_auto_darkness_state(&device, &queue, &resources.state);
         assert_eq!(adaptive.classification_count, 2);
 
         // A coarse-probe change wakes adaptive mode immediately, before the
         // next 8 Hz deadline.
-        write_test_backdrop(&queue, &texture, 0);
+        write_test_backdrop(&queue, &resources.texture, 0);
         dispatch_test_auto_darkness(
             &device,
             &queue,
             &pipeline,
-            &bind_group,
-            &uniforms,
+            &resources.bind_group,
+            &resources.uniforms,
             TestAutoDarknessUniforms {
                 now: 0.14,
                 mode: 1,
                 flags: 0,
                 max_darkness: 0.42,
+                strategy: 0,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
             },
         );
-        let changed = read_test_auto_darkness_state(&device, &queue, &state);
+        let changed = read_test_auto_darkness_state(&device, &queue, &resources.state);
         assert_eq!(changed.classification_count, 3);
 
         // Fixed mode ignores probe changes and runs only on its 8 Hz cadence.
-        reset_test_auto_darkness_state(&queue, &state);
-        write_test_backdrop(&queue, &texture, 255);
+        reset_test_auto_darkness_state(&queue, &resources.state);
+        write_test_backdrop(&queue, &resources.texture, 255);
         for (index, now) in [0.0, 0.05, 0.126].into_iter().enumerate() {
             dispatch_test_auto_darkness(
                 &device,
                 &queue,
                 &pipeline,
-                &bind_group,
-                &uniforms,
+                &resources.bind_group,
+                &resources.uniforms,
                 TestAutoDarknessUniforms {
                     now,
                     mode: 2,
                     flags: u32::from(index == 0),
                     max_darkness: 0.42,
+                    strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
-        let fixed = read_test_auto_darkness_state(&device, &queue, &state);
+        let fixed = read_test_auto_darkness_state(&device, &queue, &resources.state);
         assert_eq!(fixed.classification_count, 2);
 
         // Full-rate mode classifies every dispatched capture.
-        reset_test_auto_darkness_state(&queue, &state);
-        write_test_backdrop(&queue, &texture, 255);
+        reset_test_auto_darkness_state(&queue, &resources.state);
+        write_test_backdrop(&queue, &resources.texture, 255);
         for (index, now) in [0.0, 0.01, 0.02].into_iter().enumerate() {
             dispatch_test_auto_darkness(
                 &device,
                 &queue,
                 &pipeline,
-                &bind_group,
-                &uniforms,
+                &resources.bind_group,
+                &resources.uniforms,
                 TestAutoDarknessUniforms {
                     now,
                     mode: 0,
                     flags: u32::from(index == 0),
                     max_darkness: 0.42,
+                    strategy: 0,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
                 },
             );
         }
-        let full_rate = read_test_auto_darkness_state(&device, &queue, &state);
+        let full_rate = read_test_auto_darkness_state(&device, &queue, &resources.state);
         assert_eq!(full_rate.classification_count, 3);
+    });
+}
+
+struct AutoDarknessTestResources {
+    texture: wgpu::Texture,
+    uniforms: wgpu::Buffer,
+    state: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+async fn create_auto_darkness_test_pipeline(
+    device: &wgpu::Device,
+) -> (wgpu::ComputePipeline, wgpu::BindGroupLayout) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("auto darkness execution test shader"),
+        source: wgpu::ShaderSource::Wgsl(
+            include_str!("../assets/shaders/liquid_glass_backdrop_stats.wgsl").into(),
+        ),
+    });
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("auto darkness execution test bgl"),
+        entries: &[
+            texture_entry_for(0, true, wgpu::ShaderStages::COMPUTE),
+            sampler_entry_for(1, wgpu::ShaderStages::COMPUTE),
+            uniform_entry(2, wgpu::ShaderStages::COMPUTE, AUTO_DARKNESS_UNIFORMS_SIZE),
+            storage_entry(
+                3,
+                wgpu::ShaderStages::COMPUTE,
+                false,
+                AUTO_DARKNESS_STATE_SIZE,
+            ),
+        ],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("auto darkness execution test pipeline layout"),
+        bind_group_layouts: &[Some(&bgl)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("auto darkness execution test pipeline"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("cs_main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    (pipeline, bgl)
+}
+
+fn create_auto_darkness_test_resources(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> AutoDarknessTestResources {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("auto darkness execution test backdrop"),
+        size: wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("auto darkness execution test uniforms"),
+        size: AUTO_DARKNESS_UNIFORMS_SIZE,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let state = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("auto darkness execution test state"),
+        size: AUTO_DARKNESS_STATE_SIZE,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("auto darkness execution test bind group"),
+        layout: bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: state.as_entire_binding(),
+            },
+        ],
+    });
+    AutoDarknessTestResources {
+        texture,
+        uniforms,
+        state,
+        bind_group,
+    }
+}
+
+#[test]
+fn auto_darkness_strategies_map_white_black_and_gray_backdrops() {
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let (pipeline, bind_group_layout) = create_auto_darkness_test_pipeline(&device).await;
+        let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
+
+        // Hand-computed target_darkness for max_darkness = 0.42 on a uniform
+        // backdrop (first classification uses filter_alpha = 1). Tuned and
+        // perceptual constants are the darkness_qa harness winners (issue
+        // #186, docs/qa/auto-darkness/results.md):
+        //   white 255: coverage 1.0; strategy 2 quantile bin 7 center 0.9375
+        //     -> all strategies saturate to 0.42.
+        //   black 0:   coverage 0; strategy 2 quantile bin 0 center 0.0625 <
+        //     L_TARGET -> all strategies stay clear at 0.0.
+        //   gray 128:  strategy 0/1 white_score 0 (luma 0.502 < luma_lo);
+        //     strategy 2 quantile bin 1 center 0.1875 < L_TARGET 0.20 ->
+        //     0.0 for all strategies.
+        //   gray 200:  strategy 0 white_score 0.4615 < coverage lo 0.55 ->
+        //     0.0; strategy 1 white_score 0.6630, smoothstep(0.40, 0.70) =
+        //     0.958 -> 0.402; strategy 2 quantile bin 4 center 0.5625 ->
+        //     clamp(1 - 0.20/0.5625) = 0.644 -> 0.42.
+        let cases: [(u8, [f32; 3]); 4] = [
+            (255, [0.42, 0.42, 0.42]),
+            (0, [0.0, 0.0, 0.0]),
+            (128, [0.0, 0.0, 0.0]),
+            (200, [0.0, 0.402, 0.42]),
+        ];
+        for strategy in 0..=2u32 {
+            for &(value, expected) in &cases {
+                reset_test_auto_darkness_state(&queue, &resources.state);
+                write_test_backdrop(&queue, &resources.texture, value);
+                dispatch_test_auto_darkness(
+                    &device,
+                    &queue,
+                    &pipeline,
+                    &resources.bind_group,
+                    &resources.uniforms,
+                    TestAutoDarknessUniforms {
+                        now: 0.0,
+                        mode: 0,
+                        flags: 1,
+                        max_darkness: 0.42,
+                        strategy,
+                        use_region: 0,
+                        region_origin: [0.0; 2],
+                        region_extent: [1.0; 2],
+                    },
+                );
+                let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+                assert_eq!(result.classification_count, 1);
+                let expected = expected[strategy as usize];
+                assert!(
+                    (result.target_darkness - expected).abs() < 0.005,
+                    "strategy {strategy}, backdrop {value}: target_darkness {} expected {}",
+                    result.target_darkness,
+                    expected,
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn auto_darkness_strategy_2_probe_wakes_adaptive_classification() {
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let (pipeline, bind_group_layout) = create_auto_darkness_test_pipeline(&device).await;
+        let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
+
+        // Strategy 2 probes relative luminance, so a white -> black backdrop
+        // moves the probe by 1.0 and wakes a full classification before the
+        // 8 Hz (0.125 s) deadline.
+        reset_test_auto_darkness_state(&queue, &resources.state);
+        write_test_backdrop(&queue, &resources.texture, 255);
+        dispatch_test_auto_darkness(
+            &device,
+            &queue,
+            &pipeline,
+            &resources.bind_group,
+            &resources.uniforms,
+            TestAutoDarknessUniforms {
+                now: 0.0,
+                mode: 1,
+                flags: 1,
+                max_darkness: 0.42,
+                strategy: 2,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
+            },
+        );
+        let initial = read_test_auto_darkness_state(&device, &queue, &resources.state);
+        assert_eq!(initial.classification_count, 1);
+
+        // Unchanged backdrop before the deadline: probe delta 0, no wake.
+        dispatch_test_auto_darkness(
+            &device,
+            &queue,
+            &pipeline,
+            &resources.bind_group,
+            &resources.uniforms,
+            TestAutoDarknessUniforms {
+                now: 0.05,
+                mode: 1,
+                flags: 0,
+                max_darkness: 0.42,
+                strategy: 2,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
+            },
+        );
+        let stable = read_test_auto_darkness_state(&device, &queue, &resources.state);
+        assert_eq!(stable.classification_count, 1);
+
+        // White -> black flips the luminance probe, waking immediately.
+        write_test_backdrop(&queue, &resources.texture, 0);
+        dispatch_test_auto_darkness(
+            &device,
+            &queue,
+            &pipeline,
+            &resources.bind_group,
+            &resources.uniforms,
+            TestAutoDarknessUniforms {
+                now: 0.10,
+                mode: 1,
+                flags: 0,
+                max_darkness: 0.42,
+                strategy: 2,
+                use_region: 0,
+                region_origin: [0.0; 2],
+                region_extent: [1.0; 2],
+            },
+        );
+        let woken = read_test_auto_darkness_state(&device, &queue, &resources.state);
+        assert_eq!(woken.classification_count, 2);
+    });
+}
+
+#[test]
+fn auto_darkness_strategy_switches_dispatch_cleanly() {
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let (pipeline, bind_group_layout) = create_auto_darkness_test_pipeline(&device).await;
+        let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
+
+        // The renderer resets GPU state on strategy change; here we verify
+        // the shader itself survives consecutive dispatches across all three
+        // strategies without shared-memory or validation issues.
+        reset_test_auto_darkness_state(&queue, &resources.state);
+        write_test_backdrop(&queue, &resources.texture, 255);
+        for (index, strategy) in [0u32, 1, 2].into_iter().enumerate() {
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: index as f32 * 0.01,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 0,
+                    region_origin: [0.0; 2],
+                    region_extent: [1.0; 2],
+                },
+            );
+        }
+        let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+        assert_eq!(result.classification_count, 3);
+        assert!((0.0..=0.42).contains(&result.target_darkness));
+        assert!(result.displayed_darkness.is_finite());
+    });
+}
+
+#[test]
+fn auto_darkness_region_restricts_classification_to_modal_rect() {
+    pollster::block_on(async {
+        let (device, queue) = create_device().await;
+        let (pipeline, bind_group_layout) = create_auto_darkness_test_pipeline(&device).await;
+        let resources = create_auto_darkness_test_resources(&device, &bind_group_layout);
+
+        // Four-quadrant backdrop: top-left quadrant white, the other three
+        // black (16x16 texture, 8x8 per quadrant; the 16x16 grid samples
+        // texel centers so exactly 64 cells land in the white quadrant).
+        write_quadrant_test_backdrop(&queue, &resources.texture);
+
+        // 戦略D: use_region=1 over the top-left quadrant -> every sampled
+        // texel is white. Strategy 0: coverage 1.0 -> smoothstep(0.55, 0.82,
+        // 1.0) = 1.0 -> max_darkness. Strategy 2: 64 samples all in the top
+        // luminance bin (center 0.9375) -> clamp(1 - 0.20/0.9375) > max.
+        for strategy in [0u32, 2] {
+            reset_test_auto_darkness_state(&queue, &resources.state);
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 1,
+                    region_origin: [0.0, 0.0],
+                    region_extent: [0.5, 0.5],
+                },
+            );
+            let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+            assert!(
+                (result.target_darkness - 0.42).abs() < 0.005,
+                "strategy {strategy} white-quadrant region: target {} expected 0.42",
+                result.target_darkness
+            );
+        }
+
+        // use_region=1 over the black bottom-right quadrant -> all samples
+        // black; both strategies stay clear.
+        for strategy in [0u32, 2] {
+            reset_test_auto_darkness_state(&queue, &resources.state);
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 1,
+                    region_origin: [0.5, 0.5],
+                    region_extent: [0.5, 0.5],
+                },
+            );
+            let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+            assert!(
+                result.target_darkness.abs() < 0.005,
+                "strategy {strategy} black-quadrant region: target {} expected 0.0",
+                result.target_darkness
+            );
+        }
+
+        // use_region=0 on the same texture: the global judgment dilutes the
+        // 25% white quadrant away. Strategy 0: coverage 0.25 ->
+        // smoothstep(0.55, 0.82, 0.25) = 0 -> target 0. Strategy 2: the
+        // 192 black samples fill bin 0, so the 0.75 quantile lands at
+        // luminance 0.0625 < L_TARGET -> target 0.
+        for strategy in [0u32, 2] {
+            reset_test_auto_darkness_state(&queue, &resources.state);
+            dispatch_test_auto_darkness(
+                &device,
+                &queue,
+                &pipeline,
+                &resources.bind_group,
+                &resources.uniforms,
+                TestAutoDarknessUniforms {
+                    now: 0.0,
+                    mode: 0,
+                    flags: 1,
+                    max_darkness: 0.42,
+                    strategy,
+                    use_region: 0,
+                    region_origin: [0.0, 0.0],
+                    region_extent: [1.0, 1.0],
+                },
+            );
+            let result = read_test_auto_darkness_state(&device, &queue, &resources.state);
+            assert!(
+                result.target_darkness.abs() < 0.005,
+                "strategy {strategy} global four-quadrant: target {} expected 0.0 (diluted)",
+                result.target_darkness
+            );
+        }
     });
 }
 
@@ -474,6 +810,39 @@ fn read_test_auto_darkness_state(
 
 fn write_test_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture, value: u8) {
     let pixels = vec![value; 16 * 16 * 4];
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(16 * 4),
+            rows_per_image: Some(16),
+        },
+        wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// 16x16 backdrop with the top-left 8x8 quadrant white (255) and the other
+/// three quadrants black. Used by the 戦略D region tests: the 16x16 grid's
+/// texel-center samples put exactly 64 cells in the white quadrant.
+fn write_quadrant_test_backdrop(queue: &wgpu::Queue, texture: &wgpu::Texture) {
+    let mut pixels = vec![0u8; 16 * 16 * 4];
+    for y in 0..8u32 {
+        for x in 0..8u32 {
+            let index = ((y * 16 + x) * 4) as usize;
+            pixels[index..index + 3].fill(255);
+            pixels[index + 3] = 255;
+        }
+    }
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
