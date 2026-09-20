@@ -47,7 +47,8 @@ pub(super) struct GlassUniforms {
     backdrop_extent: [f32; 2],
     glass_darkness: f32,
     presentation_alpha: f32,
-    _uniform_pad: [f32; 2],
+    presentation_progress: f32,
+    presentation_start_offset: f32,
 }
 
 #[repr(C)]
@@ -597,6 +598,11 @@ fn capture_sampling_padding(
 impl LiquidGlassRenderer {
     pub fn set_presentation_alpha(&mut self, alpha: f32) {
         self.params.presentation_alpha = alpha.clamp(0.0, 1.0);
+    }
+
+    pub fn set_presentation_motion(&mut self, progress: f32, start_offset: f32) {
+        self.params.presentation_progress = progress.clamp(0.0, 1.0);
+        self.params.presentation_start_offset = start_offset.max(0.0);
     }
 
     pub fn new(
@@ -2877,7 +2883,8 @@ fn uniforms_from_params(
         backdrop_origin: [backdrop.region.x as f32, backdrop.region.y as f32],
         backdrop_extent: [backdrop.region.width as f32, backdrop.region.height as f32],
         presentation_alpha: params.presentation_alpha,
-        _uniform_pad: [0.0; 2],
+        presentation_progress: params.presentation_progress,
+        presentation_start_offset: params.presentation_start_offset,
     }
 }
 

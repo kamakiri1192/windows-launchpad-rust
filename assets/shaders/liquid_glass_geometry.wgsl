@@ -15,12 +15,15 @@ struct GlassUniforms {
     shape_count: u32,
     debug_flags: u32,
     time: f32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
+    activation: f32,
+    backdrop_replacement: f32,
+    auto_darkness_enabled: u32,
     backdrop_origin: vec2<f32>,
     backdrop_extent: vec2<f32>,
+    glass_darkness: f32,
     presentation_alpha: f32,
+    presentation_progress: f32,
+    presentation_start_offset: f32,
 };
 
 struct GlassShape {
@@ -121,6 +124,17 @@ fn resolved_center(shape: GlassShape) -> vec2<f32> {
             rel.x * cosr - rel.y * sinr,
             rel.x * sinr + rel.y * cosr - dy,
         );
+    }
+    if shape.shape_type == 7u {
+        let normalized = (center - shape.motion.xy) / max(shape.motion.zw, vec2<f32>(1.0));
+        let distance = length(normalized);
+        let direction = select(
+            vec2<f32>(0.0),
+            normalized / max(distance, 0.0001),
+            distance > 0.0001,
+        );
+        let travel = min(shape.motion.z, shape.motion.w) * u.presentation_start_offset;
+        center = center + direction * travel * (1.0 - u.presentation_progress);
     }
     if shape.shape_type == 0u || shape.shape_type == 4u || shape.shape_type == 5u {
         center.x = center.x + u.scroll_x;

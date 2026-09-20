@@ -62,6 +62,7 @@ pub struct GlassShape {
 /// - 5 = scrolling rounded rectangle animated around its own center.
 /// - 6 = frame-independent control rounded rectangle animated around its own
 ///   center.
+/// - 7 = scrolling folder glass animated along the launch gather path.
 const SHAPE_SCROLLING: u32 = 0;
 const SHAPE_FIXED: u32 = 1;
 const SHAPE_CONTROL: u32 = 2;
@@ -69,6 +70,7 @@ const SHAPE_CLIP_ONLY: u32 = 3;
 const SHAPE_ANIMATED_BADGE: u32 = 4;
 const SHAPE_ANIMATED_SCROLLING: u32 = 5;
 const SHAPE_ANIMATED_CONTROL: u32 = 6;
+const SHAPE_LAUNCH_GATHER: u32 = 7;
 
 impl GlassShape {
     pub fn rounded_rect(center: [f32; 2], size: [f32; 2], radius: f32) -> Self {
@@ -126,6 +128,26 @@ impl GlassShape {
     ) -> Self {
         let mut shape = Self::with_kind(center, size, radius, SHAPE_ANIMATED_CONTROL);
         shape.motion = [center[0], center[1], phase, 1.0];
+        shape
+    }
+
+    /// Folder glass that follows the same radial gather path as its tile and
+    /// miniature icons while the launcher opens. The payload is
+    /// `(frame_center_x, frame_center_y, frame_half_width, frame_half_height)`.
+    pub fn launch_gather_rounded_rect(
+        center: [f32; 2],
+        size: [f32; 2],
+        radius: f32,
+        frame_center: [f32; 2],
+        frame_half_size: [f32; 2],
+    ) -> Self {
+        let mut shape = Self::with_kind(center, size, radius, SHAPE_LAUNCH_GATHER);
+        shape.motion = [
+            frame_center[0],
+            frame_center[1],
+            frame_half_size[0],
+            frame_half_size[1],
+        ];
         shape
     }
 
@@ -209,6 +231,9 @@ impl GlassShape {
             // A circle around the rectangle encloses every ±0.06 rad rotation.
             let diagonal = (half[0] * half[0] + half[1] * half[1]).sqrt() + 2.0;
             [diagonal, diagonal]
+        } else if self.shape_type == SHAPE_LAUNCH_GATHER {
+            let travel = self.motion[2].min(self.motion[3]) * 0.2;
+            [half[0] + travel, half[1] + travel]
         } else {
             half
         };
@@ -291,6 +316,19 @@ mod tests {
             GlassShape::animated_control_rounded_rect([12.0, 34.0], [80.0, 80.0], 19.0, 1.25);
         assert_eq!(shape.shape_type, 6);
         assert_eq!(shape.motion, [12.0, 34.0, 1.25, 1.0]);
+    }
+
+    #[test]
+    fn launch_gather_retains_frame_pivot_and_offset_payload() {
+        let shape = GlassShape::launch_gather_rounded_rect(
+            [120.0, 180.0],
+            [84.0, 84.0],
+            19.0,
+            [640.0, 400.0],
+            [480.0, 300.0],
+        );
+        assert_eq!(shape.shape_type, 7);
+        assert_eq!(shape.motion, [640.0, 400.0, 480.0, 300.0]);
     }
 
     #[test]

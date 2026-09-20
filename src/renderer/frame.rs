@@ -58,6 +58,8 @@ impl Renderer {
     pub fn render(&mut self, args: &DrawArgs) {
         self.liquid_glass
             .set_presentation_alpha(args.presentation[1]);
+        self.liquid_glass
+            .set_presentation_motion(args.presentation[0], args.presentation_motion[0]);
         // Update uniforms (tiny, every frame).
         let clip = self.frame_clip;
         self.queue.write_buffer(

@@ -4,6 +4,10 @@ pub struct LiquidGlassParams {
     /// Runtime-only alpha used by the launcher's open transition. It is not
     /// persisted with the user-facing Liquid Glass settings.
     pub presentation_alpha: f32,
+    /// Runtime-only gather progress used by folder glass geometry.
+    pub presentation_progress: f32,
+    /// Runtime-only radial start offset used by folder glass geometry.
+    pub presentation_start_offset: f32,
     pub auto_darkness_enabled: bool,
     /// Maximum black tint contributed by backdrop-aware darkness.
     pub auto_darkness_max: f32,
@@ -27,6 +31,8 @@ impl Default for LiquidGlassParams {
         Self {
             enabled: true,
             presentation_alpha: 1.0,
+            presentation_progress: 1.0,
+            presentation_start_offset: 0.0,
             auto_darkness_enabled: false,
             auto_darkness_max: 0.16,
             thickness: 26.0,

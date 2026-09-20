@@ -47,14 +47,31 @@ fn shape_for(surface: &GlassSurface) -> GlassShape {
     shape
 }
 
-fn grid_overlay_shape(surface: &GlassSurface, tiles: &[TileView]) -> GlassShape {
+fn grid_overlay_shape(
+    surface: &GlassSurface,
+    tiles: &[TileView],
+    frame_clip: (f32, f32, f32, f32, f32),
+) -> GlassShape {
     let center = [surface.rect.center().x, surface.rect.center().y];
     let size = [surface.rect.width, surface.rect.height];
+    let is_folder = surface.behavior == GlassBehavior::Scrolling
+        && tiles.iter().any(|tile| {
+            tile.id == surface.id
+                && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_NO_FILL != 0
+        });
     let animated_parent = tiles.iter().find(|tile| {
         tile.id == surface.id
             && tile.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0
     });
-    let mut shape = if let Some(tile) = animated_parent {
+    let mut shape = if is_folder {
+        GlassShape::launch_gather_rounded_rect(
+            center,
+            size,
+            surface.radius,
+            [frame_clip.0, frame_clip.1],
+            [frame_clip.2, frame_clip.3],
+        )
+    } else if let Some(tile) = animated_parent {
         if surface.behavior == GlassBehavior::Control {
             GlassShape::animated_control_rounded_rect(
                 center,
@@ -397,6 +414,31 @@ impl Renderer {
         // matching batch would let a later empty batch erase the active one.
         self.liquid_glass
             .set_modal_shapes(&self.device, &self.queue, &modal_shapes);
+        // Resolve the current frame geometry before translating overlay
+        // shapes. Glass batches are normally inserted in draw order, but the
+        // renderer should not make the folder gather pivot depend on that
+        // incidental vector ordering.
+        let frame_clip = model
+            .glass
+            .iter()
+            .find(|batch| batch.layer == GlassLayer::Base)
+            .and_then(|batch| {
+                batch
+                    .surfaces
+                    .iter()
+                    .find(|surface| surface.behavior == GlassBehavior::FixedFrame)
+            })
+            .map(|frame| {
+                let center = frame.rect.center();
+                (
+                    center.x,
+                    center.y,
+                    frame.rect.width * 0.5,
+                    frame.rect.height * 0.5,
+                    frame.radius,
+                )
+            })
+            .unwrap_or(self.frame_clip);
         let grid_motion_changed = model.tiles != self.prepared_model.tiles;
         for batch in &model.glass {
             let batch_unchanged = self
@@ -419,7 +461,7 @@ impl Renderer {
                     let shapes: Vec<_> = batch
                         .surfaces
                         .iter()
-                        .map(|surface| grid_overlay_shape(surface, tiles))
+                        .map(|surface| grid_overlay_shape(surface, tiles, frame_clip))
                         .collect();
                     self.liquid_glass
                         .set_grid_overlay_shapes(&self.device, &self.queue, &shapes);
@@ -429,7 +471,7 @@ impl Renderer {
                     let shapes: Vec<_> = batch
                         .surfaces
                         .iter()
-                        .map(|surface| grid_overlay_shape(surface, tiles))
+                        .map(|surface| grid_overlay_shape(surface, tiles, frame_clip))
                         .collect();
                     self.liquid_glass
                         .set_drag_overlay_shapes(&self.device, &self.queue, &shapes);
@@ -882,10 +924,32 @@ mod tests {
             z: 0,
         };
 
-        let shape = grid_overlay_shape(&source, &[tile]);
+        let shape = grid_overlay_shape(&source, &[tile], (640.0, 400.0, 480.0, 300.0, 28.0));
         assert_eq!(shape.shape_type, 6);
         assert_eq!(shape.motion, [240.0, 60.0, 1.75, 1.0]);
         assert_eq!(shape.tint, [0.0, 0.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn closed_folder_glass_uses_launch_gather_geometry() {
+        let mut source = surface("folder", 22, 240.0);
+        source.behavior = GlassBehavior::Scrolling;
+        let tile = TileView {
+            id: source.id.clone(),
+            rect: Rect::new(198.0, 18.0, 84.0, 84.0),
+            radius: 19.0,
+            color: Color::rgba(0.0, 0.0, 0.0, 0.0),
+            has_icon: true,
+            motion: crate::ui_model::grid::TileAnim {
+                flags: crate::ui_model::grid::TileAnim::FLAG_NO_FILL,
+                ..crate::ui_model::grid::TileAnim::IDLE
+            },
+            z: 0,
+        };
+
+        let shape = grid_overlay_shape(&source, &[tile], (640.0, 400.0, 480.0, 300.0, 28.0));
+        assert_eq!(shape.shape_type, 7);
+        assert_eq!(shape.motion, [640.0, 400.0, 480.0, 300.0]);
     }
 
     #[test]

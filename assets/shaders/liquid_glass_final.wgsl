@@ -28,7 +28,8 @@ struct GlassUniforms {
     backdrop_extent: vec2<f32>,
     glass_darkness: f32,
     presentation_alpha: f32,
-    _uniform_pad: vec2<f32>,
+    presentation_progress: f32,
+    presentation_start_offset: f32,
 };
 
 struct AutoDarknessUniforms {
