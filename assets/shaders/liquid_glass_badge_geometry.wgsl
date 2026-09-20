@@ -26,8 +26,10 @@ struct GlassUniforms {
     backdrop_extent: vec2<f32>,
     glass_darkness: f32,
     presentation_alpha: f32,
-    presentation_progress: f32,
     presentation_start_offset: f32,
+    presentation_grid: u32,
+    presentation: vec4<f32>,
+    presentation_frame: vec4<f32>,
 };
 
 struct GlassShape {

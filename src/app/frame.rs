@@ -131,7 +131,7 @@ impl App {
             .map(|runner| runner.animation_dt())
             .unwrap_or(wall_anim_dt);
         let anim_dt = wall_anim_dt;
-        let launch_animating = self.launch_presentation.tick(anim_dt);
+        let launch_animating = self.launch_presentation.tick(context_menu_anim_dt);
         if self.editing {
             self.wiggle_phase += anim_dt;
         }

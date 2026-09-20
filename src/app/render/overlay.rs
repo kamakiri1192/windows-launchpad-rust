@@ -132,6 +132,7 @@ fn overlay_glyph_views(quads: &[text::GlyphQuad], id: &UiId) -> Vec<GlyphView> {
     quads
         .iter()
         .map(|quad| GlyphView {
+            presentation_pivot: None,
             id: id.clone(),
             rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
             uv: UvRect {

@@ -260,7 +260,7 @@ impl LiquidGlassRenderer {
         }
 
         let (width, height) = self.texture_size;
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -270,6 +270,10 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        // Presentation is an extra transform on the existing scrolling/edit
+        // geometry, scoped to closed folders. Modal/drag/control lanes retain
+        // their ordinary transform and only share the window fade.
+        uniforms.presentation_grid = 1;
         queue.write_buffer(
             &self.grid_overlay_uniform_buffer,
             0,

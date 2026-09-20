@@ -140,7 +140,14 @@ impl Renderer {
         // Shaders
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tile shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../shader.wgsl"),
+                ]
+                .concat()
+                .into(),
+            ),
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -321,7 +328,14 @@ impl Renderer {
 
         let text_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("text shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shader_text.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../shader_text.wgsl"),
+                ]
+                .concat()
+                .into(),
+            ),
         });
         let text_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("text pipeline layout"),
@@ -412,7 +426,14 @@ impl Renderer {
         });
         let icon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("icon shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shader_icon.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../shader_icon.wgsl"),
+                ]
+                .concat()
+                .into(),
+            ),
         });
         let icon_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("icon pipeline layout"),

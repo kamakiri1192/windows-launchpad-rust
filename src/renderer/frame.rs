@@ -56,12 +56,13 @@ impl RenderFrame {
 impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
-        self.liquid_glass
-            .set_presentation_alpha(args.presentation[1]);
-        self.liquid_glass
-            .set_presentation_motion(args.presentation[0], args.presentation_motion[0]);
-        // Update uniforms (tiny, every frame).
         let clip = self.frame_clip;
+        self.liquid_glass.set_presentation(
+            args.presentation,
+            [clip.0, clip.1, clip.2, clip.3],
+            args.presentation_motion[0],
+        );
+        // Update uniforms (tiny, every frame).
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,

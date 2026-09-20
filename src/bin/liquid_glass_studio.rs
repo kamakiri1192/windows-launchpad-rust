@@ -47,7 +47,11 @@ struct GlassUniforms {
     backdrop_origin: [f32; 2],
     backdrop_extent: [f32; 2],
     glass_darkness: f32,
-    _uniform_pad: [f32; 3],
+    presentation_alpha: f32,
+    presentation_start_offset: f32,
+    presentation_grid: u32,
+    presentation: [f32; 4],
+    presentation_frame: [f32; 4],
 }
 
 #[repr(C)]
@@ -777,7 +781,12 @@ impl StudioRenderer {
         let geometry_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("studio liquid glass geometry shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../assets/shaders/liquid_glass_geometry.wgsl").into(),
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../../assets/shaders/liquid_glass_geometry.wgsl"),
+                ]
+                .concat()
+                .into(),
             ),
         });
         let final_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1409,7 +1418,11 @@ fn uniforms_from_params(
         backdrop_origin: [0.0, 0.0],
         backdrop_extent: [width as f32, height as f32],
         glass_darkness: 0.0,
-        _uniform_pad: [0.0; 3],
+        presentation_alpha: 1.0,
+        presentation_start_offset: 0.0,
+        presentation_grid: 0,
+        presentation: [1.0, 1.0, 1.0, 0.0],
+        presentation_frame: [0.0, 0.0, 1.0, 1.0],
     }
 }
 

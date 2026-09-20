@@ -37,27 +37,6 @@ struct VsOut {
     @location(2) presentation_alpha: f32,
 };
 
-fn presentation_item_progress(center: vec2<f32>) -> f32 {
-    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
-    let radial = clamp(length(normalized), 0.0, 1.0);
-    let delay = radial * u.presentation.w;
-    let local = clamp((u.presentation.x - delay) / max(1.0 - delay, 0.001), 0.0, 1.0);
-    return smoothstep(0.0, 1.0, local);
-}
-
-fn presentation_gather_offset(center: vec2<f32>, item_progress: f32) -> vec2<f32> {
-    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
-    let radial = length(normalized);
-    var direction = vec2<f32>(0.0, 0.0);
-    if radial > 0.001 {
-        direction = normalized / radial;
-    }
-    let travel = min(u.frame_half_size.x, u.frame_half_size.y)
-        * u.presentation_motion.x;
-    // At progress 0 the item is outside its final position. It travels back
-    // along the radial vector as the reveal progresses.
-    return direction * travel * (1.0 - item_progress);
-}
 
 @vertex
 fn vs_main(
@@ -65,11 +44,9 @@ fn vs_main(
     @location(0) xywh: vec4<f32>,  // (x, y, w, h) top-left + size, content px
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
-    // NOTE: grid text has no clip region. The vertex buffer is the shared
-    // 5-attribute / 80-byte GlyphQuad layout (which also carries clip_rect at
-    // location 3 and clip_radius at location 4 for the control/modal text
-    // shaders), but this grid-text entry point only consumes the first three
-    // locations. Locations 3/4 are uploaded but ignored here.
+    @location(4) radius_pivot: vec4<f32>, // (clip radius, owner x/y, has owner)
+    // Grid text shares the 80-byte GlyphQuad layout. Location 3 is unused;
+    // location 4 carries the explicit owner pivot in the radius padding.
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
@@ -82,10 +59,14 @@ fn vs_main(
     let c = corners[vi];
 
     let origin = vec2<f32>(xywh.x + u.scroll_x, xywh.y);
-    let glyph_center = vec2<f32>(origin.x + xywh.z * 0.5, origin.y + xywh.w * 0.5);
-    let item_progress = presentation_item_progress(glyph_center);
+    let glyph_center = select(
+        vec2<f32>(origin.x + xywh.z * 0.5, origin.y + xywh.w * 0.5),
+        radius_pivot.yz + vec2<f32>(u.scroll_x, 0.0),
+        radius_pivot.w > 0.5,
+    );
+    let item_progress = launch_item_progress(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation);
     let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
-    let gather_offset = presentation_gather_offset(glyph_center, item_progress);
+    let gather_offset = launch_gather_offset(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
     let world = glyph_center + gather_offset
         + (vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w) - glyph_center)
             * reveal_scale;

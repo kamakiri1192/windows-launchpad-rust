@@ -290,6 +290,8 @@ pub struct GlyphBatch {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlyphView {
+    /// Shared owner pivot for a launch reveal; absent for non-grid text.
+    pub presentation_pivot: Option<Point>,
     pub id: UiId,
     pub rect: Rect,
     pub uv: UvRect,

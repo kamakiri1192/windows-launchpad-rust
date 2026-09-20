@@ -62,27 +62,6 @@ const FLAG_DRAG: f32 = 2.0;
 const FLAG_FIXED: f32 = 4.0;
 const FLAG_GROUP_MOTION: f32 = 32.0;
 
-fn presentation_item_progress(center: vec2<f32>) -> f32 {
-    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
-    let radial = clamp(length(normalized), 0.0, 1.0);
-    let delay = radial * u.presentation.w;
-    let local = clamp((u.presentation.x - delay) / max(1.0 - delay, 0.001), 0.0, 1.0);
-    return smoothstep(0.0, 1.0, local);
-}
-
-fn presentation_gather_offset(center: vec2<f32>, item_progress: f32) -> vec2<f32> {
-    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
-    let radial = length(normalized);
-    var direction = vec2<f32>(0.0, 0.0);
-    if radial > 0.001 {
-        direction = normalized / radial;
-    }
-    let travel = min(u.frame_half_size.x, u.frame_half_size.y)
-        * u.presentation_motion.x;
-    // At progress 0 the item is outside its final position. It travels back
-    // along the radial vector as the reveal progresses.
-    return direction * travel * (1.0 - item_progress);
-}
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -190,10 +169,20 @@ fn vs_main(
         center.y + rotated.y - wiggle_dy - applied_lift,
     );
 
-    let item_progress = presentation_item_progress(center);
+    // Every miniature belongs to the folder pivot, including during reveal.
+    var reveal_pivot = center;
+    if grouped {
+        reveal_pivot = motion_pivot.xy;
+        if dragged && u.drag_active > 0.5 {
+            reveal_pivot = u.drag_pos;
+        } else if !fixed {
+            reveal_pivot.x += u.scroll_x;
+        }
+    }
+    let item_progress = select(launch_item_progress(reveal_pivot, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation), 1.0, fixed || dragged);
     let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
-    let gather_offset = presentation_gather_offset(center, item_progress);
-    world = center + (world - center) * reveal_scale + gather_offset;
+    let gather_offset = launch_gather_offset(reveal_pivot, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
+    world = reveal_pivot + (world - reveal_pivot) * reveal_scale + gather_offset;
 
     // Physical px → clip space. Y is flipped so content origin is top-left.
     let half = u.viewport * 0.5;

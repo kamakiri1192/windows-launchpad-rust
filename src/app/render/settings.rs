@@ -963,6 +963,7 @@ fn glyph_views(quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
     quads
         .iter()
         .map(|quad| GlyphView {
+            presentation_pivot: None,
             id: UiId::settings_panel(),
             rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
             uv: UvRect {
@@ -1187,6 +1188,7 @@ mod tests {
             tint: None,
         };
         let glyph = |id: &str, y: f32, clip| GlyphView {
+            presentation_pivot: None,
             id: UiId::named(id),
             rect: Rect::new(0.0, y, 10.0, 10.0),
             uv: UvRect::default(),

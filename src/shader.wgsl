@@ -58,27 +58,6 @@ const FLAG_DRAG: f32 = 2.0;
 const FLAG_FIXED: f32 = 4.0;
 const FLAG_NO_FILL: f32 = 16.0;
 
-fn presentation_item_progress(center: vec2<f32>) -> f32 {
-    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
-    let radial = clamp(length(normalized), 0.0, 1.0);
-    let delay = radial * u.presentation.w;
-    let local = clamp((u.presentation.x - delay) / max(1.0 - delay, 0.001), 0.0, 1.0);
-    return smoothstep(0.0, 1.0, local);
-}
-
-fn presentation_gather_offset(center: vec2<f32>, item_progress: f32) -> vec2<f32> {
-    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
-    let radial = length(normalized);
-    var direction = vec2<f32>(0.0, 0.0);
-    if radial > 0.001 {
-        direction = normalized / radial;
-    }
-    let travel = min(u.frame_half_size.x, u.frame_half_size.y)
-        * u.presentation_motion.x;
-    // At progress 0 the item is outside its final position. It travels back
-    // along the radial vector as the reveal progresses.
-    return direction * travel * (1.0 - item_progress);
-}
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -157,9 +136,9 @@ fn vs_main(
     let rotated = vec2<f32>(rel.x * cosr - rel.y * sinr, rel.x * sinr + rel.y * cosr);
     var world = vec2<f32>(center.x + rotated.x, center.y + rotated.y - wiggle_dy - lift);
 
-    let item_progress = presentation_item_progress(center);
+    let item_progress = select(launch_item_progress(center, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation), 1.0, fixed || dragged);
     let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
-    let gather_offset = presentation_gather_offset(center, item_progress);
+    let gather_offset = launch_gather_offset(center, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
     world = center + (world - center) * reveal_scale + gather_offset;
 
     // Physical px → clip space. Y is flipped so that content origin is

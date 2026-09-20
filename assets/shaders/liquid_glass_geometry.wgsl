@@ -22,8 +22,10 @@ struct GlassUniforms {
     backdrop_extent: vec2<f32>,
     glass_darkness: f32,
     presentation_alpha: f32,
-    presentation_progress: f32,
     presentation_start_offset: f32,
+    presentation_grid: u32,
+    presentation: vec4<f32>,
+    presentation_frame: vec4<f32>,
 };
 
 struct GlassShape {
@@ -110,6 +112,17 @@ fn smooth_union(d1: f32, d2: f32, k: f32) -> f32 {
     return min(d1, d2) - e * e * 0.25 / k;
 }
 
+fn shape_launch_progress(shape: GlassShape) -> f32 {
+    if u.presentation_grid == 0u || (shape.shape_type != 0u && shape.shape_type != 5u) {
+        return 1.0;
+    }
+    return launch_item_progress(shape.center + vec2<f32>(u.scroll_x, 0.0), u.presentation_frame, u.presentation);
+}
+
+fn shape_launch_scale(shape: GlassShape) -> f32 {
+    return mix(u.presentation.z, 1.0, shape_launch_progress(shape));
+}
+
 fn resolved_center(shape: GlassShape) -> vec2<f32> {
     var center = shape.center;
     if shape.shape_type == 4u || shape.shape_type == 5u || shape.shape_type == 6u {
@@ -125,20 +138,14 @@ fn resolved_center(shape: GlassShape) -> vec2<f32> {
             rel.x * sinr + rel.y * cosr - dy,
         );
     }
-    if shape.shape_type == 7u {
-        let normalized = (center - shape.motion.xy) / max(shape.motion.zw, vec2<f32>(1.0));
-        let distance = length(normalized);
-        let direction = select(
-            vec2<f32>(0.0),
-            normalized / max(distance, 0.0001),
-            distance > 0.0001,
-        );
-        let travel = min(shape.motion.z, shape.motion.w) * u.presentation_start_offset;
-        center = center + direction * travel * (1.0 - u.presentation_progress);
-    }
-    if shape.shape_type == 0u || shape.shape_type == 4u || shape.shape_type == 5u
-        || shape.shape_type == 7u {
+    if shape.shape_type == 0u || shape.shape_type == 4u || shape.shape_type == 5u {
         center.x = center.x + u.scroll_x;
+    }
+    let progress = shape_launch_progress(shape);
+    if progress < 1.0 {
+        let pivot = shape.center + vec2<f32>(u.scroll_x, 0.0);
+        center = pivot + (center - pivot) * shape_launch_scale(shape)
+            + launch_gather_offset(pivot, u.presentation_frame, progress, u.presentation_start_offset);
     }
     return center;
 }
@@ -158,12 +165,13 @@ fn resolved_local(shape: GlassShape, pixel: vec2<f32>) -> vec2<f32> {
             local.x * sinr + local.y * cosr,
         );
     }
-    return local;
+    return local / max(shape_launch_scale(shape), 0.001);
 }
 
 struct SceneSample {
     distance: f32,
     tint: vec4<f32>,
+    opacity: f32,
 };
 
 fn resolved_tint(shape: GlassShape) -> vec4<f32> {
@@ -184,6 +192,7 @@ fn smooth_union_sample(a: SceneSample, b: SceneSample, k: f32) -> SceneSample {
     var result: SceneSample;
     result.distance = mix(b.distance, a.distance, h) - k * h * (1.0 - h);
     result.tint = mix(b.tint, a.tint, h);
+    result.opacity = mix(b.opacity, a.opacity, h);
     return result;
 }
 
@@ -191,6 +200,7 @@ fn scene_sample(pixel: vec2<f32>) -> SceneSample {
     var result: SceneSample;
     result.distance = 1.0e6;
     result.tint = u.glass_color;
+    result.opacity = 1.0;
     var inside_tint = u.glass_color;
     var inside_distance = -1.0e6;
     var inside_found = false;
@@ -209,11 +219,12 @@ fn scene_sample(pixel: vec2<f32>) -> SceneSample {
         }
         let local = resolved_local(shape, pixel);
         let half_size = shape.size * 0.5;
-        let shape_d = sdf_rrect(local, half_size, shape.radius);
+        let shape_d = sdf_rrect(local, half_size, shape.radius) * shape_launch_scale(shape);
         let shape_tint = resolved_tint(shape);
         var shape_sample: SceneSample;
         shape_sample.distance = shape_d;
         shape_sample.tint = shape_tint;
+        shape_sample.opacity = shape_launch_progress(shape);
         result = smooth_union_sample(result, shape_sample, u.blend);
 
         // A nested surface can be geometrically swallowed by a larger smooth
@@ -310,7 +321,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> FsOut {
     // own capsule, never to the frame.
     let cd = control_sdf(pixel);
     let control_alpha = alpha * (1.0 - smoothstep(-2.0, 0.0, cd));
-    let clipped_alpha = max(frame_clipped, control_alpha);
+    let clipped_alpha = max(frame_clipped, control_alpha) * scene.opacity;
 
     if clipped_alpha < 0.01 || sd >= 0.0 || u.thickness <= 0.0 {
         return empty_output();

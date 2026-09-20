@@ -205,7 +205,9 @@ impl App {
         // first summon frame is rendered while the window is still hidden so
         // a resident window cannot expose its old settled swapchain buffer
         // before the new reveal has reached the compositor.
-        self.launch_presentation.begin();
+        if !was_visible {
+            self.launch_presentation.begin();
+        }
         // Do not let the hidden interval contribute to the first animation
         // delta when the launcher is summoned again.
         self.last_redraw = None;
