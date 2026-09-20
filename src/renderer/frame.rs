@@ -73,6 +73,7 @@ impl Renderer {
                 drag_active: args.drag_active,
                 drag_pos: [args.drag_pos.0, args.drag_pos.1],
                 presentation: args.presentation,
+                presentation_motion: args.presentation_motion,
             }),
         );
 
@@ -283,6 +284,7 @@ impl Renderer {
                 frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
                 presentation: args.presentation,
+                presentation_motion: args.presentation_motion,
             }),
         );
         let profile_scope = self.gpu_profiler.begin("edit_badge_glass", &mut encoder);

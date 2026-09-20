@@ -22,6 +22,8 @@ struct Uniforms {
     drag_pos: vec2<f32>,
     // Open-transition values: (progress, opacity, start_scale, max_stagger).
     presentation: vec4<f32>,
+    // Open-transition motion: (start_offset_fraction, _, _, _).
+    presentation_motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -43,13 +45,18 @@ fn presentation_item_progress(center: vec2<f32>) -> f32 {
     return smoothstep(0.0, 1.0, local);
 }
 
-fn presentation_center(center: vec2<f32>, reveal_scale: f32, half_extent: f32) -> vec2<f32> {
-    var shift = (center - u.frame_center) * (1.0 - reveal_scale);
-    let max_shift = half_extent * (1.0 - reveal_scale);
-    if length(shift) > max_shift && max_shift > 0.0 {
-        shift = normalize(shift) * max_shift;
+fn presentation_gather_offset(center: vec2<f32>, item_progress: f32) -> vec2<f32> {
+    let normalized = (center - u.frame_center) / max(u.frame_half_size, vec2<f32>(1.0));
+    let radial = length(normalized);
+    var direction = vec2<f32>(0.0, 0.0);
+    if radial > 0.001 {
+        direction = normalized / radial;
     }
-    return center - shift;
+    let travel = min(u.frame_half_size.x, u.frame_half_size.y)
+        * u.presentation_motion.x;
+    // At progress 0 the item is outside its final position. It travels back
+    // along the radial vector as the reveal progresses.
+    return direction * travel * (1.0 - item_progress);
 }
 
 @vertex
@@ -78,12 +85,8 @@ fn vs_main(
     let glyph_center = vec2<f32>(origin.x + xywh.z * 0.5, origin.y + xywh.w * 0.5);
     let item_progress = presentation_item_progress(glyph_center);
     let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
-    let reveal_center = presentation_center(
-        glyph_center,
-        reveal_scale,
-        min(xywh.z, xywh.w) * 0.5,
-    );
-    let world = reveal_center
+    let gather_offset = presentation_gather_offset(glyph_center, item_progress);
+    let world = glyph_center + gather_offset
         + (vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w) - glyph_center)
             * reveal_scale;
 

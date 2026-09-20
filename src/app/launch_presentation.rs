@@ -12,11 +12,15 @@ pub const OPEN_DURATION_SECONDS: f32 = 0.34;
 /// The backdrop and control fade reaches full opacity slightly earlier than
 /// the app tiles finish gathering.
 pub const FADE_DURATION_SECONDS: f32 = 0.18;
-/// Initial scale around the page-frame center. Keeping this inside the frame
-/// avoids the rounded page clip cutting off edge icons during the reveal.
-pub const START_SCALE: f32 = 0.92;
-/// Maximum radial stagger as a fraction of the open transition.
-pub const MAX_STAGGER: f32 = 0.10;
+/// Initial scale of each app tile at the outside edge of its gather path.
+pub const START_SCALE: f32 = 0.84;
+/// Maximum radial stagger as a fraction of the open transition. Center items
+/// start first; items near the page-frame edge start this much later.
+pub const MAX_STAGGER: f32 = 0.14;
+/// Initial radial distance as a fraction of the smaller page-frame half-size.
+/// This is the actual travel distance for the outside-in gather, not merely a
+/// timing delay. At a typical 1280×800 viewport it is roughly 30–50 px.
+pub const START_OFFSET_FRACTION: f32 = 0.14;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LaunchPresentation {
@@ -68,6 +72,13 @@ impl LaunchPresentation {
         let opacity = smoothstep(self.elapsed / FADE_DURATION_SECONDS);
         [gather, opacity, START_SCALE, MAX_STAGGER]
     }
+
+    /// Motion values consumed by the tile, icon, and text vertex shaders:
+    /// `(start_offset_fraction, _, _, _)`. The extra slots keep the uniform
+    /// block extensible without changing the existing timing values.
+    pub fn motion_values(self) -> [f32; 4] {
+        [START_OFFSET_FRACTION, 0.0, 0.0, 0.0]
+    }
 }
 
 fn smoothstep(value: f32) -> f32 {
@@ -96,6 +107,10 @@ mod tests {
         assert_eq!(
             presentation.shader_values(),
             [1.0, 1.0, START_SCALE, MAX_STAGGER]
+        );
+        assert_eq!(
+            presentation.motion_values(),
+            [START_OFFSET_FRACTION, 0.0, 0.0, 0.0]
         );
     }
 

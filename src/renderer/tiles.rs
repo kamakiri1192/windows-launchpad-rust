@@ -70,4 +70,6 @@ pub(super) struct Uniforms {
     /// Open-transition values: `(gather_progress, opacity, start_scale,
     /// max_stagger)`.
     pub(super) presentation: [f32; 4],
+    /// Open-transition motion values: `(start_offset_fraction, _, _, _)`.
+    pub(super) presentation_motion: [f32; 4],
 }

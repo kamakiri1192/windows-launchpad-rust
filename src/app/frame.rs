@@ -324,6 +324,7 @@ impl App {
                 },
                 drag_pos: (self.drag_x, self.drag_y),
                 presentation: self.launch_presentation.shader_values(),
+                presentation_motion: self.launch_presentation.motion_values(),
             });
         }
         self.profiler.record_render(render_start.elapsed());

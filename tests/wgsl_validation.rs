@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const LAUNCHPAD_UNIFORMS_SIZE: u64 = 64;
+const LAUNCHPAD_UNIFORMS_SIZE: u64 = 80;
 const GLASS_UNIFORMS_SIZE: u64 = 128;
 const BLUR_UNIFORMS_SIZE: u64 = 16;
 const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;

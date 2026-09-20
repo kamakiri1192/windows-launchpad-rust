@@ -10,6 +10,9 @@ struct Uniforms {
     frame_center_radius: vec4<f32>,
     frame_half_size: vec4<f32>,
     presentation: vec4<f32>,
+    // Open-transition motion: (start_offset_fraction, _, _, _). The control
+    // remains fixed in place but shares the full uniform block layout.
+    presentation_motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

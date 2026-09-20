@@ -220,6 +220,8 @@ pub struct DrawArgs {
     /// Open-transition values: `(gather_progress, opacity, start_scale,
     /// max_stagger)`.
     pub presentation: [f32; 4],
+    /// Open-transition motion values: `(start_offset_fraction, _, _, _)`.
+    pub presentation_motion: [f32; 4],
 }
 
 /// Frame clip geometry for the tile/icon/text shaders: `(cx, cy, hw, hh, r)`
