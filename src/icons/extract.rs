@@ -235,6 +235,8 @@ fn resolve_link_target(link: &IShellLinkW) -> Option<PathBuf> {
 pub struct LnkMetadata {
     /// Resolved target path (expanded), or `""` if unresolvable.
     pub target_path: String,
+    /// Arguments stored on the shortcut, or `""` when none are present.
+    pub arguments: String,
     /// Shell IconLocation field (expanded), or `""` if the icon lives in the
     /// target exe.
     pub icon_location: String,
@@ -254,6 +256,12 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
+    let mut arguments_buf = [0u16; 2048];
+    let arguments = unsafe { link.GetArguments(&mut arguments_buf) }
+        .ok()
+        .map(|_| wide_to_string(&arguments_buf))
+        .unwrap_or_default();
+
     // IconLocation: wide buffer + out param for the index.
     let mut icon_buf = [0u16; 260];
     let mut icon_index_i32: i32 = 0;
@@ -265,12 +273,26 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
 
     Some(LnkMetadata {
         target_path,
+        arguments,
         icon_location: if icon_location.is_empty() {
             icon_location
         } else {
             expand_env(&icon_location)
         },
         icon_index: icon_index_i32,
+    })
+}
+
+/// Return whether a resolved shortcut target represents a conventional
+/// Windows application executable.
+///
+/// Start Menu folders can contain shortcuts to documents and web pages too.
+/// Those are useful in the Start Menu, but they do not belong in an
+/// application launcher. Packaged apps are represented separately by the
+/// `shell:AppsFolder` path and are handled by [`is_apps_folder_uri`].
+pub(crate) fn is_application_target(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("com")
     })
 }
 
@@ -365,7 +387,7 @@ fn exe_name_candidates(dir_name: &str, exe_name: &str) -> Vec<PathBuf> {
 }
 
 /// Expand `%VAR%` references in `s` via `ExpandEnvironmentStringsW`.
-fn expand_env(s: &str) -> String {
+pub(crate) fn expand_env(s: &str) -> String {
     let src: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
     let mut dst = vec![0u16; 1024];
     // SAFETY: src is NUL-terminated; dst is a writable 1024-wide buffer.
@@ -745,7 +767,7 @@ fn apps_folder_uri(aumid: &str) -> String {
     format!("{APPS_FOLDER_PREFIX}{aumid}")
 }
 
-fn is_apps_folder_uri(path: &Path) -> bool {
+pub(crate) fn is_apps_folder_uri(path: &Path) -> bool {
     path.to_str()
         .map(|s| {
             s.len() > APPS_FOLDER_PREFIX.len()
@@ -937,6 +959,18 @@ mod tests {
         assert!(is_apps_folder_uri(Path::new(&uri)));
         assert!(is_packaged_aumid("OpenAI.ChatGPT_abc123!App"));
         assert!(!is_packaged_aumid("Desktop.AppUserModelId"));
+    }
+
+    #[test]
+    fn application_target_filter_excludes_documents_and_urls() {
+        assert!(is_application_target(Path::new(
+            r"C:\Program Files\Example\Example.exe"
+        )));
+        assert!(is_application_target(Path::new(r"C:\Tools\legacy.com")));
+        assert!(is_application_target(Path::new(r"C:\Tools\legacy.EXE")));
+        assert!(!is_application_target(Path::new(r"C:\Docs\readme.txt")));
+        assert!(!is_application_target(Path::new(r"C:\Docs\index.html")));
+        assert!(!is_application_target(Path::new(r"C:\Tools\launch")));
     }
 
     #[test]
