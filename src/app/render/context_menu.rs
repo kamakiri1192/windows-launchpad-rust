@@ -579,6 +579,14 @@ impl App {
                     self.execute_command(AppCommand::AskChatGpt(info));
                 }
             }
+            ContextMenuSelection::AppInfo(id) => {
+                // The release build uses the native properties/info window as
+                // the small cross-platform MVP for the app-overview row. The
+                // full in-launcher information panel remains tracked in #169.
+                if let Some(info) = self.registry.launch_info(&id) {
+                    self.execute_command(AppCommand::ShowAppProperties(info));
+                }
+            }
             ContextMenuSelection::OpenInSteam(id) => {
                 // The Steam row runs through the app command boundary like a
                 // launch: the executor hides the window first, then opens the
@@ -894,13 +902,16 @@ enum ContextMenuSelection {
     /// ChatGPTで使い方を調べる: open ChatGPT with a how-to-use prompt built
     /// from the target app's name + version (via `AppCommand::AskChatGpt`).
     ChatGptHelp(AppId),
+    /// アプリの概要: ask the native desktop shell to show the app's
+    /// properties/info window (the temporary MVP for #169).
+    AppInfo(AppId),
     /// Steamで開く: open the target app's Steam library page via the
     /// `steam://` protocol handler (via `AppCommand::OpenInSteam`). Only the
     /// Steam-app menu shows this row, and it only resolves when the target is
     /// a Steam app.
     OpenInSteam(AppId),
-    /// Mock action (or a folder target of hide/reveal, which have no file on
-    /// disk to act on): just close the menu.
+    /// Mock action (or a folder target of hide/reveal/info, which have no app
+    /// file on disk to act on): just close the menu.
     CloseOnly,
 }
 
@@ -931,6 +942,10 @@ fn resolve_context_menu_selection(
         },
         Some(context_menu::ContextMenuItem::ChatGptHelp) => match target {
             Some(LauncherItem::App(id)) => ContextMenuSelection::ChatGptHelp(id.clone()),
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        Some(context_menu::ContextMenuItem::AppInfo) => match target {
+            Some(LauncherItem::App(id)) => ContextMenuSelection::AppInfo(id.clone()),
             _ => ContextMenuSelection::CloseOnly,
         },
         Some(context_menu::ContextMenuItem::OpenInSteam) => match target {
@@ -1126,6 +1141,31 @@ mod tests {
     }
 
     #[test]
+    fn app_info_row_resolves_to_native_properties_for_an_app_target() {
+        let target = LauncherItem::app(AppId::from_normalized("calc"));
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::APP_ITEMS,
+                Some(6),
+                Some(&target)
+            ),
+            ContextMenuSelection::AppInfo(AppId::from_normalized("calc"))
+        );
+    }
+
+    #[test]
+    fn app_info_row_with_no_target_is_close_only() {
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::APP_ITEMS,
+                Some(6),
+                None
+            ),
+            ContextMenuSelection::CloseOnly
+        );
+    }
+
+    #[test]
     fn outside_release_and_mock_rows_are_close_only() {
         let target = LauncherItem::app(AppId::from_normalized("calc"));
         // Outside the panel: no row hit.
@@ -1138,9 +1178,9 @@ mod tests {
             ContextMenuSelection::CloseOnly
         );
         // OpenInSteam (row 4) on a *non-Steam* target resolves to close-only,
-        // and the trailing mock rows (IconLarger, IconSmaller, AppInfo) at rows
-        // 5..8 are always close-only.
-        for row in 4..context_menu::ContextMenuItem::ALL.len() {
+        // and the trailing mock rows (IconLarger, IconSmaller) at rows 5..6
+        // are always close-only. AppInfo is intentionally app-only.
+        for row in 4..7 {
             assert_eq!(
                 resolve_context_menu_selection(
                     &context_menu::ContextMenuItem::ALL,
@@ -1150,6 +1190,14 @@ mod tests {
                 ContextMenuSelection::CloseOnly
             );
         }
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(7),
+                Some(&target)
+            ),
+            ContextMenuSelection::AppInfo(AppId::from_normalized("calc"))
+        );
     }
 
     #[test]

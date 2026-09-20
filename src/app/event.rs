@@ -102,6 +102,9 @@ pub enum AppCommand {
     /// dismiss the menu / keep working. Carries the app name + version so the
     /// prompt is specific.
     AskChatGpt(AppLaunchInfo),
+    /// Hide the launcher, then ask the native desktop shell to show the
+    /// selected app's properties/info window.
+    ShowAppProperties(AppLaunchInfo),
     /// Open `app_id`'s Steam library page (`steam://nav/games/details/<appid>`).
     /// The launcher is hidden first, mirroring the launch/reveal ordering so
     /// Steam arrives on top. Carries the Steam app id directly (not the launch
