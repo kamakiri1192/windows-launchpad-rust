@@ -141,6 +141,62 @@ pub fn reveal(path: &Path) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
+/// Open the native properties/info view for an application path.
+///
+/// Windows uses the Shell `properties` verb, which opens the normal shortcut
+/// or executable properties dialog. macOS asks Finder to open the item's Get
+/// Info window. Keeping this at the platform boundary lets the context-menu
+/// action offer the same affordance on both desktop platforms without making
+/// the app shell know about either OS's UI automation details.
+#[cfg(windows)]
+pub fn show_properties(path: &Path) -> Result<(), String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let operation = wide_null("properties");
+    let path_text = path.to_string_lossy();
+    let file = wide_null(path_text.as_ref());
+
+    // SAFETY: all PCWSTR arguments point to NUL-terminated UTF-16 buffers
+    // that live for the duration of the synchronous ShellExecuteW call.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as usize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW properties failed with code {code}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn show_properties(path: &Path) -> Result<(), String> {
+    let path = escape_applescript_string(&path.to_string_lossy());
+    let script = format!(
+        "tell application \"Finder\"\n    activate\n    open information window of (POSIX file \"{path}\" as alias)\nend tell"
+    );
+    std::process::Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(script)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("open Finder info failed: {error}"))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn show_properties(_path: &Path) -> Result<(), String> {
+    Err("showing application properties is unsupported on this platform".to_string())
+}
+
 #[cfg(target_os = "macos")]
 pub fn reveal(path: &Path) -> Result<(), String> {
     std::process::Command::new("/usr/bin/open")
@@ -215,6 +271,15 @@ pub fn open_shortcut(_path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
 }
 
 #[cfg(test)]

@@ -144,7 +144,8 @@ impl ContextMenuItem {
     /// a folder has no hide action, no file to reveal, no app metadata for a
     /// ChatGPT lookup, and is never a Steam app, so "アプリを非表示",
     /// "Finderで開く", "ChatGPTで使い方を調べる", and "Steamで開く" are all
-    /// omitted.
+    /// omitted. The app-info row remains visible for folders for menu-shape
+    /// compatibility, but resolves to a no-op because folders have no app file.
     pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
         Self::EditHome,
         Self::IconLarger,

@@ -282,6 +282,20 @@ impl App {
                     Err(err) => eprintln!("failed to open ChatGPT help for {}: {}", name, err),
                 }
             }
+            AppCommand::ShowAppProperties(info) => {
+                let name = info.name.clone();
+                let path = properties_target_path(&info);
+                self.hide();
+                match crate::platform::launch::show_properties(&path) {
+                    Ok(()) => eprintln!("opened properties for {} ({})", name, path.display()),
+                    Err(err) => eprintln!(
+                        "failed to open properties for {} ({}): {}",
+                        name,
+                        path.display(),
+                        err
+                    ),
+                }
+            }
             AppCommand::OpenInSteam { app_id } => {
                 // Hide first, mirroring launch/reveal, so Steam arrives on top.
                 self.hide();
@@ -409,6 +423,18 @@ fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
+        info.link_path.clone()
+    }
+}
+
+/// Native properties should describe the discovered launcher entry itself: a
+/// Windows `.lnk` exposes its shortcut target in the normal Properties dialog,
+/// while macOS uses the `.app` bundle's Finder info window. Fall back to the
+/// resolved target only for unusual records without a link path.
+fn properties_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
+    if info.link_path.as_os_str().is_empty() {
+        info.resolved_target.clone()
+    } else {
         info.link_path.clone()
     }
 }
@@ -729,6 +755,24 @@ mod tests {
                 std::path::PathBuf::from("x.lnk")
             );
         }
+    }
+
+    #[test]
+    fn properties_target_prefers_the_discovered_link_path() {
+        let info = launch_info();
+        assert_eq!(
+            properties_target_path(&info),
+            std::path::PathBuf::from("x.lnk")
+        );
+
+        let no_link = AppLaunchInfo {
+            link_path: std::path::PathBuf::new(),
+            ..info
+        };
+        assert_eq!(
+            properties_target_path(&no_link),
+            std::path::PathBuf::from("x.exe")
+        );
     }
 
     /// The Steam app id projection strips the `steam:` prefix and yields the
