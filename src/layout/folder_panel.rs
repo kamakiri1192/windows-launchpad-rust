@@ -363,7 +363,7 @@ pub fn build(input: FolderPanelInput<'_>) -> FolderPanelModel {
                 text: child.label.to_owned(),
                 rect: Rect::new(
                     final_rect.x - 12.0 * scale,
-                    final_rect.max_y() + 5.0 * scale,
+                    final_rect.max_y() + crate::layout::grid::APP_LABEL_GAP * scale,
                     final_rect.width + 24.0 * scale,
                     LABEL_HEIGHT * scale,
                 ),
