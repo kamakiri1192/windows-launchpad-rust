@@ -114,10 +114,11 @@ fn toggle_lens_preserves_sharp_scene_colors_even_with_panel_effects_enabled() {
                     size,
                 );
             }
-            // GlassUniforms is 128 bytes. Set intentionally hostile shared
+            // Follow the shared GlassUniforms size, including fields added by
+            // the base branch. Set intentionally hostile shared
             // panel parameters: blur 30, saturation .1, manual darkness 1,
             // automatic darkness enabled, and a cropped desktop mapping.
-            let mut uniforms = [0.0f32; 32];
+            let mut uniforms = [0.0f32; GLASS_UNIFORMS_SIZE as usize / std::mem::size_of::<f32>()];
             uniforms[0] = 8.0;
             uniforms[1] = 1.0;
             uniforms[3] = 3.0;
