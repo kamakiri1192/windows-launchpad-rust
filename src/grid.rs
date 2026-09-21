@@ -269,7 +269,7 @@ impl GridLayout {
             let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let label_w = self.tile_size + self.scaled(20.0); // a little wider than the tile
             let label_x = tile_x + (self.tile_size - label_w) * 0.5;
-            let label_y = tile_y + self.tile_size + self.scaled(8.0);
+            let label_y = tile_y + self.tile_size + self.scaled(layout_grid::APP_LABEL_GAP);
             out.push(crate::renderer::text_engine::Label {
                 text: item.name.to_string(),
                 x: label_x,
@@ -505,7 +505,10 @@ mod tests {
         let apps = fake_apps(1);
         let labels = g.build_labels(vw, &view(&apps));
         let label = &labels[0];
-        assert!((label.y - (g.margin_top + g.tile_size + 8.0 * scale)).abs() < 1e-2);
+        assert!(
+            (label.y - (g.margin_top + g.tile_size + layout_grid::APP_LABEL_GAP * scale)).abs()
+                < 1e-2
+        );
         assert!((label.max_width - (g.tile_size + 20.0 * scale)).abs() < 1e-2);
 
         let x = g.margin_left + g.tile_size * 0.5;

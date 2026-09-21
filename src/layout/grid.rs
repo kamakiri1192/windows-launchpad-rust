@@ -22,6 +22,10 @@
 
 const LABEL_CLICK_EXTRA_X: f32 = 10.0;
 const LABEL_CLICK_EXTRA_Y: f32 = 42.0;
+/// Vertical distance between a tile's bottom edge and its app-name label.
+/// Keep this shared with the GPU-facing label builder so hit/animation
+/// geometry and rendered text continue to use the same anchor.
+pub const APP_LABEL_GAP: f32 = 3.0;
 pub const BASE_TILE_SIZE: f32 = 84.0;
 
 // --- Fixed page-frame geometry --------------------------------------------
@@ -468,7 +472,7 @@ pub fn label_rect(layout: &GridLayout, viewport_w: f32, idx: usize) -> (f32, f32
     let (tile_x, tile_y) = layout.tile_position(viewport_w, idx);
     let label_w = layout.tile_size + layout.scaled(20.0); // a little wider than the tile
     let label_x = tile_x + (layout.tile_size - label_w) * 0.5;
-    let label_y = tile_y + layout.tile_size + layout.scaled(8.0);
+    let label_y = tile_y + layout.tile_size + layout.scaled(APP_LABEL_GAP);
     (label_x, label_y, label_w, layout.scaled(20.0))
 }
 
@@ -545,7 +549,7 @@ mod tests {
         let expected_w = g.tile_size + g.scaled(20.0);
         assert!((lw - expected_w).abs() < 1e-2);
         assert!((lx - (tile_x + (g.tile_size - expected_w) * 0.5)).abs() < 1e-2);
-        assert!((ly - (tile_y + g.tile_size + g.scaled(8.0))).abs() < 1e-2);
+        assert!((ly - (tile_y + g.tile_size + g.scaled(APP_LABEL_GAP))).abs() < 1e-2);
     }
 
     #[test]
