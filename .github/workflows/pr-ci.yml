@@ -2,6 +2,7 @@ name: PR CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
@@ -19,6 +20,7 @@ env:
 jobs:
   rust:
     name: Windows checks
+    if: github.event.action != 'labeled'
     runs-on: windows-latest
 
     steps:
@@ -75,6 +77,15 @@ jobs:
 
   macos:
     name: macOS checks
+    if: >-
+      (
+        github.event.action == 'labeled' &&
+        github.event.label.name == 'ci:macos'
+      ) ||
+      (
+        github.event.action != 'labeled' &&
+        contains(github.event.pull_request.labels.*.name, 'ci:macos')
+      )
     runs-on: macos-14
 
     steps:
