@@ -31,7 +31,7 @@ const RESET_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.7];
 // ---- Dimensions (logical px, mirrors `debug_slider_geometry`) ----
 
 /// Track width in logical pixels.
-const TRACK_WIDTH: f32 = 120.0;
+const TRACK_WIDTH: f32 = 100.0;
 /// Track half-height.
 const TRACK_HALF_H: f32 = 2.5;
 /// Knob radius.
@@ -41,7 +41,9 @@ const RESET_RADIUS: f32 = 9.0;
 /// Reset icon stroke width multiplier.
 const RESET_STROKE: f32 = 1.4;
 /// Gap between track right edge and reset icon.
-const RESET_GAP: f32 = 10.0;
+const RESET_GAP: f32 = 20.0;
+/// Keep the reset glyph and its padded hit region inside the row.
+const RIGHT_INSET: f32 = 16.0;
 
 /// Row height used when a label is present.
 const ROW_H: f32 = 46.0;
@@ -186,6 +188,7 @@ impl Slider {
     ///
     /// Returns `(track_left, track_width, knob_r, reset_cx, reset_r, track_hh)`.
     pub fn geometry(content_right: f32, scale: f32) -> (f32, f32, f32, f32, f32, f32) {
+        let content_right = content_right - RIGHT_INSET * scale;
         let reset_r = RESET_RADIUS * scale;
         let gap = RESET_GAP * scale;
         let track_right = content_right - reset_r * 2.0 - gap;
@@ -321,9 +324,8 @@ impl Ui {
 
         // --- Slider geometry ---
         // `rect.max_x()` is the content-area right edge (set by the layout to
-        // `content_right` = panel_right - CONTENT_PAD). Pass it straight into
-        // Slider::geometry so the rendered track/reset/knob match the
-        // hit_test geometry exactly (no extra inset).
+        // `content_right` = panel_right - CONTENT_PAD). The shared geometry
+        // helper owns the row inset so rendering and pointer mapping agree.
         let content_right = rect.max_x();
         let (track_left, track_width, knob_r, reset_cx, reset_r, track_hh) =
             Slider::geometry(content_right, scale);
@@ -397,10 +399,10 @@ impl Ui {
         // --- Hit regions ---
         // Track hit region (the full track area)
         let track_hit_rect = Rect::new(
-            track_left - 4.0 * scale,
-            row_cy - track_hh - 4.0 * scale,
-            track_width + 8.0 * scale,
-            track_hh * 2.0 + 8.0 * scale,
+            track_left - knob_r - 4.0 * scale,
+            row_cy - knob_r - 4.0 * scale,
+            track_width + knob_r * 2.0 + 8.0 * scale,
+            knob_r * 2.0 + 8.0 * scale,
         );
         if s.enabled {
             let track_target = s
@@ -603,6 +605,77 @@ mod tests {
         let all: Vec<_> = render.ink.iter().flat_map(|b| &b.views).collect();
         assert!(all.iter().any(|v| v.kind == ControlKind::SliderTrack));
         assert!(all.iter().any(|v| v.kind == ControlKind::SliderKnob));
+    }
+
+    #[test]
+    fn hit_region_contains_entire_knob_at_both_endpoints() {
+        for value in [0.0, 1.0] {
+            let mut ui = new_ui();
+            let id = UiId::named("endpoint-slider");
+            ui.slider(&Slider::new(value, (0.0, 1.0)).id(id.clone()));
+            let (render, hits, _) = ui.take();
+            let knob = render
+                .ink
+                .iter()
+                .flat_map(|batch| &batch.views)
+                .find(|view| view.kind == ControlKind::SliderKnob)
+                .unwrap();
+            let track = hits
+                .regions()
+                .iter()
+                .find(|hit| hit.id == format_slider_id(&id, "track"))
+                .unwrap();
+            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                assert!(track.contains(Point::new(
+                    knob.center.x + dx * knob.extent,
+                    knob.center.y + dy * knob.extent
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn reset_hit_area_stays_inside_row_and_separate_from_track() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let mut ui = Ui::new(
+                Theme {
+                    scale_factor: scale,
+                    ..Default::default()
+                },
+                800.0,
+                600.0,
+            );
+            let id = UiId::named("reset-layout");
+            let response = ui.slider(&Slider::new(1.0, (0.0, 1.0)).id(id.clone()).label("Value"));
+            let (render, hits, _) = ui.take();
+            let reset = hits
+                .regions()
+                .iter()
+                .find(|h| h.id == format_slider_id(&id, "reset"))
+                .unwrap();
+            let track = hits
+                .regions()
+                .iter()
+                .find(|h| h.id == format_slider_id(&id, "track"))
+                .unwrap();
+            let icon = render
+                .ink
+                .iter()
+                .flat_map(|b| &b.views)
+                .find(|v| v.kind == ControlKind::ResetIcon)
+                .unwrap();
+            // Sample just inside the half-open hit rectangle's edges.
+            let radius = icon.extent * 1.6 - 0.01;
+            assert!(!track.contains(Point::new(icon.center.x - radius, icon.center.y)));
+            for dx in [-radius, radius] {
+                for dy in [-radius, radius] {
+                    let p = Point::new(icon.center.x + dx, icon.center.y + dy);
+                    assert!(response.response.rect.contains(p));
+                    assert!(reset.contains(p));
+                    assert!(!track.contains(p));
+                }
+            }
+        }
     }
 
     #[test]

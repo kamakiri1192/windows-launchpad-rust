@@ -195,6 +195,9 @@ pub struct TimedAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QaAction {
+    Focus {
+        focused: bool,
+    },
     ToggleSettings,
     /// In-memory renderer fixture; manual darkness with automatic adaptation off.
     GlassDarkness {
@@ -686,6 +689,13 @@ fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), Strin
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QaTarget {
+    SettingsSlider {
+        key: String,
+        progress: f32,
+    },
+    SettingsSliderReset {
+        key: String,
+    },
     Point {
         x: f32,
         y: f32,
@@ -730,6 +740,9 @@ pub struct QaFrameRecord {
     pub index: u64,
     /// Physical [x, y, width, height] of each active settings thumb lens.
     pub settings_toggle_lenses: Vec<[f32; 4]>,
+    pub settings_slider_lenses: Vec<[f32; 4]>,
+    pub settings_slider_drag: Option<String>,
+    pub settings_slider_values: [f32; 9],
     pub bottom_glass_rects: Vec<[f32; 4]>,
     pub elapsed_ms: u64,
     pub file: String,
@@ -782,6 +795,9 @@ pub struct QaFrameRecord {
 }
 
 struct QaFrameState {
+    settings_slider_lenses: Vec<[f32; 4]>,
+    settings_slider_drag: Option<String>,
+    settings_slider_values: [f32; 9],
     settings_toggle_lenses: Vec<[f32; 4]>,
     bottom_glass_rects: Vec<[f32; 4]>,
     editing: bool,
@@ -1068,6 +1084,9 @@ impl QaRunner {
         self.frames.push(QaFrameRecord {
             index: self.frame_index,
             settings_toggle_lenses: state.settings_toggle_lenses,
+            settings_slider_lenses: state.settings_slider_lenses,
+            settings_slider_drag: state.settings_slider_drag,
+            settings_slider_values: state.settings_slider_values,
             bottom_glass_rects: state.bottom_glass_rects,
             elapsed_ms,
             file: file.clone(),
@@ -1570,6 +1589,7 @@ impl App {
 
     fn apply_qa_action(&mut self, action: QaAction) {
         match action {
+            QaAction::Focus { focused } => self.handle_action(AppAction::Focused(focused)),
             QaAction::ToggleSettings => self.handle_action(AppAction::ToggleSettings),
             QaAction::GlassDarkness { value } => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -1815,6 +1835,34 @@ impl App {
 
     fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {
         match target {
+            QaTarget::SettingsSlider { key, progress } => {
+                use crate::ui_model::render_model::{ControlKind, InkLane};
+                let id = format!("settings-row:slider-{key}");
+                let track = self
+                    .render_model
+                    .ink
+                    .iter()
+                    .find(|batch| batch.lane == InkLane::Settings)?
+                    .views
+                    .iter()
+                    .find(|view| view.id.as_str() == id && view.kind == ControlKind::SliderTrack)?;
+                Some(Point::new(
+                    track.center.x + (progress - 0.5) * track.stroke * 2.0,
+                    track.center.y,
+                ))
+            }
+            QaTarget::SettingsSliderReset { key } => {
+                use crate::ui_model::render_model::{ControlKind, InkLane};
+                let id = format!("settings-row:slider-{key}");
+                self.render_model
+                    .ink
+                    .iter()
+                    .find(|batch| batch.lane == InkLane::Settings)?
+                    .views
+                    .iter()
+                    .find(|view| view.id.as_str() == id && view.kind == ControlKind::ResetIcon)
+                    .map(|view| view.center)
+            }
             QaTarget::Point { x, y } => Some(Point::new(*x, *y)),
             QaTarget::SettingsCategory { key } => self
                 .cached_settings_hit_map
@@ -1968,6 +2016,7 @@ impl App {
                 batch.layer == crate::ui_model::render_model::GlassLayer::SettingsOverlay
             })
             .flat_map(|batch| &batch.surfaces)
+            .filter(|surface| surface.id.as_str().starts_with("settings-row:toggle-"))
             .map(|surface| {
                 [
                     surface.rect.x,
@@ -1978,6 +2027,27 @@ impl App {
             })
             .collect();
         self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
+            settings_slider_lenses: self
+                .render_model
+                .glass
+                .iter()
+                .filter(|batch| {
+                    batch.layer == crate::ui_model::render_model::GlassLayer::SettingsOverlay
+                })
+                .flat_map(|batch| &batch.surfaces)
+                .filter(|surface| surface.id.as_str().starts_with("settings-row:slider-"))
+                .map(|surface| {
+                    [
+                        surface.rect.x,
+                        surface.rect.y,
+                        surface.rect.width,
+                        surface.rect.height,
+                    ]
+                })
+                .collect(),
+            settings_slider_drag: self.settings_slider_drag.map(|field| format!("{field:?}")),
+            settings_slider_values: crate::domain::settings::LiquidGlassParamField::ALL
+                .map(|field| field.get(&self.settings.liquid_glass)),
             settings_toggle_lenses,
             bottom_glass_rects,
             editing,
@@ -2050,6 +2120,24 @@ fn sanitize_name(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slider_scenario_covers_release_and_lifecycle_cancellation() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/settings_slider_glass.json")).unwrap();
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::Focus { focused: false })));
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::Escape)));
+        for direction in [-0.3, 1.3] {
+            assert!(scenario.actions.iter().any(|action| matches!(action.action,
+                QaAction::Move { target: QaTarget::SettingsSlider { progress, .. } } if progress == direction)));
+        }
+    }
 
     #[test]
     fn settings_glass_scenario_covers_both_drag_directions_and_darkness() {

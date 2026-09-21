@@ -389,6 +389,8 @@ pub struct App {
     /// When a slider knob is being dragged, the Liquid Glass parameter field
     /// it controls. `None` outside an active drag.
     pub settings_slider_drag: Option<crate::domain::settings::LiquidGlassParamField>,
+    pub(crate) settings_slider_visual_states:
+        HashMap<crate::ui_model::ids::UiId, crate::scroll::Spring>,
     /// Cached HitMap from the previous frame's `build_with_ui` call, used for
     /// hit testing in the current frame's input processing (1-frame delay).
     pub cached_settings_hit_map: Option<crate::layout::hit_map::HitMap>,
@@ -539,6 +541,7 @@ impl App {
             settings_scroll_rows: 0,
             settings_scroll: ContinuousScroller::new(ContinuousConfig::default()),
             settings_slider_drag: None,
+            settings_slider_visual_states: HashMap::new(),
             cached_settings_hit_map: None,
             settings_render_cache: None,
             settings_toggle_visual_states: HashMap::new(),
