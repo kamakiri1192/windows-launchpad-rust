@@ -195,6 +195,11 @@ pub struct TimedAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QaAction {
+    ToggleSettings,
+    /// In-memory renderer fixture; manual darkness with automatic adaptation off.
+    GlassDarkness {
+        value: f32,
+    },
     OpenFolder {
         id: String,
     },
@@ -681,20 +686,51 @@ fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), Strin
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QaTarget {
-    Point { x: f32, y: f32 },
-    GridItem { index: usize },
-    GridItemPoint { index: usize, x: f32, y: f32 },
-    GridItemLabel { index: usize },
-    ContextMenuRow { index: usize },
-    FolderChild { index: usize },
-    FolderChildLabel { index: usize },
+    Point {
+        x: f32,
+        y: f32,
+    },
+    SettingsCategory {
+        key: String,
+    },
+    /// Progress along thumb travel; values outside 0..1 exercise overdrag.
+    SettingsToggle {
+        key: String,
+        progress: f32,
+    },
+    GridItem {
+        index: usize,
+    },
+    GridItemPoint {
+        index: usize,
+        x: f32,
+        y: f32,
+    },
+    GridItemLabel {
+        index: usize,
+    },
+    ContextMenuRow {
+        index: usize,
+    },
+    FolderChild {
+        index: usize,
+    },
+    FolderChildLabel {
+        index: usize,
+    },
     FolderTitle,
-    FolderPanel { x: f32, y: f32 },
+    FolderPanel {
+        x: f32,
+        y: f32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QaFrameRecord {
     pub index: u64,
+    /// Physical [x, y, width, height] of each active settings thumb lens.
+    pub settings_toggle_lenses: Vec<[f32; 4]>,
+    pub bottom_glass_rects: Vec<[f32; 4]>,
     pub elapsed_ms: u64,
     pub file: String,
     pub editing: bool,
@@ -746,6 +782,8 @@ pub struct QaFrameRecord {
 }
 
 struct QaFrameState {
+    settings_toggle_lenses: Vec<[f32; 4]>,
+    bottom_glass_rects: Vec<[f32; 4]>,
     editing: bool,
     context_menu_active: bool,
     context_menu_phase: String,
@@ -1029,6 +1067,8 @@ impl QaRunner {
             .and_then(|scroll| folder_scroll_input_target_x.map(|target| scroll.0 - target));
         self.frames.push(QaFrameRecord {
             index: self.frame_index,
+            settings_toggle_lenses: state.settings_toggle_lenses,
+            bottom_glass_rects: state.bottom_glass_rects,
             elapsed_ms,
             file: file.clone(),
             editing: state.editing,
@@ -1530,6 +1570,13 @@ impl App {
 
     fn apply_qa_action(&mut self, action: QaAction) {
         match action {
+            QaAction::ToggleSettings => self.handle_action(AppAction::ToggleSettings),
+            QaAction::GlassDarkness { value } => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_liquid_glass_auto_darkness_enabled(false);
+                    renderer.set_liquid_glass_darkness(value.clamp(0.0, 1.0));
+                }
+            }
             QaAction::OpenFolder { id } => {
                 self.open_folder(FolderId::from_normalized(id));
             }
@@ -1587,7 +1634,9 @@ impl App {
                 self.handle_action(AppAction::Keyboard(KeyAction::CommitFolderRename));
             }
             QaAction::Escape => {
-                let action = if self.folders.rename.is_some() {
+                let action = if self.settings_panel_active() {
+                    KeyAction::CloseSettings
+                } else if self.folders.rename.is_some() {
                     KeyAction::CancelFolderRename
                 } else if self.editing {
                     KeyAction::ExitEditMode
@@ -1767,6 +1816,38 @@ impl App {
     fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {
         match target {
             QaTarget::Point { x, y } => Some(Point::new(*x, *y)),
+            QaTarget::SettingsCategory { key } => self
+                .cached_settings_hit_map
+                .as_ref()?
+                .regions()
+                .iter()
+                .find(|region| {
+                    region.target == crate::ui_model::hit::HitTarget::settings_category(key)
+                })
+                .map(|region| region.rect.center()),
+            QaTarget::SettingsToggle { key, progress } => {
+                use crate::ui_model::render_model::{ControlKind, InkLane};
+                let id = format!("settings-row:toggle-{key}");
+                let track = self
+                    .render_model
+                    .ink
+                    .iter()
+                    .find(|batch| batch.lane == InkLane::Settings)?
+                    .views
+                    .iter()
+                    .find(|view| {
+                        view.id.as_str() == id
+                            && view.kind == ControlKind::RowBackground
+                            && view.corner_radius > 0.0
+                            && (view.corner_radius - view.extent).abs() < 0.5
+                            && view.stroke > view.extent
+                    })?;
+                let travel = (track.stroke - track.extent).max(1.0);
+                Some(Point::new(
+                    track.center.x + (progress - 0.5) * 2.0 * travel,
+                    track.center.y,
+                ))
+            }
             QaTarget::GridItem { index } => self
                 .visible_launcher_items()
                 .get(*index)
@@ -1864,7 +1945,41 @@ impl App {
             });
         let pager = self.qa_pager_snapshot();
         let text_atlas = self.text.as_ref().map(|text| text.atlas_stats());
+        let bottom_glass_rects = self
+            .render_model
+            .glass
+            .iter()
+            .filter(|batch| batch.layer == crate::ui_model::render_model::GlassLayer::Overlay)
+            .flat_map(|batch| &batch.surfaces)
+            .map(|surface| {
+                [
+                    surface.rect.x,
+                    surface.rect.y,
+                    surface.rect.width,
+                    surface.rect.height,
+                ]
+            })
+            .collect();
+        let settings_toggle_lenses = self
+            .render_model
+            .glass
+            .iter()
+            .filter(|batch| {
+                batch.layer == crate::ui_model::render_model::GlassLayer::SettingsOverlay
+            })
+            .flat_map(|batch| &batch.surfaces)
+            .map(|surface| {
+                [
+                    surface.rect.x,
+                    surface.rect.y,
+                    surface.rect.width,
+                    surface.rect.height,
+                ]
+            })
+            .collect();
         self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
+            settings_toggle_lenses,
+            bottom_glass_rects,
             editing,
             context_menu_active,
             context_menu_phase,
@@ -1935,6 +2050,31 @@ fn sanitize_name(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_glass_scenario_covers_both_drag_directions_and_darkness() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/settings_toggle_glass.json")).unwrap();
+        for expected in [-1.0, 2.0] {
+            assert!(scenario.actions.iter().any(|action| matches!(
+                action.action,
+                QaAction::Move { target: QaTarget::SettingsToggle { progress, .. } } if progress == expected
+            )));
+        }
+        for expected in [0.0, 0.8] {
+            assert!(scenario.actions.iter().any(|action| matches!(
+                action.action, QaAction::GlassDarkness { value } if value == expected
+            )));
+        }
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::ToggleSettings))
+                .count(),
+            2
+        );
+    }
 
     #[test]
     fn scenario_schema_parses_semantic_targets() {

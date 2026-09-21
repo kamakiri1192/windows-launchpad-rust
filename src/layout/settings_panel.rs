@@ -2442,6 +2442,14 @@ mod tests {
             .find(|b| b.layer == GlassLayer::Overlay)
             .map(|b| b.surfaces.len())
             .unwrap_or(0);
+        let toggle_ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .flat_map(|batch| &batch.views)
+            .filter(|view| view.kind == ControlKind::Toggle)
+            .count();
         let ink_count: usize = model.result.render.ink.iter().map(|b| b.views.len()).sum();
         let glyph_count: usize = model
             .result
@@ -2466,18 +2474,22 @@ mod tests {
             avg_us / 1000.0
         );
         eprintln!("  Modal glass shapes: {}", modal_glass);
-        eprintln!("  Overlay glass:      {} (toggle thumbs)", overlay_glass);
+        eprintln!(
+            "  Overlay glass:      {} (pressed toggle thumbs)",
+            overlay_glass
+        );
+        eprintln!("  Plain toggle ink:   {}", toggle_ink);
         eprintln!("  Ink views:          {}", ink_count);
         eprintln!("  Glyph views:        {}", glyph_count);
         eprintln!("  Text views:         {}", text_count);
         eprintln!("  Hit regions:        {}", region_count);
         eprintln!();
 
-        // The Debug category should produce ~11 toggle thumbs (glass overlay
-        // shapes) plus helper shapes. Overlay >= 11 is an indicator.
+        // Resting toggles are plain ink. Glass is created only for the
+        // pointer-held frame by the retained settings visual overlay.
         assert!(
-            overlay_glass >= 11,
-            "expected at least 11 toggle glass thumbs"
+            overlay_glass == 0 && toggle_ink >= 11,
+            "expected resting toggles as plain ink (glass={overlay_glass}, ink={toggle_ink})"
         );
     }
 

@@ -1,0 +1,40 @@
+{
+  "name": "settings-toggle-glass",
+  "viewport": [1280, 800],
+  "fps": 30,
+  "duration_ms": 6900,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "generated_apps": [{ "prefix": "glass-", "name_prefix": "Glass QA ", "count": 12 }]
+  },
+  "actions": [
+    { "at_ms": 0, "type": "glass_darkness", "value": 0.0 },
+    { "at_ms": 400, "type": "glass_darkness", "value": 0.8 },
+    { "at_ms": 800, "type": "move", "target": { "kind": "grid_item", "index": 0 } },
+    { "at_ms": 800, "type": "long_press" },
+    { "at_ms": 900, "type": "pointer_up" },
+    { "at_ms": 1300, "type": "glass_darkness", "value": 0.0 },
+    { "at_ms": 1700, "type": "exit_edit_mode" },
+    { "at_ms": 1800, "type": "toggle_settings" },
+    { "at_ms": 2100, "type": "move", "target": { "kind": "settings_category", "key": "system" } },
+    { "at_ms": 2100, "type": "pointer_down" },
+    { "at_ms": 2134, "type": "pointer_up" },
+    { "at_ms": 2400, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 0.0 } },
+    { "at_ms": 2400, "type": "pointer_down" },
+    { "at_ms": 2800, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 0.5 } },
+    { "at_ms": 2900, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 1.0 } },
+    { "at_ms": 3300, "type": "glass_darkness", "value": 0.8 },
+    { "at_ms": 3800, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 2.0 } },
+    { "at_ms": 4100, "type": "pointer_up" },
+    { "at_ms": 4400, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 1.0 } },
+    { "at_ms": 4400, "type": "pointer_down" },
+    { "at_ms": 4800, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 0.0 } },
+    { "at_ms": 5000, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": -1.0 } },
+    { "at_ms": 5300, "type": "pointer_up" },
+    { "at_ms": 5600, "type": "escape" },
+    { "at_ms": 6000, "type": "toggle_settings" },
+    { "at_ms": 6300, "type": "move", "target": { "kind": "settings_toggle", "key": "show-fps", "progress": 0.0 } },
+    { "at_ms": 6300, "type": "pointer_down" },
+    { "at_ms": 6700, "type": "pointer_up" }
+  ]
+}

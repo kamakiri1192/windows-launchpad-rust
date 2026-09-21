@@ -128,6 +128,10 @@ pub enum GlassLayer {
     /// scene blur can be captured after the Glass Focus Veil and before the
     /// settings surface itself is composited.
     Settings,
+    /// Glass controls that belong to the settings panel. These render after
+    /// the panel surface so interactive lenses stay legible instead of being
+    /// swallowed by the panel's completed-scene glass.
+    SettingsOverlay,
     /// Context menu glass. Isolated from `Modal` so the menu's glass never
     /// smooth-unions with an open folder panel's glass — they stay visually
     /// distinct even when overlapping. Composited above `Modal`.

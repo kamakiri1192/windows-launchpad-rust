@@ -518,6 +518,54 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        // Settings ink (including the switch track) is placed below the
+        // interactive thumb lens. The lens then samples the already-rendered
+        // track, matching the single cooperative glass construction used by
+        // the iOS reference instead of painting the track over the lens.
+        let profile_scope = self
+            .gpu_profiler
+            .begin("settings_underlay_content", &mut encoder);
+        if self.settings_instance_buffer.len() > 0 {
+            if let Some(buf) = self.settings_instance_buffer.as_ref() {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("settings underlay content pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.control_pipeline);
+                pass.set_bind_group(0, &self.control_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..self.settings_instance_buffer.len());
+            }
+        }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // Settings toggle lenses are deliberately composited after the panel
+        // surface and its underlay content. Capture that completed scene now
+        // so each thumb can refract the actual green/white track below it.
+        if self.liquid_glass.has_settings_control_glass() {
+            self.liquid_glass
+                .prepare_settings_control_scene(&mut encoder, frame.texture());
+        }
+
+        let profile_scope = self
+            .gpu_profiler
+            .begin("settings_control_glass", &mut encoder);
+        self.liquid_glass
+            .render_settings_controls(&self.queue, &mut encoder, &view);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
         // Generic fixed modal content, plus settings-specific content, on top
         // of the modal glass.
         let profile_scope = self.gpu_profiler.begin("modal_content", &mut encoder);
@@ -601,14 +649,6 @@ impl Renderer {
                         pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                         pass.set_vertex_buffer(0, buf.slice(..));
                         pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
-                    }
-                }
-                if self.settings_instance_buffer.len() > 0 {
-                    if let Some(buf) = self.settings_instance_buffer.as_ref() {
-                        pass.set_pipeline(&self.control_pipeline);
-                        pass.set_bind_group(0, &self.control_bind_group, &[]);
-                        pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..6, 0..self.settings_instance_buffer.len());
                     }
                 }
                 if self.settings_text_instance_buffer.len() > 0 {

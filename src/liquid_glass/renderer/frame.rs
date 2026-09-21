@@ -701,6 +701,118 @@ impl LiquidGlassRenderer {
         }
     }
 
+    /// Render settings-panel control glass after the panel surface. The
+    /// settings thumb lenses use a completed scene that includes the current
+    /// toggle track, so the green/white underlay remains visible through the
+    /// transparent lens.
+    pub fn render_settings_controls(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) {
+        if !self.params.enabled || self.settings_control_shape_count == 0 {
+            return;
+        }
+
+        let (width, height) = self.texture_size;
+        let control_activation = self
+            .settings_control_shapes
+            .iter()
+            .map(|shape| shape.activation)
+            .fold(0.0f32, f32::max);
+        let mut uniforms = uniforms_from_params(
+            &self.params,
+            self.debug,
+            (width, height),
+            0.0,
+            self.settings_control_shape_count,
+            0.0,
+            control_activation,
+            self.backdrop_mapping,
+        );
+        // A pressed toggle is a transparent lens over the already-composited
+        // track. Do not feed it the panel's completed-scene blur: that turns
+        // the green/white track into a milky white pill and hides the colour
+        // change the lens is meant to reveal.
+        uniforms.blur_radius = 0.0;
+        // Scale the rim to this small lens instead of using page-panel optics.
+        uniforms.thickness = self
+            .settings_control_shapes
+            .iter()
+            .map(|shape| shape.size[1] * 0.12)
+            .fold(f32::INFINITY, f32::min)
+            .clamp(1.0, 6.0);
+        uniforms.max_displacement = uniforms.thickness * 10.0;
+        // Settings Toggle lenses are interactive controls, not part of the
+        // panel's replacement/darkness treatment. Preserve their transparent
+        // backdrop so the captured track and desktop remain visible through it.
+        uniforms.backdrop_replacement = 0.0;
+        uniforms.auto_darkness_enabled = 0;
+        uniforms.glass_darkness = 0.0;
+        queue.write_buffer(
+            &self.settings_control_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        if self.settings_control_geometry_dirty {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("liquid glass settings control geometry pass"),
+                    color_attachments: &[
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &self.settings_control_geometry_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &self.settings_control_tint_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                    ],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.geometry_pipeline);
+                pass.set_bind_group(0, &self.settings_control_geometry_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.settings_control_geometry_dirty = false;
+        }
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("liquid glass settings control final pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.settings_control_final_pipeline);
+        pass.set_bind_group(0, &self.settings_control_final_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
     /// Render the settings/folder modal glass from the shared modal-shape
     /// buffer. Settings uses the completed-scene bind group; folders use their
     /// ordinary backdrop path so they do not sample an unprepared settings
@@ -805,6 +917,10 @@ impl LiquidGlassRenderer {
         }
     }
 
+    pub fn has_settings_control_glass(&self) -> bool {
+        self.params.enabled && self.settings_control_shape_count > 0
+    }
+
     pub fn has_context_menu_glass(&self) -> bool {
         self.params.enabled && self.context_menu_shape_count > 0
     }
@@ -869,6 +985,30 @@ impl LiquidGlassRenderer {
             self.settings_panel_blur_radius
                 .unwrap_or(self.params.blur_radius),
             bounds,
+        );
+    }
+
+    /// Capture the scene immediately below the interactive settings thumbs.
+    /// This checkpoint is deliberately later than the settings underlay pass,
+    /// so the switch track itself participates in the lens backdrop.
+    pub fn prepare_settings_control_scene(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        pre_settings_control_scene: &wgpu::Texture,
+    ) {
+        if !self.has_settings_control_glass() {
+            return;
+        }
+        // The settings/menu completed-scene cache must never be overwritten
+        // by the post-track checkpoint. No blur/flatten pass is needed here.
+        encoder.copy_texture_to_texture(
+            pre_settings_control_scene.as_image_copy(),
+            self.settings_control_scene_texture.as_image_copy(),
+            wgpu::Extent3d {
+                width: self.texture_size.0,
+                height: self.texture_size.1,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
