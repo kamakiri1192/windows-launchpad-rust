@@ -566,14 +566,8 @@ impl App {
                 }
                 self.request_redraw();
             }
-            SettingsPressTarget::LiquidGlassParam(field) => {
-                // Begin a drag. Subsequent pointer moves update the value
-                // via `update_settings_slider_drag`; release commits.
-                self.settings_slider_drag = Some(field);
-                // Also set the value at the press position so a tap without
-                // drag still moves the knob.
-                self.update_settings_slider_drag(self.pointer_phys_x);
-            }
+            // The pointer-down/move/up lifecycle owns numeric sliders.
+            SettingsPressTarget::LiquidGlassParam(_) => {}
             SettingsPressTarget::LiquidGlassParamReset(field) => {
                 let (min, max, default) = field.range();
                 let _ = (min, max);
@@ -1241,7 +1235,7 @@ impl App {
         self.reset_settings_category_hover();
         // Drop any in-flight slider drag and reset the per-category scroll so
         // the next open starts at the top.
-        self.settings_slider_drag = None;
+        self.end_settings_slider_drag();
         self.settings_toggle_drag = None;
         self.reset_settings_scroll();
         debug_log!("settings: closed");

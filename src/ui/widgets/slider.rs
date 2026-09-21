@@ -397,10 +397,10 @@ impl Ui {
         // --- Hit regions ---
         // Track hit region (the full track area)
         let track_hit_rect = Rect::new(
-            track_left - 4.0 * scale,
-            row_cy - track_hh - 4.0 * scale,
-            track_width + 8.0 * scale,
-            track_hh * 2.0 + 8.0 * scale,
+            track_left - knob_r - 4.0 * scale,
+            row_cy - knob_r - 4.0 * scale,
+            track_width + knob_r * 2.0 + 8.0 * scale,
+            knob_r * 2.0 + 8.0 * scale,
         );
         if s.enabled {
             let track_target = s
@@ -603,6 +603,33 @@ mod tests {
         let all: Vec<_> = render.ink.iter().flat_map(|b| &b.views).collect();
         assert!(all.iter().any(|v| v.kind == ControlKind::SliderTrack));
         assert!(all.iter().any(|v| v.kind == ControlKind::SliderKnob));
+    }
+
+    #[test]
+    fn hit_region_contains_entire_knob_at_both_endpoints() {
+        for value in [0.0, 1.0] {
+            let mut ui = new_ui();
+            let id = UiId::named("endpoint-slider");
+            ui.slider(&Slider::new(value, (0.0, 1.0)).id(id.clone()));
+            let (render, hits, _) = ui.take();
+            let knob = render
+                .ink
+                .iter()
+                .flat_map(|batch| &batch.views)
+                .find(|view| view.kind == ControlKind::SliderKnob)
+                .unwrap();
+            let track = hits
+                .regions()
+                .iter()
+                .find(|hit| hit.id == format_slider_id(&id, "track"))
+                .unwrap();
+            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                assert!(track.contains(Point::new(
+                    knob.center.x + dx * knob.extent,
+                    knob.center.y + dy * knob.extent
+                )));
+            }
+        }
     }
 
     #[test]

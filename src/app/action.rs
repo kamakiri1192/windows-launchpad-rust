@@ -760,6 +760,11 @@ impl App {
             PressAction::Settings(target) => {
                 self.pressed_on_settings = Some(target);
                 self.begin_settings_toggle_drag(target);
+                if let SettingsPressTarget::LiquidGlassParam(field) = target {
+                    self.settings_slider_drag = Some(field);
+                    self.update_settings_slider_drag(px);
+                }
+                self.request_redraw();
             }
             PressAction::Control => {
                 self.pressed_on_control = true;
@@ -872,6 +877,11 @@ impl App {
             ReleaseAction::Folder => self.handle_folder_pointer_release(px, py),
             ReleaseAction::ContextMenu => self.handle_context_menu_pointer_release(px, py),
             ReleaseAction::Settings { pressed, released } => {
+                // Slider values belong to the held-pointer lifecycle. Starting
+                // a drag in the click path would latch it after mouse-up.
+                if matches!(pressed, SettingsPressTarget::LiquidGlassParam(_)) {
+                    return;
+                }
                 if let Some(drag) = settings_toggle_drag.filter(|drag| drag.dragging) {
                     self.finish_settings_toggle_drag(drag);
                     return;
@@ -1062,6 +1072,9 @@ impl App {
             return;
         }
         if !focused {
+            self.end_settings_slider_drag();
+            self.pressed_on_settings = None;
+            self.settings_toggle_drag = None;
             // Focus loss is a lifecycle boundary even when an edit/settings
             // exception keeps the window visible. Deliver a single Cancelled
             // to the sticky pager owner, then clear every continuation before

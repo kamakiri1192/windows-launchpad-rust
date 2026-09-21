@@ -167,6 +167,21 @@ impl SettingsRenderCache {
         views
     }
 
+    fn materialize_slider_knobs(&self, scroll_position: f32) -> Vec<InkView> {
+        let delta = self.scroll_delta(scroll_position) * self.visual_scale;
+        self.ink
+            .iter()
+            .filter(|view| view.kind == ControlKind::SliderKnob)
+            .cloned()
+            .map(|mut view| {
+                if view.clip.is_some() {
+                    view.center.y += delta;
+                }
+                view
+            })
+            .collect()
+    }
+
     fn materialize_overlay(&self, target_scroll_position: f32) -> Vec<GlassSurface> {
         let delta = self.scroll_delta(target_scroll_position);
         let mut surfaces = self.overlay.clone();
@@ -204,6 +219,7 @@ impl SettingsRenderCache {
 impl App {
     pub(crate) fn render_settings_panel(&mut self) {
         if !self.settings_panel_active() {
+            self.settings_slider_visual_states.clear();
             self.settings_render_cache = None;
             self.cached_settings_hit_map = None;
             self.render_model
@@ -415,7 +431,31 @@ impl App {
                 )
             })
             .unwrap_or(false);
-        if toggles_animating {
+        // Restore only slider knobs from retained geometry each frame, so
+        // press/settle scaling cannot accumulate or disappear after release.
+        let slider_knobs = self
+            .settings_render_cache
+            .as_ref()
+            .map(|cache| cache.materialize_slider_knobs(scroll_position))
+            .unwrap_or_default();
+        let sliders_animating = self
+            .render_model
+            .ink
+            .iter_mut()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .map(|batch| {
+                apply_settings_slider_visuals(
+                    &mut self.settings_slider_visual_states,
+                    &mut settings_overlay,
+                    &mut batch.views,
+                    slider_knobs,
+                    self.settings_slider_drag
+                        .filter(|_| input.liquid_glass.enabled),
+                    self.last_frame_dt_ms,
+                )
+            })
+            .unwrap_or(false);
+        if toggles_animating || sliders_animating {
             self.request_redraw();
         }
         // Count existing overlay glass (from bottom control etc.). Settings
@@ -588,6 +628,62 @@ impl App {
             [crate::spring_anim::Channel::rest(0.0); SettingsCategory::COUNT];
         self.settings_category_hover_elapsed = [0.0; SettingsCategory::COUNT];
     }
+}
+
+fn apply_settings_slider_visuals(
+    states: &mut std::collections::HashMap<UiId, crate::scroll::Spring>,
+    surfaces: &mut Vec<GlassSurface>,
+    ink: &mut Vec<InkView>,
+    knobs: Vec<InkView>,
+    active: Option<LiquidGlassParamField>,
+    dt_ms: f32,
+) -> bool {
+    ink.retain(|view| view.kind != ControlKind::SliderKnob);
+    states.retain(|id, _| knobs.iter().any(|knob| knob.id == *id));
+    let motion = crate::ui::Theme::default().toggle_motion;
+    let config = crate::scroll::PhysicsConfig {
+        spring_omega: motion.thumb_spring_omega,
+        spring_zeta: motion.thumb_spring_zeta,
+        ..Default::default()
+    };
+    let mut animating = false;
+    for mut knob in knobs {
+        let Some(key) = knob.id.as_str().strip_prefix("settings-row:slider-") else {
+            ink.push(knob);
+            continue;
+        };
+        let pressed = active == Some(param_field_from_key(key));
+        let spring = states
+            .entry(knob.id.clone())
+            .or_insert_with(|| crate::scroll::Spring::at(0.0));
+        spring.glide_to(f32::from(pressed));
+        animating |= spring.step((dt_ms / 1000.0).clamp(0.0, 0.05), &config);
+        let radius = knob.extent * (1.0 + 0.40 * poyo_press_amount(spring.value, spring.velocity));
+        if pressed {
+            surfaces.push(GlassSurface {
+                id: knob.id,
+                rect: Rect::new(
+                    knob.center.x - radius,
+                    knob.center.y - radius,
+                    radius * 2.0,
+                    radius * 2.0,
+                ),
+                radius,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: knob.z,
+                clip: knob.clip,
+                activation: spring.value.max(0.01),
+                blur_radius: Some(0.0),
+                backdrop_replacement: 0.0,
+                tint: None,
+            });
+        } else {
+            knob.extent = radius;
+            ink.push(knob);
+        }
+    }
+    animating
 }
 
 fn settings_toggle_id(target: Option<SettingsPressTarget>) -> Option<UiId> {
@@ -1339,6 +1435,70 @@ fn push_text_right(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn slider_is_solid_at_rest_glass_only_while_held_and_settles_without_drift() {
+        use super::*;
+        let knob = InkView {
+            id: UiId::settings_row("slider-auto-darkness-max"),
+            center: Point::new(200.0, 100.0),
+            extent: 7.5,
+            opacity: 0.92,
+            scene_blur: 0.0,
+            stroke: 0.0,
+            corner_radius: 0.0,
+            color: Color::rgba(1.0, 1.0, 1.0, 0.92),
+            kind: ControlKind::SliderKnob,
+            z: 101,
+            clip: None,
+        };
+        let mut states = std::collections::HashMap::new();
+        let mut ink = Vec::new();
+        let mut glass = Vec::new();
+        apply_settings_slider_visuals(
+            &mut states,
+            &mut glass,
+            &mut ink,
+            vec![knob.clone()],
+            None,
+            16.0,
+        );
+        assert!(glass.is_empty());
+        assert_eq!(ink[0], knob);
+        for _ in 0..60 {
+            glass.clear();
+            apply_settings_slider_visuals(
+                &mut states,
+                &mut glass,
+                &mut ink,
+                vec![knob.clone()],
+                Some(LiquidGlassParamField::AutoDarknessMax),
+                16.0,
+            );
+            assert!(ink.is_empty());
+            assert_eq!(glass.len(), 1);
+            assert_eq!(glass[0].rect.center(), knob.center);
+            assert!(glass[0].radius <= knob.extent * 1.5);
+            assert_eq!(glass[0].blur_radius, Some(0.0));
+            assert_eq!(glass[0].tint, None);
+        }
+        assert!(glass[0].radius > knob.extent * 1.3);
+        for _ in 0..120 {
+            glass.clear();
+            apply_settings_slider_visuals(
+                &mut states,
+                &mut glass,
+                &mut ink,
+                vec![knob.clone()],
+                None,
+                16.0,
+            );
+            assert!(glass.is_empty());
+            assert_eq!(ink.len(), 1);
+        }
+        assert!((ink[0].extent - knob.extent).abs() < 0.01);
+        assert_eq!(ink[0].center, knob.center);
+    }
+
     use super::*;
     use crate::app::state::SettingsPressTarget;
     use crate::domain::settings::{LiquidGlassDebugFlag, LiquidGlassParamField};

@@ -132,6 +132,9 @@ impl App {
             self.exit_edit_mode();
         }
         // Close the settings overlay so a re-summon starts clean.
+        self.end_settings_slider_drag();
+        self.pressed_on_settings = None;
+        self.settings_toggle_drag = None;
         self.settings_open = false;
         self.settings_panel_progress = 0.0;
         self.reset_settings_category_hover();

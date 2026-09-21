@@ -134,6 +134,28 @@ python scripts/verify_settings_toggle_glass.py target/qa-sequences/settings-togg
 これにより歯車も通常どおり描画され、設定を開いても実ウィンドウの表示や
 デスクトップ取り込みの再開は行いません。
 
+## 設定スライダーの回帰QA
+
+`qa/settings_slider_glass.json` は数値スライダーの押下開始・保持中の更新・解放確定、
+短いクリック、左右の範囲外ドラッグ、フォーカス喪失、Escapeで閉じる操作、再表示、
+リセットをproductionの入力処理で再生します。解放後にポインターだけを動かし、
+値が追従しないことも確認します。スライダーつまみは通常は単色、保持中だけ
+SettingsOverlayの透明レンズになり、解放時は単色に戻りながら元の大きさへ収束します。
+
+```powershell
+$env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\settings_slider_glass.json).Path
+.\target\release\launchpad-windows.exe
+python scripts/verify_settings_slider_glass.py target/qa-sequences/settings-slider-glass-<timestamp>
+```
+
+検証スクリプトにはPillowが必要です。manifestには `settings_slider_drag`、
+`settings_slider_lenses`（物理座標の矩形）、`settings_slider_values` を記録します。
+値の順序は `LiquidGlassParamField::ALL`（thickness, refractive index, saturation,
+auto darkness max, glass darkness, context menu darkness, settings panel darkness,
+chromatic aberration, blur radius）です。値と操作状態に加え、保持中の透明性、
+解放後の単色への復帰、膨らみの上限、周囲のパネルへの影響を画素で検証します。
+併せて `settings_toggle_glass.json` のチェックを実行し、toggle / bottomの回帰を確認します。
+
 ## コンテキストメニューの開閉QA
 
 `qa/context_menu_open.json`は、fixtureのアプリへproduction input router経由で右クリックし、
