@@ -874,37 +874,48 @@ impl Renderer {
         // control-text pipeline (screen-fixed, no page-frame clip). It runs in
         // its own command buffer after the scene submit so it can `Load` the
         // presented image without disturbing the profiler's second submit.
-        if self.overlay_text_instance_buffer.len() > 0 {
-            if let Some(buf) = self.overlay_text_instance_buffer.as_ref() {
-                let mut overlay_encoder =
-                    self.device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("overlay encoder"),
-                        });
-                {
-                    let mut pass = overlay_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("debug overlay pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
+        if self.overlay_background_instance_buffer.len() > 0
+            || self.overlay_text_instance_buffer.len() > 0
+        {
+            let mut overlay_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("overlay encoder"),
                     });
+            {
+                let mut pass = overlay_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("debug overlay pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                // Paint a single procedural rounded rectangle per line
+                // before the glyphs. This keeps contrast stable without
+                // adding atlas samples or shadow copies per character.
+                if let Some(buf) = self.overlay_background_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.overlay_background_instance_buffer.len());
+                }
+                if let Some(buf) = self.overlay_text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_text_pipeline);
                     pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.overlay_text_instance_buffer.len());
                 }
-                self.queue.submit(std::iter::once(overlay_encoder.finish()));
             }
+            self.queue.submit(std::iter::once(overlay_encoder.finish()));
         }
 
         // Optional QA self-capture: copy the surface texture to a host-readable
