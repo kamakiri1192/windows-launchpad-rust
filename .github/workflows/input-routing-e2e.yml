@@ -2,6 +2,7 @@ name: Native input routing E2E
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 permissions:
@@ -19,6 +20,16 @@ env:
 jobs:
   windows:
     name: Windows native input routing
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.action == 'labeled' &&
+        github.event.label.name == 'ci:native-e2e'
+      ) ||
+      (
+        github.event.action != 'labeled' &&
+        contains(github.event.pull_request.labels.*.name, 'ci:native-e2e')
+      )
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -58,6 +69,16 @@ jobs:
 
   macos:
     name: macOS native input routing
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.action == 'labeled' &&
+        github.event.label.name == 'ci:native-e2e'
+      ) ||
+      (
+        github.event.action != 'labeled' &&
+        contains(github.event.pull_request.labels.*.name, 'ci:native-e2e')
+      )
     runs-on: macos-14
     timeout-minutes: 30
 
