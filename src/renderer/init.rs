@@ -739,6 +739,10 @@ impl Renderer {
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
+            debug_overlay_backgrounds: Vec::new(),
+            overlay_background_instance_buffer: InstanceBuffer::new(
+                "overlay background instance buffer",
+            ),
             overlay_text_instance_buffer: InstanceBuffer::new("overlay text instance buffer"),
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),

@@ -47,6 +47,7 @@ use wgpu::{
 
 use crate::layout::grid::GridLayout;
 use crate::liquid_glass::LiquidGlassRenderer;
+use crate::renderer::controls::{ControlInstance, KIND_ROUND_RECT};
 use crate::renderer::text_engine::GlyphQuad;
 
 use counters::BufferCounters;
@@ -178,6 +179,8 @@ pub struct Renderer {
     /// Debug HUD glyphs (e.g. "FPS: 60"), drawn in the final overlay pass
     /// on top of all modal content. Populated by the app layer from
     /// [`Self::last_fps`]; reuses the control-text pipeline + atlas.
+    debug_overlay_backgrounds: Vec<DebugOverlayBackground>,
+    overlay_background_instance_buffer: InstanceBuffer<ControlInstance>,
     overlay_text_instance_buffer: InstanceBuffer<GlyphQuad>,
     /// Settings overlay ink (close ×) + title text instances, drawn in a final
     /// overlay pass on top of the panel glass. They reuse the control pipelines.
@@ -204,6 +207,63 @@ pub struct Renderer {
 pub(crate) enum CompletedSceneLane {
     Settings,
     ContextMenu,
+}
+
+/// A compact dark backing plate for one line of the debug HUD.
+///
+/// The backing plate is deliberately a procedural rounded rectangle rather
+/// than a text shadow. It adds one small control instance per visible line,
+/// keeps the glyph shader at one atlas sample, and avoids multiplying the
+/// number of glyph fragments for a diagnostic that is often used while
+/// measuring frame pacing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DebugOverlayBackground {
+    pub(crate) center: [f32; 2],
+    pub(crate) half_size: [f32; 2],
+    pub(crate) radius: f32,
+    pub(crate) color: [f32; 4],
+    pub(crate) opacity: f32,
+}
+
+impl Renderer {
+    /// Upload the procedural backing plates for the final debug HUD pass.
+    pub(crate) fn set_debug_overlay_backgrounds(&mut self, backgrounds: &[DebugOverlayBackground]) {
+        // The FPS number changes every frame, but its measured width usually
+        // does not. Avoid rewriting the tiny GPU buffer unless line geometry
+        // actually changes (DPI, enabled lines, or a digit-width transition).
+        if self.debug_overlay_backgrounds.as_slice() == backgrounds {
+            return;
+        }
+        self.debug_overlay_backgrounds.clear();
+        self.debug_overlay_backgrounds
+            .extend_from_slice(backgrounds);
+
+        let instances: Vec<_> = backgrounds
+            .iter()
+            .map(|background| ControlInstance {
+                center: background.center,
+                params: [
+                    background.half_size[1],
+                    background.opacity,
+                    background.half_size[0],
+                    background.radius,
+                ],
+                color: background.color,
+                kind: [KIND_ROUND_RECT, 0.0, 0.0, 0.0],
+                clip_rect: [0.0; 4],
+                clip_radius: [0.0; 4],
+            })
+            .collect();
+        let outcome =
+            self.overlay_background_instance_buffer
+                .set(&self.device, &self.queue, &instances);
+        if outcome.allocated {
+            self.counters.record_growth(counters::Category::Control);
+        }
+        if outcome.wrote {
+            self.counters.record_write(counters::Category::Control);
+        }
+    }
 }
 
 pub struct DrawArgs {
