@@ -49,7 +49,7 @@ def verify(root):
     # Long hold reaches a bounded puff, and the thumb remains visible after
     # release. Sampling at the same knob center distinguishes clear vs solid.
     x, y, w, h = frame(1500)["settings_slider_lenses"][0]
-    require(26 < w < 36 and abs(w - h) < .01, "unbounded or missing puff")
+    require(26 < h < 36 and 1.2 < w / h < 1.3, "unbounded or missing horizontal puff")
     center = (round(x + w / 2), round(y + h / 2 - 6))
     held, released = image(1500).getpixel(center), image(1950).getpixel(center)
     require(sum(released) > sum(held) + 12,

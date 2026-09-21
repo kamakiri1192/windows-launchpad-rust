@@ -658,14 +658,16 @@ fn apply_settings_slider_visuals(
             .or_insert_with(|| crate::scroll::Spring::at(0.0));
         spring.glide_to(f32::from(pressed));
         animating |= spring.step((dt_ms / 1000.0).clamp(0.0, 0.05), &config);
-        let radius = knob.extent * (1.0 + 0.40 * poyo_press_amount(spring.value, spring.velocity));
+        let puff = poyo_press_amount(spring.value, spring.velocity);
+        let radius = knob.extent * (1.0 + 0.40 * puff);
+        let half_width = knob.extent * (1.0 + 0.75 * puff);
         if pressed {
             surfaces.push(GlassSurface {
                 id: knob.id,
                 rect: Rect::new(
-                    knob.center.x - radius,
+                    knob.center.x - half_width,
                     knob.center.y - radius,
-                    radius * 2.0,
+                    half_width * 2.0,
                     radius * 2.0,
                 ),
                 radius,
@@ -1482,6 +1484,7 @@ mod tests {
             assert_eq!(glass[0].tint, None);
         }
         assert!(glass[0].radius > knob.extent * 1.3);
+        assert!((glass[0].rect.width / glass[0].rect.height - 1.25).abs() < 0.01);
         for _ in 0..120 {
             glass.clear();
             apply_settings_slider_visuals(
