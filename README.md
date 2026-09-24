@@ -1,4 +1,7 @@
-# launchpad-windows
+# Liquid Start (launchpad-windows)
+
+Develop by Kamakura Software
+
 
 macOS Launchpad 風の操作感と Liquid Glass 表現を、Rust / winit / wgpu で実装する
 GPU アクセラレーション対応のネイティブアプリランチャーです。Windows を主対象に
