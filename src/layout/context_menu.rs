@@ -39,12 +39,12 @@ pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 200.0;
 /// This is the *superset* row count (the Steam-app menu); a non-Steam app
 /// menu omits the Steam row; a folder menu omits four app-only rows and adds
 /// one folder-specific action.
-pub const CONTEXT_MENU_ITEM_COUNT: usize = 8;
+pub const CONTEXT_MENU_ITEM_COUNT: usize = 6;
 /// Number of rows omitted when the menu targets a folder. A folder cannot be
 /// hidden (no hide-app row), has no file to reveal (no reveal row), has no app
 /// metadata for a ChatGPT lookup (no chatgpt-help row), and is never a Steam
-/// app (no open-in-Steam row), so four rows are omitted from the app menu. A
-/// folder menu adds its own delete action after the shared rows.
+/// app (no open-in-Steam row), so four rows are omitted from the Steam-app menu.
+/// A folder menu adds its own delete action after the shared rows.
 pub const FOLDER_OMITTED_ITEM_COUNT: usize = 4;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
@@ -71,8 +71,7 @@ pub const CONTEXT_MENU_HOVER_RGB: [f32; 3] = MENU_LABEL_RGB;
 /// iOS-style destructive action color (`systemRed`, approximately `#FF3B30`).
 pub const MENU_DESTRUCTIVE_RGB: [f32; 3] = [1.0, 0.231, 0.188];
 
-/// One of the context-menu actions. Selecting an action runs it and closes the
-/// menu; the mock rows (icon size / app info) still close only.
+/// One of the context-menu actions. Selecting an action closes the menu.
 ///
 /// Defined here (in the pure layout layer) rather than in the feature module
 /// so the renderer-neutral geometry does not depend on the binary-only
@@ -101,9 +100,10 @@ pub enum ContextMenuItem {
 
 impl ContextMenuItem {
     /// All items in display order. This is the *superset* shown when the menu
-    /// targets a Steam app: it includes the "Steamで開く" row. A non-Steam app
-    /// omits that row (see [`APP_ITEMS`]); a folder omits four app-only rows
-    /// and adds a folder-specific row (see [`FOLDER_ITEMS`]).
+    /// targets a Steam app: it includes the "Steamで開く" row. Icon-size actions
+    /// remain hidden until implemented. A non-Steam app omits that row (see
+    /// [`APP_ITEMS`]); a folder omits four app-only rows and adds a
+    /// folder-specific row (see [`FOLDER_ITEMS`]).
     ///
     /// [`APP_ITEMS`]: ContextMenuItem::APP_ITEMS
     /// [`FOLDER_ITEMS`]: ContextMenuItem::FOLDER_ITEMS
@@ -113,8 +113,6 @@ impl ContextMenuItem {
         Self::RevealInFinder,
         Self::ChatGptHelp,
         Self::OpenInSteam,
-        Self::IconLarger,
-        Self::IconSmaller,
         Self::AppInfo,
     ];
 
@@ -131,8 +129,6 @@ impl ContextMenuItem {
         Self::HideApp,
         Self::RevealInFinder,
         Self::ChatGptHelp,
-        Self::IconLarger,
-        Self::IconSmaller,
         Self::AppInfo,
     ];
 
@@ -150,13 +146,8 @@ impl ContextMenuItem {
     /// omitted. The app-info row remains visible for folders for menu-shape
     /// compatibility, but resolves to a no-op because folders have no app file.
     /// The destructive folder action appears second, directly after edit-home.
-    pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
-        Self::EditHome,
-        Self::DeleteFolder,
-        Self::IconLarger,
-        Self::IconSmaller,
-        Self::AppInfo,
-    ];
+    pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] =
+        [Self::EditHome, Self::DeleteFolder, Self::AppInfo];
 
     /// Japanese display label for the item.
     pub const fn label(self) -> &'static str {
@@ -218,9 +209,7 @@ pub fn menu_rows(is_folder_target: bool, is_steam: bool) -> Vec<ContextMenuItem>
             items.push(ContextMenuItem::OpenInSteam);
         }
     }
-    // Icon-size and app-info are always available.
-    items.push(ContextMenuItem::IconLarger);
-    items.push(ContextMenuItem::IconSmaller);
+    // Icon-size actions remain hidden until they are implemented (issue #168).
     items.push(ContextMenuItem::AppInfo);
     items
 }
@@ -607,16 +596,21 @@ mod tests {
         assert!(!items.contains(&ContextMenuItem::ChatGptHelp));
         assert!(!items.contains(&ContextMenuItem::OpenInSteam));
 
-        // A non-Steam app keeps the seven non-Steam rows (no Steam row), in the
+        // A non-Steam app keeps the five non-Steam rows (no Steam row), in the
         // same order as `APP_ITEMS`.
         let app_items = menu_rows(false, false);
         assert_eq!(app_items, ContextMenuItem::APP_ITEMS);
         assert!(!app_items.contains(&ContextMenuItem::OpenInSteam));
 
-        // A Steam app shows the full eight-row superset, in `ALL` order.
+        // A Steam app shows the full six-row superset, in `ALL` order.
         let steam_items = menu_rows(false, true);
         assert_eq!(steam_items, ContextMenuItem::ALL);
         assert!(steam_items.contains(&ContextMenuItem::OpenInSteam));
+
+        for rows in [&items, &app_items, &steam_items] {
+            assert!(!rows.contains(&ContextMenuItem::IconLarger));
+            assert!(!rows.contains(&ContextMenuItem::IconSmaller));
+        }
 
         // The built rows carry no label storage; labels derive on demand.
         assert_eq!(items[0].label(), ContextMenuItem::EditHome.label());
@@ -755,7 +749,7 @@ mod tests {
             content_opacity: 1.0,
             content_blur: 0.0,
             activation: 0.0,
-            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            focus_amounts: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
             items: &ContextMenuItem::ALL,
         };
 
@@ -827,8 +821,6 @@ mod tests {
                 ControlKind::FolderIcon,
                 ControlKind::ChatGptLogo,
                 ControlKind::SteamLogo,
-                ControlKind::Plus,
-                ControlKind::Minus,
                 ControlKind::Info,
             ]
         );
