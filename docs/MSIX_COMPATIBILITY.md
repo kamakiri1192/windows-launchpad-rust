@@ -1,43 +1,31 @@
-# MSIX compatibility notes
+# MSIX版の互換性確認
 
-Liquid Start remains an ordinary Win32 executable. MSIX only adds a
-Windows.Desktop package manifest and Store distribution path; no runtime code,
-internal identifiers, Steam behavior, or GitHub ZIP format was changed for
-packaging.
+Liquid Startは、従来どおりWin32アプリとして動作します。MSIX版では、実行ファイルにWindowsデスクトップ向けのマニフェストを付け、Microsoft Storeから配布します。パッケージ化に伴う実行時コードやアプリ内部の識別子、Steam版の起動方法、GitHub ZIP版の構成は変更していません。
 
-## Current implementation and checks
+## 機能ごとの確認項目
 
-| Feature | Existing implementation | MSIX consideration and manual check |
+| 機能 | 現在の実装 | MSIX版で確認すること |
 | --- | --- | --- |
-| Global Win+Space shortcut | Registers WH_KEYBOARD_LL with SetWindowsHookExW from the full-trust process. | The manifest grants full trust, not a special global-hook capability. Confirm hook registration, shortcut capture, suppression behavior, and cleanup on Windows 10/11 with the Store package installed. |
-| Notification-area icon | Uses Shell_NotifyIconW on its own message-pump thread. | Confirm the icon appears, its menu works, and quitting/relaunching restores it. Also check behavior after Explorer restarts. |
-| Liquid Glass capture | Uses Windows Graphics Capture and Direct3D interop. | Confirm GraphicsCaptureSession::IsSupported, capture permission/system UX, frame updates, and cleanup in a packaged launch on each supported OS/device. |
-| Installed apps and Start Menu | Enumerates shell:AppsFolder and per-user/all-users Start Menu shortcut folders. | Confirm enumeration and launching for unpackaged Win32, packaged, and Store apps. The package itself may also appear in the AppsFolder scan. |
-| Steam apps | Reads Steam registry locations and library manifests on disk. | Confirm registry discovery and access to each Steam library, especially libraries on another drive or protected location. |
-| SQLite persistence | Opens %LOCALAPPDATA%\Launchpad\cache.sqlite3; the fallback without LOCALAPPDATA is beside the executable. | Full-trust MSIX documentation describes AppData access as pass-through, while other packaged-desktop documentation describes per-package handling for some virtualized-app scenarios and OS versions. Do not assume the result: test existing-file reads/writes, first creation, package upgrades, uninstall, and interoperation with the GitHub/Steam executable on the minimum supported Windows version. No data migration or path change is included. |
-| Single instance | Uses the stable Local\LaunchpadWindowsSingleInstance mutex. | The identity and executable name remain the same; test simultaneous packaged and unpackaged launches and retain the existing single-instance behavior. |
+| `Win + Space` のグローバルショートカット | フル信頼（通常のデスクトップアプリと同じ権限）で動作し、`SetWindowsHookExW` で `WH_KEYBOARD_LL` を登録します。 | Store版をインストールした状態で、フックの登録、キー入力の検出と抑止、終了時の解除をWindows 10/11で確認します。 |
+| 通知領域のアイコン | 専用のメッセージ処理スレッドから `Shell_NotifyIconW` を呼び出します。 | アイコンとメニューの表示、アプリ終了後の再起動、エクスプローラー再起動後の復帰を確認します。 |
+| Liquid Glassの画面取り込み | Windows Graphics CaptureとDirect3Dを連携させて画面を取り込みます。 | キャプチャに対応しているか、必要な許可画面が表示されるか、映像が更新されるか、終了時にリソースを解放するかを確認します。 |
+| インストール済みアプリとスタートメニュー | `shell:AppsFolder` と、ユーザー別・全ユーザー共通のスタートメニュー用フォルダーを調べます。 | 通常のWin32アプリ、パッケージアプリ、Storeアプリが一覧に表示され、起動できることを確認します。Liquid Start自身が一覧に現れる場合も確認します。 |
+| Steamアプリ | レジストリとディスク上のSteamライブラリ情報を調べます。 | レジストリからの検出と、各ライブラリへのアクセスを確認します。別ドライブやアクセス制限のある場所にあるライブラリも対象です。 |
+| SQLiteの保存データ | `%LOCALAPPDATA%\Launchpad\cache.sqlite3` を使います。`LOCALAPPDATA` が使えない場合は実行ファイルと同じフォルダーを使います。 | 既存データの読み書き、新規作成、パッケージ更新後の保持、アンインストール後の扱いを確認します。Store版・GitHub ZIP版・Steam版の間でキャッシュを共有できるかも確認します。 |
+| 多重起動の防止 | `Local\LaunchpadWindowsSingleInstance` という名前付きミューテックスを使います。 | MSIX版と通常の実行ファイルを同時に起動しても、既存の多重起動防止が働くことを確認します。 |
 
-The app uses %LOCALAPPDATA% rather than package-local storage, which is
-important for compatibility with the current Win32 builds. The [current MSIX virtualization overview](https://learn.microsoft.com/en-us/windows/msix/msix-containerization-overview) describes full-trust AppData writes as pass-through. The [packaged desktop behavior reference](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes) also documents per-package handling for virtualized-app scenarios. Treat this as a runtime compatibility check on supported Windows versions rather than relying on one behavior.
-The app keeps ordinary desktop access, but packaged process behavior and Windows-version differences should be verified before relying on cross-channel cache sharing. The MSIX package is not considered validated for release until
-the database compatibility checks above pass.
+## 保存データの扱い
 
-## User data compatibility
+マニフェストでは `Windows.FullTrustApplication` を指定しています。Microsoftの説明では、フル信頼アプリがユーザープロファイル内の `AppData` に書き込む場合、通常の保存先をそのまま使います。一方、パッケージごとの保存先への振り分けは、仮想化されたアプリについて説明されています。Liquid Startはフル信頼で動作するため、既存の `%LOCALAPPDATA%\Launchpad\cache.sqlite3` を引き続き使う想定です。
 
-The cache path remains %LOCALAPPDATA%\Launchpad\cache.sqlite3, and
-diagnostic logs remain under %LOCALAPPDATA%\Launchpad. The crate name,
-LAUNCHPAD_* variables, mutex, database compatibility IDs, QA identifiers,
-and Rust module names are not changed by this packaging work.
+詳しくは、[MSIXのコンテナー化の仕組み](https://learn.microsoft.com/en-us/windows/msix/msix-containerization-overview)と[パッケージ化されたデスクトップアプリの動作](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes)を参照してください。対応するWindowsの各バージョンで既存データを読み書きし、Store版・GitHub ZIP版・Steam版の間で共有できることを確認します。この確認が終わるまでは、MSIX版のリリース検証は完了としません。
 
-Do not delete or migrate the cache as part of packaging. Test with a copy of a
-real pre-existing cache first. The Store MSIX, GitHub ZIP, and Steam build use
-the same Rust executable and code; whether Windows routes a particular AppData
-operation to a package-specific location must be confirmed on the actual
-target OS versions.
+診断ログも `%LOCALAPPDATA%\Launchpad` に保存します。Cargoのcrate名、`LAUNCHPAD_*` 環境変数、ミューテックス名、データベース互換性ID、QA用の識別子、Rustのモジュール名は変更していません。
 
-## Store package limits
+既存のキャッシュは削除も移行もしません。実際のユーザーデータで試す前に、既存キャッシュのコピーを使って読み書きや更新後の動作を確認してください。
 
-Only the MSIX manifest requests package identity and runFullTrust. The
-executable is still built for x86_64-pc-windows-msvc and does not require a
-packaged process or WindowsApps install path when used from Steam or a GitHub
-ZIP. See ../packaging/windows/README.md for building and signing.
+## パッケージ化による変更範囲
+
+アプリのパッケージ識別情報と `runFullTrust` の宣言はMSIXマニフェストに追加します。実行ファイルは引き続き `x86_64-pc-windows-msvc` 向けです。Steam版やGitHub ZIP版は通常のWin32アプリとして起動するため、MSIXのプロセス環境や `WindowsApps` 内の配置には依存しません。
+
+MSIXのビルドと署名の手順は[Windows向けパッケージングの説明](../packaging/windows/README.md)を参照してください。
