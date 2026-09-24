@@ -428,7 +428,8 @@ impl App {
         // Measure the longest label once at open time so the open-animation
         // target and the per-frame layout agree on the same panel width. The
         // measured set is the rows this target will display: a folder menu
-        // omits four rows, a non-Steam app omits the Steam row. This is built
+        // omits four app-only rows and adds delete, while a non-Steam app omits
+        // the Steam row. This is built
         // here only to size the panel; `ContextMenuState::open` rebuilds and
         // caches the same list (same target → same flags), which the render and
         // release paths then read.
@@ -1052,9 +1053,7 @@ mod tests {
     fn folder_menu_rows_omit_hide_app_reveal_chatgpt_and_steam_rows() {
         let items = context_menu::menu_rows(true, false);
         assert_eq!(items, context_menu::ContextMenuItem::FOLDER_ITEMS);
-        // A folder has no hide action, no file to reveal, no app metadata for a
-        // ChatGPT lookup, and is never a Steam app, so the folder menu omits all
-        // Four app-only rows are omitted and the folder delete row is added.
+        // A folder omits four app-only rows and adds the delete row.
         assert_eq!(
             items.len(),
             context_menu::ContextMenuItem::FOLDER_ITEM_COUNT
@@ -1066,14 +1065,14 @@ mod tests {
     }
 
     #[test]
-    fn non_steam_app_menu_rows_show_seven_items_without_the_steam_row() {
+    fn non_steam_app_menu_rows_show_five_items_without_the_steam_row() {
         let items = context_menu::menu_rows(false, false);
         assert_eq!(items, context_menu::ContextMenuItem::APP_ITEMS);
         assert!(!items.contains(&context_menu::ContextMenuItem::OpenInSteam));
     }
 
     #[test]
-    fn steam_app_menu_rows_show_all_eight_items() {
+    fn steam_app_menu_rows_show_all_six_items() {
         let items = context_menu::menu_rows(false, true);
         assert_eq!(items, context_menu::ContextMenuItem::ALL);
         assert!(items.contains(&context_menu::ContextMenuItem::OpenInSteam));
@@ -1160,7 +1159,7 @@ mod tests {
         assert_eq!(
             resolve_context_menu_selection(
                 &context_menu::ContextMenuItem::APP_ITEMS,
-                Some(6),
+                Some(4),
                 Some(&target)
             ),
             ContextMenuSelection::AppInfo(AppId::from_normalized("calc"))
@@ -1172,7 +1171,7 @@ mod tests {
         assert_eq!(
             resolve_context_menu_selection(
                 &context_menu::ContextMenuItem::APP_ITEMS,
-                Some(6),
+                Some(4),
                 None
             ),
             ContextMenuSelection::CloseOnly
@@ -1180,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn outside_release_and_mock_rows_are_close_only() {
+    fn outside_release_and_non_steam_row_are_close_only() {
         let target = LauncherItem::app(AppId::from_normalized("calc"));
         // Outside the panel: no row hit.
         assert_eq!(
@@ -1191,23 +1190,19 @@ mod tests {
             ),
             ContextMenuSelection::CloseOnly
         );
-        // OpenInSteam (row 4) on a *non-Steam* target resolves to close-only,
-        // and the trailing mock rows (IconLarger, IconSmaller) at rows 5..6
-        // are always close-only. AppInfo is intentionally app-only.
-        for row in 4..7 {
-            assert_eq!(
-                resolve_context_menu_selection(
-                    &context_menu::ContextMenuItem::ALL,
-                    Some(row),
-                    Some(&target)
-                ),
-                ContextMenuSelection::CloseOnly
-            );
-        }
+        // OpenInSteam (row 4) on a non-Steam target resolves to close-only.
         assert_eq!(
             resolve_context_menu_selection(
                 &context_menu::ContextMenuItem::ALL,
-                Some(7),
+                Some(4),
+                Some(&target)
+            ),
+            ContextMenuSelection::CloseOnly
+        );
+        assert_eq!(
+            resolve_context_menu_selection(
+                &context_menu::ContextMenuItem::ALL,
+                Some(5),
                 Some(&target)
             ),
             ContextMenuSelection::AppInfo(AppId::from_normalized("calc"))
@@ -1288,7 +1283,7 @@ mod tests {
         content_opacity: f32,
         content_blur: f32,
         activation: f32,
-        focus: [f32; 8],
+        focus: [f32; context_menu::CONTEXT_MENU_ITEM_COUNT],
         items: &[context_menu::ContextMenuItem],
     ) -> ContextMenuInput<'_> {
         ContextMenuInput {
@@ -1325,9 +1320,9 @@ mod tests {
                 font_px: 18,
             },
         );
-        let mut focus = [0.0f32; 8];
+        let mut focus = [0.0f32; context_menu::CONTEXT_MENU_ITEM_COUNT];
         focus[1] = 1.0;
-        let mut partial_focus = [0.0f32; 8];
+        let mut partial_focus = [0.0f32; context_menu::CONTEXT_MENU_ITEM_COUNT];
         partial_focus[0] = 0.5;
         partial_focus[2] = 0.5;
         let states: Vec<ContextMenuInput<'_>> = vec![
@@ -1340,7 +1335,7 @@ mod tests {
                 0.0,
                 8.0,
                 1.0,
-                [0.0; 8],
+                [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
                 &items,
             ),
             // Mid-reveal.
@@ -1352,7 +1347,7 @@ mod tests {
                 0.3,
                 4.0,
                 0.6,
-                [0.0; 8],
+                [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
                 &items,
             ),
             // Rest with the hover pill on row 1.
@@ -1388,7 +1383,7 @@ mod tests {
                 1.0,
                 0.0,
                 0.0,
-                [0.0; 8],
+                [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
                 &items,
             ),
         ];
@@ -1437,7 +1432,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
-            [0.0; 8],
+            [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
             &items,
         );
         let model1 = cache.derive_model(&input1);
@@ -1455,7 +1450,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
-            [0.0; 8],
+            [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
             &items,
         );
         let model2 = cache.derive_model(&input2);
@@ -1486,7 +1481,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
-            [0.0; 8],
+            [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
             &items,
         );
         let model3 = cache.derive_model(&input3);
@@ -1516,7 +1511,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
-            [0.0; 8],
+            [0.0; context_menu::CONTEXT_MENU_ITEM_COUNT],
             &items,
         );
         let model3 = stepped.derive_model(&input3);
