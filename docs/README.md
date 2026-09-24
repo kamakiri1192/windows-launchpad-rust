@@ -1,5 +1,10 @@
 # launchpad-windows docs
 
+- [INITIAL_FOLDER_LAYOUT_SPEC.md](INITIAL_FOLDER_LAYOUT_SPEC.md) — 初期フォルダ配置の非AI仕様。
+  Windows / macOSの19種類のプリセット候補、初回判定、保存、取り消し、受け入れ条件。
+- [AI_FOLDER_ASSIST_SPEC.md](AI_FOLDER_ASSIST_SPEC.md) — 任意のAI整理補助仕様。
+  ルールとの境界、外部送信、初回許可と撤回、プレビュー、Store要件、検証条件。
+
 - [../ARCHITECTURE.md](../ARCHITECTURE.md) - target New Architecture,
   boundaries, data flow, and extension rules.
 - [DF_REARCHITECTURE_PLAN.md](DF_REARCHITECTURE_PLAN.md) - proposed Dynamic
