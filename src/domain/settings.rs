@@ -27,9 +27,9 @@ pub struct Settings {
     #[serde(default = "default_show_steam_apps")]
     pub show_steam_apps: bool,
     /// Enables single-key developer shortcuts (`M` decoration toggle, `R`
-    /// icon-cache reset, and the Liquid Glass parameter/debug keys). Off by
-    /// default and on upgrade so production builds ship with debug keys inert
-    /// until the user opts in from the settings panel.
+    /// icon-cache reset, and the Liquid Glass parameter/debug keys) in builds
+    /// with debug assertions. Release builds ignore this value even if it was
+    /// persisted by a previous debug build.
     #[serde(default)]
     pub debug_keys_enabled: bool,
     /// Shows the on-screen FPS overlay (top-right). The frame rate is

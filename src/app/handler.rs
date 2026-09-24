@@ -298,6 +298,10 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
+                let debug_keys_enabled = super::action::debug_keys_enabled_for_build(
+                    self.settings.debug_keys_enabled,
+                    cfg!(debug_assertions),
+                );
                 let key_action = if is_repeated_escape(event.repeat, key_code) {
                     // The first Escape press may dismiss the context menu. If
                     // its key-repeat outlives the close animation, it must not
@@ -325,7 +329,7 @@ impl ApplicationHandler<UserEvent> for App {
                             .rename
                             .as_ref()
                             .is_none_or(|editor| editor.preedit.is_empty()),
-                        self.settings.debug_keys_enabled,
+                        debug_keys_enabled,
                         key_code,
                         event.text.as_deref(),
                     )
@@ -335,7 +339,7 @@ impl ApplicationHandler<UserEvent> for App {
                         self.editing,
                         self.control.wants_keyboard(),
                         self.control.preedit.is_empty(),
-                        self.settings.debug_keys_enabled,
+                        debug_keys_enabled,
                         key_code,
                         event.text.as_deref(),
                     )
