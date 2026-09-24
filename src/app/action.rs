@@ -229,10 +229,17 @@ fn folder_cursor_left_intent(editing: bool, folder_gesture_active: bool) -> Fold
 /// 6. `M` → toggle decorations; `R` (field closed) → reset icon cache;
 ///    otherwise → Liquid Glass debug key delegation.
 ///
-/// Steps 6–7 are gated on `debug_keys_enabled`: when the user has not opted in
-/// from the settings panel, every developer shortcut falls through to
-/// [`KeyAction::None`] (or step 5 takes over for printable text) so production
-/// builds ship with those keys inert.
+/// Steps 6–7 are gated on `debug_keys_enabled`, which the event handler only
+/// enables when the user opted in and the build has debug assertions enabled.
+/// Release builds therefore leave developer shortcuts inert regardless of a
+/// persisted setting value.
+pub(super) const fn debug_keys_enabled_for_build(
+    configured_enabled: bool,
+    debug_assertions_enabled: bool,
+) -> bool {
+    configured_enabled && debug_assertions_enabled
+}
+
 pub fn keyboard_action(
     settings_open: bool,
     editing: bool,
@@ -716,7 +723,10 @@ impl App {
             // IME input with the search field closed: auto-open it so Japanese
             // composition (preedit/commit) can drive instant search too.
             // Suppressed when debug shortcuts are enabled (developer keys win).
-            if self.settings.debug_keys_enabled {
+            if debug_keys_enabled_for_build(
+                self.settings.debug_keys_enabled,
+                cfg!(debug_assertions),
+            ) {
                 return;
             }
             // Close a viewing folder first so the search reflects the grid.
@@ -1327,6 +1337,13 @@ mod tests {
     }
 
     // ---- debug keys ----
+
+    #[test]
+    fn developer_shortcuts_require_user_opt_in_and_debug_build() {
+        assert!(!debug_keys_enabled_for_build(false, true));
+        assert!(debug_keys_enabled_for_build(true, true));
+        assert!(!debug_keys_enabled_for_build(true, false));
+    }
 
     #[test]
     fn key_m_toggles_decorations() {
