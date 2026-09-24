@@ -820,6 +820,34 @@ mod tests {
     }
 
     #[test]
+    fn delete_folder_promotes_children_at_its_position_in_order() {
+        let folder_id = FolderId::generate(0);
+        let mut folder = Folder::new(folder_id.clone(), "Games");
+        folder.children = vec![app("first"), app("second")];
+
+        let mut state = LauncherState::new();
+        state.items = vec![
+            LauncherItem::App(app("before")),
+            LauncherItem::Folder(folder_id.clone()),
+            LauncherItem::App(app("after")),
+        ];
+        state.upsert_folder(folder.clone());
+
+        assert_eq!(state.delete_folder(&folder_id), Some(folder));
+        assert_eq!(
+            state.items,
+            vec![
+                LauncherItem::App(app("before")),
+                LauncherItem::App(app("first")),
+                LauncherItem::App(app("second")),
+                LauncherItem::App(app("after")),
+            ]
+        );
+        assert!(!state.folders.contains_key(&folder_id));
+        assert!(state.customized);
+    }
+
+    #[test]
     fn unhide_app_appends_to_tail() {
         let mut state = LauncherState::from_legacy(vec![app("b")], vec![app("a")]);
         state.unhide_app(&app("a"));

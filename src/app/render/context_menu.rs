@@ -1081,18 +1081,19 @@ mod tests {
 
     #[test]
     fn folder_menu_row_indices_never_resolve_to_hide_reveal_or_chatgpt() {
-        let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
-            "folder-a",
-        ));
+        let folder_id = crate::domain::folders::FolderId::from_normalized("folder-a");
+        let target = LauncherItem::folder(folder_id.clone());
         let items = context_menu::menu_rows(true, false);
-        // A folder menu has no hide-app, reveal, ChatGPT-help, or Steam row;
-        // every row resolves to close-only (or edit-home for row 0). Walk every
-        // row.
+        // A folder menu has no hide-app, reveal, ChatGPT-help, or Steam row.
+        // Its delete action is the second row; the remaining rows resolve to
+        // close-only (except edit-home at row 0). Walk every row.
         for row in 0..items.len() {
-            let expected = if row == 0 {
-                ContextMenuSelection::EditHome
-            } else {
-                ContextMenuSelection::CloseOnly
+            let expected = match items[row] {
+                context_menu::ContextMenuItem::EditHome => ContextMenuSelection::EditHome,
+                context_menu::ContextMenuItem::DeleteFolder => {
+                    ContextMenuSelection::DeleteFolder(folder_id.clone())
+                }
+                _ => ContextMenuSelection::CloseOnly,
             };
             assert_eq!(
                 resolve_context_menu_selection(&items, Some(row), Some(&target)),
