@@ -24,12 +24,12 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 // binding 1 + 2 are the shared glyph atlas + sampler (used by the control-text
-// pipeline, unused by this shader). binding 3 is the brand-logo SDF atlas — a
-// 2D array texture whose layer 0 is the ChatGPT logo and layer 1 is the Steam
-// logo, each stored as a single-channel signed distance field (0.5 at the
-// silhouette edge, >0.5 inside). binding 4 is its linear sampler. Kinds 19 and
-// 20 reconstruct a crisp, resolution-independent edge from the field, so the
-// logos stay sharp at any DPI from a tiny 64×64 source. See
+// pipeline, unused by this shader). binding 3 is the context-menu SDF atlas —
+// a 2D array texture whose layers 0–2 are the ChatGPT logo, Steam logo, and
+// trash-can icon, each stored as a single-channel signed distance field (0.5
+// at the silhouette edge, >0.5 inside). binding 4 is its linear sampler. Kinds
+// 19–21 reconstruct a crisp, resolution-independent edge from the field, so
+// these icons stay sharp at any DPI. See
 // examples/generate_logo_sdf.rs and
 // https://jobtalle.com/distance_field_transparency.html.
 @group(0) @binding(3) var logo_sdf_atlas: texture_2d_array<f32>;
@@ -58,6 +58,8 @@ struct Uniforms {
 //  19 = ChatGPT logo (context menu: ChatGPT help) — SDF atlas layer 0.
 //       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
 //  20 = Steam logo (context menu: open in Steam) — SDF atlas layer 1.
+//       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
+//  21 = trash can (context menu: delete folder) — SDF atlas layer 2.
 //       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
@@ -175,16 +177,14 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         // slider knob: a filled disk of radius `size`.
         return size * 1.6;
     }
-    if kind > 18.5 {
-        // Brand logos (kinds 19 ChatGPT / 20 Steam): drawn a bit larger than
-        // the procedural glyphs' `size * 1.2` so the logos carry similar visual
-        // weight to the pencil/folder/etc. icons next to them. Both the vertex
-        // shader (here) and the fragment shader's UV mapping must use the same
-        // factor or the logo stretches.
+    if kind > 18.5 && kind < 21.5 {
+        // SDF icons (kinds 19 ChatGPT / 20 Steam / 21 trash): draw a bit larger
+        // than the procedural glyphs' `size * 1.2` for similar visual weight.
+        // The vertex and fragment shader extents must match or the icon stretches.
         return size * 1.5;
     }
     if kind > 12.5 {
-        // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
+        // Procedural context-menu glyphs (kinds 13–18): `size` is the full icon extent.
         return size * 1.2;
     }
     if kind > 11.5 && kind < 12.5 {
@@ -498,19 +498,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             1.0 - smoothstep(-1.0, 1.0, dot),
             1.0 - smoothstep(-1.0, 1.0, stem),
         );
-    } else {
-        // Brand logos (kind 19 ChatGPT / kind 20 Steam): reconstruct a crisp,
-        // resolution-independent edge from the SDF atlas. The vertex shader
+    } else if kind < 21.5 {
+        // SDF icons (kind 19 ChatGPT / kind 20 Steam / kind 21 trash):
+        // reconstruct a crisp, resolution-independent edge from the SDF atlas.
+        // The vertex shader
         // sized this kind's quad to a half-extent of `size * 1.5` (larger than
-        // the procedural glyphs' `size * 1.2` so the logos read with similar
+        // the procedural glyphs' `size * 1.2` so the icons read with similar
         // visual weight; see element_extent), so `local` ranges over
         // ±(size * 1.5); map that full quad to [0,1]² UVs. The atlas layer is 0
-        // for the ChatGPT logo (kind 19) and 1 for the Steam logo (kind 20).
+        // for ChatGPT (kind 19), 1 for Steam (kind 20), and 2 for trash (21).
         // The texel's red channel is the distance field — 0.5 at the silhouette
         // edge, values above 0.5 inside — and the edge is rebuilt over a single
-        // pixel using `fwidth`, so it never blurs however large the logo is
+        // pixel using `fwidth`, so it never blurs however large the icon is
         // drawn.
-        let layer = select(0, 1, kind > 19.5);
+        let layer = select(0, select(1, 2, kind > 20.5), kind > 19.5);
         let half_extent = max(in.params.x * 1.5, 1.0);
         let uv = vec2<f32>(p.x / half_extent + 0.5, p.y / half_extent + 0.5);
         if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {

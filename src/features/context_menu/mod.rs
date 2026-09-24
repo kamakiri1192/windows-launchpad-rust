@@ -480,14 +480,14 @@ mod tests {
 
     /// `open()` builds and caches the row list from the target's kind, so the
     /// render/release paths read one consistent `items` snapshot. A folder
-    /// gets four rows; a non-Steam app gets seven (no Steam row); a Steam app
-    /// gets the full eight-row superset including OpenInSteam.
+    /// gets five rows including delete; a non-Steam app gets seven (no Steam
+    /// row); a Steam app gets the full eight-row superset including OpenInSteam.
     #[test]
     fn open_builds_and_caches_the_row_list_for_each_target_kind() {
         let mut state = ContextMenuState::default();
         assert!(state.items.is_empty(), "default state has no rows");
 
-        // Folder: EditHome, IconLarger, IconSmaller, AppInfo (4 rows).
+        // Folder: shared rows plus its destructive delete action (5 rows).
         state.open(
             LauncherItem::folder(crate::domain::folders::FolderId::from_normalized("f")),
             0.0,
@@ -498,6 +498,7 @@ mod tests {
             state.items,
             vec![
                 ContextMenuItem::EditHome,
+                ContextMenuItem::DeleteFolder,
                 ContextMenuItem::IconLarger,
                 ContextMenuItem::IconSmaller,
                 ContextMenuItem::AppInfo,
