@@ -1090,6 +1090,22 @@ impl App {
         self.request_redraw();
     }
 
+    /// Remove a folder container while preserving its apps as top-level items.
+    /// The context-menu action is immediate and persists the new layout.
+    pub(crate) fn delete_folder(&mut self, id: &crate::domain::folders::FolderId) {
+        if self.launcher_state.delete_folder(id).is_none() {
+            return;
+        }
+        if self.folders.active.as_ref() == Some(id) {
+            self.close_folder();
+            self.folder_scroller = None;
+            self.folder_scroll_pending_commit = false;
+        }
+        self.persist_launcher_state();
+        self.relayout();
+        self.request_redraw();
+    }
+
     /// A press is pending; check whether movement past `CLICK_SLOP_PHYS`
     /// promotes it to a real scroll drag. Returns true if it was promoted.
     pub(crate) fn maybe_promote_press_to_drag(&mut self) -> bool {

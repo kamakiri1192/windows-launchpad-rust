@@ -530,13 +530,13 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Brand-logo SDF atlas (binding 3) + sampler (binding 4). The
-                // atlas is a 2D array texture whose layer 0 is the ChatGPT logo
-                // and layer 1 is the Steam logo, each a single-channel signed
-                // distance field. Kinds 19 and 20 of shader_control.wgsl sample
+                // Context-menu SDF atlas (binding 3) + sampler (binding 4). The
+                // atlas is a 2D array texture whose layers 0–2 are ChatGPT,
+                // Steam, and trash icons, each a single-channel signed
+                // distance field. Kinds 19–21 of shader_control.wgsl sample
                 // the right layer and reconstruct a crisp, resolution-
-                // independent edge, so both logos stay sharp at any DPI from a
-                // compact 64×64 source (see examples/generate_logo_sdf.rs and
+                // independent edge, so all three stay sharp at any DPI from a
+                // compact 128×128 source (see examples/generate_logo_sdf.rs and
                 // https://jobtalle.com/distance_field_transparency.html).
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
@@ -556,10 +556,9 @@ impl Renderer {
                 },
             ],
         });
-        // Decode the embedded ChatGPT and Steam SDF textures and pack them as
-        // the two layers of a small 2D array texture. The menu draws the logos
-        // at ~20 logical px, and the distance field reconstructs the edge, so a
-        // 64² source per layer is ample and keeps the atlas tiny.
+        // Decode the embedded context-menu SDF textures and pack them as the
+        // three layers of a small 2D array texture. The menu draws icons at
+        // ~20 logical px; the distance field reconstructs their edges.
         let (logo_atlas_texture, logo_atlas_view, logo_atlas_sampler) =
             create_logo_sdf_atlas(&device, &queue);
         let control_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1137,36 +1136,43 @@ fn create_qa_offscreen_texture(
 /// The embedded ChatGPT-logo PNG (rasterized from the source SVG at the
 /// near-black menu label color `#1C1C1E`). Declared here so the bytes are
 /// baked into the binary exactly once.
-/// The embedded ChatGPT-logo SDF texture (64×64 grayscale). Generated from
+/// The embedded ChatGPT-logo SDF texture (128×128 grayscale). Generated from
 /// `assets/icons/chatgpt-logo.png` by `examples/generate_logo_sdf.rs` (JFA +
 /// 1+JFA, see https://jobtalle.com/distance_field_transparency.html). Layer 0
 /// of the brand-logo atlas; the shader reconstructs a crisp edge from it.
 const CHATGPT_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/chatgpt-logo-sdf.png");
 
-/// The embedded Steam-logo SDF texture (64×64 grayscale). Generated from
+/// The embedded Steam-logo SDF texture. Generated from
 /// `assets/icons/steam-logo.png` by `examples/generate_logo_sdf.rs`. Layer 1 of
-/// the brand-logo atlas.
+/// the context-menu SDF atlas.
 const STEAM_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/steam-logo-sdf.png");
 
-/// Decode the embedded brand-logo SDF textures and pack them as the two layers
+/// The embedded trash-can SDF texture. Generated from
+/// `assets/icons/trash-can.png` (rasterized from the source SVG) by
+/// `examples/generate_logo_sdf.rs`. Layer 2 of the context-menu SDF atlas.
+const TRASH_CAN_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/trash-can-sdf.png");
+
+/// Decode the embedded context-menu SDF textures and pack them as three layers
 /// of a small 2D array texture. Layer 0 is the ChatGPT logo (kind 19), layer 1
-/// is the Steam logo (kind 20). Each layer is a single-channel signed distance
-/// field (0.5 at the silhouette edge, values above 0.5 inside) from which the
-/// shader reconstructs a crisp, resolution-independent edge. Returns
-/// `(texture, view, sampler)`. On decode failure each layer falls back to a
-/// 1×1 fully-inside texel (0xFF) so the logo renders as a solid block instead
-/// of vanishing, keeping a valid resource bound.
+/// the Steam logo (kind 20), and layer 2 the trash can (kind 21). Each layer is
+/// a single-channel signed distance field (0.5 at the silhouette edge, values
+/// above 0.5 inside) from which the shader reconstructs a crisp,
+/// resolution-independent edge. Returns `(texture, view, sampler)`. On decode
+/// failure each layer falls back to a 1×1 fully-inside texel (0xFF) so the icon
+/// renders as a solid block instead of vanishing, keeping a valid resource
+/// bound.
 fn create_logo_sdf_atlas(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
     let chatgpt = decode_logo_sdf(CHATGPT_LOGO_SDF_PNG, "chatgpt");
     let steam = decode_logo_sdf(STEAM_LOGO_SDF_PNG, "steam");
-    let size = chatgpt.0.max(steam.0).max(1);
-    let layers = 2u32;
+    let trash = decode_logo_sdf(TRASH_CAN_SDF_PNG, "trash");
+    let size = chatgpt.0.max(steam.0).max(trash.0).max(1);
+    let layers = 3u32;
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("brand logo SDF atlas"),
+        label: Some("context menu SDF atlas"),
         size: wgpu::Extent3d {
             width: size,
             height: size,
@@ -1180,7 +1186,7 @@ fn create_logo_sdf_atlas(
         view_formats: &[],
     });
 
-    for (layer, (_, pixels)) in [chatgpt, steam].iter().enumerate() {
+    for (layer, (_, pixels)) in [chatgpt, steam, trash].iter().enumerate() {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -1211,7 +1217,7 @@ fn create_logo_sdf_atlas(
         ..Default::default()
     });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("brand logo SDF sampler"),
+        label: Some("context menu SDF sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -1227,7 +1233,7 @@ fn create_logo_sdf_atlas(
 
 /// Decode an embedded 8-bit grayscale SDF PNG into `(side, pixels)`. Returns
 /// the larger of width/height as the per-layer side so non-square sources still
-/// upload cleanly; both current logos are square 64×64.
+/// upload cleanly; all current context-menu SDFs are square 128×128.
 fn decode_logo_sdf(bytes: &[u8], name: &str) -> (u32, Vec<u8>) {
     match image::load_from_memory(bytes) {
         Ok(image) => {

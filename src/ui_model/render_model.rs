@@ -217,12 +217,15 @@ pub enum ControlKind {
     EyeOff,
     /// Folder glyph (context menu: reveal in Finder/Explorer). Drawn by kind 15.
     FolderIcon,
-    /// ChatGPT logo (context menu: ChatGPT help). Drawn by kind 19 from a
-    /// dedicated rasterized SVG texture (not a procedural SDF).
+    /// ChatGPT logo (context menu: ChatGPT help). Drawn by kind 19 from the
+    /// context-menu SDF atlas.
     ChatGptLogo,
-    /// Steam logo (context menu: open in Steam). Drawn by kind 20 from a
-    /// dedicated rasterized SVG texture (not a procedural SDF).
+    /// Steam logo (context menu: open in Steam). Drawn by kind 20 from the
+    /// context-menu SDF atlas.
     SteamLogo,
+    /// Trash can glyph (context menu: delete folder). Drawn by kind 21 from
+    /// the context-menu SDF atlas generated from `trash-can.svg`.
+    Trash,
     /// Plus glyph (context menu: larger icon). Drawn by kind 16.
     Plus,
     /// Minus glyph (context menu: smaller icon). Drawn by kind 17.

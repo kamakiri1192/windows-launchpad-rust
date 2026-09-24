@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <g
+    fill="none"
+    stroke="#000"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="14"
+    transform="translate(38 17) scale(0.9)"
+  >
+    <!-- Lid -->
+    <path d="M8 55h184" />
+    <!-- Handle -->
+    <path d="M62 55V31a22 22 0 0 1 22-22h30a22 22 0 0 1 22 22v24" />
+    <!-- Tapered can body -->
+    <path d="M29 55l7 151q1 20 20 20h88q19 0 20-20l7-151" />
+    <!-- Three inner ribs -->
+    <path d="M68 83v111M100 83v111M132 83v111" />
+  </g>
+</svg>

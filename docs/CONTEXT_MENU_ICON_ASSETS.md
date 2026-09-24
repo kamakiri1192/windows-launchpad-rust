@@ -168,27 +168,43 @@ cargo run --release --example generate_logo_sdf -- \
     assets/icons/steam-logo.svg assets/icons/steam-logo-sdf.png
 ```
 
-デフォルト出力は 64×64・8bit グレースケール。アルファ（実際には単一チャネル）は `0.5` が輪郭、`>0.5` が内側、`<0.5` が外側。生成物（`*-sdf.png`）はリポジトリにコミットするので、CI で再生成は不要。ロゴを差し替えたときだけ上記コマンドを再実行する。
+デフォルト出力は 128×128・8bit グレースケール。アルファ（実際には単一チャネル）は `0.5` が輪郭、`>0.5` が内側、`<0.5` が外側。生成物（`*-sdf.png`）はリポジトリにコミットするので、CI で再生成は不要。ロゴを差し替えたときだけ上記コマンドを再実行する。
 
 ### アトラス化（`texture_2d_array`）
 
-複数ロゴを個別テクスチャ＋サンプラーで持つと binding がロゴ数分増え、`rebind_text_atlas` のメンテも重くなる。そのため ChatGPT（layer 0）と Steam（layer 1）を **1枚の 2D 配列テクスチャ** にパックする。ロゴを足すときは layer を増やすだけで binding 数は不変。
+複数アイコンを個別テクスチャ＋サンプラーで持つと binding がアイコン数分増え、`rebind_text_atlas` のメンテも重くなる。そのため ChatGPT（layer 0）、Steam（layer 1）、ゴミ箱（layer 2）を **1枚の 2D 配列テクスチャ** にパックする。アイコンを足すときは layer を増やすだけで binding 数は不変。
 
-- `src/renderer/init.rs::create_logo_sdf_atlas` が `CHATGPT_LOGO_SDF_PNG` / `STEAM_LOGO_SDF_PNG` をデコードし、`R8Unorm` の `texture_2d_array`（layer 2 枚）へ書き込む
+- `src/renderer/init.rs::create_logo_sdf_atlas` が `CHATGPT_LOGO_SDF_PNG` / `STEAM_LOGO_SDF_PNG` / `TRASH_CAN_SDF_PNG` をデコードし、`R8Unorm` の `texture_2d_array`（layer 3 枚）へ書き込む
 - control bind group の **binding 3** がこのアトラス（`D2Array` ビュー）、**binding 4** がサンプラー。従来の binding 3〜6（ロゴ別のテクスチャ＋サンプラー2組）は廃止
 - `rebind_text_atlas`（`src/renderer/text.rs`）は layout が5 binding になったので、グリフアトラス拡張時の再構築でも **binding 3/4 を必ず含める**（従来の落とし穴と同じ。省略すると validation panic）
 
 ### シェーダーでの輪郭再構築
 
-`shader_control.wgsl` の kind 19（ChatGPT）は layer 0、kind 20（Steam）は layer 1 をサンプリングし、記事と同じ式で1ピクセル幅のアンチエイリアスをかける。
+`shader_control.wgsl` の kind 19（ChatGPT）は layer 0、kind 20（Steam）は layer 1、kind 21（ゴミ箱）は layer 2 をサンプリングし、記事と同じ式で1ピクセル幅のアンチエイリアスをかける。
 
 ```wgsl
-let layer = select(0, 1, kind > 19.5);
+let layer = select(0, select(1, 2, kind > 20.5), kind > 19.5);
 let sampled = textureSample(logo_sdf_atlas, logo_sampler, uv, layer);
 let d = sampled.r;                       // 0.5 が輪郭
 let aa = fwidth(d);
 coverage = clamp((d - 0.5) * 2.0 / max(aa, 0.0001), 0.0, 1.0);
 ```
 
-インスタンス色で着色するため RGB 色保持は不要（記事のカラーテクスチャ処理は省略）。ロゴを追加するときは `examples/generate_logo_sdf.rs` で SDF を生成 → `include_bytes!` 定数を足す → `create_logo_sdf_atlas` の layers とループを更新 → `ControlKind` / kind 値 / WGSL の layer を増やす。
+インスタンス色で着色するため RGB 色保持は不要（記事のカラーテクスチャ処理は省略）。SDF アイコンを追加するときは `examples/generate_logo_sdf.rs` で SDF を生成 → `include_bytes!` 定数を足す → `create_logo_sdf_atlas` の layers とループを更新 → `ControlKind` / kind 値 / WGSL の layer を増やす。
+
+ゴミ箱アイコンは `assets/icons/trash-can.svg` を元データとして保存し、透過PNG `assets/icons/trash-can.png` にラスタライズした後、次のコマンドで SDF を生成する。Windowsで `rsvg-convert` がない場合は、Resvgで256×256の透過PNGを作り、そのPNGをexampleへ渡す。
+
+```powershell
+$toolDir = Join-Path $env:TEMP 'launchpad-svg-tools'
+npm install --prefix $toolDir --no-save @resvg/resvg-js
+$env:RESVG_MODULE = Join-Path $toolDir 'node_modules/@resvg/resvg-js'
+$env:SVG_INPUT = (Resolve-Path 'assets/icons/trash-can.svg').Path
+$env:PNG_OUTPUT = Join-Path (Get-Location) 'assets/icons/trash-can.png'
+node -e "const fs=require('node:fs');const {Resvg}=require(process.env.RESVG_MODULE);fs.writeFileSync(process.env.PNG_OUTPUT,new Resvg(fs.readFileSync(process.env.SVG_INPUT,'utf8')).render().asPng())"
+```
+
+```sh
+cargo run --release --example generate_logo_sdf -- \
+    assets/icons/trash-can.png assets/icons/trash-can-sdf.png
+```
 

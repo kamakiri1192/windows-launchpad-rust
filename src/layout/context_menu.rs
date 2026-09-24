@@ -37,12 +37,14 @@ pub const FALLBACK_MAX_LABEL_WIDTH: f32 = 200.0;
 /// Number of rows currently emitted by the context menu. Kept public so the
 /// feature animation and renderer-neutral input model share one array size.
 /// This is the *superset* row count (the Steam-app menu); a non-Steam app
-/// menu omits the Steam row and a folder menu omits four rows.
+/// menu omits the Steam row; a folder menu omits four app-only rows and adds
+/// one folder-specific action.
 pub const CONTEXT_MENU_ITEM_COUNT: usize = 8;
 /// Number of rows omitted when the menu targets a folder. A folder cannot be
 /// hidden (no hide-app row), has no file to reveal (no reveal row), has no app
 /// metadata for a ChatGPT lookup (no chatgpt-help row), and is never a Steam
-/// app (no open-in-Steam row), so four rows are omitted from the app menu.
+/// app (no open-in-Steam row), so four rows are omitted from the app menu. A
+/// folder menu adds its own delete action after the shared rows.
 pub const FOLDER_OMITTED_ITEM_COUNT: usize = 4;
 /// Font size in logical px (1× DPI), matching the app-icon label size. The
 /// renderer's `scale_factor` converts this to physical px.
@@ -93,13 +95,15 @@ pub enum ContextMenuItem {
     IconSmaller,
     /// アプリの概要
     AppInfo,
+    /// フォルダを削除
+    DeleteFolder,
 }
 
 impl ContextMenuItem {
     /// All items in display order. This is the *superset* shown when the menu
     /// targets a Steam app: it includes the "Steamで開く" row. A non-Steam app
-    /// omits that row (see [`APP_ITEMS`]); a folder omits four rows (see
-    /// [`FOLDER_ITEMS`]).
+    /// omits that row (see [`APP_ITEMS`]); a folder omits four app-only rows
+    /// and adds a folder-specific row (see [`FOLDER_ITEMS`]).
     ///
     /// [`APP_ITEMS`]: ContextMenuItem::APP_ITEMS
     /// [`FOLDER_ITEMS`]: ContextMenuItem::FOLDER_ITEMS
@@ -136,9 +140,8 @@ impl ContextMenuItem {
     /// hide action (it cannot be hidden), no file to reveal (it is a virtual
     /// launcher group with no file on disk to open), no app metadata for a
     /// ChatGPT lookup, and is never a Steam app, so [`FOLDER_OMITTED_ITEM_COUNT`]
-    /// rows are omitted — the folder menu is that many rows shorter than the
-    /// app menu.
-    pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - FOLDER_OMITTED_ITEM_COUNT;
+    /// rows are omitted, then its delete action is added.
+    pub const FOLDER_ITEM_COUNT: usize = CONTEXT_MENU_ITEM_COUNT - FOLDER_OMITTED_ITEM_COUNT + 1;
 
     /// Items shown when the menu targets a folder. See [`FOLDER_ITEM_COUNT`]:
     /// a folder has no hide action, no file to reveal, no app metadata for a
@@ -146,8 +149,10 @@ impl ContextMenuItem {
     /// "Finderで開く", "ChatGPTで使い方を調べる", and "Steamで開く" are all
     /// omitted. The app-info row remains visible for folders for menu-shape
     /// compatibility, but resolves to a no-op because folders have no app file.
+    /// The destructive folder action appears second, directly after edit-home.
     pub const FOLDER_ITEMS: [Self; Self::FOLDER_ITEM_COUNT] = [
         Self::EditHome,
+        Self::DeleteFolder,
         Self::IconLarger,
         Self::IconSmaller,
         Self::AppInfo,
@@ -170,13 +175,14 @@ impl ContextMenuItem {
             Self::IconLarger => "アイコンを大きくする",
             Self::IconSmaller => "アイコンを小さくする",
             Self::AppInfo => "アプリの概要",
+            Self::DeleteFolder => "フォルダを削除",
         }
     }
 
     /// Foreground color for this menu action, shared by its label and icon.
     pub const fn foreground_rgb(self) -> [f32; 3] {
         match self {
-            Self::HideApp => MENU_DESTRUCTIVE_RGB,
+            Self::HideApp | Self::DeleteFolder => MENU_DESTRUCTIVE_RGB,
             _ => MENU_LABEL_RGB,
         }
     }
@@ -186,9 +192,8 @@ impl ContextMenuItem {
 /// at runtime from the target's kind. The list is *constructed* (not selected
 /// from a static slice) so future per-app menu customization can compose rows
 /// without a combinatorial explosion of static arrays. Folder targets omit four
-/// rows (hide-app / reveal / ChatGPT-help / open-in-Steam — none apply to a
-/// virtual launcher group); a non-Steam app omits the Steam row; a Steam app
-/// shows the full superset.
+/// app-only rows and add the folder-delete row; a non-Steam app omits the Steam
+/// row; a Steam app shows the full superset.
 ///
 /// Labels are *not* returned here: callers derive them on demand via
 /// [`ContextMenuItem::label`], so the row list carries no duplicate label
@@ -200,6 +205,9 @@ pub fn menu_rows(is_folder_target: bool, is_steam: bool) -> Vec<ContextMenuItem>
     let mut items = Vec::with_capacity(CONTEXT_MENU_ITEM_COUNT);
     // "ホーム画面を編集" is always available.
     items.push(ContextMenuItem::EditHome);
+    if is_folder_target {
+        items.push(ContextMenuItem::DeleteFolder);
+    }
     if !is_folder_target {
         // App-only actions: hide, reveal, ChatGPT help.
         items.push(ContextMenuItem::HideApp);
@@ -572,6 +580,7 @@ fn item_icon_kind(item: ContextMenuItem) -> ControlKind {
         ContextMenuItem::IconLarger => ControlKind::Plus,
         ContextMenuItem::IconSmaller => ControlKind::Minus,
         ContextMenuItem::AppInfo => ControlKind::Info,
+        ContextMenuItem::DeleteFolder => ControlKind::Trash,
     }
 }
 
@@ -585,14 +594,14 @@ mod tests {
     use crate::ui_model::render_model::ControlKind;
 
     /// `menu_rows` builds the row list at runtime from `(is_folder, is_steam)`.
-    /// A folder omits four rows; a non-Steam app omits the Steam row; a Steam
-    /// app shows the full superset. The built `Vec`s match the canonical static
-    /// arrays (`FOLDER_ITEMS` / `APP_ITEMS` / `ALL`) kept for test reference.
+    /// A folder omits four app-only rows and adds delete; a non-Steam app omits
+    /// the Steam row; a Steam app shows the full superset. The built `Vec`s
+    /// match the canonical static arrays kept for test reference.
     #[test]
     fn folder_menu_omits_the_hide_reveal_chatgpt_and_steam_rows() {
         let items = menu_rows(true, false);
         assert_eq!(items, ContextMenuItem::FOLDER_ITEMS);
-        assert_eq!(items.len(), ContextMenuItem::ALL.len() - 4);
+        assert_eq!(items.len(), ContextMenuItem::FOLDER_ITEM_COUNT);
         assert!(!items.contains(&ContextMenuItem::HideApp));
         assert!(!items.contains(&ContextMenuItem::RevealInFinder));
         assert!(!items.contains(&ContextMenuItem::ChatGptHelp));

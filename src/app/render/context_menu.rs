@@ -7,6 +7,7 @@
 use crate::app::event::AppCommand;
 use crate::app::state::App;
 use crate::domain::app_id::AppId;
+use crate::domain::folders::FolderId;
 use crate::domain::launcher_item::LauncherItem;
 use crate::features::context_menu::MenuTarget;
 use crate::layout::context_menu::{
@@ -392,6 +393,7 @@ fn context_menu_item_kind(item: context_menu::ContextMenuItem) -> ControlKind {
         context_menu::ContextMenuItem::IconLarger => ControlKind::Plus,
         context_menu::ContextMenuItem::IconSmaller => ControlKind::Minus,
         context_menu::ContextMenuItem::AppInfo => ControlKind::Info,
+        context_menu::ContextMenuItem::DeleteFolder => ControlKind::Trash,
     }
 }
 
@@ -593,6 +595,7 @@ impl App {
                 // app's Steam library page via the steam:// protocol handler.
                 self.execute_command(AppCommand::OpenInSteam { app_id: id });
             }
+            ContextMenuSelection::DeleteFolder(id) => self.delete_folder(&id),
             // Mock actions (and folder targets of hide/reveal): just close.
             ContextMenuSelection::CloseOnly => {}
         }
@@ -910,6 +913,8 @@ enum ContextMenuSelection {
     /// Steam-app menu shows this row, and it only resolves when the target is
     /// a Steam app.
     OpenInSteam(AppId),
+    /// フォルダを削除し、中のアプリを元の場所へ戻す。
+    DeleteFolder(FolderId),
     /// Mock action (or a folder target of hide/reveal/info, which have no app
     /// file on disk to act on): just close the menu.
     CloseOnly,
@@ -952,6 +957,10 @@ fn resolve_context_menu_selection(
             Some(LauncherItem::App(id)) if id.is_steam() => {
                 ContextMenuSelection::OpenInSteam(id.clone())
             }
+            _ => ContextMenuSelection::CloseOnly,
+        },
+        Some(context_menu::ContextMenuItem::DeleteFolder) => match target {
+            Some(LauncherItem::Folder(id)) => ContextMenuSelection::DeleteFolder(id.clone()),
             _ => ContextMenuSelection::CloseOnly,
         },
         _ => ContextMenuSelection::CloseOnly,
@@ -1045,8 +1054,11 @@ mod tests {
         assert_eq!(items, context_menu::ContextMenuItem::FOLDER_ITEMS);
         // A folder has no hide action, no file to reveal, no app metadata for a
         // ChatGPT lookup, and is never a Steam app, so the folder menu omits all
-        // four rows — four shorter than the Steam-app superset menu.
-        assert_eq!(items.len(), context_menu::ContextMenuItem::ALL.len() - 4);
+        // Four app-only rows are omitted and the folder delete row is added.
+        assert_eq!(
+            items.len(),
+            context_menu::ContextMenuItem::FOLDER_ITEM_COUNT
+        );
         assert!(!items.contains(&context_menu::ContextMenuItem::HideApp));
         assert!(!items.contains(&context_menu::ContextMenuItem::RevealInFinder));
         assert!(!items.contains(&context_menu::ContextMenuItem::ChatGptHelp));
@@ -1069,18 +1081,19 @@ mod tests {
 
     #[test]
     fn folder_menu_row_indices_never_resolve_to_hide_reveal_or_chatgpt() {
-        let target = LauncherItem::folder(crate::domain::folders::FolderId::from_normalized(
-            "folder-a",
-        ));
+        let folder_id = crate::domain::folders::FolderId::from_normalized("folder-a");
+        let target = LauncherItem::folder(folder_id.clone());
         let items = context_menu::menu_rows(true, false);
-        // A folder menu has no hide-app, reveal, ChatGPT-help, or Steam row;
-        // every row resolves to close-only (or edit-home for row 0). Walk every
-        // row.
+        // A folder menu has no hide-app, reveal, ChatGPT-help, or Steam row.
+        // Its delete action is the second row; the remaining rows resolve to
+        // close-only (except edit-home at row 0). Walk every row.
         for row in 0..items.len() {
-            let expected = if row == 0 {
-                ContextMenuSelection::EditHome
-            } else {
-                ContextMenuSelection::CloseOnly
+            let expected = match items[row] {
+                context_menu::ContextMenuItem::EditHome => ContextMenuSelection::EditHome,
+                context_menu::ContextMenuItem::DeleteFolder => {
+                    ContextMenuSelection::DeleteFolder(folder_id.clone())
+                }
+                _ => ContextMenuSelection::CloseOnly,
             };
             assert_eq!(
                 resolve_context_menu_selection(&items, Some(row), Some(&target)),
