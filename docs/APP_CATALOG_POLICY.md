@@ -30,3 +30,15 @@ IDのない候補の補完照合では、既存の実行ファイルと取得済
 検索中の右クリックでは検索語・検索結果を維持し、Escと外側クリックはまずメニューを閉じる。既存のIME変換の確定は受け取り、メニューの背後では新しい検索入力を開始しない。
 
 参考: [System.Kind](https://learn.microsoft.com/en-us/windows/win32/properties/props-system-kind)、[Using Kind Names](https://learn.microsoft.com/en-us/windows/win32/properties/building-property-handlers-user-friendly-kind-names)。
+
+## Shell項目のアイコンとファイル表示
+
+Win32アプリのAppsFolder項目をImageFactoryで取得すると、小さい実アイコンを大きな枠付きキャンバスに置いた画像が返る場合がある。枠も不透明なので、通常の余白除去では修復できない。Shell項目をPIDLとして解決し、SHGetFileInfo(SHGFI_PIDL)と従来のShell image listでアイコンを取得する。パッケージ登録があるアプリは、従来のImageFactoryでパッケージの画像を取得する。どちらも名前による分岐は行わない。
+
+Windowsの抽出バージョン更新で旧画像を再取得し、配置用データは変更しない。Creator Companion、XSOverlay、x264設定ツール、拡大鏡、Discordを実機で比較した。設定とDev Homeはパッケージ経路を維持する。取得時間の単回観測は対象のデスクトップアプリで約4〜8msだったが、Shellキャッシュが温まる順序の影響があるため、起動時間の改善率とはしない。
+
+| 以前の取得結果 | 修正後 |
+| --- | --- |
+| ![枠内に小さいアイコン](qa/desktop-icon-before.png) | ![アイコン本体](qa/desktop-icon-after.png) |
+
+Explorerの表示はSHOpenFolderAndSelectItemsを使用する。実ファイルの起動先がある場合はそのファイルを選択し、プロトコル起動先しかない場合は元のShell項目を選択する。URIをファイルパスとしてExplorerのコマンドラインに渡さず、解決失敗を既定フォルダの表示で隠さない。実機ではUnityBugReporter.exeのインストール先と、Applications内のXSOverlayが選択されることを確認した。

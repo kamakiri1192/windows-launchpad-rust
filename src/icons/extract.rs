@@ -519,9 +519,51 @@ fn get_path_hicon(path: &Path) -> Option<HICON> {
 }
 
 fn extract_icon_from_apps_folder_uri(path: &Path) -> Option<DecodedIcon> {
+    // Packaged apps already used the image factory before Win32 AppsFolder
+    // discovery. Keep their package artwork path rather than changing it with
+    // the desktop-app fix. The package property, not an app-name pattern,
+    // distinguishes the two Shell providers.
     let wide = path_to_wide(path)?;
-    let factory: IShellItemImageFactory =
+    let item: IShellItem2 =
         unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>) }.ok()?;
+    if shell_property(&item, "System.AppUserModel.PackageFullName")
+        .value()
+        .is_some()
+    {
+        return apps_folder_factory_icon(&item);
+    }
+    apps_folder_image_list_icon(&item).or_else(|| apps_folder_factory_icon(&item))
+}
+
+/// Resolve the Shell item itself so explicit shortcut icons and provider
+/// icons survive a change from a filesystem launcher to an AppsFolder locator.
+fn apps_folder_image_list_icon(item: &IShellItem2) -> Option<DecodedIcon> {
+    use windows::Win32::UI::Shell::{SHGetIDListFromObject, SHGFI_PIDL};
+    let pidl = unsafe { SHGetIDListFromObject(item) }.ok()?;
+    if pidl.is_null() {
+        return None;
+    }
+    let _pidl_guard = PidlGuard(pidl);
+    let mut info = SHFILEINFOW::default();
+    let result = unsafe {
+        SHGetFileInfoW(
+            PCWSTR(pidl.cast()),
+            Default::default(),
+            Some(&mut info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_FLAGS(SHGFI_PIDL.0 | SHGFI_SYSICONINDEX.0 | SHGFI_LARGEICON.0),
+        )
+    };
+    if result == 0 {
+        return None;
+    }
+    let hicon = get_hicon_from_system_image_list(info.iIcon)?;
+    let _guard = IconGuard(hicon);
+    hicon_to_rgba(hicon)
+}
+
+fn apps_folder_factory_icon(item: &IShellItem2) -> Option<DecodedIcon> {
+    let factory: IShellItemImageFactory = item.cast().ok()?;
     let flags = SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP;
     let bitmap = unsafe { factory.GetImage(SIZE { cx: 256, cy: 256 }, flags) }.ok()?;
     let _bitmap_guard = BitmapGuard(bitmap);
@@ -1266,8 +1308,66 @@ mod tests {
         );
 
         for shortcut in enumerate_start_menu() {
+            if let Ok(filter) = std::env::var("LAUNCHPAD_ICON_PROBE_FILTER") {
+                if !filter
+                    .split('|')
+                    .any(|part| shortcut.name.to_lowercase().contains(&part.to_lowercase()))
+                {
+                    continue;
+                }
+            }
             let safe_name = sanitize_filename(&shortcut.name);
             let link = load_shell_link(&shortcut.path);
+
+            if is_apps_folder_uri(&shortcut.path) {
+                let started = std::time::Instant::now();
+                let wide = path_to_wide(&shortcut.path).unwrap();
+                let item: IShellItem2 = unsafe {
+                    SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>)
+                }
+                .unwrap();
+                if let Some(icon) = apps_folder_factory_icon(&item) {
+                    eprintln!(
+                        "old factory: {} {}us",
+                        shortcut.name,
+                        started.elapsed().as_micros()
+                    );
+                    record_probe(
+                        &out_dir,
+                        &mut csv,
+                        &safe_name,
+                        &shortcut,
+                        "shell_factory",
+                        &icon,
+                    );
+                    let normalized = crate::icons::normalize::normalize(&icon).image;
+                    record_probe(
+                        &out_dir,
+                        &mut csv,
+                        &safe_name,
+                        &shortcut,
+                        "shell_normalized",
+                        &normalized,
+                    );
+                }
+                let started = std::time::Instant::now();
+                if let Some(icon) = extract_icon_from_apps_folder_uri(&shortcut.path) {
+                    eprintln!(
+                        "current extraction: {} {}us",
+                        shortcut.name,
+                        started.elapsed().as_micros()
+                    );
+                    record_probe(&out_dir, &mut csv, &safe_name, &shortcut, "current", &icon);
+                    record_probe(
+                        &out_dir,
+                        &mut csv,
+                        &safe_name,
+                        &shortcut,
+                        "current_normalized",
+                        &crate::icons::normalize::normalize(&icon).image,
+                    );
+                }
+            }
 
             if let Some(icon) = get_path_hicon(&shortcut.path).and_then(icon_to_decoded) {
                 record_probe(&out_dir, &mut csv, &safe_name, &shortcut, "lnk", &icon);

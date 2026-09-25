@@ -55,10 +55,12 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// soft-fringe pixels from the previous normalizer are regenerated.
 /// v9: recognizes dense, symmetric translucent macOS tile bodies when the
 /// opaque envelope contains only non-square foreground artwork.
+/// Windows v6: resolve desktop AppsFolder icons through the Shell image list;
+/// invalidate thumbnail-frame artwork without touching saved app placement.
 #[cfg(target_os = "macos")]
 pub const EXTRACTION_VERSION: u32 = 9;
 #[cfg(not(target_os = "macos"))]
-pub const EXTRACTION_VERSION: u32 = 5;
+pub const EXTRACTION_VERSION: u32 = 6;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).

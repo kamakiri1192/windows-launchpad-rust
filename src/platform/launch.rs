@@ -153,21 +153,33 @@ fn launch_with_refresh(
 
 /// Open the OS file manager (Explorer / Finder) with `path` selected.
 ///
-/// Windows reveals a file by launching `explorer.exe /select,<path>`; macOS
-/// uses `open -R`. Both return as soon as the child process spawns, so the
-/// result only reflects whether the manager was *started*, not whether the
-/// selection actually appeared.
+/// Windows selects a parsed Shell item through SHOpenFolderAndSelectItems; macOS
+/// uses `open -R`. Windows reports Shell parsing/selection errors; macOS
+/// reports whether the file-manager request was started.
 #[cfg(windows)]
 pub fn reveal(path: &Path) -> Result<(), String> {
-    // `/select,<path>` must arrive as a single command-line argument (the
-    // comma is part of the switch, no space after it). Building the string
-    // here keeps `Command` from splitting on the comma.
-    let arg = format!("/select,{}", path.to_string_lossy());
-    std::process::Command::new("explorer.exe")
-        .arg(arg)
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx};
+    use windows::Win32::UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName};
+    let _com = crate::icons::extract::ComScope::new();
+    if !path.is_absolute()
+        && !crate::icons::extract::is_apps_folder_uri(path)
+        && !path.to_string_lossy().starts_with("::{")
+    {
+        return Err("No filesystem or Shell item to reveal".into());
+    }
+    let name = wide_null(&path.to_string_lossy());
+    let mut pidl = std::ptr::null_mut();
+    unsafe { SHParseDisplayName(PCWSTR(name.as_ptr()), None::<&IBindCtx>, &mut pidl, 0, None) }
+        .map_err(|err| format!("Could not resolve item to reveal: {err}"))?;
+    // No child array means open the item's parent and select the item itself.
+    // A failed parse/select is reported instead of opening Explorer's default
+    // folder and treating process creation as a successful selection.
+    let result = unsafe { SHOpenFolderAndSelectItems(pidl, None, 0) };
+    unsafe {
+        CoTaskMemFree(Some(pidl.cast()));
+    }
+    result.map_err(|err| format!("Could not select item in Explorer: {err}"))
 }
 
 /// Open the native properties/info view for an application path.
@@ -322,6 +334,28 @@ fn escape_applescript_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn reveal_rejects_protocols_and_missing_items_without_opening_default_folder() {
+        for path in [
+            "steam://rungameid/123",
+            "https://example.com",
+            "",
+            "relative.exe",
+            "C:/launchpad-nonexistent-reveal-fixture-871223/missing.exe",
+        ] {
+            assert!(reveal(Path::new(path)).is_err(), "{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "interactive: opens Explorer to the explicitly supplied item"]
+    fn probe_reveal_item() {
+        let path = std::env::var_os("LAUNCHPAD_REVEAL_PROBE").expect("set LAUNCHPAD_REVEAL_PROBE");
+        reveal(Path::new(&path)).unwrap();
+    }
 
     #[cfg(windows)]
     #[test]

@@ -493,10 +493,12 @@ impl App {
 fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     #[cfg(windows)]
     {
-        if info.resolved_target.as_os_str().is_empty() {
-            info.link_path.clone()
-        } else {
+        if info.resolved_target.is_absolute() {
             info.resolved_target.clone()
+        } else {
+            // Protocol launch targets (e.g. steam://) are not filesystem
+            // locations. Reveal the original Shell item/shortcut instead.
+            info.link_path.clone()
         }
     }
     #[cfg(target_os = "macos")]
@@ -815,8 +817,11 @@ mod tests {
         #[cfg(windows)]
         {
             assert_eq!(
-                reveal_target_path(&launch_info()),
-                std::path::PathBuf::from("x.exe")
+                reveal_target_path(&AppLaunchInfo {
+                    resolved_target: std::path::PathBuf::from("C:/Program Files/Example/app.exe"),
+                    ..launch_info()
+                }),
+                std::path::PathBuf::from("C:/Program Files/Example/app.exe")
             );
             // Unresolvable shortcut → the .lnk itself.
             let unresolved = AppLaunchInfo {
@@ -827,6 +832,12 @@ mod tests {
                 reveal_target_path(&unresolved),
                 std::path::PathBuf::from("x.lnk")
             );
+            let protocol = AppLaunchInfo {
+                resolved_target: "steam://rungameid/123".into(),
+                link_path: "shell:AppsFolder\\steam://rungameid/123".into(),
+                ..launch_info()
+            };
+            assert_eq!(reveal_target_path(&protocol), protocol.link_path);
         }
         #[cfg(not(windows))]
         {
