@@ -150,6 +150,7 @@ pub fn scan_catalog() -> crate::domain::app_catalog::CatalogScan {
                 target_path: meta.target_path,
                 icon_location: meta.icon_location,
                 icon_index: meta.icon_index,
+                provider_icon: None,
                 version: exe.version,
                 publisher: exe.publisher,
                 identifier: exe.product_name,

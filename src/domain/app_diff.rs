@@ -9,6 +9,13 @@ use std::collections::BTreeMap;
 
 use crate::domain::app_id::AppId;
 
+/// Artwork supplied by an app provider, independent of its launch route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IconSource {
+    pub path: String,
+    pub mtime: u64,
+}
+
 /// One shortcut's salient fields at scan time. The fields are exactly the ones
 /// that, if changed, should trigger an icon re-extraction (see
 /// `docs/ICON_CACHE.md` → cache invalidation). Kept small so a snapshot is
@@ -33,6 +40,7 @@ pub struct SnapshotEntry {
     pub icon_location: String,
     /// Shell-reported icon index inside `icon_location`.
     pub icon_index: i32,
+    pub provider_icon: Option<IconSource>,
     /// App version string for the ChatGPT-help prompt (macOS
     /// `CFBundleShortVersionString` / Windows exe version resource), or `""`
     /// when the platform could not read one. Not icon-relevant, so it never
@@ -61,6 +69,7 @@ impl SnapshotEntry {
             || self.target_mtime != other.target_mtime
             || self.icon_location != other.icon_location
             || self.icon_index != other.icon_index
+            || self.provider_icon != other.provider_icon
     }
 }
 
@@ -126,6 +135,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             version: String::new(),
             publisher: String::new(),
             identifier: String::new(),

@@ -255,6 +255,15 @@ impl IdentityAliases {
                 );
             }
             let mut entry = candidate.entry.clone();
+            // A preferred launch route need not supply the best artwork. Keep
+            // provider artwork from this identity group without replacing the
+            // Shell/shortcut launch target or its metadata.
+            entry.provider_icon = g
+                .candidates
+                .iter()
+                .filter(|c| c.valid && c.entry.provider_icon.is_some())
+                .min_by_key(|c| (c.source, &c.entry.app_id))
+                .and_then(|c| c.entry.provider_icon.clone());
             entry.app_id = id.clone();
             result.insert(id, entry);
         }
@@ -474,6 +483,7 @@ mod tests {
                 target_mtime: 1,
                 icon_location: String::new(),
                 icon_index: 0,
+                provider_icon: None,
                 version: String::new(),
                 publisher: String::new(),
                 identifier: String::new(),
@@ -494,6 +504,57 @@ mod tests {
         let groups = aliases.groups(candidates);
         aliases.reconcile(groups, layout)
     }
+    #[test]
+    fn provider_artwork_survives_launch_selection_and_refreshes_independently() {
+        use crate::domain::app_diff::IconSource;
+        let mut shell = c(
+            "shell:AppsFolder\\steam://rungameid/123",
+            Some("steam:123"),
+            None,
+        );
+        shell.source = Source::Shell;
+        let mut steam = c("steam://rungameid/123", Some("steam:123"), None);
+        steam.source = Source::Steam;
+        steam.entry.provider_icon = Some(IconSource {
+            path: "library/game.exe".into(),
+            mtime: 10,
+        });
+        let unrelated = c("other", Some("steam:456"), None);
+        let mut aliases = IdentityAliases::default();
+        let mut layout = LauncherState::default();
+        let id = AppId::from_normalized("steam:123");
+        let initial = scan(
+            &mut aliases,
+            &mut layout,
+            vec![steam.clone(), unrelated.clone(), shell.clone()],
+        );
+        assert_eq!(initial.len(), 2);
+        assert!(initial[&AppId::from_normalized("steam:456")]
+            .provider_icon
+            .is_none());
+        let entry = &initial[&id];
+        assert_eq!(entry.link_path, shell.entry.link_path);
+        assert_eq!(entry.target_path, shell.entry.target_path);
+        assert_eq!(entry.target_mtime, shell.entry.target_mtime);
+        assert_eq!(entry.provider_icon, steam.entry.provider_icon);
+        assert_eq!(aliases.source_of(&id), Some(Source::Shell));
+
+        steam.entry.provider_icon.as_mut().unwrap().mtime += 1;
+        let refreshed = scan(
+            &mut aliases,
+            &mut layout,
+            vec![shell.clone(), unrelated, steam.clone()],
+        );
+        assert!(entry.icon_relevant_diff(&refreshed[&id]));
+        assert_eq!(refreshed[&id].link_path, entry.link_path);
+        let fallback = scan(&mut aliases, &mut layout, vec![shell.clone()]);
+        assert!(fallback[&id].provider_icon.is_none());
+        assert!(refreshed[&id].icon_relevant_diff(&fallback[&id]));
+        steam.valid = false;
+        let invalid = scan(&mut aliases, &mut layout, vec![shell, steam]);
+        assert!(invalid[&id].provider_icon.is_none());
+    }
+
     #[test]
     fn common_aumid_groups_different_routes_and_shell_wins() {
         let mut direct = c(

@@ -23,6 +23,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::domain::app_diff::IconSource;
 use crate::domain::app_id::AppId;
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
@@ -79,6 +80,7 @@ pub struct CachedIcon {
     pub target_mtime: u64,
     pub icon_location: String,
     pub icon_index: i32,
+    pub provider_icon: Option<IconSource>,
     pub image: DecodedIcon,
     pub extracted_at_version: u32,
     pub category: IconCategory,
@@ -95,6 +97,7 @@ pub struct CacheProbe<'a> {
     pub target_mtime: u64,
     pub icon_location: &'a str,
     pub icon_index: i32,
+    pub provider_icon: Option<&'a IconSource>,
 }
 
 /// A opened cache DB. Cheap to share behind a `Mutex` since SQLite serializes
@@ -160,7 +163,7 @@ impl IconCache {
             .query_row(
                 "SELECT link_path, display_name, link_mtime, target_path, target_mtime,
                         icon_location, icon_index, image_w, image_h, image_rgba,
-                        extraction_version, category, scale
+                        extraction_version, category, scale, provider_icon_path, provider_icon_mtime
                  FROM icons WHERE app_id = ?1",
                 params![probe.app_id.as_ref()],
                 |r| {
@@ -169,6 +172,7 @@ impl IconCache {
                     let rgba: Vec<u8> = r.get("image_rgba")?;
                     let cat_str: String = r.get("category")?;
                     let cat = IconCategory::from_str_lossy(&cat_str);
+                    let provider_mtime = r.get::<_, i64>("provider_icon_mtime")? as u64;
                     Ok(CachedIcon {
                         app_id: probe.app_id.clone(),
                         link_path: r.get::<_, String>("link_path")?,
@@ -178,6 +182,12 @@ impl IconCache {
                         target_mtime: r.get::<_, i64>("target_mtime")? as u64,
                         icon_location: r.get::<_, String>("icon_location")?,
                         icon_index: r.get::<_, i64>("icon_index")? as i32,
+                        provider_icon: r.get::<_, Option<String>>("provider_icon_path")?.map(
+                            |path| IconSource {
+                                path,
+                                mtime: provider_mtime,
+                            },
+                        ),
                         image: DecodedIcon {
                             rgba,
                             w: image_w,
@@ -208,8 +218,8 @@ impl IconCache {
             "INSERT INTO icons (app_id, link_path, display_name, link_mtime, target_path,
                                 target_mtime, icon_location, icon_index, image_w, image_h,
                                 image_rgba, extraction_version, category, scale,
-                                last_seen_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                                last_seen_at, provider_icon_path, provider_icon_mtime)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
              ON CONFLICT(app_id) DO UPDATE SET
                link_path=excluded.link_path,
                display_name=excluded.display_name,
@@ -224,7 +234,9 @@ impl IconCache {
                extraction_version=excluded.extraction_version,
                category=excluded.category,
                scale=excluded.scale,
-               last_seen_at=excluded.last_seen_at",
+               last_seen_at=excluded.last_seen_at,
+               provider_icon_path=excluded.provider_icon_path,
+               provider_icon_mtime=excluded.provider_icon_mtime",
             params![
                 entry.app_id.as_ref(),
                 entry.link_path,
@@ -241,6 +253,8 @@ impl IconCache {
                 entry.category.as_str(),
                 entry.scale as f64,
                 now_unix(),
+                entry.provider_icon.as_ref().map(|icon| icon.path.as_str()),
+                entry.provider_icon.as_ref().map_or(0, |icon| icon.mtime) as i64,
             ],
         )?;
         tx.commit()
@@ -456,6 +470,7 @@ pub fn is_cache_valid(probe: &CacheProbe<'_>, cached: &CachedIcon) -> bool {
         && cached.target_mtime == probe.target_mtime
         && cached.icon_location == probe.icon_location
         && cached.icon_index == probe.icon_index
+        && cached.provider_icon.as_ref() == probe.provider_icon
 }
 
 fn now_unix() -> u64 {
@@ -562,7 +577,9 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             category           TEXT NOT NULL DEFAULT 'fullbleed',
             scale              REAL NOT NULL DEFAULT 1.0,
             last_seen_at       INTEGER NOT NULL,
-            deleted_at         INTEGER
+            deleted_at         INTEGER,
+            provider_icon_path TEXT,
+            provider_icon_mtime INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS icons_last_seen ON icons(last_seen_at);
         CREATE TABLE IF NOT EXISTS kv (
@@ -633,6 +650,17 @@ fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<bool> {
         )?;
         repaired = true;
     }
+    // Additive metadata: old rows represent no provider override. They remain
+    // valid for ordinary apps, and the new provider key invalidates Steam rows.
+    if !existing.iter().any(|c| c == "provider_icon_path") {
+        conn.execute("ALTER TABLE icons ADD COLUMN provider_icon_path TEXT", [])?;
+    }
+    if !existing.iter().any(|c| c == "provider_icon_mtime") {
+        conn.execute(
+            "ALTER TABLE icons ADD COLUMN provider_icon_mtime INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     Ok(repaired)
 }
 
@@ -669,6 +697,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             image: fake_icon([1, 2, 3, 255]),
             extracted_at_version: EXTRACTION_VERSION,
             category: IconCategory::FullBleed,
@@ -684,6 +713,7 @@ mod tests {
             target_mtime: 0,
             icon_location: "",
             icon_index: 0,
+            provider_icon: None,
         }
     }
 
@@ -700,6 +730,59 @@ mod tests {
         let got = c.get_if_valid(&probe(&app, 10)).unwrap();
         assert!(got.is_some());
         assert_eq!(got.unwrap().display_name, "app1");
+    }
+
+    #[test]
+    fn provider_artwork_roundtrips_and_invalidates_on_add_change_or_removal() {
+        let c = cache();
+        let mut e = entry("app1", 10);
+        let app = id("app1");
+        c.put(&e).unwrap();
+        let source = IconSource {
+            path: "library/game.exe".into(),
+            mtime: 20,
+        };
+        let mut p = probe(&app, 10);
+        p.provider_icon = Some(&source);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        e.provider_icon = Some(source.clone());
+        c.put(&e).unwrap();
+        assert_eq!(
+            c.get_if_valid(&p).unwrap().unwrap().provider_icon,
+            e.provider_icon
+        );
+        let updated = IconSource {
+            mtime: 21,
+            ..source.clone()
+        };
+        p.provider_icon = Some(&updated);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        let moved = IconSource {
+            path: "library/new/game.exe".into(),
+            ..source
+        };
+        p.provider_icon = Some(&moved);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        p.provider_icon = None;
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+    }
+
+    #[test]
+    fn adding_provider_columns_preserves_old_icons_and_user_state() {
+        let c = cache();
+        let e = entry("app1", 10);
+        c.put(&e).unwrap();
+        c.put_hidden_ids(std::slice::from_ref(&e.app_id)).unwrap();
+        {
+            let conn = c.conn.lock().unwrap();
+            conn.execute("ALTER TABLE icons DROP COLUMN provider_icon_path", [])
+                .unwrap();
+            conn.execute("ALTER TABLE icons DROP COLUMN provider_icon_mtime", [])
+                .unwrap();
+            check_schema_version(&conn).unwrap();
+        }
+        assert!(c.get_if_valid(&probe(&e.app_id, 10)).unwrap().is_some());
+        assert_eq!(c.get_hidden_ids(), vec![e.app_id]);
     }
 
     #[test]

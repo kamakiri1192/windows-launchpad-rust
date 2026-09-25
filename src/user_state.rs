@@ -109,6 +109,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             version: String::new(),
             publisher: String::new(),
             identifier: String::new(),

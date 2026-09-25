@@ -42,3 +42,18 @@ Windowsの抽出バージョン更新で旧画像を再取得し、配置用デ�
 | ![枠内に小さいアイコン](qa/desktop-icon-before.png) | ![アイコン本体](qa/desktop-icon-after.png) |
 
 Explorerの表示はSHOpenFolderAndSelectItemsを使用する。実ファイルの起動先がある場合はそのファイルを選択し、プロトコル起動先しかない場合は元のShell項目を選択する。URIをファイルパスとしてExplorerのコマンドラインに渡さず、解決失敗を既定フォルダの表示で隠さない。実機ではUnityBugReporter.exeのインストール先と、Applications内のXSOverlayが選択されることを確認した。
+
+
+## 起動先と提供元のアイコンを分離する
+
+同一IDの候補を統合するとき、起動先を選ぶ優先順位をそのまま画像ソースに適用しない。Steam scannerが既存の選択処理で見つけた画像・exe・アプリバンドルを、独立した`provider_icon`（パス・更新時刻）として保持する。Shell項目で起動する場合も、この情報をicon workerへ渡す。表示名や起動URIの文字列では画像経路を切り替えない。
+
+提供元画像の追加・移動・更新・消失で、該当アイコンのキャッシュを無効化する。画像ファイルが消失・破損していた場合は元のShell項目やショートカットのアイコンに戻す。キャッシュの列追加は既存行を維持し、提供元画像がない通常アプリと保存済みの配置を消去しない。
+
+実機の統合後カタログ161件で、Steam由来の4件（XSOverlay、SteamVR、Desktop Mate、VRChat）が既存の高解像度ソースを使うことを確認した。4件とも取得結果は256×256、正規化後は128×128。XSOverlayではShell側の粗い画像からインストール済みexeの画像に戻ることを目視確認した。これは実アプリのスキャンからicon workerまでを通した取得画像であり、画面全体のキャプチャではない。
+
+| Shell側の画像を使っていた状態 | 提供元画像を保持した状態 |
+| --- | --- |
+| ![Steamアイコン修正前](qa/steam-icon-before.png) | ![Steamアイコン修正後](qa/steam-icon-after.png) |
+
+読み取り専用の実機検証: `cargo test --bin launchpad-windows report_catalog_provider_icons -- --ignored --nocapture`。取得結果は`target/steam-icon-probe/`に保存する。合成テストは異なる起動経路、別IDの分離、画像更新、提供元の欠落・無効化、画像破損、キャッシュの移行・更新を検証する。

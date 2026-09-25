@@ -251,6 +251,7 @@ impl App {
                     target_mtime: entry.target_mtime,
                     icon_location: entry.icon_location.clone(),
                     icon_index: entry.icon_index,
+                    provider_icon: entry.provider_icon.clone(),
                     reason: IconReason::Fresh,
                 };
                 if handle.requests.send(req).is_err() {
@@ -365,6 +366,7 @@ impl App {
                 target_mtime: entry.target_mtime,
                 icon_location: entry.icon_location.clone(),
                 icon_index: entry.icon_index,
+                provider_icon: entry.provider_icon.clone(),
                 reason: if is_initial {
                     IconReason::Fresh
                 } else {
@@ -417,6 +419,7 @@ impl App {
             target_mtime: entry.target_mtime,
             icon_location: &entry.icon_location,
             icon_index: entry.icon_index,
+            provider_icon: entry.provider_icon.as_ref(),
         };
         let rec_state = self.registry.get(id).map(|r| r.icon_state);
         if matches!(rec_state, Some(IconState::Loaded | IconState::Cached)) {
@@ -526,6 +529,7 @@ impl App {
                 target_mtime: entry.target_mtime,
                 icon_location: &entry.icon_location,
                 icon_index: entry.icon_index,
+                provider_icon: entry.provider_icon.as_ref(),
             };
             match self.cache.get_if_valid(&probe) {
                 Ok(Some(cached)) => {
@@ -549,6 +553,7 @@ impl App {
                         target_mtime: entry.target_mtime,
                         icon_location: entry.icon_location.clone(),
                         icon_index: entry.icon_index,
+                        provider_icon: entry.provider_icon.clone(),
                         reason: IconReason::Updated,
                     });
                 }
