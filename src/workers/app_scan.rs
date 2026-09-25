@@ -19,6 +19,9 @@ use std::path::Path;
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 #[cfg(windows)]
+#[path = "shortcut_dedup.rs"]
+mod shortcut_dedup;
+#[cfg(windows)]
 use crate::icons::extract::{self, enumerate_start_menu};
 #[cfg(any(windows, target_os = "macos"))]
 use crate::workers::steam_scan::scan_steam_apps;
@@ -49,6 +52,7 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
         let shortcuts = enumerate_start_menu();
         let uninstaller_targets = collect_uninstaller_targets();
         let mut out = BTreeMap::new();
+        let mut launch_metadata = BTreeMap::new();
         for sc in shortcuts {
             let app_id = AppId::from_link_path(&sc.path);
             let link_mtime = extract::file_mtime(&sc.path);
@@ -78,6 +82,7 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
                 crate::platform::windows::exe_metadata(Path::new(&meta.target_path))
             };
 
+            launch_metadata.insert(app_id.clone(), meta.clone());
             let entry = SnapshotEntry {
                 app_id: app_id.clone(),
                 name: sc.name,
@@ -95,6 +100,7 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
             // which is fine — they're the same shortcut.
             out.insert(app_id, entry);
         }
+        shortcut_dedup::deduplicate(&mut out, &launch_metadata);
         for entry in scan_steam_apps() {
             // Steam may also have created a Start Menu shortcut. Prefer the Steam
             // manifest record because it has a stable app id and survives shortcut
@@ -423,6 +429,20 @@ fn wide_null(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Read-only diagnostic; installed apps vary by machine"]
+    fn report_duplicate_app_launchers() {
+        let snapshot = scan_start_menu();
+        for name in ["Discord", "Steam", "FocuSee", "VRChat Creator Companion"] {
+            let entries: Vec<_> = snapshot.values().filter(|e| e.name == name).collect();
+            eprintln!("{name}: {} launcher(s)", entries.len());
+            for entry in entries {
+                eprintln!("  {} -> {}", entry.link_path, entry.target_path);
+            }
+        }
+    }
 
     #[test]
     fn scan_returns_map_even_when_empty() {

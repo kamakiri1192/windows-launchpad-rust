@@ -36,11 +36,12 @@ use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_StartMenu, IEnumShellItems, ILFree,
-    IShellItem, IShellItem2, IShellItemImageFactory, IShellLinkW, SHCreateItemFromIDList,
-    SHCreateItemFromParsingName, SHGetFileInfoW, SHGetImageList, SHGetKnownFolderPath, ShellLink,
-    KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON, SHGFI_SYSICONINDEX,
-    SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
+    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_CommonStartup, FOLDERID_StartMenu,
+    FOLDERID_Startup, IEnumShellItems, ILFree, IShellItem, IShellItem2, IShellItemImageFactory,
+    IShellLinkW, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW,
+    SHGetImageList, SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS,
+    SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+    SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
@@ -69,9 +70,13 @@ const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
 pub fn enumerate_start_menu() -> Vec<Shortcut> {
     let _com = ComScope::new();
     let mut out = Vec::new();
+    let startup_folders: Vec<_> = [FOLDERID_Startup, FOLDERID_CommonStartup]
+        .into_iter()
+        .filter_map(known_folder_path)
+        .collect();
     for folder in [FOLDERID_StartMenu, FOLDERID_CommonStartMenu] {
         if let Some(path) = known_folder_path(folder) {
-            collect_lnks(&path, &mut out);
+            collect_lnks(&path, &startup_folders, &mut out);
         }
     }
     collect_apps_folder_entries(&mut out);
@@ -237,6 +242,10 @@ pub struct LnkMetadata {
     pub target_path: String,
     /// Arguments stored on the shortcut, or `""` when none are present.
     pub arguments: String,
+    /// False when arguments could not be read; not equivalent to no arguments.
+    pub arguments_known: bool,
+    /// Expanded "Start in" directory; None when it could not be read.
+    pub working_directory: Option<String>,
     /// Shell IconLocation field (expanded), or `""` if the icon lives in the
     /// target exe.
     pub icon_location: String,
@@ -256,11 +265,13 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let mut arguments_buf = [0u16; 2048];
-    let arguments = unsafe { link.GetArguments(&mut arguments_buf) }
+    let mut arguments_buf = vec![0u16; 32768];
+    let arguments_known = unsafe { link.GetArguments(&mut arguments_buf) }.is_ok();
+    let arguments = wide_to_string(&arguments_buf);
+    let mut directory_buf = vec![0u16; 32768];
+    let working_directory = unsafe { link.GetWorkingDirectory(&mut directory_buf) }
         .ok()
-        .map(|_| wide_to_string(&arguments_buf))
-        .unwrap_or_default();
+        .map(|_| expand_env(&wide_to_string(&directory_buf)));
 
     // IconLocation: wide buffer + out param for the index.
     let mut icon_buf = [0u16; 260];
@@ -274,6 +285,8 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
     Some(LnkMetadata {
         target_path,
         arguments,
+        arguments_known,
+        working_directory,
         icon_location: if icon_location.is_empty() {
             icon_location
         } else {
@@ -630,9 +643,16 @@ fn known_folder_path(folder: windows::core::GUID) -> Option<PathBuf> {
 }
 
 /// Recursively collect `*.lnk` files under `root` into `out`.
-fn collect_lnks(root: &Path, out: &mut Vec<Shortcut>) {
+fn collect_lnks(root: &Path, excluded: &[PathBuf], out: &mut Vec<Shortcut>) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        // Login actions are not manual launch entries, even if their names match an app.
+        if excluded.iter().any(|path| {
+            path.to_string_lossy()
+                .eq_ignore_ascii_case(&dir.to_string_lossy())
+        }) {
+            continue;
+        }
         let pattern = dir.join("*");
         let Some(pattern_w) = path_to_wide(&pattern) else {
             continue;
@@ -909,6 +929,34 @@ impl Drop for ComScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_menu_walk_excludes_only_the_configured_startup_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "launchpad-startup-test-{}",
+            format_args!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )
+        ));
+        let startup = root.join("Login actions");
+        let ordinary = root.join("Startup editor");
+        std::fs::create_dir_all(&startup).unwrap();
+        std::fs::create_dir_all(&ordinary).unwrap();
+        std::fs::write(root.join("FocuSee.lnk"), []).unwrap();
+        std::fs::write(startup.join("FocuSee.lnk"), []).unwrap();
+        std::fs::write(ordinary.join("Editor.lnk"), []).unwrap();
+        let mut entries = Vec::new();
+        collect_lnks(&root, std::slice::from_ref(&startup), &mut entries);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| !e.path.starts_with(&startup)));
+        // Only remove the unique temporary directory created by this test.
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn path_to_wide_is_nul_terminated() {
