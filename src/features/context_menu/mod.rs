@@ -480,14 +480,14 @@ mod tests {
 
     /// `open()` builds and caches the row list from the target's kind, so the
     /// render/release paths read one consistent `items` snapshot. A folder
-    /// gets four rows; a non-Steam app gets seven (no Steam row); a Steam app
-    /// gets the full eight-row superset including OpenInSteam.
+    /// gets three rows including delete; a non-Steam app gets five (no Steam row); a Steam app
+    /// gets the full six-row superset including OpenInSteam.
     #[test]
     fn open_builds_and_caches_the_row_list_for_each_target_kind() {
         let mut state = ContextMenuState::default();
         assert!(state.items.is_empty(), "default state has no rows");
 
-        // Folder: EditHome, IconLarger, IconSmaller, AppInfo (4 rows).
+        // Folder: EditHome, DeleteFolder, AppInfo (3 rows).
         state.open(
             LauncherItem::folder(crate::domain::folders::FolderId::from_normalized("f")),
             0.0,
@@ -498,31 +498,32 @@ mod tests {
             state.items,
             vec![
                 ContextMenuItem::EditHome,
-                ContextMenuItem::IconLarger,
-                ContextMenuItem::IconSmaller,
+                ContextMenuItem::DeleteFolder,
                 ContextMenuItem::AppInfo,
             ]
         );
         assert!(!state.items.contains(&ContextMenuItem::OpenInSteam));
 
-        // Non-Steam app: seven rows, no Steam row.
+        // Non-Steam app: five rows, no Steam row.
         state.open(
             LauncherItem::app(AppId::from_normalized("calc")),
             0.0,
             0.0,
             target_at(0.0, 0.0),
         );
-        assert_eq!(state.items.len(), 7);
+        assert_eq!(state.items.len(), 5);
         assert!(!state.items.contains(&ContextMenuItem::OpenInSteam));
+        assert!(!state.items.contains(&ContextMenuItem::IconLarger));
+        assert!(!state.items.contains(&ContextMenuItem::IconSmaller));
 
-        // Steam app: eight rows including OpenInSteam.
+        // Steam app: six rows including OpenInSteam.
         state.open(
             LauncherItem::app(AppId::from_normalized("steam:620")),
             0.0,
             0.0,
             target_at(0.0, 0.0),
         );
-        assert_eq!(state.items.len(), 8);
+        assert_eq!(state.items.len(), 6);
         assert!(state.items.contains(&ContextMenuItem::OpenInSteam));
 
         // The cached list matches what `menu_rows` builds for the same flags.

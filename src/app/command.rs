@@ -35,6 +35,21 @@ impl App {
     /// blob never blocks startup or wipes other settings.
     pub(crate) fn load_customization(&mut self) {
         self.settings = self.cache.get_settings();
+        #[cfg(windows)]
+        if !self.qa_enabled() {
+            match crate::user_state::load(&self.cache.path().with_file_name("user-state.sqlite3")) {
+                Ok(Some(state)) => {
+                    self.launcher_state = state.layout;
+                    self.catalog_aliases = state.aliases;
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.catalog_store_writable = false;
+                    eprintln!("user-state: preserving unreadable store: {error}");
+                }
+            }
+        }
         if let Some(state) = self.cache.get_launcher_state() {
             self.launcher_state = state;
             return;
@@ -55,6 +70,24 @@ impl App {
     pub(crate) fn persist_launcher_state(&self) {
         if self.qa_enabled() {
             return;
+        }
+        #[cfg(windows)]
+        {
+            if !self.catalog_store_writable {
+                return;
+            }
+            let state = crate::user_state::UserState::new(
+                self.launcher_state.clone(),
+                self.catalog_aliases.clone(),
+            );
+            if let Err(error) = crate::user_state::save(
+                &self.cache.path().with_file_name("user-state.sqlite3"),
+                &state,
+                &self.launcher_state,
+            ) {
+                eprintln!("user-state: failed to persist layout: {error}");
+                return;
+            }
         }
         if let Err(e) = self.cache.put_launcher_state(&self.launcher_state) {
             eprintln!("layout: failed to persist launcher state: {e}");
@@ -281,7 +314,25 @@ impl App {
                 let link_path = info.link_path.clone();
                 let name = info.name.clone();
                 self.hide();
-                match crate::platform::launch::open_shortcut(&link_path) {
+                #[cfg(windows)]
+                let result = {
+                    let id = self
+                        .snapshot
+                        .iter()
+                        .find(|(_, entry)| std::path::Path::new(&entry.link_path) == link_path)
+                        .map(|(id, _)| id.clone());
+                    crate::platform::launch::open_shortcut_with_refresh(&link_path, || {
+                        let id = id?;
+                        self.apply_catalog(crate::workers::app_scan::scan_catalog());
+                        let id = self.catalog_aliases.canonical(&id);
+                        self.snapshot
+                            .get(&id)
+                            .map(|entry| entry.link_path.clone().into())
+                    })
+                };
+                #[cfg(not(windows))]
+                let result = crate::platform::launch::open_shortcut(&link_path);
+                match result {
                     Ok(()) => eprintln!("launched {}", name),
                     Err(err) => eprintln!(
                         "failed to launch {} ({}): {}",
@@ -442,10 +493,12 @@ impl App {
 fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     #[cfg(windows)]
     {
-        if info.resolved_target.as_os_str().is_empty() {
-            info.link_path.clone()
-        } else {
+        if info.resolved_target.is_absolute() {
             info.resolved_target.clone()
+        } else {
+            // Protocol launch targets (e.g. steam://) are not filesystem
+            // locations. Reveal the original Shell item/shortcut instead.
+            info.link_path.clone()
         }
     }
     #[cfg(target_os = "macos")]
@@ -764,8 +817,11 @@ mod tests {
         #[cfg(windows)]
         {
             assert_eq!(
-                reveal_target_path(&launch_info()),
-                std::path::PathBuf::from("x.exe")
+                reveal_target_path(&AppLaunchInfo {
+                    resolved_target: std::path::PathBuf::from("C:/Program Files/Example/app.exe"),
+                    ..launch_info()
+                }),
+                std::path::PathBuf::from("C:/Program Files/Example/app.exe")
             );
             // Unresolvable shortcut → the .lnk itself.
             let unresolved = AppLaunchInfo {
@@ -776,6 +832,12 @@ mod tests {
                 reveal_target_path(&unresolved),
                 std::path::PathBuf::from("x.lnk")
             );
+            let protocol = AppLaunchInfo {
+                resolved_target: "steam://rungameid/123".into(),
+                link_path: "shell:AppsFolder\\steam://rungameid/123".into(),
+                ..launch_info()
+            };
+            assert_eq!(reveal_target_path(&protocol), protocol.link_path);
         }
         #[cfg(not(windows))]
         {

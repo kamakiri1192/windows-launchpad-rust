@@ -237,6 +237,12 @@ pub struct App {
     /// add/remove/re-detect cycles without corruption. Drives the visible grid
     /// order; the registry is now only the discovered-app dataset.
     pub launcher_state: LauncherState,
+    #[cfg(windows)]
+    pub catalog_aliases: crate::domain::app_catalog::IdentityAliases,
+    #[cfg(windows)]
+    pub catalog_presence: crate::domain::app_catalog::Presence,
+    #[cfg(windows)]
+    pub catalog_store_writable: bool,
     /// CPU-side fixed-slot atlas; the GPU texture mirrors it.
     pub atlas: IconAtlas,
     /// True once the atlas texture has been allocated+uploaded at least once.
@@ -473,6 +479,12 @@ impl App {
             launch_presentation: crate::app::launch_presentation::LaunchPresentation::default(),
             registry: AppRegistry::new(),
             launcher_state: LauncherState::new(),
+            #[cfg(windows)]
+            catalog_aliases: Default::default(),
+            #[cfg(windows)]
+            catalog_presence: Default::default(),
+            #[cfg(windows)]
+            catalog_store_writable: true,
             atlas: IconAtlas::new(64),
             atlas_uploaded: false,
             snapshot: BTreeMap::new(),

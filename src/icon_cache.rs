@@ -23,6 +23,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::domain::app_diff::IconSource;
 use crate::domain::app_id::AppId;
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
@@ -55,10 +56,12 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// soft-fringe pixels from the previous normalizer are regenerated.
 /// v9: recognizes dense, symmetric translucent macOS tile bodies when the
 /// opaque envelope contains only non-square foreground artwork.
+/// Windows v6: resolve desktop AppsFolder icons through the Shell image list;
+/// invalidate thumbnail-frame artwork without touching saved app placement.
 #[cfg(target_os = "macos")]
 pub const EXTRACTION_VERSION: u32 = 9;
 #[cfg(not(target_os = "macos"))]
-pub const EXTRACTION_VERSION: u32 = 5;
+pub const EXTRACTION_VERSION: u32 = 6;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).
@@ -77,6 +80,7 @@ pub struct CachedIcon {
     pub target_mtime: u64,
     pub icon_location: String,
     pub icon_index: i32,
+    pub provider_icon: Option<IconSource>,
     pub image: DecodedIcon,
     pub extracted_at_version: u32,
     pub category: IconCategory,
@@ -93,6 +97,7 @@ pub struct CacheProbe<'a> {
     pub target_mtime: u64,
     pub icon_location: &'a str,
     pub icon_index: i32,
+    pub provider_icon: Option<&'a IconSource>,
 }
 
 /// A opened cache DB. Cheap to share behind a `Mutex` since SQLite serializes
@@ -158,7 +163,7 @@ impl IconCache {
             .query_row(
                 "SELECT link_path, display_name, link_mtime, target_path, target_mtime,
                         icon_location, icon_index, image_w, image_h, image_rgba,
-                        extraction_version, category, scale
+                        extraction_version, category, scale, provider_icon_path, provider_icon_mtime
                  FROM icons WHERE app_id = ?1",
                 params![probe.app_id.as_ref()],
                 |r| {
@@ -167,6 +172,7 @@ impl IconCache {
                     let rgba: Vec<u8> = r.get("image_rgba")?;
                     let cat_str: String = r.get("category")?;
                     let cat = IconCategory::from_str_lossy(&cat_str);
+                    let provider_mtime = r.get::<_, i64>("provider_icon_mtime")? as u64;
                     Ok(CachedIcon {
                         app_id: probe.app_id.clone(),
                         link_path: r.get::<_, String>("link_path")?,
@@ -176,6 +182,12 @@ impl IconCache {
                         target_mtime: r.get::<_, i64>("target_mtime")? as u64,
                         icon_location: r.get::<_, String>("icon_location")?,
                         icon_index: r.get::<_, i64>("icon_index")? as i32,
+                        provider_icon: r.get::<_, Option<String>>("provider_icon_path")?.map(
+                            |path| IconSource {
+                                path,
+                                mtime: provider_mtime,
+                            },
+                        ),
                         image: DecodedIcon {
                             rgba,
                             w: image_w,
@@ -206,8 +218,8 @@ impl IconCache {
             "INSERT INTO icons (app_id, link_path, display_name, link_mtime, target_path,
                                 target_mtime, icon_location, icon_index, image_w, image_h,
                                 image_rgba, extraction_version, category, scale,
-                                last_seen_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                                last_seen_at, provider_icon_path, provider_icon_mtime)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
              ON CONFLICT(app_id) DO UPDATE SET
                link_path=excluded.link_path,
                display_name=excluded.display_name,
@@ -222,7 +234,9 @@ impl IconCache {
                extraction_version=excluded.extraction_version,
                category=excluded.category,
                scale=excluded.scale,
-               last_seen_at=excluded.last_seen_at",
+               last_seen_at=excluded.last_seen_at,
+               provider_icon_path=excluded.provider_icon_path,
+               provider_icon_mtime=excluded.provider_icon_mtime",
             params![
                 entry.app_id.as_ref(),
                 entry.link_path,
@@ -239,6 +253,8 @@ impl IconCache {
                 entry.category.as_str(),
                 entry.scale as f64,
                 now_unix(),
+                entry.provider_icon.as_ref().map(|icon| icon.path.as_str()),
+                entry.provider_icon.as_ref().map_or(0, |icon| icon.mtime) as i64,
             ],
         )?;
         tx.commit()
@@ -454,6 +470,7 @@ pub fn is_cache_valid(probe: &CacheProbe<'_>, cached: &CachedIcon) -> bool {
         && cached.target_mtime == probe.target_mtime
         && cached.icon_location == probe.icon_location
         && cached.icon_index == probe.icon_index
+        && cached.provider_icon.as_ref() == probe.provider_icon
 }
 
 fn now_unix() -> u64 {
@@ -560,24 +577,25 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             category           TEXT NOT NULL DEFAULT 'fullbleed',
             scale              REAL NOT NULL DEFAULT 1.0,
             last_seen_at       INTEGER NOT NULL,
-            deleted_at         INTEGER
+            deleted_at         INTEGER,
+            provider_icon_path TEXT,
+            provider_icon_mtime INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS icons_last_seen ON icons(last_seen_at);
         CREATE TABLE IF NOT EXISTS kv (
             key   TEXT PRIMARY KEY,
             value BLOB NOT NULL
         );
-        INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?1);
-        INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('extraction_version', ?2);
         ",
     )?;
-    // Set the bundled version constants into the meta row (overwriting if the
-    // file pre-existed with an older value — the version mismatch is handled
-    // in `check_schema_version`).
+    // Keep the stored version until its columns have actually been migrated.
     conn.execute(
-        "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION as i64],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('extraction_version', ?1)",
+        params![EXTRACTION_VERSION as i64],
     )?;
     Ok(())
 }
@@ -590,13 +608,17 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
             |r| r.get(0),
         )
         .unwrap_or(0);
-    if stored as u32 != SCHEMA_VERSION {
-        // Schema version mismatch: run any pending column migrations
-        // before wiping cached rows so that subsequent INSERTs succeed.
-        migrate_icons_schema(conn)?;
+    // Earlier releases could stamp v2 on a v1 table. Inspect the columns even
+    // when the stored version matches; only rebuildable icon rows are discarded.
+    let repaired = migrate_icons_schema(conn)?;
+    if stored as u32 != SCHEMA_VERSION || repaired {
         // Wipe icons so everything is re-extracted.
         conn.execute("DELETE FROM icons", [])?;
     }
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?1)",
+        params![SCHEMA_VERSION as i64],
+    )?;
     Ok(())
 }
 
@@ -605,7 +627,7 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
 /// This handles the v1→v2 migration where `category` and `scale` columns were
 /// added. SQLite does not support `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so
 /// we query `PRAGMA table_info` to check for column existence first.
-fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
+fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<bool> {
     // Collect existing column names.
     let mut stmt = conn.prepare("PRAGMA table_info(icons)")?;
     let existing: Vec<String> = stmt
@@ -613,19 +635,33 @@ fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
         .filter_map(|r| r.ok())
         .collect();
 
+    let mut repaired = false;
     if !existing.iter().any(|c| c == "category") {
         conn.execute(
             "ALTER TABLE icons ADD COLUMN category TEXT NOT NULL DEFAULT 'fullbleed'",
             [],
         )?;
+        repaired = true;
     }
     if !existing.iter().any(|c| c == "scale") {
         conn.execute(
             "ALTER TABLE icons ADD COLUMN scale REAL NOT NULL DEFAULT 1.0",
             [],
         )?;
+        repaired = true;
     }
-    Ok(())
+    // Additive metadata: old rows represent no provider override. They remain
+    // valid for ordinary apps, and the new provider key invalidates Steam rows.
+    if !existing.iter().any(|c| c == "provider_icon_path") {
+        conn.execute("ALTER TABLE icons ADD COLUMN provider_icon_path TEXT", [])?;
+    }
+    if !existing.iter().any(|c| c == "provider_icon_mtime") {
+        conn.execute(
+            "ALTER TABLE icons ADD COLUMN provider_icon_mtime INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(repaired)
 }
 
 /// Resolve the platform-native persistent database path. Kept pub(crate) so
@@ -661,6 +697,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             image: fake_icon([1, 2, 3, 255]),
             extracted_at_version: EXTRACTION_VERSION,
             category: IconCategory::FullBleed,
@@ -676,6 +713,7 @@ mod tests {
             target_mtime: 0,
             icon_location: "",
             icon_index: 0,
+            provider_icon: None,
         }
     }
 
@@ -692,6 +730,59 @@ mod tests {
         let got = c.get_if_valid(&probe(&app, 10)).unwrap();
         assert!(got.is_some());
         assert_eq!(got.unwrap().display_name, "app1");
+    }
+
+    #[test]
+    fn provider_artwork_roundtrips_and_invalidates_on_add_change_or_removal() {
+        let c = cache();
+        let mut e = entry("app1", 10);
+        let app = id("app1");
+        c.put(&e).unwrap();
+        let source = IconSource {
+            path: "library/game.exe".into(),
+            mtime: 20,
+        };
+        let mut p = probe(&app, 10);
+        p.provider_icon = Some(&source);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        e.provider_icon = Some(source.clone());
+        c.put(&e).unwrap();
+        assert_eq!(
+            c.get_if_valid(&p).unwrap().unwrap().provider_icon,
+            e.provider_icon
+        );
+        let updated = IconSource {
+            mtime: 21,
+            ..source.clone()
+        };
+        p.provider_icon = Some(&updated);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        let moved = IconSource {
+            path: "library/new/game.exe".into(),
+            ..source
+        };
+        p.provider_icon = Some(&moved);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        p.provider_icon = None;
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+    }
+
+    #[test]
+    fn adding_provider_columns_preserves_old_icons_and_user_state() {
+        let c = cache();
+        let e = entry("app1", 10);
+        c.put(&e).unwrap();
+        c.put_hidden_ids(std::slice::from_ref(&e.app_id)).unwrap();
+        {
+            let conn = c.conn.lock().unwrap();
+            conn.execute("ALTER TABLE icons DROP COLUMN provider_icon_path", [])
+                .unwrap();
+            conn.execute("ALTER TABLE icons DROP COLUMN provider_icon_mtime", [])
+                .unwrap();
+            check_schema_version(&conn).unwrap();
+        }
+        assert!(c.get_if_valid(&probe(&e.app_id, 10)).unwrap().is_some());
+        assert_eq!(c.get_hidden_ids(), vec![e.app_id]);
     }
 
     #[test]
@@ -909,6 +1000,15 @@ mod tests {
     /// fail silently because the new column names are not recognised.
     #[test]
     fn migration_adds_category_and_scale_columns_to_v1_db() {
+        assert_legacy_cache_migration(1);
+    }
+
+    #[test]
+    fn migration_repairs_v1_columns_with_incorrect_current_version() {
+        assert_legacy_cache_migration(SCHEMA_VERSION);
+    }
+
+    fn assert_legacy_cache_migration(stored_version: u32) {
         let conn = Connection::open_in_memory().unwrap();
 
         // Create v1-style schema (without category/scale columns).
@@ -968,8 +1068,25 @@ mod tests {
             1
         );
 
-        // Run the full version-check path (migration + wipe).
+        conn.execute(
+            "UPDATE schema_meta SET value=?1 WHERE key='schema_version'",
+            [stored_version],
+        )
+        .unwrap();
+        // Exercise initialization too: it used to conceal the old schema.
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO kv VALUES('launcher_state', ?1)",
+            [b"user layout".as_slice()],
+        )
+        .unwrap();
         check_schema_version(&conn).unwrap();
+        let saved: Vec<u8> = conn
+            .query_row("SELECT value FROM kv WHERE key='launcher_state'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(saved, b"user layout");
 
         // Columns must now exist.
         let mut stmt = conn.prepare("PRAGMA table_info(icons)").unwrap();

@@ -140,6 +140,7 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
         icon_index: 0,
+        provider_icon: None,
         version,
         publisher,
         identifier,

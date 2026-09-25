@@ -641,6 +641,14 @@ pub fn build_with_ui(
 ) -> SettingsPanelModel {
     let scale = sanitize_scale(input.scale_factor);
     let layout = panel_layout(input.viewport, scale);
+    // The developer-only category is unavailable in optimized release builds.
+    // Fall back defensively in case the active category was carried over as Debug.
+    let active_category = if !cfg!(debug_assertions) && input.category == SettingsCategoryId::Debug
+    {
+        SettingsCategoryId::Apps
+    } else {
+        input.category
+    };
     let raw_progress = input.progress.clamp(0.0, 1.0);
     let pop = pop_progress(raw_progress);
     let visual_scale = 0.935 + 0.065 * pop;
@@ -780,6 +788,9 @@ pub fn build_with_ui(
     // Sidebar category buttons
     // ------------------------------------------------------------------
     for (index, (cat_id, label)) in copy.categories.iter().copied().enumerate() {
+        if !cfg!(debug_assertions) && cat_id == SettingsCategoryId::Debug {
+            continue;
+        }
         let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
         let sidebar_w = layout.sidebar_w - 24.0 * scale;
         let row_rect = Rect::new(
@@ -863,8 +874,8 @@ pub fn build_with_ui(
     let cat_label = copy
         .categories
         .iter()
-        .find_map(|(cat, lbl)| (*cat == input.category).then_some(*lbl))
-        .unwrap_or(input.category.key());
+        .find_map(|(cat, lbl)| (*cat == active_category).then_some(*lbl))
+        .unwrap_or(active_category.key());
     ui.begin_absolute_placement();
     ui.set_cursor(content_left, layout.top + 32.0 * scale);
     ui.set_available_width(content_w);
@@ -881,7 +892,7 @@ pub fn build_with_ui(
             .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
     );
 
-    match input.category {
+    match active_category {
         // ==============================================================
         // Apps
         // ==============================================================

@@ -114,31 +114,72 @@ fn steam_url(appid: &str) -> String {
 
 #[cfg(windows)]
 pub fn open_shortcut(path: &Path) -> Result<(), String> {
-    match shell_execute(path) {
-        Ok(()) => Ok(()),
-        Err(shell_err) => open_via_explorer(path).map_err(|explorer_err| {
-            format!("{shell_err}; explorer.exe fallback failed: {explorer_err}")
-        }),
+    shell_execute(path).map_err(|error| error.message)
+}
+
+#[cfg(windows)]
+struct LaunchError {
+    unresolved: bool,
+    message: String,
+}
+
+/// Refresh only when parsing failed before invocation. Shell cancellation and
+/// execution errors must never trigger another route or a second launch.
+#[cfg(windows)]
+pub fn open_shortcut_with_refresh(
+    path: &Path,
+    refresh: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    launch_with_refresh(path, shell_execute, refresh)
+}
+
+#[cfg(windows)]
+fn launch_with_refresh(
+    path: &Path,
+    mut launch: impl FnMut(&Path) -> Result<(), LaunchError>,
+    refresh: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    match launch(path) {
+        Err(error) if error.unresolved => {
+            if let Some(next) = refresh().filter(|next| next != path) {
+                launch(&next).map_err(|error| error.message)
+            } else {
+                Err(error.message)
+            }
+        }
+        result => result.map_err(|error| error.message),
     }
 }
 
 /// Open the OS file manager (Explorer / Finder) with `path` selected.
 ///
-/// Windows reveals a file by launching `explorer.exe /select,<path>`; macOS
-/// uses `open -R`. Both return as soon as the child process spawns, so the
-/// result only reflects whether the manager was *started*, not whether the
-/// selection actually appeared.
+/// Windows selects a parsed Shell item through SHOpenFolderAndSelectItems; macOS
+/// uses `open -R`. Windows reports Shell parsing/selection errors; macOS
+/// reports whether the file-manager request was started.
 #[cfg(windows)]
 pub fn reveal(path: &Path) -> Result<(), String> {
-    // `/select,<path>` must arrive as a single command-line argument (the
-    // comma is part of the switch, no space after it). Building the string
-    // here keeps `Command` from splitting on the comma.
-    let arg = format!("/select,{}", path.to_string_lossy());
-    std::process::Command::new("explorer.exe")
-        .arg(arg)
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx};
+    use windows::Win32::UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName};
+    let _com = crate::icons::extract::ComScope::new();
+    if !path.is_absolute()
+        && !crate::icons::extract::is_apps_folder_uri(path)
+        && !path.to_string_lossy().starts_with("::{")
+    {
+        return Err("No filesystem or Shell item to reveal".into());
+    }
+    let name = wide_null(&path.to_string_lossy());
+    let mut pidl = std::ptr::null_mut();
+    unsafe { SHParseDisplayName(PCWSTR(name.as_ptr()), None::<&IBindCtx>, &mut pidl, 0, None) }
+        .map_err(|err| format!("Could not resolve item to reveal: {err}"))?;
+    // No child array means open the item's parent and select the item itself.
+    // A failed parse/select is reported instead of opening Explorer's default
+    // folder and treating process creation as a successful selection.
+    let result = unsafe { SHOpenFolderAndSelectItems(pidl, None, 0) };
+    unsafe {
+        CoTaskMemFree(Some(pidl.cast()));
+    }
+    result.map_err(|err| format!("Could not select item in Explorer: {err}"))
 }
 
 /// Open the native properties/info view for an application path.
@@ -213,45 +254,53 @@ pub fn reveal(_path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn shell_execute(path: &Path) -> Result<(), String> {
+fn shell_execute(path: &Path) -> Result<(), LaunchError> {
     use windows::core::PCWSTR;
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    let operation = wide_null("open");
-    let path_text = path.to_string_lossy();
-    let file = wide_null(path_text.as_ref());
-
-    // SAFETY: all PCWSTR arguments point to NUL-terminated UTF-16 buffers that
-    // live for the duration of the call. ShellExecuteW returns synchronously.
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR(operation.as_ptr()),
-            PCWSTR(file.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
+    use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx};
+    use windows::Win32::UI::Shell::{
+        SHParseDisplayName, ShellExecuteExW, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOASYNC,
+        SHELLEXECUTEINFOW,
     };
-
-    // ShellExecuteW reports success with any value greater than 32. Values at
-    // or below 32 are historical SE_ERR_* / Win32 error codes.
-    let code = result.0 as usize;
-    if code > 32 {
-        Ok(())
-    } else {
-        Err(format!("ShellExecuteW failed with code {code}"))
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let _com = crate::icons::extract::ComScope::new();
+    let name = wide_null(&path.to_string_lossy());
+    // Provider protocol URLs are lpFile targets, not filesystem/Shell PIDLs.
+    if path.to_string_lossy().starts_with("steam://") {
+        let mut execute = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOASYNC,
+            lpFile: PCWSTR(name.as_ptr()),
+            nShow: SW_SHOWNORMAL.0,
+            ..Default::default()
+        };
+        return unsafe { ShellExecuteExW(&mut execute) }.map_err(|error| LaunchError {
+            unresolved: false,
+            message: error.to_string(),
+        });
     }
-}
-
-#[cfg(windows)]
-fn open_via_explorer(path: &Path) -> Result<(), String> {
-    std::process::Command::new("explorer.exe")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+    let mut pidl = std::ptr::null_mut();
+    unsafe { SHParseDisplayName(PCWSTR(name.as_ptr()), None::<&IBindCtx>, &mut pidl, 0, None) }
+        .map_err(|error| LaunchError {
+            unresolved: true,
+            message: format!("Shell could not resolve {}: {error}", path.display()),
+        })?;
+    let mut execute = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_INVOKEIDLIST | SEE_MASK_NOASYNC,
+        lpIDList: pidl.cast(),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    // Invoke the registered default verb exactly once. No explorer.exe fallback:
+    // starting Explorer does not establish that an application launch succeeded.
+    let result = unsafe { ShellExecuteExW(&mut execute) };
+    unsafe {
+        CoTaskMemFree(Some(pidl.cast()));
+    }
+    result.map_err(|error| LaunchError {
+        unresolved: false,
+        message: format!("Shell rejected launch of {}: {error}", path.display()),
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -285,6 +334,89 @@ fn escape_applescript_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn reveal_rejects_protocols_and_missing_items_without_opening_default_folder() {
+        for path in [
+            "steam://rungameid/123",
+            "https://example.com",
+            "",
+            "relative.exe",
+            "C:/launchpad-nonexistent-reveal-fixture-871223/missing.exe",
+        ] {
+            assert!(reveal(Path::new(path)).is_err(), "{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "interactive: opens Explorer to the explicitly supplied item"]
+    fn probe_reveal_item() {
+        let path = std::env::var_os("LAUNCHPAD_REVEAL_PROBE").expect("set LAUNCHPAD_REVEAL_PROBE");
+        reveal(Path::new(&path)).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_unresolved_locators_refresh_and_retry_once() {
+        use std::cell::Cell;
+        let old = Path::new("old.lnk");
+        for rejected in [false, true] {
+            let calls = Cell::new(0);
+            let result = launch_with_refresh(
+                old,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    if rejected {
+                        Err(LaunchError {
+                            unresolved: false,
+                            message: "cancelled".into(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                || panic!("accepted or rejected invocation must not refresh"),
+            );
+            assert_eq!(result.is_err(), rejected);
+            assert_eq!(calls.get(), 1);
+        }
+        let mut attempted = Vec::new();
+        let result = launch_with_refresh(
+            old,
+            |path| {
+                attempted.push(path.to_path_buf());
+                if path == old {
+                    Err(LaunchError {
+                        unresolved: true,
+                        message: "missing".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+            || Some("new.lnk".into()),
+        );
+        assert!(result.is_ok());
+        assert_eq!(attempted, [old.to_path_buf(), "new.lnk".into()]);
+        for replacement in [None, Some(old.to_path_buf())] {
+            let calls = Cell::new(0);
+            assert!(launch_with_refresh(
+                old,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    Err(LaunchError {
+                        unresolved: true,
+                        message: "missing".into(),
+                    })
+                },
+                || replacement
+            )
+            .is_err());
+            assert_eq!(calls.get(), 1);
+        }
+    }
 
     #[test]
     fn steam_url_targets_library_details() {

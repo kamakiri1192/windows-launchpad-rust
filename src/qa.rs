@@ -218,6 +218,20 @@ pub enum QaAction {
     TypeText {
         value: String,
     },
+    SearchText {
+        value: String,
+    },
+    SearchPreedit {
+        value: String,
+    },
+    SearchCommit {
+        value: String,
+    },
+    AssertSearch {
+        query: String,
+        visible_items: usize,
+        menu_active: bool,
+    },
     CommitRename,
     Escape,
     ExitEditMode,
@@ -1649,6 +1663,33 @@ impl App {
             }
             QaAction::TypeText { value } => {
                 self.handle_action(AppAction::Keyboard(KeyAction::FolderRenameChar(value)));
+            }
+            QaAction::SearchText { value } => {
+                self.handle_action(AppAction::Keyboard(KeyAction::OpenSearchAndChar(value)));
+            }
+            QaAction::SearchPreedit { value } => {
+                self.handle_action(AppAction::Ime(winit::event::Ime::Preedit(value, None)));
+            }
+            QaAction::SearchCommit { value } => {
+                self.handle_action(AppAction::Ime(winit::event::Ime::Commit(value)));
+            }
+            QaAction::AssertSearch {
+                query,
+                visible_items,
+                menu_active,
+            } => {
+                assert_eq!(self.visible_search_query(), query, "search query changed");
+                assert_eq!(
+                    self.visible_launcher_items().len(),
+                    visible_items,
+                    "search results changed"
+                );
+                assert_eq!(
+                    self.context_menu.is_active(),
+                    menu_active,
+                    "unexpected menu state"
+                );
+                assert!(self.control.wants_keyboard(), "search field collapsed");
             }
             QaAction::CommitRename => {
                 self.handle_action(AppAction::Keyboard(KeyAction::CommitFolderRename));

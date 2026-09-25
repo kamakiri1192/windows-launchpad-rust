@@ -123,6 +123,42 @@ impl LauncherState {
         self.folders.remove(id)
     }
 
+    /// Delete the folder container and promote its children to top-level items
+    /// at the folder's former position, preserving child order. Hidden or
+    /// already-placed apps are left where they are.
+    pub fn delete_folder(&mut self, id: &FolderId) -> Option<Folder> {
+        let folder = self.folders.remove(id)?;
+        let former_index = self
+            .items
+            .iter()
+            .position(|item| item.as_folder_id() == Some(id));
+        self.items.retain(|item| item.as_folder_id() != Some(id));
+
+        let mut promoted = Vec::with_capacity(folder.children.len());
+        for app_id in &folder.children {
+            let already_in_items = self.items.iter().any(|item| item.is_app(app_id));
+            let already_in_folder = self.folder_child_ids().any(|child| child == app_id);
+            let already_promoted = promoted
+                .iter()
+                .any(|item: &LauncherItem| item.is_app(app_id));
+            if self.hidden_apps.contains(app_id)
+                || already_in_items
+                || already_in_folder
+                || already_promoted
+            {
+                continue;
+            }
+            promoted.push(LauncherItem::App(app_id.clone()));
+        }
+
+        let insert_at = former_index
+            .unwrap_or(self.items.len())
+            .min(self.items.len());
+        self.items.splice(insert_at..insert_at, promoted);
+        self.customized = true;
+        Some(folder)
+    }
+
     /// Hide an app: drop it from the top-level item list and add it to the
     /// hidden set. Returns true if this changed the state.
     pub fn hide_app(&mut self, id: &AppId) -> bool {
@@ -781,6 +817,34 @@ mod tests {
         assert!(state.is_hidden(&app("hidden")));
         assert!(!state.folders.contains_key(&folder_id));
         assert_eq!(state.items, vec![LauncherItem::App(app("remaining"))]);
+    }
+
+    #[test]
+    fn delete_folder_promotes_children_at_its_position_in_order() {
+        let folder_id = FolderId::generate(0);
+        let mut folder = Folder::new(folder_id.clone(), "Games");
+        folder.children = vec![app("first"), app("second")];
+
+        let mut state = LauncherState::new();
+        state.items = vec![
+            LauncherItem::App(app("before")),
+            LauncherItem::Folder(folder_id.clone()),
+            LauncherItem::App(app("after")),
+        ];
+        state.upsert_folder(folder.clone());
+
+        assert_eq!(state.delete_folder(&folder_id), Some(folder));
+        assert_eq!(
+            state.items,
+            vec![
+                LauncherItem::App(app("before")),
+                LauncherItem::App(app("first")),
+                LauncherItem::App(app("second")),
+                LauncherItem::App(app("after")),
+            ]
+        );
+        assert!(!state.folders.contains_key(&folder_id));
+        assert!(state.customized);
     }
 
     #[test]

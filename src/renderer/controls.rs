@@ -82,11 +82,13 @@ pub const KIND_MINUS: f32 = 17.0;
 /// Info glyph used by the context menu (app info).
 pub const KIND_INFO: f32 = 18.0;
 /// ChatGPT logo glyph used by the context menu (ChatGPT help). Drawn by
-/// sampling the dedicated SVG texture (kind 19), not a procedural SDF.
+/// sampling the context-menu SDF atlas (kind 19), not a procedural SDF.
 pub const KIND_CHATGPT_LOGO: f32 = 19.0;
 /// Steam logo glyph used by the context menu (open in Steam). Drawn by
-/// sampling the dedicated SVG texture (kind 20), not a procedural SDF.
+/// sampling the context-menu SDF atlas (kind 20), not a procedural SDF.
 pub const KIND_STEAM_LOGO: f32 = 20.0;
+/// Trash can glyph used by the context menu (delete folder).
+pub const KIND_TRASH: f32 = 21.0;
 
 /// Uniform for the bottom-control overlay + text shaders. The bottom control
 /// uses only the viewport; edit badges also use scroll and the page frame clip.

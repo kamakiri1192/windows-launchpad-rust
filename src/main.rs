@@ -45,6 +45,8 @@ mod spring_anim;
 mod startup_timer;
 mod ui;
 mod ui_model;
+#[cfg(windows)]
+mod user_state;
 mod workers;
 
 use std::sync::Arc;

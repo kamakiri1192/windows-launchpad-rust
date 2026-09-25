@@ -987,6 +987,10 @@ impl App {
                 WorkerMessage::Icon(IconResult::Failed { app_id, error }) => {
                     self.fail_icon(&app_id, error);
                 }
+                #[cfg(windows)]
+                WorkerMessage::Refresh(RefreshMessage::Catalog(scan)) => {
+                    self.apply_catalog(scan);
+                }
                 WorkerMessage::Refresh(RefreshMessage::Initial(snap)) => {
                     self.ingest_snapshot(snap, true);
                 }
@@ -1086,6 +1090,22 @@ impl App {
         {
             self.drag_item = None;
         }
+        self.relayout();
+        self.request_redraw();
+    }
+
+    /// Remove a folder container while preserving its apps as top-level items.
+    /// The context-menu action is immediate and persists the new layout.
+    pub(crate) fn delete_folder(&mut self, id: &crate::domain::folders::FolderId) {
+        if self.launcher_state.delete_folder(id).is_none() {
+            return;
+        }
+        if self.folders.active.as_ref() == Some(id) {
+            self.close_folder();
+            self.folder_scroller = None;
+            self.folder_scroll_pending_commit = false;
+        }
+        self.persist_launcher_state();
         self.relayout();
         self.request_redraw();
     }

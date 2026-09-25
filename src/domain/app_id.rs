@@ -1,11 +1,12 @@
-//! Stable application identity derived from a shortcut's `.lnk` path.
+//! Durable application identity, independent of the selected launch route.
+//! Windows catalog aliases also preserve legacy shortcut-path IDs.
 //!
 //! The launcher used to key everything off a positional `app_index`. That works
 //! when the app list is immutable, but as soon as shortcuts are added or removed
 //! while the launcher is open, a positional index silently "shifts" — clicking
-//! the same physical tile can resolve to a different app. `AppId` fixes this:
-//! it is derived from the *normalized* `.lnk` path, so the same shortcut always
-//! maps to the same id regardless of where it sits in the display order.
+//! the same physical tile can resolve to a different app. `AppId` fixes this
+//! by identifying the app independently of its position. Windows catalog IDs
+//! are preserved by aliases as launch routes change; legacy path IDs remain valid.
 //!
 //! Normalization is intentionally simple and portable (no `std::fs::canonicalize`,
 //! which would touch the disk and fail for missing files): lowercase, drive letter
@@ -15,9 +16,10 @@
 use std::fmt;
 use std::path::Path;
 
-/// Opaque, stable identifier for one Start Menu shortcut.
+/// Opaque application identifier. Legacy IDs can be shortcut paths; new Windows
+/// catalog IDs are allocated once and preserved by the durable alias map.
 ///
-/// Wraps the normalized `.lnk` path. Cheap to clone (an `Arc<str>` would be
+/// Wraps an opaque string. Cheap to clone (an `Arc<str>` would be
 /// overkill for our sizes). Compared by the inner string, so it works as a
 /// `HashMap`/`BTreeMap` key out of the box.
 #[derive(

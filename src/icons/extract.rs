@@ -16,18 +16,15 @@
 //! All Win32 handles (`HICON`, `HBITMAP`, `HDC`) are wrapped in RAII guards so
 //! a panic or early return can't leak GDI objects.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use windows::core::{Interface, GUID, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{HANDLE, PROPERTYKEY, SIZE};
+use windows::Win32::Foundation::{PROPERTYKEY, SIZE};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     DIB_RGB_COLORS, HBITMAP, HDC,
 };
-use windows::Win32::Storage::FileSystem::{
-    FindClose, FindFirstFileW, FindNextFileW, FILE_ATTRIBUTE_DIRECTORY, WIN32_FIND_DATAW,
-};
+use windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IBindCtx, IPersistFile,
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -36,23 +33,29 @@ use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_StartMenu, IEnumShellItems, ILFree,
-    IShellItem, IShellItem2, IShellItemImageFactory, IShellLinkW, SHCreateItemFromIDList,
-    SHCreateItemFromParsingName, SHGetFileInfoW, SHGetImageList, SHGetKnownFolderPath, ShellLink,
-    KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON, SHGFI_SYSICONINDEX,
-    SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
+    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_CommonStartup, FOLDERID_Desktop,
+    FOLDERID_PublicDesktop, FOLDERID_StartMenu, FOLDERID_Startup, IEnumShellItems, ILFree,
+    IShellItem, IShellItem2, IShellItemImageFactory, IShellLinkDataList, IShellLinkW,
+    SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW, SHGetImageList,
+    SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON,
+    SHGFI_SYSICONINDEX, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
 };
 
 use super::DecodedIcon;
+use crate::domain::app_catalog::{PropertyValue, Source};
+use windows::Win32::System::Com::StructuredStorage::{PropVariantToStringAlloc, PROPVARIANT};
+use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PSGetPropertyKeyFromName};
 
 /// One enumerated shortcut: its Shell display name and the `.lnk` path on disk.
 #[derive(Debug, Clone)]
 pub struct Shortcut {
     pub name: String,
     pub path: PathBuf,
+    pub source: Source,
+    pub metadata: Option<LnkMetadata>,
 }
 
 const APPS_FOLDER_PREFIX: &str = r"shell:AppsFolder\";
@@ -61,21 +64,70 @@ const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
     pid: 5,
 };
 
-/// Enumerate `.lnk` files under both the per-user and all-users Start Menus.
+/// Enumerate `.lnk` files in the Start Menus and desktop known folders.
+/// Desktop folders are scanned only at the top level; user document trees are
+/// not application catalogs. Callers filter out links to non-applications.
 ///
 /// Returns the combined list, duplicates (same file in both folders are rare)
 /// kept in encounter order. Errors are logged and skipped so a single
 /// unreadable folder can't blank the whole grid.
 pub fn enumerate_start_menu() -> Vec<Shortcut> {
+    enumerate_application_candidates().0
+}
+pub fn enumerate_application_candidates() -> (
+    Vec<Shortcut>,
+    Vec<String>,
+    std::collections::BTreeSet<Source>,
+) {
     let _com = ComScope::new();
     let mut out = Vec::new();
-    for folder in [FOLDERID_StartMenu, FOLDERID_CommonStartMenu] {
+    let mut errors = Vec::new();
+    let mut failed_sources = std::collections::BTreeSet::new();
+    let startup_folders: Vec<_> = [FOLDERID_Startup, FOLDERID_CommonStartup]
+        .into_iter()
+        .filter_map(known_folder_path)
+        .collect();
+    for (folder, source) in [
+        (FOLDERID_StartMenu, Source::UserStart),
+        (FOLDERID_CommonStartMenu, Source::SharedStart),
+    ] {
         if let Some(path) = known_folder_path(folder) {
-            collect_lnks(&path, &mut out);
+            let start = out.len();
+            if let Err(error) = collect_lnks_checked(&path, &startup_folders, true, &mut out) {
+                errors.push(error);
+                failed_sources.insert(source);
+            }
+            for item in &mut out[start..] {
+                item.source = source;
+            }
+        } else {
+            errors.push(format!("Could not resolve known folder for {source:?}"));
+            failed_sources.insert(source);
         }
     }
-    collect_apps_folder_entries(&mut out);
-    out
+    for (folder, source) in [
+        (FOLDERID_Desktop, Source::UserDesktop),
+        (FOLDERID_PublicDesktop, Source::SharedDesktop),
+    ] {
+        if let Some(path) = known_folder_path(folder) {
+            let start = out.len();
+            if let Err(error) = collect_lnks_checked(&path, &startup_folders, false, &mut out) {
+                errors.push(error);
+                failed_sources.insert(source);
+            }
+            for item in &mut out[start..] {
+                item.source = source;
+            }
+        } else {
+            errors.push(format!("Could not resolve known folder for {source:?}"));
+            failed_sources.insert(source);
+        }
+    }
+    if let Err(error) = collect_apps_folder_entries(&mut out) {
+        errors.push(error.to_string());
+        failed_sources.insert(Source::Shell);
+    }
+    (out, errors, failed_sources)
 }
 
 /// Extract the best-available icon for a single `.lnk` file as an RGBA bitmap.
@@ -235,8 +287,17 @@ fn resolve_link_target(link: &IShellLinkW) -> Option<PathBuf> {
 pub struct LnkMetadata {
     /// Resolved target path (expanded), or `""` if unresolvable.
     pub target_path: String,
+    pub app_user_model_id: PropertyValue,
     /// Arguments stored on the shortcut, or `""` when none are present.
     pub arguments: String,
+    /// False when arguments could not be read; not equivalent to no arguments.
+    pub arguments_known: bool,
+    /// Expanded "Start in" directory; None when it could not be read.
+    pub working_directory: Option<String>,
+    /// Shell link flags; None means the launch settings could not be read.
+    pub link_flags: Option<u32>,
+    /// Initial window display mode (normal, minimized, maximized).
+    pub show_command: Option<i32>,
     /// Shell IconLocation field (expanded), or `""` if the icon lives in the
     /// target exe.
     pub icon_location: String,
@@ -256,11 +317,18 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let mut arguments_buf = [0u16; 2048];
-    let arguments = unsafe { link.GetArguments(&mut arguments_buf) }
+    let mut arguments_buf = vec![0u16; 32768];
+    let arguments_known = unsafe { link.GetArguments(&mut arguments_buf) }.is_ok();
+    let arguments = wide_to_string(&arguments_buf);
+    let mut directory_buf = vec![0u16; 32768];
+    let working_directory = unsafe { link.GetWorkingDirectory(&mut directory_buf) }
         .ok()
-        .map(|_| wide_to_string(&arguments_buf))
-        .unwrap_or_default();
+        .map(|_| expand_env(&wide_to_string(&directory_buf)));
+    let link_flags = link
+        .cast::<IShellLinkDataList>()
+        .ok()
+        .and_then(|data| unsafe { data.GetFlags() }.ok());
+    let show_command = unsafe { link.GetShowCmd() }.ok().map(|command| command.0);
 
     // IconLocation: wide buffer + out param for the index.
     let mut icon_buf = [0u16; 260];
@@ -273,7 +341,39 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
 
     Some(LnkMetadata {
         target_path,
+        app_user_model_id: {
+            let embedded = link
+                .cast::<IPropertyStore>()
+                .map(|store| read_property(unsafe { store.GetValue(&PKEY_APPUSERMODEL_ID) }))
+                .unwrap_or_default();
+            if embedded.value().is_some() {
+                embedded
+            } else {
+                // The Shell property handler can expose an identity that the
+                // loaded IShellLink property store does not. Ask it about the
+                // original shortcut, never infer an ID from its display name.
+                let shell = path_to_wide(lnk)
+                    .and_then(|wide| unsafe {
+                        SHCreateItemFromParsingName::<_, _, IShellItem2>(
+                            PCWSTR(wide.as_ptr()),
+                            None::<&IBindCtx>,
+                        )
+                        .ok()
+                    })
+                    .map(|item| shell_property(&item, "System.AppUserModel.ID"))
+                    .unwrap_or_default();
+                if shell.value().is_some() {
+                    shell
+                } else {
+                    embedded
+                }
+            }
+        },
         arguments,
+        arguments_known,
+        working_directory,
+        link_flags,
+        show_command,
         icon_location: if icon_location.is_empty() {
             icon_location
         } else {
@@ -419,9 +519,51 @@ fn get_path_hicon(path: &Path) -> Option<HICON> {
 }
 
 fn extract_icon_from_apps_folder_uri(path: &Path) -> Option<DecodedIcon> {
+    // Packaged apps already used the image factory before Win32 AppsFolder
+    // discovery. Keep their package artwork path rather than changing it with
+    // the desktop-app fix. The package property, not an app-name pattern,
+    // distinguishes the two Shell providers.
     let wide = path_to_wide(path)?;
-    let factory: IShellItemImageFactory =
+    let item: IShellItem2 =
         unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>) }.ok()?;
+    if shell_property(&item, "System.AppUserModel.PackageFullName")
+        .value()
+        .is_some()
+    {
+        return apps_folder_factory_icon(&item);
+    }
+    apps_folder_image_list_icon(&item).or_else(|| apps_folder_factory_icon(&item))
+}
+
+/// Resolve the Shell item itself so explicit shortcut icons and provider
+/// icons survive a change from a filesystem launcher to an AppsFolder locator.
+fn apps_folder_image_list_icon(item: &IShellItem2) -> Option<DecodedIcon> {
+    use windows::Win32::UI::Shell::{SHGetIDListFromObject, SHGFI_PIDL};
+    let pidl = unsafe { SHGetIDListFromObject(item) }.ok()?;
+    if pidl.is_null() {
+        return None;
+    }
+    let _pidl_guard = PidlGuard(pidl);
+    let mut info = SHFILEINFOW::default();
+    let result = unsafe {
+        SHGetFileInfoW(
+            PCWSTR(pidl.cast()),
+            Default::default(),
+            Some(&mut info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_FLAGS(SHGFI_PIDL.0 | SHGFI_SYSICONINDEX.0 | SHGFI_LARGEICON.0),
+        )
+    };
+    if result == 0 {
+        return None;
+    }
+    let hicon = get_hicon_from_system_image_list(info.iIcon)?;
+    let _guard = IconGuard(hicon);
+    hicon_to_rgba(hicon)
+}
+
+fn apps_folder_factory_icon(item: &IShellItem2) -> Option<DecodedIcon> {
+    let factory: IShellItemImageFactory = item.cast().ok()?;
     let flags = SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP;
     let bitmap = unsafe { factory.GetImage(SIZE { cx: 256, cy: 256 }, flags) }.ok()?;
     let _bitmap_guard = BitmapGuard(bitmap);
@@ -629,112 +771,187 @@ fn known_folder_path(folder: windows::core::GUID) -> Option<PathBuf> {
     Some(PathBuf::from(wide))
 }
 
-/// Recursively collect `*.lnk` files under `root` into `out`.
-fn collect_lnks(root: &Path, out: &mut Vec<Shortcut>) {
+/// Collect `*.lnk` files, optionally descending into subdirectories.
+fn collect_lnks(root: &Path, excluded: &[PathBuf], recursive: bool, out: &mut Vec<Shortcut>) {
+    let _ = collect_lnks_checked(root, excluded, recursive, out);
+}
+fn collect_lnks_checked(
+    root: &Path,
+    excluded: &[PathBuf],
+    recursive: bool,
+    out: &mut Vec<Shortcut>,
+) -> Result<(), String> {
     let mut stack = vec![root.to_path_buf()];
+    let mut errors = Vec::new();
     while let Some(dir) = stack.pop() {
-        let pattern = dir.join("*");
-        let Some(pattern_w) = path_to_wide(&pattern) else {
+        if excluded.iter().any(|path| {
+            path.to_string_lossy()
+                .eq_ignore_ascii_case(&dir.to_string_lossy())
+        }) {
             continue;
-        };
-        let mut data = WIN32_FIND_DATAW::default();
-        // SAFETY: pattern_w is NUL-terminated; data outlives the call.
-        let handle = unsafe { FindFirstFileW(PCWSTR(pattern_w.as_ptr()), &mut data) };
-        let handle = match handle {
-            Ok(h) if !h.is_invalid() => h,
-            _ => continue,
-        };
-        let _h_guard = FindGuard(handle);
-        loop {
-            if !is_dots(&data.cFileName) {
-                let name = wide_to_string(&data.cFileName);
-                let full = dir.join(&name);
-                let is_dir = (data.dwFileAttributes & FILE_ATTRIBUTE_ATTRIBUTES_MASK)
-                    == FILE_ATTRIBUTE_DIRECTORY.0;
-                if is_dir {
-                    stack.push(full);
-                } else if name.to_ascii_lowercase().ends_with(".lnk") {
-                    let stem = file_stem_or_name(&full, &name);
-                    out.push(Shortcut {
-                        name: localized_display_name(&full).unwrap_or(stem),
-                        path: full,
-                    });
-                }
+        }
+        let items = match std::fs::read_dir(&dir) {
+            Ok(items) => items,
+            Err(error) => {
+                errors.push(format!("{}: {error}", dir.display()));
+                continue;
             }
-            // SAFETY: handle valid; data is a *mut that outlives the call.
-            if unsafe { FindNextFileW(handle, &mut data) }.is_err() {
-                break;
+        };
+        for item in items {
+            let item = match item {
+                Ok(item) => item,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    continue;
+                }
+            };
+            let full = item.path();
+            let file_type = match item.file_type() {
+                Ok(t) => t,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                if recursive {
+                    stack.push(full);
+                }
+            } else if full
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("lnk"))
+            {
+                let name = item.file_name().to_string_lossy().into_owned();
+                out.push(Shortcut {
+                    name: localized_display_name(&full)
+                        .unwrap_or_else(|| file_stem_or_name(&full, &name)),
+                    path: full,
+                    source: Source::SharedStart,
+                    metadata: None,
+                });
             }
         }
     }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
-/// Add packaged apps from the virtual `shell:AppsFolder` namespace.
-///
-/// Some modern apps (Store/MSIX packaged apps, including ChatGPT/Codex on
-/// machines where they are installed that way) do not always materialize as
-/// `.lnk` files under the filesystem Start Menu. The AppsFolder namespace is
-/// the shell's canonical app list; we import only package AUMIDs (`...!App`) and
-/// skip display names already found as real shortcuts to avoid obvious dupes.
-fn collect_apps_folder_entries(out: &mut Vec<Shortcut>) {
-    let mut existing_names: HashSet<String> = out
-        .iter()
-        .map(|shortcut| normalized_app_name(&shortcut.name))
-        .collect();
-
+/// Enumerate Win32 and packaged Shell apps; labels never define identity.
+fn collect_apps_folder_entries(out: &mut Vec<Shortcut>) -> windows::core::Result<()> {
     let root_wide = str_to_wide("shell:AppsFolder");
     let root: IShellItem =
-        match unsafe { SHCreateItemFromParsingName(PCWSTR(root_wide.as_ptr()), None::<&IBindCtx>) }
-        {
-            Ok(root) => root,
-            Err(_) => return,
-        };
-    let enum_items: IEnumShellItems =
-        match unsafe { root.BindToHandler(None::<&IBindCtx>, &BHID_EnumItems) } {
-            Ok(items) => items,
-            Err(_) => return,
-        };
-
+        unsafe { SHCreateItemFromParsingName(PCWSTR(root_wide.as_ptr()), None::<&IBindCtx>) }?;
+    let mut incomplete = false;
+    let items: IEnumShellItems = unsafe { root.BindToHandler(None::<&IBindCtx>, &BHID_EnumItems) }?;
     loop {
         let mut item = [None];
         let mut fetched = 0;
-        if unsafe { enum_items.Next(&mut item, Some(&mut fetched)) }.is_err() || fetched == 0 {
+        unsafe { items.Next(&mut item, Some(&mut fetched)) }?;
+        if fetched == 0 {
             break;
         }
-        let Some(item) = item[0].take() else {
-            continue;
-        };
-        let Some(app) = apps_folder_shortcut_from_item(item) else {
-            continue;
-        };
-        let normalized_name = normalized_app_name(&app.name);
-        if existing_names.contains(&normalized_name) {
-            continue;
+        if let Some(item) = item[0].take() {
+            if let Some(app) = apps_folder_shortcut_from_item(item) {
+                out.push(app);
+            } else {
+                incomplete = true;
+            }
         }
-        existing_names.insert(normalized_name);
-        out.push(app);
+    }
+    if incomplete {
+        Err(windows::core::Error::from_hresult(
+            windows::Win32::Foundation::E_FAIL,
+        ))
+    } else {
+        Ok(())
     }
 }
+fn read_property(value: windows::core::Result<PROPVARIANT>) -> PropertyValue {
+    let Ok(value) = value else {
+        return PropertyValue::Unavailable;
+    };
+    // windows-rs owns the returned PROPVARIANT and clears it on Drop.
+    unsafe {
+        if value.Anonymous.Anonymous.vt.0 == 0 {
+            PropertyValue::Missing
+        } else if matches!(value.Anonymous.Anonymous.vt.0, 8 | 31) {
+            match PropVariantToStringAlloc(&value)
+                .ok()
+                .and_then(take_pwstr_string)
+            {
+                Some(s) if !s.is_empty() => PropertyValue::Value(s),
+                Some(_) => PropertyValue::Missing,
+                None => PropertyValue::Unavailable,
+            }
+        } else {
+            PropertyValue::Unavailable
+        }
+    }
+}
+fn shell_property(item: &IShellItem2, name: &str) -> PropertyValue {
+    let name = str_to_wide(name);
+    let mut key = PROPERTYKEY::default();
+    if unsafe { PSGetPropertyKeyFromName(PCWSTR(name.as_ptr()), &mut key) }.is_err() {
+        return PropertyValue::Unavailable;
+    }
+    read_property(unsafe { item.GetProperty(&key) })
+}
 
+/// Read the resolved file's kinds, not the shortcut's `link` kind. Missing
+/// metadata remains unknown; it is not evidence that a Shell app is a document.
+pub(crate) fn target_kinds(path: &Path) -> Vec<String> {
+    use windows::Win32::System::Com::StructuredStorage::{
+        PropVariantGetElementCount, PropVariantGetStringElem,
+    };
+    let read = || -> Option<Vec<String>> {
+        let wide = path_to_wide(path)?;
+        let item: IShellItem2 =
+            unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>) }
+                .ok()?;
+        let name = str_to_wide("System.Kind");
+        let mut key = PROPERTYKEY::default();
+        unsafe { PSGetPropertyKeyFromName(PCWSTR(name.as_ptr()), &mut key) }.ok()?;
+        let value = unsafe { item.GetProperty(&key) }.ok()?;
+        (0..unsafe { PropVariantGetElementCount(&value) })
+            .map(|index| {
+                take_pwstr_string(unsafe { PropVariantGetStringElem(&value, index) }.ok()?)
+            })
+            .collect()
+    };
+    read().unwrap_or_default()
+}
 fn apps_folder_shortcut_from_item(item: IShellItem) -> Option<Shortcut> {
     let item2: IShellItem2 = item.cast().ok()?;
-    let aumid = take_pwstr_string(unsafe { item2.GetString(&PKEY_APPUSERMODEL_ID) }.ok()?)?;
-    if !is_packaged_aumid(&aumid) {
-        return None;
-    }
-
+    let identity = read_property(unsafe { item2.GetProperty(&PKEY_APPUSERMODEL_ID) });
+    let locator = if let Some(id) = identity.value() {
+        apps_folder_uri(id)
+    } else {
+        take_pwstr_string(
+            unsafe { item.GetDisplayName(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING) }
+                .ok()?,
+        )?
+    };
     let name = normalize_shortcut_display_name(take_pwstr_string(
         unsafe { item.GetDisplayName(SIGDN_NORMALDISPLAY) }.ok()?,
     )?)?;
+    let target = shell_property(&item2, "System.Link.TargetParsingPath");
+    let args = shell_property(&item2, "System.Link.Arguments");
     Some(Shortcut {
         name,
-        path: PathBuf::from(apps_folder_uri(&aumid)),
+        path: PathBuf::from(locator),
+        source: Source::Shell,
+        metadata: Some(LnkMetadata {
+            target_path: target.value().unwrap_or_default().into(),
+            app_user_model_id: identity,
+            arguments: args.value().unwrap_or_default().into(),
+            arguments_known: args != PropertyValue::Unavailable,
+            ..Default::default()
+        }),
     })
 }
-
-/// `dwFileAttributes` mask for the directory bit, redefined locally because
-/// the crate's `FILE_ATTRIBUTE_DIRECTORY` constant route is verbose.
-const FILE_ATTRIBUTE_ATTRIBUTES_MASK: u32 = FILE_ATTRIBUTE_DIRECTORY.0;
 
 fn localized_display_name(path: &Path) -> Option<String> {
     let wide = path_to_wide(path)?;
@@ -755,25 +972,22 @@ fn normalize_shortcut_display_name(name: String) -> Option<String> {
     }
 }
 
-fn normalized_app_name(name: &str) -> String {
-    name.trim().to_ascii_lowercase()
-}
-
-fn is_packaged_aumid(aumid: &str) -> bool {
-    aumid.contains('!')
-}
-
 fn apps_folder_uri(aumid: &str) -> String {
     format!("{APPS_FOLDER_PREFIX}{aumid}")
 }
 
 pub(crate) fn is_apps_folder_uri(path: &Path) -> bool {
-    path.to_str()
-        .map(|s| {
-            s.len() > APPS_FOLDER_PREFIX.len()
-                && s[..APPS_FOLDER_PREFIX.len()].eq_ignore_ascii_case(APPS_FOLDER_PREFIX)
+    path.to_str().is_some_and(|s| {
+        [
+            APPS_FOLDER_PREFIX,
+            "::{4234d49b-0245-4df3-b780-3893943456e1}\\",
+        ]
+        .iter()
+        .any(|prefix| {
+            s.get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
         })
-        .unwrap_or(false)
+    })
 }
 
 fn file_stem_or_name(path: &Path, name: &str) -> String {
@@ -861,17 +1075,6 @@ impl Drop for ScreenDcGuard {
 }
 
 /// Owns a find handle and closes it on drop.
-struct FindGuard(HANDLE);
-impl Drop for FindGuard {
-    fn drop(&mut self) {
-        if !self.0.is_invalid() {
-            unsafe { _ = FindClose(self.0) };
-        }
-    }
-}
-
-// ---- COM scope ---------------------------------------------------------
-
 /// RAII guard that initializes COM on creation and uninitializes on drop.
 ///
 /// Shell APIs (SHGetFileInfo etc.) technically work without explicit COM init,
@@ -909,6 +1112,63 @@ impl Drop for ComScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_link_reads_explicit_id_without_normalizing_it() {
+        let _com = ComScope::new();
+        let link: IShellLinkW =
+            unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }.unwrap();
+        let store: IPropertyStore = link.cast().unwrap();
+        assert_eq!(
+            read_property(unsafe { store.GetValue(&PKEY_APPUSERMODEL_ID) }),
+            PropertyValue::Missing
+        );
+        let input = PROPVARIANT::from("Vendor.MixedCase.Product.Version");
+        unsafe { store.SetValue(&PKEY_APPUSERMODEL_ID, &input) }.unwrap();
+        assert_eq!(
+            read_property(unsafe { store.GetValue(&PKEY_APPUSERMODEL_ID) }),
+            PropertyValue::Value("Vendor.MixedCase.Product.Version".into())
+        );
+        assert_eq!(
+            read_property(Err(windows::core::Error::from_hresult(
+                windows::Win32::Foundation::E_FAIL
+            ))),
+            PropertyValue::Unavailable
+        );
+    }
+
+    #[test]
+    fn start_menu_walk_excludes_only_the_configured_startup_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "launchpad-startup-test-{}",
+            format_args!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )
+        ));
+        let startup = root.join("Login actions");
+        let ordinary = root.join("Startup editor");
+        std::fs::create_dir_all(&startup).unwrap();
+        std::fs::create_dir_all(&ordinary).unwrap();
+        std::fs::write(root.join("App.lnk"), []).unwrap();
+        std::fs::write(startup.join("App.lnk"), []).unwrap();
+        std::fs::write(ordinary.join("Editor.lnk"), []).unwrap();
+        let mut entries = Vec::new();
+        collect_lnks(&root, std::slice::from_ref(&startup), true, &mut entries);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| !e.path.starts_with(&startup)));
+        // Desktop discovery must not descend into document/project folders.
+        let mut desktop_entries = Vec::new();
+        collect_lnks(&root, &[], false, &mut desktop_entries);
+        assert_eq!(desktop_entries.len(), 1);
+        assert_eq!(desktop_entries[0].path, root.join("App.lnk"));
+        // Only remove the unique temporary directory created by this test.
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn path_to_wide_is_nul_terminated() {
@@ -957,8 +1217,9 @@ mod tests {
         let uri = apps_folder_uri("OpenAI.ChatGPT_abc123!App");
         assert_eq!(uri, r"shell:AppsFolder\OpenAI.ChatGPT_abc123!App");
         assert!(is_apps_folder_uri(Path::new(&uri)));
-        assert!(is_packaged_aumid("OpenAI.ChatGPT_abc123!App"));
-        assert!(!is_packaged_aumid("Desktop.AppUserModelId"));
+        assert!(is_apps_folder_uri(Path::new(&apps_folder_uri(
+            "Desktop.AppUserModelId"
+        ))));
     }
 
     #[test]
@@ -1047,8 +1308,66 @@ mod tests {
         );
 
         for shortcut in enumerate_start_menu() {
+            if let Ok(filter) = std::env::var("LAUNCHPAD_ICON_PROBE_FILTER") {
+                if !filter
+                    .split('|')
+                    .any(|part| shortcut.name.to_lowercase().contains(&part.to_lowercase()))
+                {
+                    continue;
+                }
+            }
             let safe_name = sanitize_filename(&shortcut.name);
             let link = load_shell_link(&shortcut.path);
+
+            if is_apps_folder_uri(&shortcut.path) {
+                let started = std::time::Instant::now();
+                let wide = path_to_wide(&shortcut.path).unwrap();
+                let item: IShellItem2 = unsafe {
+                    SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>)
+                }
+                .unwrap();
+                if let Some(icon) = apps_folder_factory_icon(&item) {
+                    eprintln!(
+                        "old factory: {} {}us",
+                        shortcut.name,
+                        started.elapsed().as_micros()
+                    );
+                    record_probe(
+                        &out_dir,
+                        &mut csv,
+                        &safe_name,
+                        &shortcut,
+                        "shell_factory",
+                        &icon,
+                    );
+                    let normalized = crate::icons::normalize::normalize(&icon).image;
+                    record_probe(
+                        &out_dir,
+                        &mut csv,
+                        &safe_name,
+                        &shortcut,
+                        "shell_normalized",
+                        &normalized,
+                    );
+                }
+                let started = std::time::Instant::now();
+                if let Some(icon) = extract_icon_from_apps_folder_uri(&shortcut.path) {
+                    eprintln!(
+                        "current extraction: {} {}us",
+                        shortcut.name,
+                        started.elapsed().as_micros()
+                    );
+                    record_probe(&out_dir, &mut csv, &safe_name, &shortcut, "current", &icon);
+                    record_probe(
+                        &out_dir,
+                        &mut csv,
+                        &safe_name,
+                        &shortcut,
+                        "current_normalized",
+                        &crate::icons::normalize::normalize(&icon).image,
+                    );
+                }
+            }
 
             if let Some(icon) = get_path_hicon(&shortcut.path).and_then(icon_to_decoded) {
                 record_probe(&out_dir, &mut csv, &safe_name, &shortcut, "lnk", &icon);
