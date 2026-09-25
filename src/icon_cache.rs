@@ -567,17 +567,16 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             key   TEXT PRIMARY KEY,
             value BLOB NOT NULL
         );
-        INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?1);
-        INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('extraction_version', ?2);
         ",
     )?;
-    // Set the bundled version constants into the meta row (overwriting if the
-    // file pre-existed with an older value — the version mismatch is handled
-    // in `check_schema_version`).
+    // Keep the stored version until its columns have actually been migrated.
     conn.execute(
-        "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION as i64],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('extraction_version', ?1)",
+        params![EXTRACTION_VERSION as i64],
     )?;
     Ok(())
 }
@@ -590,13 +589,17 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
             |r| r.get(0),
         )
         .unwrap_or(0);
-    if stored as u32 != SCHEMA_VERSION {
-        // Schema version mismatch: run any pending column migrations
-        // before wiping cached rows so that subsequent INSERTs succeed.
-        migrate_icons_schema(conn)?;
+    // Earlier releases could stamp v2 on a v1 table. Inspect the columns even
+    // when the stored version matches; only rebuildable icon rows are discarded.
+    let repaired = migrate_icons_schema(conn)?;
+    if stored as u32 != SCHEMA_VERSION || repaired {
         // Wipe icons so everything is re-extracted.
         conn.execute("DELETE FROM icons", [])?;
     }
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?1)",
+        params![SCHEMA_VERSION as i64],
+    )?;
     Ok(())
 }
 
@@ -605,7 +608,7 @@ fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
 /// This handles the v1→v2 migration where `category` and `scale` columns were
 /// added. SQLite does not support `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so
 /// we query `PRAGMA table_info` to check for column existence first.
-fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
+fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<bool> {
     // Collect existing column names.
     let mut stmt = conn.prepare("PRAGMA table_info(icons)")?;
     let existing: Vec<String> = stmt
@@ -613,19 +616,22 @@ fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
         .filter_map(|r| r.ok())
         .collect();
 
+    let mut repaired = false;
     if !existing.iter().any(|c| c == "category") {
         conn.execute(
             "ALTER TABLE icons ADD COLUMN category TEXT NOT NULL DEFAULT 'fullbleed'",
             [],
         )?;
+        repaired = true;
     }
     if !existing.iter().any(|c| c == "scale") {
         conn.execute(
             "ALTER TABLE icons ADD COLUMN scale REAL NOT NULL DEFAULT 1.0",
             [],
         )?;
+        repaired = true;
     }
-    Ok(())
+    Ok(repaired)
 }
 
 /// Resolve the platform-native persistent database path. Kept pub(crate) so
@@ -909,6 +915,15 @@ mod tests {
     /// fail silently because the new column names are not recognised.
     #[test]
     fn migration_adds_category_and_scale_columns_to_v1_db() {
+        assert_legacy_cache_migration(1);
+    }
+
+    #[test]
+    fn migration_repairs_v1_columns_with_incorrect_current_version() {
+        assert_legacy_cache_migration(SCHEMA_VERSION);
+    }
+
+    fn assert_legacy_cache_migration(stored_version: u32) {
         let conn = Connection::open_in_memory().unwrap();
 
         // Create v1-style schema (without category/scale columns).
@@ -968,8 +983,25 @@ mod tests {
             1
         );
 
-        // Run the full version-check path (migration + wipe).
+        conn.execute(
+            "UPDATE schema_meta SET value=?1 WHERE key='schema_version'",
+            [stored_version],
+        )
+        .unwrap();
+        // Exercise initialization too: it used to conceal the old schema.
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO kv VALUES('launcher_state', ?1)",
+            [b"user layout".as_slice()],
+        )
+        .unwrap();
         check_schema_version(&conn).unwrap();
+        let saved: Vec<u8> = conn
+            .query_row("SELECT value FROM kv WHERE key='launcher_state'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(saved, b"user layout");
 
         // Columns must now exist.
         let mut stmt = conn.prepare("PRAGMA table_info(icons)").unwrap();

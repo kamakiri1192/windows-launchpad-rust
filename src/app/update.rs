@@ -987,6 +987,10 @@ impl App {
                 WorkerMessage::Icon(IconResult::Failed { app_id, error }) => {
                     self.fail_icon(&app_id, error);
                 }
+                #[cfg(windows)]
+                WorkerMessage::Refresh(RefreshMessage::Catalog(scan)) => {
+                    self.apply_catalog(scan);
+                }
                 WorkerMessage::Refresh(RefreshMessage::Initial(snap)) => {
                     self.ingest_snapshot(snap, true);
                 }
