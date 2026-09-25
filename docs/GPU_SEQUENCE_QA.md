@@ -65,6 +65,9 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `pointer_down` / `pointer_up`: production と同じ press/release classifier を通す。
 - `long_press`: 現在のトップレベル項目またはフォルダ子要素を押し、production と同じ長押し閾値・編集モード遷移を決定的な時刻で評価する。
 - `type_text` / `commit_rename`: フォルダ名入力を検証する。
+- `search_text` / `search_preedit` / `search_commit`: 検索入力とIME変換を再生する。
+- `assert_search`: 検索文字列、表示件数、検索欄の維持、メニューの有無を検証する。
+  `qa/search_context_menu.json` は検索結果の右クリック、IME確定、Esc、外側クリック、検索の継続を確認する。
 - `escape` / `exit_edit_mode`: 状態の優先順位を検証する。
 - `scroll_sample`: platform adapterで正規化済みのscroll sampleをproduction
   `AppAction::ScrollSample`へ渡す。`gesture_id`、`timestamp_us`、

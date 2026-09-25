@@ -411,9 +411,9 @@ impl App {
             self.context_menu.phase,
             self.context_menu.is_active(),
         );
-        if self.control.wants_keyboard() {
-            self.control.press_close();
-        }
+        // Opening a menu transfers keyboard ownership, not search state.
+        // Clearing the query here changes the grid under the captured target
+        // and moves its icon away from the menu's anchor.
         self.pending_press = None;
         // A previous menu model can still be retained until its close tail
         // finishes. Do not let a pointer move re-hit-test that stale geometry
@@ -520,7 +520,8 @@ impl App {
             if Self::should_pass_context_menu_dismissal_through(
                 self.folders.is_active(),
                 over_interactive_item,
-            ) {
+            ) && !self.control.wants_keyboard()
+            {
                 // Closing is visual-only, so reclassifying now hands this
                 // same gesture to the page or folder below. Recursion stops
                 // after this one handoff because a closing menu no longer

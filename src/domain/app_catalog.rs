@@ -401,6 +401,10 @@ mod tests {
             "Unreal Engine",
             "Steam",
             "FocuSee",
+            "Fork",
+            "Git Bash",
+            "Git CMD",
+            "Git GUI",
         ] {
             assert_eq!(
                 result.values().filter(|e| e.name == name).count(),

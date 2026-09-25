@@ -341,10 +341,34 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
 
     Some(LnkMetadata {
         target_path,
-        app_user_model_id: link
-            .cast::<IPropertyStore>()
-            .map(|store| read_property(unsafe { store.GetValue(&PKEY_APPUSERMODEL_ID) }))
-            .unwrap_or_default(),
+        app_user_model_id: {
+            let embedded = link
+                .cast::<IPropertyStore>()
+                .map(|store| read_property(unsafe { store.GetValue(&PKEY_APPUSERMODEL_ID) }))
+                .unwrap_or_default();
+            if embedded.value().is_some() {
+                embedded
+            } else {
+                // The Shell property handler can expose an identity that the
+                // loaded IShellLink property store does not. Ask it about the
+                // original shortcut, never infer an ID from its display name.
+                let shell = path_to_wide(lnk)
+                    .and_then(|wide| unsafe {
+                        SHCreateItemFromParsingName::<_, _, IShellItem2>(
+                            PCWSTR(wide.as_ptr()),
+                            None::<&IBindCtx>,
+                        )
+                        .ok()
+                    })
+                    .map(|item| shell_property(&item, "System.AppUserModel.ID"))
+                    .unwrap_or_default();
+                if shell.value().is_some() {
+                    shell
+                } else {
+                    embedded
+                }
+            }
+        },
         arguments,
         arguments_known,
         working_directory,
@@ -832,6 +856,30 @@ fn shell_property(item: &IShellItem2, name: &str) -> PropertyValue {
         return PropertyValue::Unavailable;
     }
     read_property(unsafe { item.GetProperty(&key) })
+}
+
+/// Read the resolved file's kinds, not the shortcut's `link` kind. Missing
+/// metadata remains unknown; it is not evidence that a Shell app is a document.
+pub(crate) fn target_kinds(path: &Path) -> Vec<String> {
+    use windows::Win32::System::Com::StructuredStorage::{
+        PropVariantGetElementCount, PropVariantGetStringElem,
+    };
+    let read = || -> Option<Vec<String>> {
+        let wide = path_to_wide(path)?;
+        let item: IShellItem2 =
+            unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>) }
+                .ok()?;
+        let name = str_to_wide("System.Kind");
+        let mut key = PROPERTYKEY::default();
+        unsafe { PSGetPropertyKeyFromName(PCWSTR(name.as_ptr()), &mut key) }.ok()?;
+        let value = unsafe { item.GetProperty(&key) }.ok()?;
+        (0..unsafe { PropVariantGetElementCount(&value) })
+            .map(|index| {
+                take_pwstr_string(unsafe { PropVariantGetStringElem(&value, index) }.ok()?)
+            })
+            .collect()
+    };
+    read().unwrap_or_default()
 }
 fn apps_folder_shortcut_from_item(item: IShellItem) -> Option<Shortcut> {
     let item2: IShellItem2 = item.cast().ok()?;

@@ -81,7 +81,16 @@ pub fn scan_catalog() -> crate::domain::app_catalog::CatalogScan {
                 }
             }
         };
-        if !is_application_candidate(sc.source, &meta.target_path) {
+        let target = Path::new(&meta.target_path);
+        let kinds = if sc.source == Source::Shell
+            && target.is_absolute()
+            && !extract::is_application_target(target)
+        {
+            extract::target_kinds(target)
+        } else {
+            Vec::new()
+        };
+        if !is_application_candidate(sc.source, &meta.target_path, &kinds) {
             continue;
         }
         if uninstallers.matches(Path::new(&meta.target_path), &meta.arguments, &sc.name) {
@@ -95,16 +104,10 @@ pub fn scan_catalog() -> crate::domain::app_catalog::CatalogScan {
         });
         let native_key = (meta.app_user_model_id != PropertyValue::Unavailable
             && meta.arguments_known
-            && meta.arguments.is_empty()
             && Path::new(&meta.target_path).is_file()
             && extract::is_application_target(Path::new(&meta.target_path))
             && !is_host(&meta.target_path))
-        .then(|| {
-            format!(
-                "native:{}",
-                normalize_windows_path(Path::new(&meta.target_path))
-            )
-        });
+        .then(|| native_invocation_key(&meta.target_path, &meta.arguments));
         let exact_key = (meta.app_user_model_id != PropertyValue::Unavailable
             && Path::new(&meta.target_path).is_absolute()
             && meta.arguments_known
@@ -199,9 +202,71 @@ fn known_launch_flags(flags: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn is_application_candidate(source: crate::domain::app_catalog::Source, target: &str) -> bool {
-    source == crate::domain::app_catalog::Source::Shell
-        || extract::is_application_target(Path::new(target))
+fn native_invocation_key(target: &str, arguments: &str) -> String {
+    let path = normalize_windows_path(Path::new(target));
+    if arguments.is_empty() {
+        // Preserve existing aliases for argument-free native applications.
+        format!("native:{path}")
+    } else {
+        // Do not strip, case-fold or reorder arguments: they may identify
+        // different applications/profiles hosted by the same executable.
+        format!("native-args:{:?}", (path, arguments))
+    }
+}
+
+#[cfg(windows)]
+fn is_application_candidate(
+    source: crate::domain::app_catalog::Source,
+    target: &str,
+    kinds: &[String],
+) -> bool {
+    let path = Path::new(target);
+    // AppsFolder also contains ordinary documents and Internet shortcuts.
+    // An AUMID identifies the entry but does not make its target an application.
+    let lower = target.to_ascii_lowercase();
+    if lower.starts_with("http:")
+        || lower.starts_with("https:")
+        || path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("url"))
+    {
+        return false;
+    }
+    if extract::is_application_target(path) {
+        return true;
+    }
+    if source != crate::domain::app_catalog::Source::Shell {
+        return false;
+    }
+    // Namespace entries, packaged apps and provider launch protocols have no
+    // filesystem document target. Preserve these and unknown metadata.
+    if !path.is_absolute() {
+        return true;
+    }
+    let has_kind = |kind: &str| kinds.iter().any(|value| value.eq_ignore_ascii_case(kind));
+    if has_kind("program") || has_kind("game") {
+        return true;
+    }
+    ![
+        "document",
+        "picture",
+        "music",
+        "video",
+        "movie",
+        "recordedtv",
+        "email",
+        "communication",
+        "contact",
+        "calendar",
+        "task",
+        "note",
+        "journal",
+        "feed",
+        "webhistory",
+        "searchfolder",
+    ]
+    .iter()
+    .any(|kind| has_kind(kind))
 }
 
 #[cfg(windows)]
@@ -558,6 +623,67 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn shell_content_is_classified_by_target_not_label_or_identity() {
+        use crate::domain::app_catalog::Source;
+        for target in [
+            "https://example.com/app.exe",
+            "HTTP://example.com/",
+            "C:/docs/renamed.URL",
+        ] {
+            assert!(!is_application_candidate(Source::Shell, target, &[]));
+        }
+        for extension in ["txt", "html", "rtf", "pdf", "custom"] {
+            assert!(!is_application_candidate(
+                Source::Shell,
+                &format!("C:/docs/any-name.{extension}"),
+                &["link".into(), "Document".into()]
+            ));
+        }
+        for target in [
+            "",
+            "shell:AppsFolder\\vendor.app",
+            "::{shell-namespace}",
+            "steam://rungameid/123",
+            "C:/Windows/system32/eventvwr.msc",
+            "C:/Apps/renamed.exe",
+            "C:/Apps/unknown.target",
+        ] {
+            assert!(
+                is_application_candidate(Source::Shell, target, &[]),
+                "{target}"
+            );
+        }
+        assert!(is_application_candidate(
+            Source::Shell,
+            "C:/Apps/tool.custom",
+            &["program".into(), "document".into()]
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_invocations_preserve_arguments_and_existing_alias_keys() {
+        let key = native_invocation_key("C:/Apps/Editor.exe", "--profile work");
+        assert_eq!(
+            key,
+            native_invocation_key("c:/apps/editor.EXE", "--profile work")
+        );
+        assert_ne!(
+            key,
+            native_invocation_key("C:/Apps/Editor.exe", "--profile personal")
+        );
+        assert_ne!(
+            key,
+            native_invocation_key("C:/Apps/Editor.exe", "--profile Work")
+        );
+        assert_eq!(
+            native_invocation_key("C:/Apps/Editor.exe", ""),
+            r"native:c:\apps\editor.exe"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn same_named_document_cannot_suppress_shell_app_and_steam_uses_ids() {
         use windows::Win32::UI::Shell::{SLDF_HAS_DARWINID, SLDF_RUN_WITH_SHIMLAYER};
         assert!(!known_launch_flags(SLDF_HAS_DARWINID.0 as u32));
@@ -566,9 +692,10 @@ mod tests {
         use crate::domain::app_catalog::Source;
         assert!(!is_application_candidate(
             Source::UserStart,
-            "C:/docs/readme.txt"
+            "C:/docs/readme.txt",
+            &[],
         ));
-        assert!(is_application_candidate(Source::Shell, ""));
+        assert!(is_application_candidate(Source::Shell, "", &[]));
         assert_eq!(
             steam_identity("C:/Steam/steam.exe", "-applaunch 123"),
             Some("steam:123".into())
