@@ -263,6 +263,73 @@ fn no_missing_apps_are_synthesized_and_singletons_keep_their_role() {
 }
 
 #[test]
+fn partial_first_scan_orders_available_apps_and_later_discoveries_append() {
+    for entries in [vec![], vec![unknown()], vec![unknown(), settings()]] {
+        let mut apps = snapshot(entries.clone());
+        let mut state = initial_layout::prepare_catalog_layout(
+            LauncherState::new(),
+            &apps,
+            &Settings::default(),
+            true,
+            false,
+            true,
+            &catalog(),
+        );
+        assert_eq!(state.items, generate(entries).items);
+        assert!(state.customized);
+        let before = state.items.clone();
+        let late = app("late", "000 Late app", "C:/late.exe", "", "");
+        apps.insert(late.app_id.clone(), late);
+        state = initial_layout::prepare_catalog_layout(
+            state,
+            &apps,
+            &Settings::default(),
+            false,
+            true,
+            true,
+            &catalog(),
+        );
+        state.integrate_discovered_apps(&apps.keys().cloned().collect(), |id| {
+            apps.get(id).map(|e| e.name.clone())
+        });
+        assert_eq!(&state.items[..before.len()], before.as_slice());
+        assert_eq!(
+            state.items.last().unwrap().as_app_id().unwrap().as_str(),
+            "late"
+        );
+    }
+}
+
+#[test]
+fn legacy_skipped_scan_keeps_its_order_and_appends_later_discoveries() {
+    let mut state = LauncherState::new();
+    state.items = vec![LauncherItem::App(AppId::from_normalized("unknown"))];
+    state.initial_layout = Some(initial_layout::InitialLayoutRecord::new(
+        InitializationStatus::SkippedError,
+        "old-version".into(),
+    ));
+    let apps = snapshot(vec![
+        unknown(),
+        app("late", "000 Late app", "C:/late.exe", "", ""),
+    ]);
+    let mut restored = initial_layout::prepare_catalog_layout(
+        state.clone(),
+        &apps,
+        &Settings::default(),
+        false,
+        false,
+        true,
+        &catalog(),
+    );
+    assert_eq!(restored.items, state.items);
+    assert_eq!(restored.initial_layout, state.initial_layout);
+    restored.integrate_discovered_apps(&apps.keys().cloned().collect(), |id| {
+        apps.get(id).map(|e| e.name.clone())
+    });
+    assert_eq!(ids(&restored), ["unknown", "late"]);
+}
+
+#[test]
 fn versions_promote_one_representative_using_numeric_release_not_name_order() {
     let blender = |id: &str, version: &str| {
         let mut e = app(

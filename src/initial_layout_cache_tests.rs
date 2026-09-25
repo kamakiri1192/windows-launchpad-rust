@@ -103,7 +103,7 @@ fn order_without_folders_survives_restart_and_undo_is_not_reapplied() {
 fn explicit_reset_groups_current_apps_after_incomplete_scan_and_restores_on_restart() {
     let c = cache();
     let previous = prepare(&c, 2, false).state;
-    assert!(previous.folders.is_empty());
+    assert_eq!(previous.folders.len(), 1);
     let state = initial_layout::reset(
         &snapshot(2),
         Platform::Windows,
@@ -145,10 +145,10 @@ fn settings_reset_save_failure_preserves_both_settings_and_layout() {
 }
 
 #[test]
-fn empty_success_partial_failure_and_old_unarranged_users_do_not_retry() {
+fn empty_scans_and_old_unarranged_users_do_not_retry() {
     for (count, complete, status) in [
         (0, true, InitializationStatus::CompletedFlat),
-        (2, false, InitializationStatus::SkippedError),
+        (0, false, InitializationStatus::CompletedFlat),
     ] {
         let c = cache();
         let first = prepare(&c, count, complete);
@@ -166,6 +166,28 @@ fn empty_success_partial_failure_and_old_unarranged_users_do_not_retry() {
         prepare(&c, 2, true).state.initial_layout.unwrap().status,
         InitializationStatus::PreservedExisting
     );
+}
+
+#[test]
+fn partial_initial_scan_is_saved_once_and_later_apps_stay_outside_its_folder() {
+    let c = cache();
+    let first = prepare(&c, 2, false).state;
+    assert_eq!(first.folders.len(), 1);
+    assert!(first.initial_undo_available());
+    assert_eq!(prepare(&c, 2, false).state, first);
+    for (count, complete) in [(3, false), (4, true)] {
+        let later = prepare(&c, count, complete).state;
+        assert_eq!(later.folders, first.folders);
+        assert_eq!(later.items[0], first.items[0]);
+        assert_eq!(
+            later.top_level_app_ids().cloned().collect::<Vec<_>>(),
+            (2..count)
+                .map(|n| AppId::from_normalized(format!("steam:{n}")))
+                .collect::<Vec<_>>()
+        );
+        assert!(!later.initial_undo_available());
+        assert_eq!(prepare(&c, count, complete).state, later);
+    }
 }
 
 #[test]

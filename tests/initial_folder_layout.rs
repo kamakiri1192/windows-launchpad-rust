@@ -1447,10 +1447,12 @@ fn canonical_catalog_initialization_preserves_existing_and_partial_layouts() {
         true,
         &catalog,
     );
-    assert!(partial.folders.is_empty());
+    assert_eq!(partial.items, fresh.items);
+    assert_eq!(partial.folders, fresh.folders);
+    assert!(partial.customized);
     assert_eq!(
         partial.initial_layout.unwrap().status,
-        InitializationStatus::SkippedError
+        InitializationStatus::Applied
     );
     let existing = LauncherState::from_legacy(
         vec![

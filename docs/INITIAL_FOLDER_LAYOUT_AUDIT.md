@@ -69,7 +69,7 @@ GPUシナリオ `qa/initial_folder_layout_related_reset.json` はJetBrains・Git
 カタログv4の実機スキャン（重複修正PR適用前）では、152起動項目を維持し、66単体アプリ＋14フォルダ＝80項目になった。
 VRツール7、リモートデスクトップ4、Windows Dev tools7、OMEN2。VRChatとDesktop Mateはそれぞれ分類内1製品のため平置き。
 Application Verifierの2項目はWindowsツールからWindows Dev toolsへ移動した。
-読み取れない既存ショートカット等によりスキャン完了状態はpartial。自動初期化では平置きを維持し、明示的な設定リセットでは取得できた集合に適用する従来の方針を保つ。
+読み取れない既存ショートカット等によりスキャン完了状態はpartial。この検証当時は自動初期化を見送っていたが、仕様v3では取得済み集合に初期整理を適用する。後から見つかった項目は末尾へ追加する。
 
 `qa/initial_folder_layout_categories_reset.json`で5分類の生成→取り消し→設定リセット→取り消しを確認した。
 GPU連番のトップレベル数は6→11→6→11。表示名も画像で確認済み。

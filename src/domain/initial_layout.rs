@@ -14,7 +14,7 @@ use super::{
 use catalog::{Catalog, Platform};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SPEC_VERSION: u32 = 2;
+pub const SPEC_VERSION: u32 = 3;
 
 pub fn japanese_locale(locale: Option<&str>) -> bool {
     locale.is_some_and(|s| {
@@ -336,15 +336,18 @@ pub fn prepare_catalog_layout(
     snapshot: &BTreeMap<AppId, SnapshotEntry>,
     settings: &crate::domain::settings::Settings,
     fresh: bool,
-    complete: bool,
+    _complete: bool,
     japanese: bool,
     catalog: &catalog::Catalog,
 ) -> LauncherState {
     if existing.initial_layout.is_some() {
+        // Also freeze flat arrangements saved by earlier versions after a partial scan.
+        existing.customized = true;
         return existing;
     }
     let generation = "catalog-initial".to_owned();
-    if fresh && complete {
+    // Source failures remain diagnostics; arrange the apps actually available now.
+    if fresh {
         return generate(
             snapshot,
             settings,
@@ -356,12 +359,9 @@ pub fn prepare_catalog_layout(
         .state;
     }
     existing.initial_layout = Some(InitialLayoutRecord::new(
-        if fresh {
-            InitializationStatus::SkippedError
-        } else {
-            InitializationStatus::PreservedExisting
-        },
+        InitializationStatus::PreservedExisting,
         generation,
     ));
+    existing.customized = true;
     existing
 }

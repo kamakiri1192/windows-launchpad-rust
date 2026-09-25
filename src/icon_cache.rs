@@ -462,7 +462,7 @@ impl IconCache {
     pub fn prepare_initial_layout(
         &self,
         snapshot: &std::collections::BTreeMap<AppId, crate::domain::app_diff::SnapshotEntry>,
-        complete: bool,
+        _complete: bool,
         platform: Platform,
         japanese: bool,
     ) -> LayoutLoad {
@@ -487,18 +487,14 @@ impl IconCache {
                     .as_nanos()
             );
             let catalog = Catalog::bundled(std::env::var("SystemRoot").ok());
-            if loaded.fresh && complete {
+            if loaded.fresh {
                 loaded.state = initial_layout::generate(
                     snapshot, &settings, platform, japanese, generation, &catalog,
                 )
                 .state;
             } else {
                 if loaded.state.initial_layout.is_none() {
-                    let status = if loaded.fresh {
-                        InitializationStatus::SkippedError
-                    } else {
-                        InitializationStatus::PreservedExisting
-                    };
+                    let status = InitializationStatus::PreservedExisting;
                     loaded.state.initial_layout =
                         Some(InitialLayoutRecord::new(status, generation));
                 }
