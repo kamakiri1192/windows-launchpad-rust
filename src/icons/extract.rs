@@ -36,12 +36,12 @@ use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_CommonStartup, FOLDERID_StartMenu,
-    FOLDERID_Startup, IEnumShellItems, ILFree, IShellItem, IShellItem2, IShellItemImageFactory,
-    IShellLinkW, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW,
-    SHGetImageList, SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS,
-    SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
-    SIIGBF_SCALEUP,
+    BHID_EnumItems, FOLDERID_CommonStartMenu, FOLDERID_CommonStartup, FOLDERID_Desktop,
+    FOLDERID_PublicDesktop, FOLDERID_StartMenu, FOLDERID_Startup, IEnumShellItems, ILFree,
+    IShellItem, IShellItem2, IShellItemImageFactory, IShellLinkDataList, IShellLinkW,
+    SHCreateItemFromIDList, SHCreateItemFromParsingName, SHGetFileInfoW, SHGetImageList,
+    SHGetKnownFolderPath, ShellLink, KNOWN_FOLDER_FLAG, SHFILEINFOW, SHGFI_FLAGS, SHGFI_LARGEICON,
+    SHGFI_SYSICONINDEX, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_SCALEUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
@@ -62,7 +62,9 @@ const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
     pid: 5,
 };
 
-/// Enumerate `.lnk` files under both the per-user and all-users Start Menus.
+/// Enumerate `.lnk` files in the Start Menus and desktop known folders.
+/// Desktop folders are scanned only at the top level; user document trees are
+/// not application catalogs. Callers filter out links to non-applications.
 ///
 /// Returns the combined list, duplicates (same file in both folders are rare)
 /// kept in encounter order. Errors are logged and skipped so a single
@@ -76,7 +78,12 @@ pub fn enumerate_start_menu() -> Vec<Shortcut> {
         .collect();
     for folder in [FOLDERID_StartMenu, FOLDERID_CommonStartMenu] {
         if let Some(path) = known_folder_path(folder) {
-            collect_lnks(&path, &startup_folders, &mut out);
+            collect_lnks(&path, &startup_folders, true, &mut out);
+        }
+    }
+    for folder in [FOLDERID_Desktop, FOLDERID_PublicDesktop] {
+        if let Some(path) = known_folder_path(folder) {
+            collect_lnks(&path, &startup_folders, false, &mut out);
         }
     }
     collect_apps_folder_entries(&mut out);
@@ -246,6 +253,10 @@ pub struct LnkMetadata {
     pub arguments_known: bool,
     /// Expanded "Start in" directory; None when it could not be read.
     pub working_directory: Option<String>,
+    /// Shell link flags; None means the launch settings could not be read.
+    pub link_flags: Option<u32>,
+    /// Initial window display mode (normal, minimized, maximized).
+    pub show_command: Option<i32>,
     /// Shell IconLocation field (expanded), or `""` if the icon lives in the
     /// target exe.
     pub icon_location: String,
@@ -272,6 +283,11 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
     let working_directory = unsafe { link.GetWorkingDirectory(&mut directory_buf) }
         .ok()
         .map(|_| expand_env(&wide_to_string(&directory_buf)));
+    let link_flags = link
+        .cast::<IShellLinkDataList>()
+        .ok()
+        .and_then(|data| unsafe { data.GetFlags() }.ok());
+    let show_command = unsafe { link.GetShowCmd() }.ok().map(|command| command.0);
 
     // IconLocation: wide buffer + out param for the index.
     let mut icon_buf = [0u16; 260];
@@ -287,6 +303,8 @@ pub fn resolve_lnk_metadata(lnk: &Path) -> Option<LnkMetadata> {
         arguments,
         arguments_known,
         working_directory,
+        link_flags,
+        show_command,
         icon_location: if icon_location.is_empty() {
             icon_location
         } else {
@@ -642,8 +660,8 @@ fn known_folder_path(folder: windows::core::GUID) -> Option<PathBuf> {
     Some(PathBuf::from(wide))
 }
 
-/// Recursively collect `*.lnk` files under `root` into `out`.
-fn collect_lnks(root: &Path, excluded: &[PathBuf], out: &mut Vec<Shortcut>) {
+/// Collect `*.lnk` files, optionally descending into subdirectories.
+fn collect_lnks(root: &Path, excluded: &[PathBuf], recursive: bool, out: &mut Vec<Shortcut>) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         // Login actions are not manual launch entries, even if their names match an app.
@@ -672,7 +690,9 @@ fn collect_lnks(root: &Path, excluded: &[PathBuf], out: &mut Vec<Shortcut>) {
                 let is_dir = (data.dwFileAttributes & FILE_ATTRIBUTE_ATTRIBUTES_MASK)
                     == FILE_ATTRIBUTE_DIRECTORY.0;
                 if is_dir {
-                    stack.push(full);
+                    if recursive {
+                        stack.push(full);
+                    }
                 } else if name.to_ascii_lowercase().ends_with(".lnk") {
                     let stem = file_stem_or_name(&full, &name);
                     out.push(Shortcut {
@@ -947,13 +967,18 @@ mod tests {
         let ordinary = root.join("Startup editor");
         std::fs::create_dir_all(&startup).unwrap();
         std::fs::create_dir_all(&ordinary).unwrap();
-        std::fs::write(root.join("FocuSee.lnk"), []).unwrap();
-        std::fs::write(startup.join("FocuSee.lnk"), []).unwrap();
+        std::fs::write(root.join("App.lnk"), []).unwrap();
+        std::fs::write(startup.join("App.lnk"), []).unwrap();
         std::fs::write(ordinary.join("Editor.lnk"), []).unwrap();
         let mut entries = Vec::new();
-        collect_lnks(&root, std::slice::from_ref(&startup), &mut entries);
+        collect_lnks(&root, std::slice::from_ref(&startup), true, &mut entries);
         assert_eq!(entries.len(), 2);
         assert!(entries.iter().all(|e| !e.path.starts_with(&startup)));
+        // Desktop discovery must not descend into document/project folders.
+        let mut desktop_entries = Vec::new();
+        collect_lnks(&root, &[], false, &mut desktop_entries);
+        assert_eq!(desktop_entries.len(), 1);
+        assert_eq!(desktop_entries[0].path, root.join("App.lnk"));
         // Only remove the unique temporary directory created by this test.
         std::fs::remove_dir_all(root).unwrap();
     }

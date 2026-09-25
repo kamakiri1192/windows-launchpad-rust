@@ -1,4 +1,4 @@
-//! Scan the Start Menu and Steam libraries into [`SnapshotEntry`] records.
+//! Scan Start Menu/desktop shortcuts, packaged apps and Steam libraries into records.
 //!
 //! This is the *fast* side of icon loading: it walks the two Start Menu roots,
 //! resolves each `.lnk`'s target + icon location, and reads mtimes — but it
@@ -26,7 +26,7 @@ use crate::icons::extract::{self, enumerate_start_menu};
 #[cfg(any(windows, target_os = "macos"))]
 use crate::workers::steam_scan::scan_steam_apps;
 
-/// Scan both Start Menu roots plus installed Steam apps and build a snapshot.
+/// Scan Start Menu and desktop known folders plus installed Steam apps.
 ///
 /// Failures on individual shortcuts are logged and skipped; one unreadable
 /// `.lnk` can't blank the whole grid. The map is keyed by stable `AppId` so two
@@ -433,14 +433,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     #[ignore = "Read-only diagnostic; installed apps vary by machine"]
-    fn report_duplicate_app_launchers() {
+    fn report_discovered_app_launchers() {
         let snapshot = scan_start_menu();
-        for name in ["Discord", "Steam", "FocuSee", "VRChat Creator Companion"] {
-            let entries: Vec<_> = snapshot.values().filter(|e| e.name == name).collect();
-            eprintln!("{name}: {} launcher(s)", entries.len());
-            for entry in entries {
-                eprintln!("  {} -> {}", entry.link_path, entry.target_path);
-            }
+        eprintln!("{} launcher(s)", snapshot.len());
+        for entry in snapshot.values() {
+            eprintln!(
+                "{}: {} -> {}",
+                entry.name, entry.link_path, entry.target_path
+            );
         }
     }
 
