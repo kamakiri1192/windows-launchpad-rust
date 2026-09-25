@@ -850,7 +850,7 @@ pub struct ExeMetadata {
 pub fn exe_metadata(path: &std::path::Path) -> ExeMetadata {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{
-        GetFileVersionInfoExW, GetFileVersionInfoSizeW, VerQueryValueW, FILE_VER_GET_NEUTRAL,
+        GetFileVersionInfoExW, GetFileVersionInfoSizeW, FILE_VER_GET_NEUTRAL,
     };
 
     let path_w = wide_null(&path.to_string_lossy());
@@ -878,26 +878,9 @@ pub fn exe_metadata(path: &std::path::Path) -> ExeMetadata {
         return ExeMetadata::default();
     }
 
-    // Ask for the root VS_VERSION_INFO, then walk its Var-Translation table to
-    // find a language/codepage that actually exists in the file, and finally
-    // read the localized fields (each with its own fallback chain).
-    let mut root_ptr: *mut c_void = std::ptr::null_mut();
-    let mut root_len: u32 = 0;
-    // SAFETY: VerQueryValueW returns a pointer *into* the version-info buffer
-    // (no allocation); we keep `buffer` alive across all reads below.
-    let have_root = unsafe {
-        VerQueryValueW(
-            buffer.as_ptr() as *const c_void,
-            w!("\\"),
-            &mut root_ptr,
-            &mut root_len,
-        )
-        .as_bool()
-    };
-    if !have_root || root_ptr.is_null() {
-        return ExeMetadata::default();
-    }
-    let translations = read_translations(root_ptr, root_len);
+    // VerQueryValue requires the original version buffer, not the
+    // VS_FIXEDFILEINFO pointer returned when querying the root value.
+    let translations = read_translations(&buffer);
     let lang_cps: Vec<u32> = translations
         .iter()
         .copied()
@@ -949,24 +932,39 @@ pub fn exe_metadata(path: &std::path::Path) -> ExeMetadata {
     }
 }
 
-/// Read the `VarFileInfo\Translation` array from a VS_VERSION_INFO root block.
-fn read_translations(root: *mut c_void, _len: u32) -> Vec<u32> {
+/// Read the language/codepage pairs from the original version-info buffer.
+fn read_translations(buffer: &[u8]) -> Vec<u32> {
     use windows::Win32::Storage::FileSystem::VerQueryValueW;
     let mut ptr: *mut c_void = std::ptr::null_mut();
     let mut len: u32 = 0;
-    // SAFETY: same lifetime rule as the caller; pointer is into the buffer.
+    // SAFETY: buffer is the complete GetFileVersionInfo result and remains
+    // alive until the returned translation bytes have been copied.
     let ok = unsafe {
-        VerQueryValueW(root, w!("\\VarFileInfo\\Translation"), &mut ptr, &mut len).as_bool()
+        VerQueryValueW(
+            buffer.as_ptr().cast(),
+            w!("\\VarFileInfo\\Translation"),
+            &mut ptr,
+            &mut len,
+        )
+        .as_bool()
     };
     if !ok || ptr.is_null() || len == 0 {
         return Vec::new();
     }
-    let count = (len as usize) / std::mem::size_of::<u32>();
-    // SAFETY: the translation array is `len` bytes of packed u16 pairs; reading
-    // it as u32 little-endian gives the combined LANGID+codepage value used to
-    // build the localized StringFileInfo subblock path.
-    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u32, count) };
-    slice.to_vec()
+    // SAFETY: the API returns len readable bytes within the version buffer.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len as usize) };
+    translation_keys(bytes)
+}
+
+fn translation_keys(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|pair| {
+            let language = u16::from_le_bytes([pair[0], pair[1]]);
+            let codepage = u16::from_le_bytes([pair[2], pair[3]]);
+            (u32::from(language) << 16) | u32::from(codepage)
+        })
+        .collect()
 }
 
 /// Read one localized `StringFileInfo\<lang_cp>\<field>` string from a version
@@ -1010,6 +1008,45 @@ fn wide_null(value: &str) -> Vec<u16> {
 mod exe_version_tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn translation_pairs_preserve_language_then_codepage() {
+        // Japanese Unicode and neutral UTF-8 tables are not covered by the
+        // English fallback IDs. Raw DWORD interpretation reverses both pairs.
+        assert_eq!(
+            translation_keys(&[0x11, 0x04, 0xb0, 0x04, 0, 0, 0xe9, 0xfd]),
+            vec![0x041104b0, 0x0000fde9]
+        );
+    }
+
+    #[test]
+    fn translation_query_uses_whole_version_resource() {
+        fn block(key: &str, value: &[u8], children: &[u8], kind: u16) -> Vec<u8> {
+            let mut b = vec![0, 0];
+            b.extend_from_slice(&(value.len() as u16).to_le_bytes());
+            b.extend_from_slice(&kind.to_le_bytes());
+            for c in key.encode_utf16().chain([0]) {
+                b.extend_from_slice(&c.to_le_bytes());
+            }
+            while b.len() % 4 != 0 {
+                b.push(0);
+            }
+            b.extend_from_slice(value);
+            while b.len() % 4 != 0 {
+                b.push(0);
+            }
+            b.extend_from_slice(children);
+            let len = b.len() as u16;
+            b[..2].copy_from_slice(&len.to_le_bytes());
+            b
+        }
+        let translation = block("Translation", &[0x11, 0x04, 0xb0, 0x04], &[], 0);
+        let var = block("VarFileInfo", &[], &translation, 1);
+        let mut fixed = vec![0; 52];
+        fixed[..4].copy_from_slice(&0xfeef04bdu32.to_le_bytes());
+        let resource = block("VS_VERSION_INFO", &fixed, &var, 0);
+        assert_eq!(read_translations(&resource), vec![0x041104b0]);
+    }
 
     /// A missing file yields an all-empty metadata struct (no panic).
     #[test]

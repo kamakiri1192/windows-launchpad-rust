@@ -51,6 +51,10 @@ use crate::domain::launcher_item::LauncherItem;
 /// See the module docs for the invariant list and migration notes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LauncherState {
+    #[serde(default)]
+    pub initial_layout: Option<super::initial_layout::InitialLayoutRecord>,
+    #[serde(default)]
+    pub layout_revision: u64,
     /// Ordered top-level launcher items. Apps not in this list and not inside a
     /// folder are integrated into it on refresh via
     /// [`integrate_discovered_apps`][Self::integrate_discovered_apps].
@@ -98,6 +102,8 @@ impl LauncherState {
             folders: BTreeMap::new(),
             hidden_apps,
             customized,
+            initial_layout: None,
+            layout_revision: 0,
         }
     }
 
@@ -544,7 +550,7 @@ impl LauncherState {
         new_ids.sort_by(|a, b| {
             let na = name_of(a).map(|s| s.to_lowercase()).unwrap_or_default();
             let nb = name_of(b).map(|s| s.to_lowercase()).unwrap_or_default();
-            na.cmp(&nb).then_with(|| a.as_ref().cmp(b.as_ref()))
+            super::name_order::key(&na, a.as_ref()).cmp(&super::name_order::key(&nb, b.as_ref()))
         });
 
         if !self.customized {
@@ -561,7 +567,8 @@ impl LauncherState {
             all.sort_by(|a, b| {
                 let na = name_of(a).map(|s| s.to_lowercase()).unwrap_or_default();
                 let nb = name_of(b).map(|s| s.to_lowercase()).unwrap_or_default();
-                na.cmp(&nb).then_with(|| a.as_ref().cmp(b.as_ref()))
+                super::name_order::key(&na, a.as_ref())
+                    .cmp(&super::name_order::key(&nb, b.as_ref()))
             });
             self.items = all
                 .into_iter()

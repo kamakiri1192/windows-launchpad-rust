@@ -1,0 +1,238 @@
+{
+  "name": "initial-folder-layout-related-reset",
+  "viewport": [
+    1280,
+    800
+  ],
+  "scale_factor": 1.5,
+  "fps": 15,
+  "duration_ms": 4000,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      {
+        "id": "idea",
+        "name": "IntelliJ IDEA",
+        "target_path": "C:/Program Files/JetBrains/bin/idea64.exe",
+        "identifier": "IntelliJ IDEA",
+        "publisher": "JetBrains s.r.o."
+      },
+      {
+        "id": "toolbox",
+        "name": "JetBrains Toolbox",
+        "target_path": "C:/Program Files/JetBrains/Toolbox/bin/jetbrains-toolbox.exe",
+        "identifier": "JetBrains Toolbox",
+        "publisher": "JetBrains"
+      },
+      {
+        "id": "git-bash",
+        "name": "Git Bash",
+        "target_path": "C:/Program Files/Git/git-bash.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "git-gui",
+        "name": "Git GUI",
+        "target_path": "C:/Program Files/Git/cmd/git-gui.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "unity",
+        "name": "Unity",
+        "target_path": "C:/Program Files/Unity/Hub/Editor/6000.4.0f1/Editor/Unity.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "hub",
+        "name": "Unity Hub",
+        "target_path": "C:/Program Files/Unity Hub/Unity Hub.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "cubism-editor",
+        "name": "Cubism Editor",
+        "target_path": "C:/Program Files/Live2D Cubism 5.3/CubismEditor5.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "cubism-viewer",
+        "name": "Cubism Viewer",
+        "target_path": "C:/Program Files/Live2D Cubism 5.3/CubismViewer5.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "cinema",
+        "name": "Cinema 4D",
+        "target_path": "C:/Program Files/Maxon Cinema 4D 2026/Cinema 4D.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "render",
+        "name": "Team Render Client",
+        "target_path": "C:/Program Files/Maxon Cinema 4D 2026/Cinema 4D Team Render Client.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "browser",
+        "name": "Browser"
+      }
+    ],
+    "items": [
+      {
+        "kind": "app",
+        "id": "idea"
+      },
+      {
+        "kind": "app",
+        "id": "toolbox"
+      },
+      {
+        "kind": "app",
+        "id": "git-bash"
+      },
+      {
+        "kind": "app",
+        "id": "git-gui"
+      },
+      {
+        "kind": "app",
+        "id": "unity"
+      },
+      {
+        "kind": "app",
+        "id": "hub"
+      },
+      {
+        "kind": "app",
+        "id": "cubism-editor"
+      },
+      {
+        "kind": "app",
+        "id": "cubism-viewer"
+      },
+      {
+        "kind": "app",
+        "id": "cinema"
+      },
+      {
+        "kind": "app",
+        "id": "render"
+      },
+      {
+        "kind": "app",
+        "id": "browser"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 0,
+      "type": "initialize_folders",
+      "japanese": true
+    },
+    {
+      "at_ms": 850,
+      "type": "toggle_settings"
+    },
+    {
+      "at_ms": 1300,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "undo-initial-layout"
+      }
+    },
+    {
+      "at_ms": 1350,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 1400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 1500,
+      "type": "escape"
+    },
+    {
+      "at_ms": 1850,
+      "type": "toggle_settings"
+    },
+    {
+      "at_ms": 2200,
+      "type": "move",
+      "target": {
+        "kind": "settings_category",
+        "key": "system"
+      }
+    },
+    {
+      "at_ms": 2250,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2300,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2600,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "reset-settings"
+      }
+    },
+    {
+      "at_ms": 2650,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2700,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2900,
+      "type": "move",
+      "target": {
+        "kind": "settings_category",
+        "key": "apps"
+      }
+    },
+    {
+      "at_ms": 2950,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 3000,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 3300,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "undo-initial-layout"
+      }
+    },
+    {
+      "at_ms": 3350,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 3400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 3500,
+      "type": "escape"
+    }
+  ]
+}

@@ -21,6 +21,8 @@ pub mod app_diff;
 pub mod app_id;
 pub mod app_registry;
 pub mod folders;
+pub mod initial_layout;
 pub mod launcher_item;
 pub mod launcher_state;
+pub mod name_order;
 pub mod settings;

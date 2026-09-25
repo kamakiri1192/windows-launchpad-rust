@@ -93,6 +93,7 @@ pub enum SettingsPressTarget {
     AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
+    UndoInitialLayout,
     /// Liquid Glass master switch (keyboard equivalent: `V`).
     LiquidGlassEnabled,
     /// Automatically add darkness when the captured backdrop is mostly white.
@@ -243,6 +244,12 @@ pub struct App {
     pub catalog_presence: crate::domain::app_catalog::Presence,
     #[cfg(windows)]
     pub catalog_store_writable: bool,
+    pub layout_initial_fresh: bool,
+    pub layout_checkpoint: LauncherState,
+    pub layout_writable: bool,
+    pub layout_session_changed: bool,
+    pub initial_snapshot_ready: bool,
+    pub settings_reset_pending: bool,
     /// CPU-side fixed-slot atlas; the GPU texture mirrors it.
     pub atlas: IconAtlas,
     /// True once the atlas texture has been allocated+uploaded at least once.
@@ -485,6 +492,12 @@ impl App {
             catalog_presence: Default::default(),
             #[cfg(windows)]
             catalog_store_writable: true,
+            layout_initial_fresh: false,
+            layout_checkpoint: LauncherState::new(),
+            layout_writable: true,
+            layout_session_changed: false,
+            initial_snapshot_ready: false,
+            settings_reset_pending: false,
             atlas: IconAtlas::new(64),
             atlas_uploaded: false,
             snapshot: BTreeMap::new(),

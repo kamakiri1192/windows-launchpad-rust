@@ -101,6 +101,7 @@ mod tests {
             LauncherState::from_legacy(vec![AppId::from_normalized("existing-link")], vec![]);
         let mut aliases = IdentityAliases::default();
         let entry = crate::domain::app_diff::SnapshotEntry {
+            launch_arguments: None,
             app_id: AppId::from_normalized("existing-link"),
             name: "Example".into(),
             link_path: "existing-link".into(),

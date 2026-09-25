@@ -31,8 +31,8 @@ impl App {
     /// Migration: if the Phase 7 `launcher_state` key is present it is used
     /// directly. Otherwise the legacy `app_order` + `hidden_ids` binary keys
     /// are read and converted via [`LauncherState::from_legacy`]. A missing or
-    /// corrupt store is a no-op (state stays empty / non-customized), so a bad
-    /// blob never blocks startup or wipes other settings.
+    /// corrupt store is opened read-only for layout purposes. The first scan
+    /// supplies the canonical app set before the initial layout is published.
     pub(crate) fn load_customization(&mut self) {
         self.settings = self.cache.get_settings();
         #[cfg(windows)]
@@ -41,34 +41,38 @@ impl App {
                 Ok(Some(state)) => {
                     self.launcher_state = state.layout;
                     self.catalog_aliases = state.aliases;
+                    self.layout_checkpoint = self.launcher_state.clone();
                     return;
                 }
                 Ok(None) => {}
                 Err(error) => {
                     self.catalog_store_writable = false;
+                    self.layout_writable = false;
                     eprintln!("user-state: preserving unreadable store: {error}");
+                    return;
                 }
             }
         }
-        if let Some(state) = self.cache.get_launcher_state() {
-            self.launcher_state = state;
-            return;
-        }
-        // Legacy migration path: convert the old binary app_order + hidden_ids
-        // keys into the item-based launcher state.
-        let order = self.cache.get_app_order();
-        let hidden = self.cache.get_hidden_ids();
-        if !order.is_empty() || !hidden.is_empty() {
-            self.launcher_state =
-                crate::domain::launcher_state::LauncherState::from_legacy(order, hidden);
-        }
+        let loaded = self.cache.load_layout();
+        self.layout_initial_fresh = loaded.fresh;
+        self.launcher_state = loaded.state;
+        self.layout_checkpoint = self.launcher_state.clone();
+        self.layout_writable = loaded.writable;
     }
 
     /// Persist the current launcher layout so it survives across launches.
     /// Called after a drag-to-reorder, hide/unhide, or folder change. Cheap:
     /// one small JSON blob upsert. Errors are logged but never panic the UI.
-    pub(crate) fn persist_launcher_state(&self) {
-        if self.qa_enabled() {
+    pub(crate) fn persist_launcher_state(&mut self) {
+        self.layout_session_changed = true;
+        if self.launcher_state.items != self.layout_checkpoint.items
+            || self.launcher_state.folders != self.layout_checkpoint.folders
+            || self.launcher_state.hidden_apps != self.layout_checkpoint.hidden_apps
+        {
+            self.launcher_state.layout_changed();
+        }
+        self.layout_checkpoint = self.launcher_state.clone();
+        if self.qa_enabled() || !self.layout_writable {
             return;
         }
         #[cfg(windows)]
@@ -98,18 +102,18 @@ impl App {
     /// after a drag-to-reorder completes (and on hide). Phase 7 routes this
     /// through the unified launcher state; this method is kept as the
     /// edit-mode command target so the command boundary stays stable.
-    pub(crate) fn persist_user_order(&self) {
+    pub(crate) fn persist_user_order(&mut self) {
         self.persist_launcher_state();
     }
 
     /// Persist the current hidden-app list. Called after a hide/unhide change.
     /// Phase 7 routes this through the unified launcher state.
-    pub(crate) fn persist_hidden(&self) {
+    pub(crate) fn persist_hidden(&mut self) {
         self.persist_launcher_state();
     }
 
     pub(crate) fn persist_settings(&self) {
-        if self.qa_enabled() {
+        if self.qa_enabled() || !self.layout_writable {
             return;
         }
         if let Err(e) = self.cache.put_settings(&self.settings) {

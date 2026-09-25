@@ -16,12 +16,13 @@ use std::collections::HashSet;
 #[cfg(windows)]
 use std::path::Path;
 
+use super::scan_status::ScanStatus;
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 #[cfg(windows)]
 use crate::icons::extract;
 #[cfg(target_os = "macos")]
-use crate::workers::steam_scan::scan_steam_apps;
+use crate::workers::steam_scan::scan_steam_apps_checked;
 
 /// Scan Start Menu and desktop known folders plus installed Steam apps.
 ///
@@ -29,28 +30,43 @@ use crate::workers::steam_scan::scan_steam_apps;
 /// `.lnk` can't blank the whole grid. The map is keyed by stable `AppId` so two
 /// scans of the same set compare equal regardless of iteration order.
 pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
+    scan_start_menu_checked().0
+}
+
+pub fn scan_start_menu_checked() -> (BTreeMap<AppId, SnapshotEntry>, ScanStatus) {
+    let mut status = ScanStatus::default();
     #[cfg(target_os = "macos")]
     {
-        let mut out = crate::platform::macos::apps::scan_applications();
-        for entry in scan_steam_apps() {
+        let (mut out, complete) = crate::platform::macos::apps::scan_applications_checked();
+        status.record("applications", complete);
+        let (steam, errors) = scan_steam_apps_checked();
+        status.record("steam", errors.is_empty());
+        for entry in steam {
             out.insert(entry.app_id.clone(), entry);
         }
-        out
+        (out, status)
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        BTreeMap::new()
+        (BTreeMap::new(), status)
     }
 
     #[cfg(windows)]
     {
         let scan = scan_catalog();
         let mut aliases = crate::domain::app_catalog::IdentityAliases::default();
-        aliases.reconcile(
+        status.record(
+            "catalog",
+            scan.errors.is_empty()
+                && scan.failed_sources.is_empty()
+                && scan.failed_locators.is_empty(),
+        );
+        let snapshot = aliases.reconcile(
             crate::domain::app_catalog::group(scan.candidates),
             &mut crate::domain::launcher_state::LauncherState::default(),
-        )
+        );
+        (snapshot, status)
     }
 }
 
@@ -142,6 +158,7 @@ pub fn scan_catalog() -> crate::domain::app_catalog::CatalogScan {
         };
         scan.candidates.push(Candidate {
             entry: SnapshotEntry {
+                launch_arguments: meta.arguments_known.then(|| meta.arguments.clone()),
                 app_id,
                 name: sc.name,
                 link_path: sc.path.to_string_lossy().into_owned(),
@@ -732,6 +749,67 @@ mod tests {
             eprintln!(
                 "{}: {} -> {}",
                 entry.name, entry.link_path, entry.target_path
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Read-only diagnostic of installed apps; varies by machine"]
+    fn report_initial_layout_for_installed_apps() {
+        #[cfg(windows)]
+        {
+            let (shortcuts, errors, _) = extract::enumerate_application_candidates();
+            let complete = errors.is_empty();
+            eprintln!("Start Menu enumeration complete={complete}");
+            for shortcut in shortcuts {
+                if !extract::is_apps_folder_uri(&shortcut.path)
+                    && extract::resolve_lnk_metadata(&shortcut.path).is_none()
+                {
+                    eprintln!("Unresolved shortcut: {}", shortcut.path.display());
+                }
+            }
+        }
+        let start = std::time::Instant::now();
+        let (snapshot, status) = scan_start_menu_checked();
+        let scan_elapsed = start.elapsed();
+        let start = std::time::Instant::now();
+        let proposal = crate::domain::initial_layout::generate(
+            &snapshot,
+            &crate::domain::settings::Settings::default(),
+            crate::domain::initial_layout::catalog::Platform::current(),
+            true,
+            "diagnostic".into(),
+            &crate::domain::initial_layout::catalog::Catalog::bundled(
+                std::env::var("SystemRoot").ok(),
+            ),
+        );
+        eprintln!(
+            "initial-layout scan={scan_elapsed:?} compute={:?} apps={} sources={:?}",
+            start.elapsed(),
+            snapshot.len(),
+            status.sources
+        );
+        for folder in proposal.state.folders.values() {
+            eprintln!("  {}: {} shortcuts", folder.name, folder.children.len());
+            for id in &folder.children {
+                eprintln!("    {}", snapshot[id].name);
+            }
+        }
+        for item in &proposal.state.items {
+            match item {
+                crate::domain::launcher_item::LauncherItem::App(id) => {
+                    eprintln!("ORDER APP {}", snapshot[id].name)
+                }
+                crate::domain::launcher_item::LauncherItem::Folder(id) => {
+                    eprintln!("ORDER FOLDER {}", proposal.state.folders[id].name)
+                }
+            }
+        }
+        for id in proposal.state.top_level_app_ids() {
+            let e = &snapshot[id];
+            eprintln!(
+                "TOP {:?} | {:?} | {:?} | {:?} | {:?}",
+                e.name, e.target_path, e.launch_arguments, e.identifier, e.publisher
             );
         }
     }

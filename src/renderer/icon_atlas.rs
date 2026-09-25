@@ -125,23 +125,19 @@ impl IconAtlas {
             }
             return false;
         }
-        // Grow: double rows, keep cols. If that still isn't enough, widen cols.
-        let mut cols = self.cols;
-        let mut rows = (self.rows_for_capacity(needed, cols)).max(self.rows() * 2);
-        // Cap by GPU max (caller checks separately; here we just clamp).
+        // Keep columns stable while doubling rows fits. Once height reaches
+        // the GPU limit, widen the grid instead of undoing the height clamp
+        // with div_ceil(needed, old_cols) (1,000 slots otherwise need 16,250px).
         const MAX_DIM: u32 = 8192;
-        while cols * CELL > MAX_DIM && cols > 1 {
-            cols /= 2;
+        let mut new_cols = self.cols;
+        let mut new_rows = needed
+            .div_ceil(new_cols)
+            .max(self.rows() * 2)
+            .min(MAX_DIM / CELL);
+        if new_cols * new_rows < needed {
+            new_cols = new_cols.max(cols_for_capacity(needed));
+            new_rows = needed.div_ceil(new_cols);
         }
-        rows = rows.max(1);
-        while cols * CELL > MAX_DIM {
-            cols -= 1;
-        }
-        if rows * CELL > MAX_DIM {
-            rows = MAX_DIM / CELL;
-        }
-        let new_cols = cols.max(1);
-        let new_rows = rows.max((needed.div_ceil(new_cols)).max(1));
 
         let mut grown = Self::with_grid(new_cols, new_rows);
         // Re-blit every existing slot into the new buffer. We copy whole
@@ -177,10 +173,6 @@ impl IconAtlas {
 
     fn rows(&self) -> u32 {
         self.height / CELL
-    }
-
-    fn rows_for_capacity(&self, needed: u32, cols: u32) -> u32 {
-        needed.div_ceil(cols.max(1))
     }
 
     /// Compute the UV rect (over the icon bitmap, not the padding) for a slot,
@@ -420,6 +412,21 @@ mod tests {
         assert_eq!(&a.rgba()[px1..px1 + 4], &[0, 255, 0, 255]);
         // uv0 must have been recomputed for the new dimensions.
         let _ = (uv0, uv1, new_uv0);
+    }
+
+    #[test]
+    fn thousand_slots_fit_gpu_limit_and_preserve_pixels_when_columns_grow() {
+        let mut atlas = IconAtlas::new(64);
+        atlas.write_icon(63, &solid([3, 7, 11, 255]));
+        assert!(atlas.ensure_capacity(1000));
+        assert!(atlas.capacity() >= 1000);
+        assert!(atlas.width() <= 8192 && atlas.height() <= 8192);
+        let (x, y) = atlas.icon_origin(63);
+        let pixel = ((y * atlas.width() + x) * 4) as usize;
+        assert_eq!(&atlas.rgba()[pixel..pixel + 4], &[3, 7, 11, 255]);
+        let (x, y, uv) = atlas.write_icon(999, &solid([13, 17, 19, 255]));
+        assert!(x + TARGET <= atlas.width() && y + TARGET <= atlas.height());
+        assert_eq!(atlas.uv(999), Some(uv));
     }
 
     #[test]

@@ -287,6 +287,7 @@ impl App {
             show_fps: self.settings.show_fps,
             show_auto_darkness_value: self.settings.show_auto_darkness_value,
             hidden_count,
+            initial_undo_available: self.launcher_state.initial_undo_available(),
             progress: self.settings_panel_progress,
             scroll_rows: self.settings_scroll_rows,
             window_decorated,
@@ -1071,6 +1072,13 @@ fn settings_panel_copy<'a>(
         frequent_apps_detail: "ホーム画面に表示するための準備設定",
         steam_apps_label: "Steamアプリを表示",
         steam_apps_detail: "インストール済みのSteamゲームとアプリを一覧に表示します",
+        initial_undo_label: if crate::domain::initial_layout::japanese_locale(
+            sys_locale::get_locale().as_deref(),
+        ) {
+            "初期整理を取り消す"
+        } else {
+            "Undo initial folders"
+        },
         hidden_apps_label: "非表示アプリ",
         hidden_count_label,
         search_hidden_label: "検索時に非表示アプリを含める",
@@ -1082,7 +1090,7 @@ fn settings_panel_copy<'a>(
         reset_cache_label: "キャッシュをリセット",
         reset_cache_detail: "アイコンを再抽出します",
         reset_settings_label: "設定をリセット",
-        reset_settings_detail: "並び順、非表示、設定値を初期状態に戻します",
+        reset_settings_detail: "設定を初期値に戻し、アプリの初期フォルダ配置を作り直します",
         version_label: "バージョン",
         version_value: env!("CARGO_PKG_VERSION"),
         debug_section_window: "ウィンドウ",
@@ -1199,6 +1207,7 @@ pub(crate) fn settings_press_target_from_hit_target(
         } => match key.as_str() {
             "reset-cache" => SettingsPressTarget::ResetCache,
             "reset-settings" => SettingsPressTarget::ResetSettings,
+            "undo-initial-layout" => SettingsPressTarget::UndoInitialLayout,
             "lg-reset-all" => SettingsPressTarget::LiquidGlassResetAll,
             key if key.starts_with("lg-param-reset-") => {
                 let field = param_field_from_key(&key["lg-param-reset-".len()..]);
@@ -1527,6 +1536,7 @@ mod tests {
             show_fps: false,
             show_auto_darkness_value: false,
             hidden_count: 0,
+            initial_undo_available: false,
             progress: 1.0,
             scroll_rows: 0,
             window_decorated: false,
