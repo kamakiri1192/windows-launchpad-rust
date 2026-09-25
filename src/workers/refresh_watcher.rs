@@ -15,14 +15,20 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(not(windows))]
 use super::app_scan::scan_start_menu;
-use crate::domain::app_diff::{diff_snapshots, AppDiff, SnapshotEntry};
+#[cfg(not(windows))]
+use crate::domain::app_diff::diff_snapshots;
+use crate::domain::app_diff::{AppDiff, SnapshotEntry};
 use crate::domain::app_id::AppId;
+#[cfg(not(windows))]
 use crate::startup_timer::{self, prefix};
 
 /// Messages the watcher sends to the UI thread.
 #[derive(Debug)]
 pub enum RefreshMessage {
+    #[cfg(windows)]
+    Catalog(crate::domain::app_catalog::CatalogScan),
     /// First snapshot is ready (sent once, ~immediately after spawn).
     Initial(BTreeMap<AppId, SnapshotEntry>),
     /// A subsequent rescan produced a non-empty diff.
@@ -59,6 +65,18 @@ pub fn spawn(tx: Sender<RefreshMessage>, config: RefreshConfig) {
         .expect("spawn refresh-watcher");
 }
 
+#[cfg(windows)]
+fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
+    thread::sleep(config.initial_delay);
+    loop {
+        let scan = super::app_scan::scan_catalog();
+        if tx.send(RefreshMessage::Catalog(scan)).is_err() {
+            return;
+        }
+        thread::sleep(config.poll_interval);
+    }
+}
+#[cfg(not(windows))]
 fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
     let timer = startup_timer::get();
     thread::sleep(config.initial_delay);
@@ -110,6 +128,7 @@ mod tests {
             target_mtime: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             version: String::new(),
             publisher: String::new(),
             identifier: String::new(),

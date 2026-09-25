@@ -45,6 +45,8 @@ CREATE TABLE icons (
     target_mtime       INTEGER NOT NULL,   -- mtime of the target file
     icon_location      TEXT NOT NULL,      -- Shell IconLocation (may be "")
     icon_index         INTEGER NOT NULL,   -- icon index inside icon_location/target
+    provider_icon_path TEXT,               -- optional artwork independent of launch route
+    provider_icon_mtime INTEGER NOT NULL DEFAULT 0,
     image_w            INTEGER NOT NULL,   -- normalized icon width (== TARGET)
     image_h            INTEGER NOT NULL,   -- normalized icon height (== TARGET)
     image_rgba         BLOB NOT NULL,      -- straight-alpha RGBA8, w*h*4 bytes
@@ -73,11 +75,11 @@ low write latency.
 
 Two independent version numbers guard against stale data:
 
-- **`SCHEMA_VERSION`** (`icon_cache::SCHEMA_VERSION`, currently `1`) — the
+- **`SCHEMA_VERSION`** (`icon_cache::SCHEMA_VERSION`, currently `2`) — the
   on-disk table layout. A mismatch on open wipes the `icons` table so every
   entry is re-extracted against the new schema.
-- **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `5`
-  on Windows and `7` on macOS) —
+- **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `6`
+  on Windows and `9` on macOS) —
   the *extraction algorithm itself* (normalization target size, alpha handling,
   fallback strategy). Stored per-row in `extraction_version`; an entry whose
   stored version differs from the current one is treated as invalid even if the
@@ -104,7 +106,13 @@ cached.image.w == CACHED_ICON_SIZE
     && cached.target_mtime  == probe.target_mtime
     && cached.icon_location == probe.icon_location
     && cached.icon_index    == probe.icon_index
+    && cached.provider_icon.as_ref() == probe.provider_icon
 ```
+
+Provider artwork has its own path and mtime, independent of the selected launch
+route and its target metadata. Its two columns are added to older databases
+without discarding existing icon rows or user state. Old rows have no override;
+adding a provider source invalidates only the affected app's icon.
 
 A single mismatch → re-extract. Concretely, the cache is invalidated when:
 
@@ -115,6 +123,7 @@ A single mismatch → re-extract. Concretely, the cache is invalidated when:
 | resolved target path changed           | shortcut now points elsewhere                  |
 | target mtime changed                   | target exe/dll was updated                     |
 | `IconLocation` string changed          | shortcut's explicit icon was re-pointed        |
+| provider artwork added, removed, moved, or updated | preferred artwork changed |
 | icon index changed                     | icon within the location changed               |
 | `EXTRACTION_VERSION` changed           | extraction algorithm changed (re-extract all)  |
 | `SCHEMA_VERSION` changed               | schema layout changed (table wiped on open)    |

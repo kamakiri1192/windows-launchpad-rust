@@ -130,7 +130,10 @@ impl App {
             .as_mut()
             .map(|runner| runner.animation_dt())
             .unwrap_or(wall_anim_dt);
-        let anim_dt = wall_anim_dt;
+        // The QA runner reads back each GPU frame, so wall time can be much
+        // larger than the scenario step. Keep tile springs on the same clock
+        // as the menu to avoid invalid anchors during search transitions.
+        let anim_dt = context_menu_anim_dt;
         let launch_animating = self.launch_presentation.tick(context_menu_anim_dt);
         if self.editing {
             self.wiggle_phase += anim_dt;

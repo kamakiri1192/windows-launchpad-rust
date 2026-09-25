@@ -14,6 +14,60 @@ use crate::workers::icon_worker::{IconReason, IconRequest};
 use crate::app::state::App;
 
 impl App {
+    #[cfg(windows)]
+    pub(crate) fn apply_catalog(&mut self, scan: crate::domain::app_catalog::CatalogScan) {
+        for error in &scan.errors {
+            eprintln!("app-catalog: incomplete scan: {error}");
+        }
+        let mut aliases = self.catalog_aliases.clone();
+        let mut layout = self.launcher_state.clone();
+        let groups = aliases.groups(scan.candidates);
+        let mut next = aliases.reconcile(groups, &mut layout);
+        let old = self
+            .snapshot
+            .iter()
+            .filter(|(id, _)| aliases.canonical(id) == **id)
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect();
+        self.catalog_presence
+            .retain_observed(&old, &mut next, |id| {
+                !self
+                    .catalog_aliases
+                    .source_of(id)
+                    .is_some_and(|source| scan.failed_sources.contains(&source))
+                    && !old
+                        .get(id)
+                        .is_some_and(|entry| scan.failed_locators.contains(&entry.link_path))
+            });
+        // Persist identity and placement in one transaction before changing the UI.
+        if !self.qa_enabled()
+            && self.catalog_store_writable
+            && (aliases != self.catalog_aliases || layout != self.launcher_state)
+        {
+            let state = crate::user_state::UserState::new(layout.clone(), aliases.clone());
+            if let Err(error) = crate::user_state::save(
+                &self.cache.path().with_file_name("user-state.sqlite3"),
+                &state,
+                &self.launcher_state,
+            ) {
+                eprintln!("app-catalog: could not commit identity migration: {error}");
+                return;
+            }
+        }
+        let layout_changed = layout != self.launcher_state;
+        self.catalog_aliases = aliases;
+        self.launcher_state = layout;
+        if self.snapshot.is_empty() {
+            self.ingest_snapshot(next, true);
+        } else {
+            let diff = crate::domain::app_diff::diff_snapshots(&self.snapshot, &next);
+            if !diff.is_empty() || layout_changed {
+                self.apply_diff(diff);
+            }
+        }
+        self.persist_launcher_state();
+    }
+
     pub(crate) fn ensure_atlas_uploaded(&mut self) -> bool {
         let needed = self.registry.slot_count().max(1);
         let grew = self.atlas.ensure_capacity(needed);
@@ -197,6 +251,7 @@ impl App {
                     target_mtime: entry.target_mtime,
                     icon_location: entry.icon_location.clone(),
                     icon_index: entry.icon_index,
+                    provider_icon: entry.provider_icon.clone(),
                     reason: IconReason::Fresh,
                 };
                 if handle.requests.send(req).is_err() {
@@ -311,6 +366,7 @@ impl App {
                 target_mtime: entry.target_mtime,
                 icon_location: entry.icon_location.clone(),
                 icon_index: entry.icon_index,
+                provider_icon: entry.provider_icon.clone(),
                 reason: if is_initial {
                     IconReason::Fresh
                 } else {
@@ -363,6 +419,7 @@ impl App {
             target_mtime: entry.target_mtime,
             icon_location: &entry.icon_location,
             icon_index: entry.icon_index,
+            provider_icon: entry.provider_icon.as_ref(),
         };
         let rec_state = self.registry.get(id).map(|r| r.icon_state);
         if matches!(rec_state, Some(IconState::Loaded | IconState::Cached)) {
@@ -472,6 +529,7 @@ impl App {
                 target_mtime: entry.target_mtime,
                 icon_location: &entry.icon_location,
                 icon_index: entry.icon_index,
+                provider_icon: entry.provider_icon.as_ref(),
             };
             match self.cache.get_if_valid(&probe) {
                 Ok(Some(cached)) => {
@@ -495,6 +553,7 @@ impl App {
                         target_mtime: entry.target_mtime,
                         icon_location: entry.icon_location.clone(),
                         icon_index: entry.icon_index,
+                        provider_icon: entry.provider_icon.clone(),
                         reason: IconReason::Updated,
                     });
                 }

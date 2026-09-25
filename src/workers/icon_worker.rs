@@ -16,6 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
+use crate::domain::app_diff::IconSource;
 use crate::domain::app_id::AppId;
 use crate::icon_cache::{self, CachedIcon, IconCache};
 #[cfg(windows)]
@@ -50,6 +51,7 @@ pub struct IconRequest {
     pub target_mtime: u64,
     pub icon_location: String,
     pub icon_index: i32,
+    pub provider_icon: Option<IconSource>,
     pub reason: IconReason,
 }
 
@@ -228,6 +230,7 @@ fn process_one(
         target_mtime: req.target_mtime,
         icon_location: req.icon_location.clone(),
         icon_index: req.icon_index,
+        provider_icon: req.provider_icon.clone(),
         image: image.image.clone(),
         extracted_at_version: icon_cache::EXTRACTION_VERSION,
         category: image.category,
@@ -241,41 +244,197 @@ fn process_one(
     Ok((image.image, hide_tile_fill))
 }
 
+/// Artwork selection depends on provider metadata, never the chosen launch URI.
 fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
+    if let Some(icon) = req.provider_icon.as_ref().and_then(extract_provider_icon) {
+        return Some(icon);
+    }
     #[cfg(target_os = "macos")]
     {
-        if req.link_path.to_string_lossy().starts_with("steam://") {
-            let icon_path = PathBuf::from(&req.icon_location);
-            if let Ok(bytes) = std::fs::read(&icon_path) {
-                if let Ok(image) = image::load_from_memory(&bytes) {
-                    return Some(DecodedIcon::from_dynamic(image));
-                }
-            }
-            if icon_path.extension().is_some_and(|ext| ext == "app") {
-                return crate::platform::macos::apps::extract_icon(&icon_path, "");
-            }
-            return None;
-        }
         crate::platform::macos::apps::extract_icon(&req.link_path, &req.icon_location)
     }
-
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = req;
         None
     }
-
     #[cfg(windows)]
     {
-        if req.link_path.to_string_lossy().starts_with("steam://") {
-            let icon_path = PathBuf::from(&req.icon_location);
-            if let Ok(bytes) = std::fs::read(&icon_path) {
-                if let Ok(image) = image::load_from_memory(&bytes) {
-                    return Some(DecodedIcon::from_dynamic(image));
+        extract::extract_icon_from_lnk(&req.link_path)
+    }
+}
+
+fn extract_provider_icon(source: &IconSource) -> Option<DecodedIcon> {
+    let path = std::path::Path::new(&source.path);
+    #[cfg(windows)]
+    if path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("dll"))
+    {
+        // Read PE icon resources directly, without loading the entire executable.
+        return extract::extract_icon_from_path(path);
+    }
+    #[cfg(target_os = "macos")]
+    if path.is_dir() && path.extension().is_some_and(|ext| ext == "app") {
+        return crate::platform::macos::apps::extract_icon(path, "");
+    }
+    // A missing/corrupt image is not a generic file-type icon: let the caller
+    // fall back to the original Shell item or shortcut.
+    let bytes = std::fs::read(path).ok()?;
+    image::load_from_memory(&bytes)
+        .ok()
+        .map(DecodedIcon::from_dynamic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(link: &str, provider: Option<IconSource>) -> IconRequest {
+        IconRequest {
+            app_id: AppId::from_normalized("test:123"),
+            name: "Arbitrary label".into(),
+            link_path: link.into(),
+            link_mtime: 0,
+            target_path: String::new(),
+            target_mtime: 0,
+            icon_location: String::new(),
+            icon_index: 0,
+            provider_icon: provider,
+            reason: IconReason::Fresh,
+        }
+    }
+
+    fn temporary_artwork() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "launchpad-provider-{}-{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn provider_image_is_used_for_any_launch_route() {
+        let path = temporary_artwork();
+        let pixels = image::RgbaImage::from_pixel(256, 256, image::Rgba([10, 20, 30, 255]));
+        pixels.save(&path).unwrap();
+        for link in [
+            "shell:AppsFolder\\vendor.app",
+            "shortcut.lnk",
+            "steam://rungameid/123",
+        ] {
+            let req = request(
+                link,
+                Some(IconSource {
+                    path: path.to_string_lossy().into_owned(),
+                    mtime: 1,
+                }),
+            );
+            let actual = extract_request_icon(&req).unwrap();
+            assert_eq!((actual.w, actual.h), (256, 256));
+            assert_eq!(actual.rgba, pixels.as_raw().as_slice());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_or_invalid_provider_artwork_falls_back_to_launch_icon() {
+        let _com = ComScope::new();
+        let target = std::env::current_exe().unwrap();
+        let mut req = request(target.to_str().unwrap(), None);
+        let expected = extract_request_icon(&req).unwrap();
+        let path = temporary_artwork();
+        req.provider_icon = Some(IconSource {
+            path: path.to_string_lossy().into_owned(),
+            mtime: 1,
+        });
+        let missing = extract_request_icon(&req).unwrap();
+        assert_eq!(missing.rgba, expected.rgba);
+        std::fs::write(&path, b"not an image").unwrap();
+        let corrupt = extract_request_icon(&req).unwrap();
+        assert_eq!(corrupt.rgba, expected.rgba);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Read-only installed Steam artwork diagnostic; writes PNGs under target"]
+    fn report_catalog_provider_icons() {
+        use crate::domain::{app_catalog::IdentityAliases, launcher_state::LauncherState};
+        let _com = ComScope::new();
+        let scan = crate::workers::app_scan::scan_catalog();
+        eprintln!("Scan diagnostics: {:?}", scan.errors);
+        assert!(!scan
+            .failed_sources
+            .contains(&crate::domain::app_catalog::Source::Steam));
+        let expected: std::collections::BTreeMap<_, _> = scan
+            .candidates
+            .iter()
+            .filter_map(|c| {
+                c.entry
+                    .provider_icon
+                    .clone()
+                    .map(|icon| (c.identity.clone().unwrap(), icon))
+            })
+            .collect();
+        let mut aliases = IdentityAliases::default();
+        let snapshot = aliases.reconcile(
+            aliases.groups(scan.candidates),
+            &mut LauncherState::default(),
+        );
+        let out = PathBuf::from("target/steam-icon-probe");
+        std::fs::create_dir_all(&out).unwrap();
+        assert!(!expected.is_empty());
+        for (id, source) in &expected {
+            let entry = &snapshot[&AppId::from_normalized(id)];
+            assert_eq!(entry.provider_icon.as_ref(), Some(source));
+            let req = request(&entry.link_path, entry.provider_icon.clone());
+            let started = std::time::Instant::now();
+            let actual = extract_request_icon(&req).unwrap();
+            let elapsed = started.elapsed();
+            let provider = extract_provider_icon(source).unwrap();
+            assert_eq!(actual.rgba, provider.rgba);
+            let stem = id.replace(':', "-");
+            for (suffix, raw) in [
+                ("after", Some(actual.clone())),
+                (
+                    "before",
+                    extract_request_icon(&request(&entry.link_path, None)),
+                ),
+            ] {
+                if let Some(raw) = raw {
+                    let normalized = normalize(&raw).image;
+                    image::save_buffer(
+                        out.join(format!("{stem}-{suffix}.png")),
+                        &normalized.rgba,
+                        normalized.w,
+                        normalized.h,
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
                 }
             }
-            return extract::extract_icon_from_path(&icon_path);
+            eprintln!(
+                "{} | {} | launch={} | artwork={} | {}x{} | {:.1}ms",
+                id,
+                entry.name,
+                entry.link_path,
+                source.path,
+                actual.w,
+                actual.h,
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
-        extract::extract_icon_from_lnk(&req.link_path)
+        eprintln!(
+            "Verified {} provider icons across {} catalog entries",
+            expected.len(),
+            snapshot.len()
+        );
     }
 }

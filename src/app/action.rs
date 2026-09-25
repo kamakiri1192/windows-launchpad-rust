@@ -690,6 +690,12 @@ impl App {
 
     /// Handle an IME event. Gated on `control.wants_keyboard()` by the handler.
     fn handle_ime(&mut self, ime: Ime) {
+        // Match keyboard ownership while a menu is open. Let an existing
+        // composition finish normally, but do not start new search input
+        // behind the menu or discard the committed search string.
+        if self.context_menu.is_active() && self.control.preedit.is_empty() {
+            return;
+        }
         if self.folders.rename.is_some() {
             match ime {
                 Ime::Preedit(value, _) => {

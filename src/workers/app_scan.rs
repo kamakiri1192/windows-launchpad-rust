@@ -1,4 +1,4 @@
-//! Scan the Start Menu and Steam libraries into [`SnapshotEntry`] records.
+//! Scan Start Menu/desktop shortcuts, packaged apps and Steam libraries into records.
 //!
 //! This is the *fast* side of icon loading: it walks the two Start Menu roots,
 //! resolves each `.lnk`'s target + icon location, and reads mtimes — but it
@@ -19,11 +19,11 @@ use std::path::Path;
 use crate::domain::app_diff::SnapshotEntry;
 use crate::domain::app_id::AppId;
 #[cfg(windows)]
-use crate::icons::extract::{self, enumerate_start_menu};
-#[cfg(any(windows, target_os = "macos"))]
+use crate::icons::extract;
+#[cfg(target_os = "macos")]
 use crate::workers::steam_scan::scan_steam_apps;
 
-/// Scan both Start Menu roots plus installed Steam apps and build a snapshot.
+/// Scan Start Menu and desktop known folders plus installed Steam apps.
 ///
 /// Failures on individual shortcuts are logged and skipped; one unreadable
 /// `.lnk` can't blank the whole grid. The map is keyed by stable `AppId` so two
@@ -45,71 +45,269 @@ pub fn scan_start_menu() -> BTreeMap<AppId, SnapshotEntry> {
 
     #[cfg(windows)]
     {
-        let _com = extract::ComScope::new();
-        let shortcuts = enumerate_start_menu();
-        let uninstaller_targets = collect_uninstaller_targets();
-        let mut out = BTreeMap::new();
-        for sc in shortcuts {
-            let app_id = AppId::from_link_path(&sc.path);
-            let link_mtime = extract::file_mtime(&sc.path);
+        let scan = scan_catalog();
+        let mut aliases = crate::domain::app_catalog::IdentityAliases::default();
+        aliases.reconcile(
+            crate::domain::app_catalog::group(scan.candidates),
+            &mut crate::domain::launcher_state::LauncherState::default(),
+        )
+    }
+}
 
-            let meta = extract::resolve_lnk_metadata(&sc.path).unwrap_or_default();
-            // A filesystem Start Menu can contain shortcuts to documents and
-            // URLs as well as applications. Keep packaged AppsFolder entries,
-            // but only expose conventional executable targets from .lnk
-            // shortcuts so .txt/.html links do not become launcher tiles.
-            if !extract::is_apps_folder_uri(&sc.path)
-                && !extract::is_application_target(Path::new(&meta.target_path))
-            {
-                continue;
+#[cfg(windows)]
+pub fn scan_catalog() -> crate::domain::app_catalog::CatalogScan {
+    use crate::domain::app_catalog::{Candidate, CatalogScan, PropertyValue, Source};
+    let _com = extract::ComScope::new();
+    let (shortcuts, errors, failed_sources) = extract::enumerate_application_candidates();
+    let mut scan = CatalogScan {
+        candidates: Vec::new(),
+        errors,
+        failed_sources,
+        failed_locators: Default::default(),
+    };
+    let uninstallers = collect_uninstaller_targets();
+    for sc in shortcuts {
+        let meta = if let Some(meta) = sc.metadata {
+            meta
+        } else {
+            match extract::resolve_lnk_metadata(&sc.path) {
+                Some(meta) => meta,
+                None => {
+                    scan.failed_locators
+                        .insert(sc.path.to_string_lossy().into_owned());
+                    scan.errors
+                        .push(format!("Could not read {}", sc.path.display()));
+                    continue;
+                }
             }
-            if uninstaller_targets.matches(Path::new(&meta.target_path), &meta.arguments, &sc.name)
-            {
-                continue;
-            }
-            let target_mtime = if meta.target_path.is_empty() {
-                0
-            } else {
-                extract::file_mtime(Path::new(&meta.target_path))
-            };
-            let exe_meta = if meta.target_path.is_empty() {
-                crate::platform::windows::ExeMetadata::default()
-            } else {
-                crate::platform::windows::exe_metadata(Path::new(&meta.target_path))
-            };
-
-            let entry = SnapshotEntry {
-                app_id: app_id.clone(),
+        };
+        let target = Path::new(&meta.target_path);
+        let kinds = if sc.source == Source::Shell
+            && target.is_absolute()
+            && !extract::is_application_target(target)
+        {
+            extract::target_kinds(target)
+        } else {
+            Vec::new()
+        };
+        if !is_application_candidate(sc.source, &meta.target_path, &kinds) {
+            continue;
+        }
+        if uninstallers.matches(Path::new(&meta.target_path), &meta.arguments, &sc.name) {
+            continue;
+        }
+        let exe = crate::platform::windows::exe_metadata(Path::new(&meta.target_path));
+        let identity = steam_identity(&meta.target_path, &meta.arguments).or_else(|| {
+            meta.app_user_model_id
+                .value()
+                .map(|id| format!("aumid:{id}"))
+        });
+        let native_key = (meta.app_user_model_id != PropertyValue::Unavailable
+            && meta.arguments_known
+            && Path::new(&meta.target_path).is_file()
+            && extract::is_application_target(Path::new(&meta.target_path))
+            && !is_host(&meta.target_path))
+        .then(|| native_invocation_key(&meta.target_path, &meta.arguments));
+        let exact_key = (meta.app_user_model_id != PropertyValue::Unavailable
+            && Path::new(&meta.target_path).is_absolute()
+            && meta.arguments_known
+            && meta.link_flags.is_some_and(known_launch_flags)
+            && meta.working_directory.is_some()
+            && meta.show_command.is_some())
+        .then(|| {
+            format!(
+                "exact:{:?}",
+                (
+                    &meta.target_path,
+                    &meta.arguments,
+                    &meta.working_directory,
+                    meta.link_flags,
+                    meta.show_command
+                )
+            )
+        });
+        let valid = sc.source == Source::Shell
+            || (Path::new(&meta.target_path).is_file()
+                && meta
+                    .working_directory
+                    .as_ref()
+                    .is_none_or(|d| d.is_empty() || Path::new(d).is_dir()));
+        let normal = sc.source == Source::Shell
+            || (meta.link_flags.is_some_and(|flags| flags & 0x2000 == 0)
+                && meta.show_command == Some(1));
+        let app_id = if sc.source == Source::Shell {
+            AppId::from_normalized(sc.path.to_string_lossy().into_owned())
+        } else {
+            AppId::from_link_path(&sc.path)
+        };
+        scan.candidates.push(Candidate {
+            entry: SnapshotEntry {
+                app_id,
                 name: sc.name,
                 link_path: sc.path.to_string_lossy().into_owned(),
-                link_mtime,
+                link_mtime: extract::file_mtime(&sc.path),
+                target_mtime: extract::file_mtime(Path::new(&meta.target_path)),
                 target_path: meta.target_path,
-                target_mtime,
                 icon_location: meta.icon_location,
                 icon_index: meta.icon_index,
-                version: exe_meta.version,
-                publisher: exe_meta.publisher,
-                identifier: exe_meta.product_name,
-            };
-            // Duplicate ids (same file via two roots) collapse; last one wins,
-            // which is fine — they're the same shortcut.
-            out.insert(app_id, entry);
+                provider_icon: None,
+                version: exe.version,
+                publisher: exe.publisher,
+                identifier: exe.product_name,
+            },
+            identity,
+            native_key,
+            exact_key,
+            source: sc.source,
+            normal,
+            valid,
+        });
+    }
+    let (steam, errors) = super::steam_scan::scan_steam_apps_checked();
+    if !errors.is_empty() {
+        scan.failed_sources.insert(Source::Steam);
+        scan.errors.extend(errors);
+    }
+    for entry in steam {
+        scan.candidates.push(Candidate {
+            identity: Some(entry.app_id.as_str().into()),
+            entry,
+            native_key: None,
+            exact_key: None,
+            source: Source::Steam,
+            normal: true,
+            valid: true,
+        });
+    }
+    scan
+}
+
+/// Additional link payloads (MSI, compatibility shims, etc.) are not compared.
+/// Without explicit identity, equal executable/flags cannot prove equal payloads.
+#[cfg(windows)]
+fn known_launch_flags(flags: u32) -> bool {
+    use windows::Win32::UI::Shell::*;
+    let known = (SLDF_HAS_ID_LIST.0
+        | SLDF_HAS_LINK_INFO.0
+        | SLDF_HAS_NAME.0
+        | SLDF_HAS_RELPATH.0
+        | SLDF_HAS_WORKINGDIR.0
+        | SLDF_HAS_ARGS.0
+        | SLDF_HAS_ICONLOCATION.0
+        | SLDF_HAS_EXP_ICON_SZ.0
+        | SLDF_UNICODE.0
+        | SLDF_ENABLE_TARGET_METADATA.0
+        | SLDF_RUNAS_USER.0
+        | SLDF_RUN_IN_SEPARATE.0) as u32;
+    flags & !known == 0
+}
+
+#[cfg(windows)]
+fn native_invocation_key(target: &str, arguments: &str) -> String {
+    let path = normalize_windows_path(Path::new(target));
+    if arguments.is_empty() {
+        // Preserve existing aliases for argument-free native applications.
+        format!("native:{path}")
+    } else {
+        // Do not strip, case-fold or reorder arguments: they may identify
+        // different applications/profiles hosted by the same executable.
+        format!("native-args:{:?}", (path, arguments))
+    }
+}
+
+#[cfg(windows)]
+fn is_application_candidate(
+    source: crate::domain::app_catalog::Source,
+    target: &str,
+    kinds: &[String],
+) -> bool {
+    let path = Path::new(target);
+    // AppsFolder also contains ordinary documents and Internet shortcuts.
+    // An AUMID identifies the entry but does not make its target an application.
+    let lower = target.to_ascii_lowercase();
+    if lower.starts_with("http:")
+        || lower.starts_with("https:")
+        || path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("url"))
+    {
+        return false;
+    }
+    if extract::is_application_target(path) {
+        return true;
+    }
+    if source != crate::domain::app_catalog::Source::Shell {
+        return false;
+    }
+    // Namespace entries, packaged apps and provider launch protocols have no
+    // filesystem document target. Preserve these and unknown metadata.
+    if !path.is_absolute() {
+        return true;
+    }
+    let has_kind = |kind: &str| kinds.iter().any(|value| value.eq_ignore_ascii_case(kind));
+    if has_kind("program") || has_kind("game") {
+        return true;
+    }
+    ![
+        "document",
+        "picture",
+        "music",
+        "video",
+        "movie",
+        "recordedtv",
+        "email",
+        "communication",
+        "contact",
+        "calendar",
+        "task",
+        "note",
+        "journal",
+        "feed",
+        "webhistory",
+        "searchfolder",
+    ]
+    .iter()
+    .any(|kind| has_kind(kind))
+}
+
+#[cfg(windows)]
+fn steam_identity(target: &str, args: &str) -> Option<String> {
+    let id = if let Some(rest) = target.strip_prefix("steam://rungameid/") {
+        rest
+    } else {
+        if !Path::new(target)
+            .file_name()?
+            .eq_ignore_ascii_case("steam.exe")
+        {
+            return None;
         }
-        for entry in scan_steam_apps() {
-            // Steam may also have created a Start Menu shortcut. Prefer the Steam
-            // manifest record because it has a stable app id and survives shortcut
-            // creation/removal. Only collapse an exact-name entry targeting Steam.
-            out.retain(|_, existing| {
-                !(existing.name.eq_ignore_ascii_case(&entry.name)
-                    && existing
-                        .target_path
-                        .rsplit(['\\', '/'])
-                        .next()
-                        .is_some_and(|file| file.eq_ignore_ascii_case("steam.exe")))
-            });
-            out.insert(entry.app_id.clone(), entry);
-        }
-        out
+        args.strip_prefix("-applaunch ")?
+            .split_whitespace()
+            .next()?
+    };
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then(|| format!("steam:{id}"))
+}
+
+#[cfg(windows)]
+fn is_host(target: &str) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_ANY};
+    let Some(name) = Path::new(target).file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    let key = wide_null(&format!("Applications\\{name}"));
+    let value = wide_null("IsHostApp");
+    unsafe {
+        RegGetValueW(
+            HKEY_CLASSES_ROOT,
+            PCWSTR(key.as_ptr()),
+            PCWSTR(value.as_ptr()),
+            RRF_RT_ANY,
+            None,
+            None,
+            None,
+        )
+        .is_ok()
     }
 }
 
@@ -423,6 +621,120 @@ fn wide_null(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_content_is_classified_by_target_not_label_or_identity() {
+        use crate::domain::app_catalog::Source;
+        for target in [
+            "https://example.com/app.exe",
+            "HTTP://example.com/",
+            "C:/docs/renamed.URL",
+        ] {
+            assert!(!is_application_candidate(Source::Shell, target, &[]));
+        }
+        for extension in ["txt", "html", "rtf", "pdf", "custom"] {
+            assert!(!is_application_candidate(
+                Source::Shell,
+                &format!("C:/docs/any-name.{extension}"),
+                &["link".into(), "Document".into()]
+            ));
+        }
+        for target in [
+            "",
+            "shell:AppsFolder\\vendor.app",
+            "::{shell-namespace}",
+            "steam://rungameid/123",
+            "C:/Windows/system32/eventvwr.msc",
+            "C:/Apps/renamed.exe",
+            "C:/Apps/unknown.target",
+        ] {
+            assert!(
+                is_application_candidate(Source::Shell, target, &[]),
+                "{target}"
+            );
+        }
+        assert!(is_application_candidate(
+            Source::Shell,
+            "C:/Apps/tool.custom",
+            &["program".into(), "document".into()]
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_invocations_preserve_arguments_and_existing_alias_keys() {
+        let key = native_invocation_key("C:/Apps/Editor.exe", "--profile work");
+        assert_eq!(
+            key,
+            native_invocation_key("c:/apps/editor.EXE", "--profile work")
+        );
+        assert_ne!(
+            key,
+            native_invocation_key("C:/Apps/Editor.exe", "--profile personal")
+        );
+        assert_ne!(
+            key,
+            native_invocation_key("C:/Apps/Editor.exe", "--profile Work")
+        );
+        assert_eq!(
+            native_invocation_key("C:/Apps/Editor.exe", ""),
+            r"native:c:\apps\editor.exe"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_named_document_cannot_suppress_shell_app_and_steam_uses_ids() {
+        use windows::Win32::UI::Shell::{SLDF_HAS_DARWINID, SLDF_RUN_WITH_SHIMLAYER};
+        assert!(!known_launch_flags(SLDF_HAS_DARWINID.0 as u32));
+        assert!(!known_launch_flags(SLDF_RUN_WITH_SHIMLAYER.0 as u32));
+        assert!(known_launch_flags(0));
+        use crate::domain::app_catalog::Source;
+        assert!(!is_application_candidate(
+            Source::UserStart,
+            "C:/docs/readme.txt",
+            &[],
+        ));
+        assert!(is_application_candidate(Source::Shell, "", &[]));
+        assert_eq!(
+            steam_identity("C:/Steam/steam.exe", "-applaunch 123"),
+            Some("steam:123".into())
+        );
+        assert_eq!(
+            steam_identity("steam://rungameid/456", ""),
+            Some("steam:456".into())
+        );
+        assert_eq!(steam_identity("C:/Steam/steam.exe", "-uninstall 123"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Read-only diagnostic; installed apps vary by machine"]
+    fn report_discovered_app_launchers() {
+        let scan = scan_catalog();
+        eprintln!("Scan errors: {:?}", scan.errors);
+        if let Ok(path) = std::env::var("LAUNCHPAD_CATALOG_REPORT") {
+            let rows: Vec<_> = scan.candidates.iter().map(|c| serde_json::json!({
+                "name": c.entry.name, "source": format!("{:?}", c.source), "locator": c.entry.link_path,
+                "identity": c.identity, "native_key": c.native_key, "target": c.entry.target_path,
+                "normal": c.normal, "valid": c.valid,
+            })).collect();
+            std::fs::write(path, serde_json::to_vec_pretty(&rows).unwrap()).unwrap();
+        }
+        let mut aliases = crate::domain::app_catalog::IdentityAliases::default();
+        let snapshot = aliases.reconcile(
+            crate::domain::app_catalog::group(scan.candidates),
+            &mut crate::domain::launcher_state::LauncherState::default(),
+        );
+        eprintln!("{} launcher(s)", snapshot.len());
+        for entry in snapshot.values() {
+            eprintln!(
+                "{}: {} -> {}",
+                entry.name, entry.link_path, entry.target_path
+            );
+        }
+    }
 
     #[test]
     fn scan_returns_map_even_when_empty() {
