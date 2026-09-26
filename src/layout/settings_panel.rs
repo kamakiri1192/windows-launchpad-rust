@@ -1630,7 +1630,7 @@ mod tests {
             frequent_apps_detail: "Frequent detail",
             steam_apps_label: "Steam apps",
             steam_apps_detail: "Steam detail",
-            initial_undo_label: "Undo initial arrangement",
+            initial_undo_label: "Reset folder grouping",
             hidden_apps_label: "Hidden apps",
             hidden_count_label,
             search_hidden_label: "Search hidden",

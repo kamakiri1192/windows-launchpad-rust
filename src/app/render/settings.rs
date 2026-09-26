@@ -1075,9 +1075,9 @@ fn settings_panel_copy<'a>(
         initial_undo_label: if crate::domain::initial_layout::japanese_locale(
             sys_locale::get_locale().as_deref(),
         ) {
-            "初期整理を取り消す"
+            "フォルダ分けをリセット"
         } else {
-            "Undo initial folders"
+            "Reset folder grouping"
         },
         hidden_apps_label: "非表示アプリ",
         hidden_count_label,
