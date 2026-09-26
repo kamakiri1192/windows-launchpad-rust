@@ -11,8 +11,8 @@
 //! `~/Library/Application Support/Launchpad/cache.sqlite3` on macOS.
 //!
 //! Resilience:
-//!   - If the DB file is corrupt / the schema can't be opened, we delete it and
-//!     rebuild from scratch (see [`IconCache::open_or_rebuild`]).
+//!   - Corrupt/unreadable databases are preserved. The session uses an in-memory
+//!     icon cache and disables layout writes (see [`IconCache::open_or_rebuild`]).
 //!   - A `schema_version` and `extraction_version` guard against shipping a
 //!     format change that silently serves stale pixels.
 //!   - Writes are batched in a transaction; a failure rolls back and is logged,
@@ -25,11 +25,20 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::app_diff::IconSource;
 use crate::domain::app_id::AppId;
+use crate::domain::initial_layout::{
+    self,
+    catalog::{Catalog, Platform},
+    InitialLayoutRecord, InitializationStatus,
+};
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
 use crate::icons::normalize::DecodedIcon;
 use crate::icons::sizing::IconCategory;
 use crate::startup_timer::{self, prefix};
+
+#[cfg(test)]
+#[path = "initial_layout_cache_tests.rs"]
+mod initial_layout_tests;
 
 /// Bumped on any breaking change to the on-disk layout. A mismatch invalidates
 /// every cached icon (they are all re-extracted).
@@ -104,7 +113,9 @@ pub struct CacheProbe<'a> {
 /// its own writes.
 pub struct IconCache {
     conn: Mutex<Connection>,
-    /// Path to the DB file, kept so `reset()` can delete + recreate it.
+    new_data_area: bool,
+    durable: bool,
+    /// Path to the DB file for diagnostics. Icon resets preserve the kv table.
     path: PathBuf,
 }
 
@@ -118,10 +129,20 @@ impl std::fmt::Debug for IconCache {
 
 impl IconCache {
     /// Open (or create) the cache at the natural Windows location. On any
-    /// structural failure — corrupt file, unreadable, schema migration failure
-    /// — the DB file is deleted and rebuilt empty so the app keeps running.
+    /// structural failure the original database is preserved; an in-memory
+    /// icon cache keeps the app usable without overwriting layout history.
     pub fn open_or_rebuild() -> Self {
-        let path = default_db_path();
+        Self::open_preserving_at(default_db_path())
+    }
+
+    fn open_preserving_at(path: PathBuf) -> Self {
+        let new_data_area = path.try_exists().ok() == Some(false)
+            && path
+                .parent()
+                .is_some_and(|parent| match std::fs::read_dir(parent) {
+                    Ok(mut entries) => entries.next().is_none(),
+                    Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+                });
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -134,22 +155,21 @@ impl IconCache {
         t.mark(prefix::ICON_CACHE, "cache open");
 
         match open_at(&path) {
-            Ok(c) => {
+            Ok(mut c) => {
+                c.new_data_area = new_data_area;
                 t.mark(prefix::ICON_CACHE, "cache load");
                 c
             }
             Err(e) => {
                 eprintln!(
-                    "icon-cache: opening {} failed ({e}); rebuilding empty cache",
+                    "icon-cache: opening {} failed ({e}); preserving file, using memory",
                     path.display()
                 );
-                let _ = std::fs::remove_file(&path);
-                // Secondary try: if even a fresh create fails, we fall back to
-                // an in-memory DB so the app still runs (just uncached).
-                open_at(&path).unwrap_or_else(|e2| {
-                    eprintln!("icon-cache: rebuild failed ({e2}); using in-memory cache");
-                    open_at(Path::new(":memory:")).expect("in-memory sqlite always opens")
-                })
+                let mut cache =
+                    open_at(Path::new(":memory:")).expect("in-memory sqlite always opens");
+                cache.durable = false;
+                cache.new_data_area = false;
+                cache
             }
         }
     }
@@ -405,19 +425,117 @@ impl IconCache {
     /// the legacy `app_order` and `hidden_ids` keys so subsequent loads read the
     /// canonical Phase 7 format and do not migrate twice.
     pub fn put_launcher_state(&self, state: &LauncherState) -> rusqlite::Result<()> {
-        let bytes = serde_json::to_vec(state)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let tx = conn.transaction()?;
+        write_launcher_state(&tx, state)?;
+        tx.commit()
+    }
+
+    /// A settings reset commits the default preferences and regenerated layout together.
+    pub fn put_settings_and_layout(
+        &self,
+        settings: &Settings,
+        state: &LauncherState,
+    ) -> rusqlite::Result<()> {
+        let bytes = serde_json::to_vec(settings).map_err(json_error)?;
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO kv(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![SETTINGS_KEY, bytes])?;
+        write_launcher_state(&tx, state)?;
+        tx.commit()
+    }
+
+    /// Missing, legacy, corrupt and unreadable layouts are deliberately distinct.
+    pub fn load_layout(&self) -> LayoutLoad {
+        if !self.durable {
+            return LayoutLoad::unavailable();
+        }
         let conn = self.conn.lock().expect("cache mutex poisoned");
-        conn.execute(
-            "INSERT INTO kv (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![LAUNCHER_STATE_KEY, bytes],
-        )?;
-        // Remove the legacy keys so a future load reads the new format and the
-        // migration does not re-run.
-        let _ = conn.execute("DELETE FROM kv WHERE key = ?1", params![APP_ORDER_KEY]);
-        let _ = conn.execute("DELETE FROM kv WHERE key = ?1", params![HIDDEN_KEY]);
-        Ok(())
+        load_layout(&conn, self.new_data_area).unwrap_or_else(|e| {
+            eprintln!("layout: preserving unreadable data: {e}");
+            LayoutLoad::unavailable()
+        })
+    }
+
+    /// Runs on the discovery worker. Save before publishing a usable grid, in
+    /// one transaction with the initialization/undo record inside launcher_state.
+    pub fn prepare_initial_layout(
+        &self,
+        snapshot: &std::collections::BTreeMap<AppId, crate::domain::app_diff::SnapshotEntry>,
+        _complete: bool,
+        platform: Platform,
+        japanese: bool,
+    ) -> LayoutLoad {
+        if !self.durable {
+            return LayoutLoad::unavailable();
+        }
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let result = (|| -> rusqlite::Result<LayoutLoad> {
+            let tx = conn.transaction()?;
+            let mut loaded = load_layout(&tx, self.new_data_area)?;
+            let settings = read_blob(&tx, SETTINGS_KEY)?
+                .map(|b| serde_json::from_slice::<Settings>(&b))
+                .transpose()
+                .map_err(json_error)?
+                .unwrap_or_default();
+            let generation = format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            let catalog = Catalog::bundled(std::env::var("SystemRoot").ok());
+            if loaded.fresh {
+                loaded.state = initial_layout::generate(
+                    snapshot, &settings, platform, japanese, generation, &catalog,
+                )
+                .state;
+            } else {
+                if loaded.state.initial_layout.is_none() {
+                    let status = InitializationStatus::PreservedExisting;
+                    loaded.state.initial_layout =
+                        Some(InitialLayoutRecord::new(status, generation));
+                }
+                if !loaded.state.items.is_empty() || !loaded.state.folders.is_empty() {
+                    loaded.state.customized = true;
+                }
+                let before = loaded.state.clone();
+                let discovered = snapshot.keys().cloned().collect();
+                loaded.state.integrate_discovered_apps(&discovered, |id| {
+                    snapshot.get(id).map(|e| e.name.clone())
+                });
+                loaded.state.normalize(&discovered, false);
+                let membership_changed = loaded
+                    .state
+                    .initial_layout
+                    .as_ref()
+                    .and_then(|r| r.undo.as_ref())
+                    .is_some_and(|u| u.discovered != initial_layout::discovery_signature(snapshot));
+                if before.items != loaded.state.items
+                    || before.folders != loaded.state.folders
+                    || membership_changed
+                {
+                    loaded.state.layout_changed();
+                }
+                loaded.state.customized = true;
+            }
+            write_launcher_state(&tx, &loaded.state)?;
+            tx.commit()?;
+            loaded.fresh = false;
+            Ok(loaded)
+        })();
+        result.unwrap_or_else(|e| {
+            eprintln!("layout: initial save skipped: {e}");
+            // Never publish the grouped proposal after a failed save. Recover
+            // the pre-existing layout if readable, and preserve the original DB.
+            let mut fallback =
+                load_layout(&conn, false).unwrap_or_else(|_| LayoutLoad::unavailable());
+            fallback.writable = false;
+            fallback.state.customized = true;
+            fallback
+        })
     }
 
     /// Generic single-blob read from the `kv` table. Returns `None` when the key
@@ -526,6 +644,9 @@ fn parse_app_ids(bytes: &[u8]) -> Option<Vec<AppId>> {
     let mut i = 0;
     let count = read_u32(bytes, i)? as usize;
     i += 4;
+    if count > bytes.len().saturating_sub(4) / 4 {
+        return None;
+    }
     out.try_reserve(count).ok()?;
     for _ in 0..count {
         let len = read_u32(bytes, i)? as usize;
@@ -535,14 +656,86 @@ fn parse_app_ids(bytes: &[u8]) -> Option<Vec<AppId>> {
         i += len;
     }
     // Reject partial records (count claimed more than we could read).
-    if out.len() == count {
+    if out.len() == count && i == bytes.len() {
         Some(out)
     } else {
         None
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct LayoutLoad {
+    pub state: LauncherState,
+    pub fresh: bool,
+    pub writable: bool,
+}
+
+impl LayoutLoad {
+    fn unavailable() -> Self {
+        let mut state = LauncherState::new();
+        state.customized = true;
+        Self {
+            state,
+            fresh: false,
+            writable: false,
+        }
+    }
+}
+
+fn json_error(e: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+}
+
+fn read_blob(conn: &Connection, key: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0))
+        .optional()
+}
+
+fn load_layout(conn: &Connection, new_data_area: bool) -> rusqlite::Result<LayoutLoad> {
+    if let Some(bytes) = read_blob(conn, LAUNCHER_STATE_KEY)? {
+        let state: LauncherState = serde_json::from_slice(&bytes).map_err(json_error)?;
+        let mut normalized = state.clone();
+        normalized.normalize(&Default::default(), false);
+        if normalized != state {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        return Ok(LayoutLoad {
+            state,
+            fresh: false,
+            writable: true,
+        });
+    }
+    let order = read_blob(conn, APP_ORDER_KEY)?;
+    let hidden = read_blob(conn, HIDDEN_KEY)?;
+    let legacy_present = order.is_some() || hidden.is_some();
+    let decode = |b: Option<Vec<u8>>| -> rusqlite::Result<Vec<AppId>> {
+        b.map(|b| parse_app_ids(&b).ok_or(rusqlite::Error::InvalidQuery))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let state = LauncherState::from_legacy(decode(order)?, decode(hidden)?);
+    let has_keys: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM kv)", [], |r| r.get(0))?;
+    let has_icons: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM icons)", [], |r| r.get(0))?;
+    Ok(LayoutLoad {
+        state,
+        fresh: new_data_area && !legacy_present && !has_keys && !has_icons,
+        writable: true,
+    })
+}
+
+fn write_launcher_state(conn: &Connection, state: &LauncherState) -> rusqlite::Result<()> {
+    let bytes = serde_json::to_vec(state).map_err(json_error)?;
+    conn.execute("INSERT INTO kv(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![LAUNCHER_STATE_KEY, bytes])?;
+    conn.execute(
+        "DELETE FROM kv WHERE key IN (?1,?2)",
+        params![APP_ORDER_KEY, HIDDEN_KEY],
+    )?;
+    Ok(())
+}
+
 fn open_at(path: &Path) -> rusqlite::Result<IconCache> {
+    let new_data_area = path == Path::new(":memory:") || path.try_exists().ok() == Some(false);
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -552,6 +745,8 @@ fn open_at(path: &Path) -> rusqlite::Result<IconCache> {
     Ok(IconCache {
         conn: Mutex::new(conn),
         path: path.to_path_buf(),
+        new_data_area,
+        durable: true,
     })
 }
 
@@ -687,7 +882,7 @@ mod tests {
         open_at(Path::new(":memory:")).expect("open in-memory cache")
     }
 
-    fn entry(app_id: &str, mtime: u64) -> CachedIcon {
+    pub(super) fn entry(app_id: &str, mtime: u64) -> CachedIcon {
         CachedIcon {
             app_id: AppId::from_normalized(app_id.to_string()),
             link_path: format!("C:\\{app_id}.lnk"),

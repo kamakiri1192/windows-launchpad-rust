@@ -475,6 +475,7 @@ mod tests {
     fn c(source: &str, identity: Option<&str>, native: Option<&str>) -> Candidate {
         Candidate {
             entry: SnapshotEntry {
+                launch_arguments: None,
                 app_id: AppId::from_normalized(source),
                 name: "same label".into(),
                 link_path: source.into(),

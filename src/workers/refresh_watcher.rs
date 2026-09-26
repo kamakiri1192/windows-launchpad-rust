@@ -16,13 +16,15 @@ use std::thread;
 use std::time::Duration;
 
 #[cfg(not(windows))]
-use super::app_scan::scan_start_menu;
+use super::app_scan::scan_start_menu_checked;
 #[cfg(not(windows))]
 use crate::domain::app_diff::diff_snapshots;
 use crate::domain::app_diff::{AppDiff, SnapshotEntry};
 use crate::domain::app_id::AppId;
+use crate::icon_cache::{IconCache, LayoutLoad};
 #[cfg(not(windows))]
 use crate::startup_timer::{self, prefix};
+use std::sync::Arc;
 
 /// Messages the watcher sends to the UI thread.
 #[derive(Debug)]
@@ -30,7 +32,11 @@ pub enum RefreshMessage {
     #[cfg(windows)]
     Catalog(crate::domain::app_catalog::CatalogScan),
     /// First snapshot is ready (sent once, ~immediately after spawn).
-    Initial(BTreeMap<AppId, SnapshotEntry>),
+    Initial {
+        snapshot: BTreeMap<AppId, SnapshotEntry>,
+        layout: Box<LayoutLoad>,
+        status: super::scan_status::ScanStatus,
+    },
     /// A subsequent rescan produced a non-empty diff.
     Diff(AppDiff),
 }
@@ -58,15 +64,15 @@ impl Default for RefreshConfig {
 
 /// Spawn the watcher. Returns immediately; messages arrive on `tx`. The thread
 /// exits when the sender is dropped (i.e. when the UI goes away).
-pub fn spawn(tx: Sender<RefreshMessage>, config: RefreshConfig) {
+pub fn spawn(tx: Sender<RefreshMessage>, config: RefreshConfig, cache: Arc<IconCache>) {
     thread::Builder::new()
         .name("refresh-watcher".to_string())
-        .spawn(move || run(tx, config))
+        .spawn(move || run(tx, config, cache))
         .expect("spawn refresh-watcher");
 }
 
 #[cfg(windows)]
-fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
+fn run(tx: Sender<RefreshMessage>, config: RefreshConfig, _cache: Arc<IconCache>) {
     thread::sleep(config.initial_delay);
     loop {
         let scan = super::app_scan::scan_catalog();
@@ -77,21 +83,42 @@ fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
     }
 }
 #[cfg(not(windows))]
-fn run(tx: Sender<RefreshMessage>, config: RefreshConfig) {
+fn run(tx: Sender<RefreshMessage>, config: RefreshConfig, cache: Arc<IconCache>) {
     let timer = startup_timer::get();
     thread::sleep(config.initial_delay);
 
-    let mut snapshot = scan_start_menu();
+    let (mut snapshot, status) = scan_start_menu_checked();
+    let layout = cache.prepare_initial_layout(
+        &snapshot,
+        status.complete(),
+        crate::domain::initial_layout::catalog::Platform::current(),
+        crate::domain::initial_layout::japanese_locale(sys_locale::get_locale().as_deref()),
+    );
+    timer.mark(prefix::APP_REFRESH, "initial layout committed");
     timer.mark_with(prefix::APP_REFRESH, "initial scan", || {
         format!("({} apps)", snapshot.len())
     });
-    if tx.send(RefreshMessage::Initial(snapshot.clone())).is_err() {
+    if tx
+        .send(RefreshMessage::Initial {
+            snapshot: snapshot.clone(),
+            layout: Box::new(layout),
+            status,
+        })
+        .is_err()
+    {
         return;
     }
 
     loop {
         thread::sleep(config.poll_interval);
-        let new = scan_start_menu();
+        let (mut new, status) = scan_start_menu_checked();
+        // A failed source is not evidence of uninstallation. Keep known entries
+        // until a complete scan can confirm removals.
+        if !status.complete() {
+            for (id, entry) in &snapshot {
+                new.entry(id.clone()).or_insert_with(|| entry.clone());
+            }
+        }
         let diff = diff_snapshots(&snapshot, &new);
         if diff.is_empty() {
             snapshot = new;
@@ -120,6 +147,7 @@ mod tests {
     fn entry(name: &str) -> SnapshotEntry {
         let path = format!("C:\\Start Menu\\{name}.lnk");
         SnapshotEntry {
+            launch_arguments: None,
             app_id: AppId::from_link_path(PathBuf::from(&path)),
             name: name.to_string(),
             link_path: path,
@@ -136,17 +164,13 @@ mod tests {
     }
 
     #[test]
-    fn refresh_message_initial_carries_snapshot() {
-        let m = RefreshMessage::Initial(
-            [entry("A")]
-                .iter()
-                .cloned()
-                .map(|e| (e.app_id.clone(), e))
-                .collect(),
-        );
-        match m {
-            RefreshMessage::Initial(m) => assert_eq!(m.len(), 1),
-            _ => panic!("wrong variant"),
-        }
+    fn scan_status_distinguishes_empty_success_and_partial_failure() {
+        let mut status = super::super::scan_status::ScanStatus::default();
+        assert!(!status.complete());
+        status.record("applications", true);
+        status.record("steam", true);
+        assert!(status.complete());
+        status.record("unreadable source", false);
+        assert!(!status.complete());
     }
 }

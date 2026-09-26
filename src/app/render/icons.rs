@@ -19,6 +19,10 @@ impl App {
         for error in &scan.errors {
             eprintln!("app-catalog: incomplete scan: {error}");
         }
+        let first_scan = !self.initial_snapshot_ready;
+        let complete = scan.errors.is_empty()
+            && scan.failed_sources.is_empty()
+            && scan.failed_locators.is_empty();
         let mut aliases = self.catalog_aliases.clone();
         let mut layout = self.launcher_state.clone();
         let groups = aliases.groups(scan.candidates);
@@ -39,9 +43,26 @@ impl App {
                         .get(id)
                         .is_some_and(|entry| scan.failed_locators.contains(&entry.link_path))
             });
+        if first_scan {
+            layout = crate::domain::initial_layout::prepare_catalog_layout(
+                layout,
+                &next,
+                &self.settings,
+                self.layout_initial_fresh
+                    && !self.layout_session_changed
+                    && self.layout_writable
+                    && self.catalog_store_writable,
+                complete,
+                crate::domain::initial_layout::japanese_locale(sys_locale::get_locale().as_deref()),
+                &crate::domain::initial_layout::catalog::Catalog::bundled(
+                    std::env::var("SystemRoot").ok(),
+                ),
+            );
+        }
         // Persist identity and placement in one transaction before changing the UI.
         if !self.qa_enabled()
             && self.catalog_store_writable
+            && self.layout_writable
             && (aliases != self.catalog_aliases || layout != self.launcher_state)
         {
             let state = crate::user_state::UserState::new(layout.clone(), aliases.clone());
@@ -57,7 +78,10 @@ impl App {
         let layout_changed = layout != self.launcher_state;
         self.catalog_aliases = aliases;
         self.launcher_state = layout;
-        if self.snapshot.is_empty() {
+        if first_scan {
+            self.layout_checkpoint = self.launcher_state.clone();
+            self.initial_snapshot_ready = true;
+            self.layout_initial_fresh = false;
             self.ingest_snapshot(next, true);
         } else {
             let diff = crate::domain::app_diff::diff_snapshots(&self.snapshot, &next);
@@ -65,7 +89,11 @@ impl App {
                 self.apply_diff(diff);
             }
         }
-        self.persist_launcher_state();
+        if std::mem::take(&mut self.settings_reset_pending) {
+            self.reset_settings_and_layout();
+        } else {
+            self.persist_launcher_state();
+        }
     }
 
     pub(crate) fn ensure_atlas_uploaded(&mut self) -> bool {
@@ -389,6 +417,9 @@ impl App {
 
         // Relayout once so new tiles + cached icons show up immediately.
         self.relayout();
+        if is_initial {
+            self.timer.mark(prefix::STARTUP, "initial grid interactive");
+        }
         self.request_redraw();
 
         // Dispatch extraction requests to the worker (first page already
@@ -448,6 +479,19 @@ impl App {
     /// Apply a refresh diff: add new apps, update changed ones (re-extracting
     /// icons whose cache key moved), and remove gone apps.
     pub(crate) fn apply_diff(&mut self, diff: AppDiff) {
+        let layout_changed = !diff.added.is_empty()
+            || !diff.removed.is_empty()
+            || diff.updated.iter().any(|e| {
+                self.snapshot.get(&e.app_id).is_none_or(|old| {
+                    old.name != e.name
+                        || old.link_path != e.link_path
+                        || old.target_path != e.target_path
+                        || old.launch_arguments != e.launch_arguments
+                })
+            });
+        if layout_changed {
+            self.launcher_state.layout_changed();
+        }
         self.timer
             .mark_with(prefix::APP_REFRESH, "app list refresh", || {
                 format!(
@@ -561,6 +605,9 @@ impl App {
         }
 
         self.sync_launcher_layout_with_registry();
+        if layout_changed {
+            self.persist_launcher_state();
+        }
         self.relayout();
         self.request_redraw();
 

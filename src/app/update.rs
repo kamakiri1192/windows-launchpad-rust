@@ -7,7 +7,7 @@ use crate::debug_log;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
 use crate::domain::launcher_item::LauncherItem;
-use crate::domain::settings::{Settings, SortOrder};
+use crate::domain::settings::SortOrder;
 use crate::scroll::{Phase, WheelPhase};
 use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
@@ -481,12 +481,9 @@ impl App {
             SettingsPressTarget::Sort(order) => {
                 self.settings.sort_order = order;
                 if order == SortOrder::Name {
-                    // Reset the user layout to a name-sorted arrangement. Phase 7
-                    // keeps folder/hidden intents but drops the customized flag so
-                    // the next discovered-app integration rebuilds the item list
-                    // from a display-name sort (legacy "名前順" behavior).
-                    self.launcher_state.customized = false;
-                    self.sync_launcher_layout_with_registry();
+                    crate::domain::initial_layout::sort_items(&mut self.launcher_state, |id| {
+                        self.registry.lowercased_name_of(id)
+                    });
                     self.persist_launcher_state();
                     self.relayout();
                 }
@@ -500,6 +497,8 @@ impl App {
             }
             SettingsPressTarget::SteamToggle => {
                 self.settings.show_steam_apps = !self.settings.show_steam_apps;
+                self.launcher_state.layout_changed();
+                self.persist_launcher_state();
                 self.persist_settings();
                 self.close_folder();
                 self.relayout();
@@ -529,19 +528,8 @@ impl App {
                 self.reset_icons();
                 self.request_redraw();
             }
-            SettingsPressTarget::ResetSettings => {
-                self.settings = Settings::default();
-                // Mirror the reset into the renderer's Liquid Glass params so
-                // the on-screen effect matches the now-default settings.
-                self.apply_persisted_liquid_glass_to_renderer();
-                // Reset the user layout entirely (order, folders, hidden).
-                self.launcher_state = crate::domain::launcher_state::LauncherState::new();
-                self.sync_launcher_layout_with_registry();
-                self.persist_settings();
-                self.persist_launcher_state();
-                self.relayout();
-                self.request_redraw();
-            }
+            SettingsPressTarget::UndoInitialLayout => self.undo_initial_layout(),
+            SettingsPressTarget::ResetSettings => self.reset_settings_and_layout(),
             SettingsPressTarget::LiquidGlassEnabled => {
                 let next = !self.settings.liquid_glass.enabled;
                 self.settings.liquid_glass.enabled = next;
@@ -991,8 +979,34 @@ impl App {
                 WorkerMessage::Refresh(RefreshMessage::Catalog(scan)) => {
                     self.apply_catalog(scan);
                 }
-                WorkerMessage::Refresh(RefreshMessage::Initial(snap)) => {
-                    self.ingest_snapshot(snap, true);
+                WorkerMessage::Refresh(RefreshMessage::Initial {
+                    snapshot,
+                    layout,
+                    status,
+                }) => {
+                    debug_log!(
+                        "initial-layout: scan_complete={} writable={}",
+                        status.complete(),
+                        layout.writable
+                    );
+                    if !self.layout_session_changed {
+                        self.launcher_state = layout.state;
+                        self.layout_checkpoint = self.launcher_state.clone();
+                        self.layout_writable = layout.writable;
+                    } else if self.launcher_state.initial_layout.is_none() {
+                        // A user action while discovery ran owns the layout.
+                        // Retain the one-shot marker without adopting a late proposal.
+                        self.launcher_state.initial_layout = Some(crate::domain::initial_layout::InitialLayoutRecord::new(
+                            crate::domain::initial_layout::InitializationStatus::PreservedExisting,
+                            "user-edited-during-discovery".into()));
+                    }
+                    self.initial_snapshot_ready = true;
+                    self.ingest_snapshot(snapshot, true);
+                    if std::mem::take(&mut self.settings_reset_pending) {
+                        self.reset_settings_and_layout();
+                    } else if self.layout_session_changed {
+                        self.persist_launcher_state();
+                    }
                 }
                 WorkerMessage::Refresh(RefreshMessage::Diff(diff)) => {
                     self.apply_diff(diff);

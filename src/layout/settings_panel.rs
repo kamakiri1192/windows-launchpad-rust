@@ -167,6 +167,7 @@ pub enum SettingsPanelHit {
     AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
+    UndoInitialLayout,
     /// Liquid Glass master switch (keyboard `V`).
     LiquidGlassEnabled,
     /// Automatically add glass darkness when the captured backdrop is mostly
@@ -314,6 +315,7 @@ impl SettingsPanelHit {
             Self::AutoDarknessValueToggle => HitTarget::settings_toggle("show-auto-darkness-value"),
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
+            Self::UndoInitialLayout => HitTarget::settings_action("undo-initial-layout"),
             Self::LiquidGlassEnabled => HitTarget::settings_toggle("lg-enabled"),
             Self::LiquidGlassAutoDarkness => HitTarget::settings_toggle("lg-auto-darkness"),
             Self::LiquidGlassAutoDarknessMode(mode) => {
@@ -405,6 +407,7 @@ pub struct SettingsPanelInput {
     pub show_fps: bool,
     pub show_auto_darkness_value: bool,
     pub hidden_count: usize,
+    pub initial_undo_available: bool,
     pub progress: f32,
     /// Vertical scroll offset (in rows) for scrollable categories.
     /// Deprecated: Phase 4 migrates to pixel-based ContinuousScroller.
@@ -525,6 +528,7 @@ pub struct SettingsPanelCopy<'a> {
     pub frequent_apps_detail: &'a str,
     pub steam_apps_label: &'a str,
     pub steam_apps_detail: &'a str,
+    pub initial_undo_label: &'a str,
     pub hidden_apps_label: &'a str,
     pub hidden_count_label: &'a str,
     pub search_hidden_label: &'a str,
@@ -980,6 +984,17 @@ pub fn build_with_ui(
                     .color(MUTED)
                     .align(TextAlign::End),
             );
+            if input.initial_undo_available {
+                ui.begin_absolute_placement();
+                ui.set_cursor(content_left, first_top + ROW_STEP * 5.0 * scale);
+                ui.set_available_width(content_w);
+                ui.button(
+                    &Button::new(copy.initial_undo_label)
+                        .id(UiId::settings_row("undo-initial-layout"))
+                        .chevron_opt(false)
+                        .hit_target(SettingsPanelHit::UndoInitialLayout.target()),
+                );
+            }
         }
 
         // ==============================================================
@@ -1615,6 +1630,7 @@ mod tests {
             frequent_apps_detail: "Frequent detail",
             steam_apps_label: "Steam apps",
             steam_apps_detail: "Steam detail",
+            initial_undo_label: "Reset folder grouping",
             hidden_apps_label: "Hidden apps",
             hidden_count_label,
             search_hidden_label: "Search hidden",
@@ -1684,6 +1700,7 @@ mod tests {
             show_fps: false,
             show_auto_darkness_value: false,
             hidden_count: 0,
+            initial_undo_available: false,
             progress: 1.0,
             scroll_rows: 0,
             window_decorated: false,

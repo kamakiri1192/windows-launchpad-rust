@@ -1,0 +1,234 @@
+{
+  "name": "initial-layout-order-small",
+  "viewport": [
+    800,
+    600
+  ],
+  "scale_factor": 1.0,
+  "fps": 15,
+  "duration_ms": 800,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      {
+        "id": "unknown",
+        "name": "AAA unknown",
+        "target_path": "C:/Unknown.exe",
+        "identifier": "",
+        "publisher": ""
+      },
+      {
+        "id": "settings",
+        "name": "設定",
+        "link_path": "shell:AppsFolder\\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
+        "target_path": ""
+      },
+      {
+        "id": "explorer",
+        "name": "エクスプローラー",
+        "link_path": "shell:AppsFolder\\Microsoft.Windows.Explorer",
+        "target_path": ""
+      },
+      {
+        "id": "store",
+        "name": "Microsoft Store",
+        "link_path": "shell:AppsFolder\\Microsoft.WindowsStore_8wekyb3d8bbwe!App",
+        "target_path": ""
+      },
+      {
+        "id": "calc",
+        "name": "電卓",
+        "link_path": "shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+        "target_path": ""
+      },
+      {
+        "id": "notepad",
+        "name": "メモ帳",
+        "link_path": "shell:AppsFolder\\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App",
+        "target_path": ""
+      },
+      {
+        "id": "snip",
+        "name": "Snipping Tool",
+        "link_path": "shell:AppsFolder\\Microsoft.ScreenSketch_8wekyb3d8bbwe!App",
+        "target_path": ""
+      },
+      {
+        "id": "security",
+        "name": "Windows セキュリティ",
+        "link_path": "shell:AppsFolder\\Microsoft.SecHealthUI_8wekyb3d8bbwe!SecHealthUI",
+        "target_path": ""
+      },
+      {
+        "id": "feedback",
+        "name": "フィードバック Hub",
+        "link_path": "shell:AppsFolder\\Microsoft.WindowsFeedbackHub_8wekyb3d8bbwe!App",
+        "target_path": ""
+      },
+      {
+        "id": "nvidia",
+        "name": "NVIDIA Control Panel",
+        "link_path": "shell:AppsFolder\\NVIDIACorp.NVIDIAControlPanel_56jybvy8sckqj!NVIDIACorp.NVIDIAControlPanel",
+        "target_path": ""
+      },
+      {
+        "id": "gamebar",
+        "name": "Game Bar",
+        "link_path": "shell:AppsFolder\\Microsoft.XboxGamingOverlay_8wekyb3d8bbwe!App",
+        "target_path": ""
+      },
+      {
+        "id": "chrome",
+        "name": "Google Chrome",
+        "target_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        "identifier": "Google Chrome",
+        "publisher": "Google LLC"
+      },
+      {
+        "id": "edge",
+        "name": "Microsoft Edge",
+        "target_path": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+        "identifier": "Microsoft Edge",
+        "publisher": "Microsoft Corporation"
+      },
+      {
+        "id": "discord",
+        "name": "Discord",
+        "target_path": "C:/Apps/Discord/Discord.exe",
+        "identifier": "Discord",
+        "publisher": "Discord Inc."
+      },
+      {
+        "id": "obs",
+        "name": "OBS Studio",
+        "target_path": "C:/OBS/obs64.exe",
+        "identifier": "OBS Studio",
+        "publisher": "OBS"
+      },
+      {
+        "id": "blender",
+        "name": "Blender",
+        "target_path": "C:/Blender/blender.exe",
+        "identifier": "Blender",
+        "publisher": "Blender Foundation"
+      },
+      {
+        "id": "unreal",
+        "name": "Unreal Engine",
+        "target_path": "C:/UE/UnrealEditor.exe",
+        "identifier": "UnrealEditor",
+        "publisher": "Epic Games, Inc."
+      },
+      {
+        "id": "vscode",
+        "name": "Visual Studio Code",
+        "target_path": "C:/VSCode/Code.exe",
+        "identifier": "Visual Studio Code",
+        "publisher": "Microsoft Corporation"
+      },
+      {
+        "id": "photoshop",
+        "name": "Adobe Photoshop",
+        "target_path": "C:/Adobe/Photoshop.exe",
+        "identifier": "Adobe Photoshop 2026",
+        "publisher": "Adobe"
+      },
+      {
+        "id": "illustrator",
+        "name": "Adobe Illustrator",
+        "target_path": "C:/Adobe/Illustrator.exe",
+        "identifier": "Adobe Illustrator 2026",
+        "publisher": "Adobe"
+      }
+    ],
+    "items": [
+      {
+        "kind": "app",
+        "id": "unknown"
+      },
+      {
+        "kind": "app",
+        "id": "settings"
+      },
+      {
+        "kind": "app",
+        "id": "explorer"
+      },
+      {
+        "kind": "app",
+        "id": "store"
+      },
+      {
+        "kind": "app",
+        "id": "calc"
+      },
+      {
+        "kind": "app",
+        "id": "notepad"
+      },
+      {
+        "kind": "app",
+        "id": "snip"
+      },
+      {
+        "kind": "app",
+        "id": "security"
+      },
+      {
+        "kind": "app",
+        "id": "feedback"
+      },
+      {
+        "kind": "app",
+        "id": "nvidia"
+      },
+      {
+        "kind": "app",
+        "id": "gamebar"
+      },
+      {
+        "kind": "app",
+        "id": "chrome"
+      },
+      {
+        "kind": "app",
+        "id": "edge"
+      },
+      {
+        "kind": "app",
+        "id": "discord"
+      },
+      {
+        "kind": "app",
+        "id": "obs"
+      },
+      {
+        "kind": "app",
+        "id": "blender"
+      },
+      {
+        "kind": "app",
+        "id": "unreal"
+      },
+      {
+        "kind": "app",
+        "id": "vscode"
+      },
+      {
+        "kind": "app",
+        "id": "photoshop"
+      },
+      {
+        "kind": "app",
+        "id": "illustrator"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 0,
+      "type": "initialize_folders",
+      "japanese": true
+    }
+  ]
+}

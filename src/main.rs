@@ -190,27 +190,22 @@ fn main() {
     // File-backed debug logger. Opt-in via LAUNCHPAD_DEBUG env var so the
     // release build is silent by default; when on it writes to
     // the platform-native diagnostic directory (visible even with no console).
-    debug_logger::init();
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    // `--reset-cache`: delete the SQLite cache file before opening so the next
-    // launch rebuilds it from scratch. Useful if the cache is corrupted or you
-    // want to force a clean re-extraction without editing EXTRACTION_VERSION.
+    // `--reset-cache` only clears icon rows, preserving layout and first-use history.
     let reset_cache_requested = std::env::args().any(|a| a == "--reset-cache");
-    if reset_cache_requested {
-        let path = icon_cache::default_db_path();
-        eprintln!("icon-cache: --reset-cache: removing {}", path.display());
-        let _ = std::fs::remove_file(&path);
-        // WAL/SHM sidecars too, if present.
-        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
-        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
-    }
 
     // Open (or rebuild) the SQLite cache before the event loop starts so it's
     // ready for the first scan. This is cheap (a few ms) and never blocks on
     // Shell/GDI.
     let cache = Arc::new(IconCache::open_or_rebuild());
+    debug_logger::init();
+    if reset_cache_requested {
+        if let Err(e) = cache.clear_all() {
+            eprintln!("icon-cache: reset failed: {e}");
+        }
+    }
 
     // Shared inbox for worker + watcher → UI.
     let inbox: Arc<Inbox> = Arc::new(Mutex::new(Vec::new()));
@@ -284,7 +279,9 @@ fn main() {
         std::sync::mpsc::Sender<RefreshMessage>,
         std::sync::mpsc::Receiver<RefreshMessage>,
     ) = std::sync::mpsc::channel();
-    workers::refresh_watcher::spawn(refresh_tx, RefreshConfig::default());
+    if std::env::var_os(qa::SCENARIO_ENV).is_none() {
+        workers::refresh_watcher::spawn(refresh_tx, RefreshConfig::default(), cache.clone());
+    }
     spawn_bridge(refresh_rx, merged_tx, WorkerMessage::Refresh);
 
     // Single forwarder for the merged channel into the shared inbox.

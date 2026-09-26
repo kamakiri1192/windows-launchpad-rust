@@ -39,7 +39,15 @@ fn scan_steam_apps_at_checked(steam_root: &Path) -> (Vec<SnapshotEntry>, Vec<Str
     let mut libraries = vec![steam_root.clone()];
     let library_file = steam_root.join("steamapps").join("libraryfolders.vdf");
     match fs::read_to_string(&library_file) {
-        Ok(text) => libraries.extend(parse_library_paths(&text)),
+        Ok(text) => {
+            libraries.extend(parse_library_paths(&text));
+            if !text.contains('{') || !text.trim_end().ends_with('}') {
+                errors.push(format!(
+                    "Incomplete library index: {}",
+                    library_file.display()
+                ));
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => errors.push(format!("{}: {error}", library_file.display())),
     }
@@ -93,6 +101,7 @@ fn scan_steam_apps_at_checked(steam_root: &Path) -> (Vec<SnapshotEntry>, Vec<Str
             let manifest_mtime = file_mtime(&manifest_path);
             let icon_mtime = file_mtime(&icon_path);
             entries.push(SnapshotEntry {
+                launch_arguments: None,
                 app_id: AppId::from_normalized(format!("steam:{}", manifest.app_id)),
                 name: manifest.name,
                 link_path: format!("steam://rungameid/{}", manifest.app_id),
@@ -215,7 +224,11 @@ fn parse_app_manifest(text: &str) -> Option<SteamManifest> {
     let app_id = value("appid")?;
     let name = value("name")?;
     let install_dir = value("installdir").unwrap_or_default();
-    if app_id.chars().all(|ch| ch.is_ascii_digit()) && !name.trim().is_empty() {
+    if !app_id.is_empty()
+        && text.trim_end().ends_with('}')
+        && app_id.chars().all(|ch| ch.is_ascii_digit())
+        && !name.trim().is_empty()
+    {
         Some(SteamManifest {
             app_id,
             name,

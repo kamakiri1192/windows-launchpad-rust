@@ -33,6 +33,8 @@ pub struct SnapshotEntry {
     /// Resolved target path the shortcut points at, expanded, or `""` if the
     /// shortcut had no resolvable target.
     pub target_path: String,
+    /// Local-only launch identity; None means arguments could not be read.
+    pub launch_arguments: Option<String>,
     /// Target file mtime, or `0`.
     pub target_mtime: u64,
     /// Shell-reported IconLocation string (may be empty → icon lives in the
@@ -127,6 +129,7 @@ mod tests {
     fn entry(name: &str, mtime: u64) -> SnapshotEntry {
         let path = format!("C:\\ProgramData\\Start Menu\\{name}.lnk");
         SnapshotEntry {
+            launch_arguments: None,
             app_id: AppId::from_link_path(PathBuf::from(&path)),
             name: name.to_string(),
             link_path: path,

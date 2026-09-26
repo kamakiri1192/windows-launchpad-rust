@@ -165,10 +165,18 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct QaApp {
+    #[serde(default)]
+    pub link_path: Option<String>,
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub target_path: Option<String>,
+    #[serde(default)]
+    pub publisher: String,
+    #[serde(default)]
+    pub identifier: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -195,6 +203,10 @@ pub struct TimedAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QaAction {
+    InitializeFolders {
+        #[serde(default)]
+        japanese: bool,
+    },
     Focus {
         focused: bool,
     },
@@ -325,6 +337,7 @@ fn expand_generated_apps(fixture: &mut QaFixture) -> Result<(), String> {
             fixture.apps.push(QaApp {
                 id: id.clone(),
                 name: format!("{} {index:03}", generated.name_prefix),
+                ..QaApp::default()
             });
             if generated.top_level {
                 fixture.items.push(QaItem::App { id });
@@ -703,6 +716,9 @@ fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), Strin
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QaTarget {
+    SettingsAction {
+        key: String,
+    },
     SettingsSlider {
         key: String,
         progress: f32,
@@ -773,6 +789,8 @@ pub struct QaFrameRecord {
     pub folder_child_drag: bool,
     pub top_level_drag: bool,
     pub top_level_item_count: usize,
+    pub top_level_item_ids: Vec<String>,
+    pub top_level_item_names: Vec<String>,
     pub active_folder_child_count: Option<usize>,
     pub frame_dt_ms: f32,
     pub pointer_x: f32,
@@ -825,6 +843,8 @@ struct QaFrameState {
     folder_child_drag: bool,
     top_level_drag: bool,
     top_level_item_count: usize,
+    top_level_item_ids: Vec<String>,
+    top_level_item_names: Vec<String>,
     active_folder_child_count: Option<usize>,
     frame_dt_ms: f32,
     pointer_x: f32,
@@ -1117,6 +1137,8 @@ impl QaRunner {
             folder_child_drag: state.folder_child_drag,
             top_level_drag: state.top_level_drag,
             top_level_item_count: state.top_level_item_count,
+            top_level_item_ids: state.top_level_item_ids,
+            top_level_item_names: state.top_level_item_names,
             active_folder_child_count: state.active_folder_child_count,
             frame_dt_ms: state.frame_dt_ms,
             pointer_x: state.pointer_x,
@@ -1519,6 +1541,7 @@ impl App {
         let Some(fixture) = self.qa_runner.as_ref().map(QaRunner::fixture).cloned() else {
             return;
         };
+        self.initial_snapshot_ready = true;
         self.registry = AppRegistry::new();
         self.atlas = crate::renderer::icon_atlas::IconAtlas::new(64);
         self.atlas_uploaded = false;
@@ -1541,15 +1564,23 @@ impl App {
             self.registry.insert(AppRecord {
                 app_id: id,
                 name: app.name.clone(),
-                link_path: PathBuf::from(format!("qa/{}.lnk", app.id)),
-                resolved_target: PathBuf::from(format!("qa/{}.exe", app.id)),
+                link_path: PathBuf::from(
+                    app.link_path
+                        .clone()
+                        .unwrap_or_else(|| format!("qa/{}.lnk", app.id)),
+                ),
+                resolved_target: PathBuf::from(
+                    app.target_path
+                        .clone()
+                        .unwrap_or_else(|| format!("qa/{}.exe", app.id)),
+                ),
                 slot,
                 icon_state: IconState::Loaded,
                 uv: Some(uv),
                 hide_tile_fill: false,
                 version: String::new(),
-                publisher: String::new(),
-                identifier: String::new(),
+                publisher: app.publisher.clone(),
+                identifier: app.identifier.clone(),
             });
         }
         let mut launcher = LauncherState::new();
@@ -1579,6 +1610,8 @@ impl App {
                 .collect(),
         );
         self.launcher_state = launcher;
+        // Fixture writes can grow the atlas before the renderer is present.
+        self.resync_registry_uvs();
     }
 
     pub(crate) fn start_qa(&mut self, now: Instant) {
@@ -1603,6 +1636,46 @@ impl App {
 
     fn apply_qa_action(&mut self, action: QaAction) {
         match action {
+            QaAction::InitializeFolders { japanese } => {
+                let snapshot = self
+                    .registry
+                    .apps()
+                    .iter()
+                    .map(|r| {
+                        let entry = crate::domain::app_diff::SnapshotEntry {
+                            provider_icon: None,
+                            app_id: r.app_id.clone(),
+                            name: r.name.clone(),
+                            link_path: r.link_path.to_string_lossy().into_owned(),
+                            link_mtime: 0,
+                            target_path: r.resolved_target.to_string_lossy().into_owned(),
+                            launch_arguments: Some(String::new()),
+                            target_mtime: 0,
+                            icon_location: String::new(),
+                            icon_index: 0,
+                            version: String::new(),
+                            publisher: r.publisher.clone(),
+                            identifier: r.identifier.clone(),
+                        };
+                        (entry.app_id.clone(), entry)
+                    })
+                    .collect();
+                self.launcher_state = crate::domain::initial_layout::generate(
+                    &snapshot,
+                    &self.settings,
+                    crate::domain::initial_layout::catalog::Platform::current(),
+                    japanese,
+                    "qa".into(),
+                    &crate::domain::initial_layout::catalog::Catalog::bundled(None),
+                )
+                .state;
+                self.snapshot = snapshot;
+                self.layout_checkpoint = self.launcher_state.clone();
+                // Production publishes placement before the first grid. Do
+                // not animate from the fixture's temporary flat arrangement.
+                self.tile_springs.clear();
+                self.relayout();
+            }
             QaAction::Focus { focused } => self.handle_action(AppAction::Focused(focused)),
             QaAction::ToggleSettings => self.handle_action(AppAction::ToggleSettings),
             QaAction::GlassDarkness { value } => {
@@ -1904,6 +1977,13 @@ impl App {
                     .find(|view| view.id.as_str() == id && view.kind == ControlKind::ResetIcon)
                     .map(|view| view.center)
             }
+            QaTarget::SettingsAction { key } => self
+                .cached_settings_hit_map
+                .as_ref()?
+                .regions()
+                .iter()
+                .find(|r| r.target == crate::ui_model::hit::HitTarget::settings_action(key))
+                .map(|r| r.rect.center()),
             QaTarget::Point { x, y } => Some(Point::new(*x, *y)),
             QaTarget::SettingsCategory { key } => self
                 .cached_settings_hit_map
@@ -1997,6 +2077,8 @@ impl App {
     }
 
     pub(crate) fn qa_capture_path(&mut self) -> Option<PathBuf> {
+        // Do not collect or allocate diagnostics during ordinary rendering.
+        self.qa_runner.as_ref()?;
         let editing = self.editing;
         let context_menu_active = self.context_menu.is_active();
         let context_menu_phase = format!("{:?}", self.context_menu.phase);
@@ -2013,6 +2095,30 @@ impl App {
         let folder_child_drag = self.folders.child_drag.is_some();
         let top_level_drag = self.drag_item.is_some();
         let top_level_item_count = self.launcher_state.items.len();
+        let top_level_item_ids = self
+            .launcher_state
+            .items
+            .iter()
+            .map(LauncherItem::stable_key)
+            .collect();
+        let top_level_item_names = self
+            .launcher_state
+            .items
+            .iter()
+            .map(|item| match item {
+                LauncherItem::App(id) => self
+                    .registry
+                    .get(id)
+                    .map(|app| app.name.clone())
+                    .unwrap_or_default(),
+                LauncherItem::Folder(id) => self
+                    .launcher_state
+                    .folders
+                    .get(id)
+                    .map(|folder| folder.name.clone())
+                    .unwrap_or_default(),
+            })
+            .collect();
         let active_folder_child_count = self
             .folders
             .active
@@ -2102,6 +2208,8 @@ impl App {
             folder_child_drag,
             top_level_drag,
             top_level_item_count,
+            top_level_item_ids,
+            top_level_item_names,
             active_folder_child_count,
             frame_dt_ms: self.last_frame_dt_ms,
             pointer_x: self.pointer_phys_x,
