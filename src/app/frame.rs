@@ -58,9 +58,7 @@ impl App {
             )
         });
         let scroll_x;
-        let dragging;
         if let Some(s) = self.scroller.as_mut() {
-            dragging = s.phase == Phase::Dragging;
             s.tick(now);
             if let Some(position) = profile_scroll_position {
                 s.position = position;
@@ -318,7 +316,9 @@ impl App {
             r.render(&DrawArgs {
                 scroll_x,
                 viewport: vp,
-                defer_backdrop_capture: dragging || qa_enabled,
+                // Live video must keep updating during page drags. Only the
+                // deterministic QA path intentionally freezes the backdrop.
+                defer_backdrop_capture: qa_enabled,
                 time: self.wiggle_phase,
                 drag_active: if self.drag_item.is_some() || self.folders.child_drag.is_some() {
                     1.0

@@ -144,11 +144,13 @@ impl App {
     }
 }
 
+// Sampled equivalent attenuation of the raw capture, not the local material
+// value, not an after-alpha contrast measurement, and not frame-synchronous.
 fn format_auto_darkness_value(enabled: bool, value: f32) -> String {
     if enabled {
-        format!("Dynamic darkness: {:.3}", value.max(0.0))
+        format!("Dynamic Darkness (capture mean): {:.3}", value.max(0.0))
     } else {
-        "Dynamic darkness: OFF".to_owned()
+        "Dynamic Darkness (capture mean): OFF".to_owned()
     }
 }
 
@@ -180,11 +182,11 @@ mod tests {
     fn auto_darkness_overlay_uses_three_decimal_places() {
         assert_eq!(
             format_auto_darkness_value(true, 0.12345),
-            "Dynamic darkness: 0.123"
+            "Dynamic Darkness (capture mean): 0.123"
         );
         assert_eq!(
             format_auto_darkness_value(true, -0.1),
-            "Dynamic darkness: 0.000"
+            "Dynamic Darkness (capture mean): 0.000"
         );
     }
 
@@ -192,7 +194,7 @@ mod tests {
     fn auto_darkness_overlay_says_off_when_feature_is_disabled() {
         assert_eq!(
             format_auto_darkness_value(false, 0.12345),
-            "Dynamic darkness: OFF"
+            "Dynamic Darkness (capture mean): OFF"
         );
     }
 }

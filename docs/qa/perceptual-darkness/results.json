@@ -1,0 +1,49 @@
+{
+  "status": "CPU_REFERENCE_VERIFIED_NATIVE_GPU_UNMEASURED",
+  "corpus_images": 20,
+  "methods": [
+    "current",
+    "coverage_tuned",
+    "mean_ceiling",
+    "p75_ceiling",
+    "local_shoulder"
+  ],
+  "comparisons": 100,
+  "invariants": {
+    "random_color_parameter_cases": 800000,
+    "neutral_ramp_samples_per_cap": 4097,
+    "caps": [
+      0.0,
+      0.01,
+      0.16,
+      0.42,
+      0.85,
+      0.999,
+      1.0,
+      2.0
+    ],
+    "manual_values": [
+      0.0,
+      0.1,
+      0.3,
+      0.9,
+      1.0
+    ],
+    "max_linear_chromaticity_error_float64": 3.3306690738754696e-16,
+    "scope": "CPU float64 color kernel; not a GPU tolerance or perceptual study"
+  },
+  "shader_sha256": "3863c63377ca957ef83b1760d9badc71162f976adbf002127e4fcbfa33244ba4",
+  "temporal_simulation_60Hz": {
+    "old_rise_to_90_percent_frames": 20,
+    "old_fall_to_10_percent_frames": 19,
+    "new_history_latency_frames": 0
+  },
+  "not_measured": [
+    "WGSL execution",
+    "GPU milliseconds",
+    "Windows capture-to-present latency",
+    "native screenshots",
+    "human perceptual preference",
+    "final text contrast"
+  ]
+}

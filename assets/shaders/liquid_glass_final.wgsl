@@ -119,6 +119,8 @@ fn apply_saturation(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
     return mix(vec3<f32>(luma), rgb, saturation);
 }
 
+// Capture-wide diagnostic accessor retained for tooling/ABI compatibility.
+// Not used by the material; this is NOT its spatially varying correction.
 fn auto_glass_darkness() -> f32 {
     if u.auto_darkness_enabled == 0u {
         return 0.0;
@@ -131,9 +133,92 @@ fn auto_glass_darkness() -> f32 {
     return auto_darkness.displayed_darkness;
 }
 
+// BEGIN PERCEPTUAL_DARKNESS (pure functions; exercised by the QA harness)
+// The backdrop color handled here follows the existing encoded-sRGB domain.
+// Decode it once for this SDR adjustment, then return to that same domain.
+// Render-target/OS color management and the rest of the renderer are unchanged.
+fn darkness_srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
+    let c = max(rgb, vec3<f32>(0.0));
+    return select(c / 12.92, pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
+        c > vec3<f32>(0.04045));
+}
+
+fn darkness_linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
+    let c = max(rgb, vec3<f32>(0.0));
+    return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055,
+        c > vec3<f32>(0.0031308));
+}
+
+fn darkness_luminance(linear_rgb: vec3<f32>) -> f32 {
+    return dot(linear_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Bounded, monotone Reinhard-type shoulder, calibrated so white maps to
+// sRGB (1 - maximum). Multiplying LINEAR RGB by one gain preserves chromaticity.
+// No histogram, chroma veto, scene-wide exposure, or previous-frame state.
+fn darkness_auto_gain(y: f32, maximum: f32) -> f32 {
+    let cap = clamp(maximum, 0.0, 1.0);
+    if cap <= 0.0 {
+        return 1.0;
+    }
+    if cap >= 1.0 {
+        return 0.0;
+    }
+    let white = darkness_srgb_to_linear(vec3<f32>(1.0 - cap)).r;
+    return white / (white + (1.0 - white) * clamp(y, 0.0, 1.0));
+}
+
+// Manual darkness keeps its legacy encoded-RGB meaning. Auto supplies a
+// luminance ceiling, not an additional black overlay: when manual already
+// reaches that ceiling, return the manual result unchanged. The crossing is
+// continuous even for saturated colors, unlike switching between two RGB maps.
+fn perceptual_darkness_color(rgb: vec3<f32>, manual: f32, maximum: f32) -> vec3<f32> {
+    let m = clamp(manual, 0.0, 1.0);
+    let manual_rgb = rgb * (1.0 - m);
+    if maximum <= 0.0 || m >= 1.0 {
+        return manual_rgb;
+    }
+    let linear_rgb = darkness_srgb_to_linear(rgb);
+    let y = darkness_luminance(linear_rgb);
+    if y <= 0.0 {
+        return manual_rgb;
+    }
+    let target_y = y * darkness_auto_gain(y, maximum);
+    var manual_linear = linear_rgb;
+    if m > 0.0 {
+        manual_linear = darkness_srgb_to_linear(manual_rgb);
+    }
+    let manual_y = darkness_luminance(manual_linear);
+    if manual_y <= target_y {
+        return manual_rgb;
+    }
+    let gain = target_y / manual_y;
+    let output_linear = manual_linear * gain;
+    // The rounded sRGB breakpoints have a tiny overlap. Preserve the exact
+    // piecewise definition there instead of assuming its two branches join.
+    if (manual_rgb.r <= 0.04045 && output_linear.r > 0.0031308)
+        || (manual_rgb.g <= 0.04045 && output_linear.g > 0.0031308)
+        || (manual_rgb.b <= 0.04045 && output_linear.b > 0.0031308) {
+        return darkness_linear_to_srgb(output_linear);
+    }
+    // Exact sRGB attenuation with ONE scalar encode power, rather than
+    // three component powers: for the nonlinear branch, E(g*D(c)) equals
+    // (c+0.055)*pow(g,1/2.4)-0.055. A component crossing the toe uses the
+    // linear branch instead. No gamma approximation or color LUT is used.
+    let nonlinear = (max(manual_rgb, vec3<f32>(0.0)) + 0.055)
+        * pow(gain, 1.0 / 2.4) - 0.055;
+    return select(output_linear * 12.92, nonlinear,
+        output_linear > vec3<f32>(0.0031308));
+}
+// END PERCEPTUAL_DARKNESS
+
 fn apply_glass_darkness(rgb: vec3<f32>) -> vec3<f32> {
-    let strength = max(clamp(u.glass_darkness, 0.0, 1.0), auto_glass_darkness());
-    return mix(rgb, vec3<f32>(0.0), strength);
+    // The same filtered pixel being rendered drives adaptation. A stale HUD
+    // readback, an 8 Hz diagnostic mode, and even an uninitialized stats buffer
+    // cannot delay this path. Preserve manual-only output when auto is off.
+    let maximum = select(0.0, auto_darkness_uniforms.max_darkness,
+        u.auto_darkness_enabled != 0u);
+    return perceptual_darkness_color(rgb, u.glass_darkness, maximum);
 }
 
 fn sample_geometry_height(pixel: vec2<f32>) -> f32 {
