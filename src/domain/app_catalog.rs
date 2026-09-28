@@ -480,8 +480,8 @@ mod tests {
                 name: "same label".into(),
                 link_path: source.into(),
                 target_path: "example.exe".into(),
-                link_mtime: 1,
-                target_mtime: 1,
+                source_modified_at: 1,
+                target_modified_at: 1,
                 icon_location: String::new(),
                 icon_index: 0,
                 provider_icon: None,
@@ -518,7 +518,7 @@ mod tests {
         steam.source = Source::Steam;
         steam.entry.provider_icon = Some(IconSource {
             path: "library/game.exe".into(),
-            mtime: 10,
+            modified_at: 10,
         });
         let unrelated = c("other", Some("steam:456"), None);
         let mut aliases = IdentityAliases::default();
@@ -536,11 +536,11 @@ mod tests {
         let entry = &initial[&id];
         assert_eq!(entry.link_path, shell.entry.link_path);
         assert_eq!(entry.target_path, shell.entry.target_path);
-        assert_eq!(entry.target_mtime, shell.entry.target_mtime);
+        assert_eq!(entry.target_modified_at, shell.entry.target_modified_at);
         assert_eq!(entry.provider_icon, steam.entry.provider_icon);
         assert_eq!(aliases.source_of(&id), Some(Source::Shell));
 
-        steam.entry.provider_icon.as_mut().unwrap().mtime += 1;
+        steam.entry.provider_icon.as_mut().unwrap().modified_at += 1;
         let refreshed = scan(
             &mut aliases,
             &mut layout,
@@ -682,7 +682,7 @@ mod tests {
     fn earlier_placement_wins_even_inside_a_folder_and_hidden_intent_survives() {
         let a = AppId::from_normalized("a");
         let b = AppId::from_normalized("b");
-        let mut layout = LauncherState::from_legacy(vec![b.clone(), a.clone()], vec![]);
+        let mut layout = LauncherState::from_app_order(vec![b.clone(), a.clone()], vec![]);
         let mut aliases = IdentityAliases::default();
         let result = scan(
             &mut aliases,
@@ -753,7 +753,7 @@ mod tests {
         );
         lower.source = Source::Shell;
         let legacy = AppId::from_link_path(&upper.entry.link_path);
-        let mut layout = LauncherState::from_legacy(vec![legacy.clone()], vec![]);
+        let mut layout = LauncherState::from_app_order(vec![legacy.clone()], vec![]);
         let mut aliases = IdentityAliases::default();
         let result = scan(
             &mut aliases,
@@ -778,7 +778,7 @@ mod tests {
         let mut layout = LauncherState::default();
         let mut aliases = IdentityAliases::default();
         let first = scan(&mut aliases, &mut layout, vec![app.clone()]);
-        layout = LauncherState::from_legacy(
+        layout = LauncherState::from_app_order(
             vec![legacy.clone(), first.keys().next().unwrap().clone()],
             vec![],
         );

@@ -190,28 +190,21 @@ Recommended flow:
 8. Start the app again with the same temporary `LOCALAPPDATA`.
 9. Capture the restarted screen and verify the order is unchanged.
 
-Also inspect the cache directly. `app_order` is stored in the SQLite `kv` table
-as a compact binary list: `count:u32`, followed by repeated
-`len:u32 + UTF-8 app_id` entries.
+Also inspect the saved layout directly. `launcher_state` is stored as JSON
+in the shared SQLite database's `kv` table.
 
 Example parser:
 
 ```powershell
 $py = 'C:\Users\kamak\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 @'
-import os, sqlite3, struct
-path = os.path.join(os.environ['LOCALAPPDATA'], 'Launchpad', 'cache.sqlite3')
-con = sqlite3.connect(path)
-blob = con.execute("select value from kv where key='app_order'").fetchone()[0]
-pos = 0
-count = struct.unpack_from('<I', blob, pos)[0]
-pos += 4
-for i in range(min(count, 12)):
-    n = struct.unpack_from('<I', blob, pos)[0]
-    pos += 4
-    app_id = blob[pos:pos+n].decode('utf-8')
-    pos += n
-    print(i, app_id)
+import json, pathlib, sqlite3, os
+path = pathlib.Path(os.environ['LOCALAPPDATA']) / 'Launchpad' / 'launchpad.sqlite3'
+con = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+blob = con.execute("select value from kv where key='launcher_state'").fetchone()[0]
+state = json.loads(blob)
+for i, item in enumerate(state['items'][:12]):
+    print(i, item)
 '@ | & $py -
 ```
 

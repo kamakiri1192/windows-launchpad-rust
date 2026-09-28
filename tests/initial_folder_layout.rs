@@ -23,10 +23,10 @@ fn entry(
         app_id: AppId::from_normalized(id),
         name: name.into(),
         link_path: format!("C:/Start Menu/{id}.lnk"),
-        link_mtime: 0,
+        source_modified_at: 0,
         target_path: target.into(),
         launch_arguments: args.map(str::to_owned),
-        target_mtime: 0,
+        target_modified_at: 0,
         icon_location: String::new(),
         icon_index: 0,
         version: String::new(),
@@ -1454,7 +1454,7 @@ fn canonical_catalog_initialization_preserves_existing_and_partial_layouts() {
         partial.initial_layout.unwrap().status,
         InitializationStatus::Applied
     );
-    let existing = LauncherState::from_legacy(
+    let existing = LauncherState::from_app_order(
         vec![
             AppId::from_normalized("steam:1173510"),
             AppId::from_normalized("steam:250820"),

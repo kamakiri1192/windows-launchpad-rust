@@ -73,7 +73,7 @@ macOS で実デスクトップを Liquid Glass の背景に使うには、初回
 cargo run --release --locked
 ```
 
-ディスク上のアイコンキャッシュを削除してから起動する場合は、次を実行します。
+DB内のアイコン行だけを削除し、設定・配置を維持して起動する場合は、次を実行します。
 
 ```sh
 cargo run --release --locked -- --reset-cache
@@ -120,12 +120,14 @@ Liquid Glass の調整キーを含む全操作は
 ## データとキャッシュ
 
 アイコン、設定、並び順、非表示アプリ、フォルダ構成は 1 つの SQLite データベースに
-保存します。
+保存します。DB構造の更新は `rusqlite_migration` が起動時に適用します。
+保存先はOSのAPIから取得し、取得・オープン・移行に失敗した場合は通常起動せず終了します。
+旧DBの探索や別DBへの切り替えは行いません。詳細は [ICON_CACHE.md](docs/ICON_CACHE.md) を参照してください。
 
-| OS | 保存先 |
+| OS | 通常の保存先（サンドボックス・仮想化なし） |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\Launchpad\cache.sqlite3` |
-| macOS | `~/Library/Application Support/Launchpad/cache.sqlite3` |
+| Windows | `%LOCALAPPDATA%\Launchpad\launchpad.sqlite3` |
+| macOS | `~/Library/Application Support/Launchpad/launchpad.sqlite3` |
 
 `LAUNCHPAD_DEBUG=1` を設定すると、Windows では
 `%LOCALAPPDATA%\Launchpad\debug.log`、macOS では

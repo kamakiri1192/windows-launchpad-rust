@@ -58,10 +58,7 @@ fn local_curve_is_bounded_monotone_and_preserves_manual_off_contract() {
             assert!(out[0] <= rgb[0] + 0.000001);
             previous = out[0];
             for manual in [0.0, 0.1, 0.5, 1.0] {
-                assert_eq!(
-                    reference(rgb, manual, 0.0),
-                    rgb.map(|c| c * (1.0 - manual))
-                );
+                assert_eq!(reference(rgb, manual, 0.0), rgb.map(|c| c * (1.0 - manual)));
                 let adjusted = reference(rgb, manual, cap);
                 let manual_y = luminance(rgb.map(|c| decode(c * (1.0 - manual))));
                 assert!(luminance(adjusted.map(decode)) <= manual_y + 0.000001);
@@ -103,9 +100,11 @@ async fn device() -> (wgpu::Device, wgpu::Queue) {
 
 fn readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-        sender.send(result).unwrap();
-    });
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            sender.send(result).unwrap();
+        });
     device
         .poll(wgpu::PollType::Wait {
             submission_index: None,

@@ -79,39 +79,16 @@ impl App {
         }
     }
 
-    /// The durable catalog store owns layout on Windows; reset/undo must update it too.
+    /// Reset and undo use the same shared DB transaction on both platforms.
     fn save_initial_layout_candidate(
         &self,
         candidate: &crate::domain::launcher_state::LauncherState,
         settings: Option<&crate::domain::settings::Settings>,
     ) -> Result<(), String> {
-        #[cfg(windows)]
-        let path = self.cache.path().with_file_name("user-state.sqlite3");
-        #[cfg(windows)]
-        {
-            let state =
-                crate::user_state::UserState::new(candidate.clone(), self.catalog_aliases.clone());
-            crate::user_state::save(&path, &state, &self.launcher_state)?;
-        }
         let result = match settings {
             Some(settings) => self.cache.put_settings_and_layout(settings, candidate),
             None => self.cache.put_launcher_state(candidate),
         };
-        if let Err(error) = result {
-            #[cfg(windows)]
-            {
-                let previous = crate::user_state::UserState::new(
-                    self.launcher_state.clone(),
-                    self.catalog_aliases.clone(),
-                );
-                if let Err(rollback) =
-                    crate::user_state::save(&path, &previous, &self.launcher_state)
-                {
-                    eprintln!("layout: durable rollback failed: {rollback}");
-                }
-            }
-            return Err(error.to_string());
-        }
-        Ok(())
+        result.map_err(|error| error.to_string())
     }
 }

@@ -34,16 +34,16 @@ state read + one `send_event` and returns, so it stays well under
 
 ## Icon cache reset (CLI)
 
-You can also wipe the on-disk cache before launch — handy if the launcher
-won't start cleanly or you want a guaranteed cold extraction:
+You can also clear stored icon rows before launch for a cold extraction:
 
 ```
 cargo run --release -- --reset-cache
 ```
 
-`--reset-cache` deletes `%LOCALAPPDATA%\Launchpad\cache.sqlite3` (and its
-WAL/SHM sidecars) before the cache is opened, so the next launch rebuilds it
-from scratch. The `R` key does the equivalent at runtime without restarting.
+`--reset-cache` opens `launchpad.sqlite3` and deletes only its `icons` rows.
+Settings, layout, hidden apps, folders and identity aliases are preserved.
+It does not delete the DB or repair an unreadable database.
+The `R` key does the equivalent at runtime without restarting.
 
 ## Scrolling
 

@@ -26,6 +26,7 @@
 
 mod app;
 mod app_icon;
+mod database;
 mod debug_logger;
 mod domain;
 mod features;
@@ -45,8 +46,6 @@ mod spring_anim;
 mod startup_timer;
 mod ui;
 mod ui_model;
-#[cfg(windows)]
-mod user_state;
 mod workers;
 
 use std::sync::Arc;
@@ -196,10 +195,12 @@ fn main() {
     // `--reset-cache` only clears icon rows, preserving layout and first-use history.
     let reset_cache_requested = std::env::args().any(|a| a == "--reset-cache");
 
-    // Open (or rebuild) the SQLite cache before the event loop starts so it's
-    // ready for the first scan. This is cheap (a few ms) and never blocks on
-    // Shell/GDI.
-    let cache = Arc::new(IconCache::open_or_rebuild());
+    // Prepare the shared DB before normal startup. Failed migrations roll back;
+    // do not continue with an old schema or switch to another database.
+    let cache = match IconCache::open() {
+        Ok(cache) => Arc::new(cache),
+        Err(_) => std::process::exit(1),
+    };
     debug_logger::init();
     if reset_cache_requested {
         if let Err(e) = cache.clear_all() {

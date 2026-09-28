@@ -14,70 +14,61 @@ cache invalidation interacts with live Start Menu changes.
 The cache is a single SQLite file at the platform data directory:
 
 ```text
-Windows: %LOCALAPPDATA%\Launchpad\cache.sqlite3
-macOS:   ~/Library/Application Support/Launchpad/cache.sqlite3
+Windows: %LOCALAPPDATA%\Launchpad\launchpad.sqlite3
+macOS:   ~/Library/Application Support/Launchpad/launchpad.sqlite3
 ```
 
-If `LOCALAPPDATA` is unset (unusual on a normal Windows session), the launcher
-falls back to `launchpad-cache.sqlite3` next to the executable. The directory is
-created on demand. Implemented in `icon_cache::default_db_path`.
+These are the usual non-sandboxed paths. Windows resolves LocalAppData with
+`SHGetKnownFolderPath`; macOS uses `NSFileManager`'s user Application Support
+directory (including the sandbox container when applicable).
+There is no executable-directory or current-directory fallback. The directory
+is created on demand; failures stop startup.
 
-We use `rusqlite` with the `bundled` feature, so no system SQLite dependency is
-required — the C library is compiled into the binary.
+SQLite is bundled on Windows; macOS uses the system SQLite library.
 
 ## Schema
 
-Two tables plus a `schema_meta` version store.
+The schema is defined by [001_initial.sql](../migrations/001_initial.sql):
 
-```sql
-CREATE TABLE schema_meta (
-    key   TEXT PRIMARY KEY,
-    value INTEGER NOT NULL
-);
--- Always holds: ('schema_version', N) and ('extraction_version', N).
+- `icons`: rebuildable normalized RGBA images and extraction metadata.
+- `kv`: user-owned JSON blobs (`settings`, `launcher_state`, and Windows
+  `identity_aliases`). Initial-layout undo is part of `launcher_state`.
 
-CREATE TABLE icons (
-    app_id             TEXT PRIMARY KEY,   -- normalized .lnk path (see app_id.rs)
-    link_path          TEXT NOT NULL,      -- raw .lnk path
-    display_name       TEXT NOT NULL,      -- file stem, for labels
-    link_mtime         INTEGER NOT NULL,   -- Windows file time of the .lnk
-    target_path        TEXT NOT NULL,      -- resolved + env-expanded target
-    target_mtime       INTEGER NOT NULL,   -- mtime of the target file
-    icon_location      TEXT NOT NULL,      -- Shell IconLocation (may be "")
-    icon_index         INTEGER NOT NULL,   -- icon index inside icon_location/target
-    provider_icon_path TEXT,               -- optional artwork independent of launch route
-    provider_icon_mtime INTEGER NOT NULL DEFAULT 0,
-    image_w            INTEGER NOT NULL,   -- normalized icon width (== TARGET)
-    image_h            INTEGER NOT NULL,   -- normalized icon height (== TARGET)
-    image_rgba         BLOB NOT NULL,      -- straight-alpha RGBA8, w*h*4 bytes
-    extraction_version INTEGER NOT NULL,   -- EXTRACTION_VERSION at extract time
-    last_seen_at       INTEGER NOT NULL,   -- unix seconds of last scan that saw it
-    deleted_at         INTEGER             -- reserved for tombstoning
-);
-CREATE INDEX icons_last_seen ON icons(last_seen_at);
+File timestamps use descriptive names rather than `mtime` abbreviations:
 
-CREATE TABLE kv (
-    key   TEXT PRIMARY KEY,
-    value BLOB NOT NULL
-);
-```
+- `source_modified_at`: source metadata modification time (Windows shortcut,
+  macOS `Info.plist`, or Steam manifest).
+- `target_modified_at`: target file modification time.
+- `provider_icon_modified_at`: provider artwork modification time.
+
+These are not database-row `updated_at` timestamps. Values keep the scanner's
+existing representation: Windows native scans use FILETIME; macOS and Steam
+scans use Unix milliseconds. Only equality is compared; `0` means unavailable.
+The initial migration uses these names directly. Before the first public release,
+the development database was explicitly reset when consolidating this PR's schema;
+there is no automatic reset or compatibility migration in the application.
+
+Settings and layout resets commit in one transaction; identity reconciliation
+commits its aliases and layout together. Icon reset only deletes `icons` rows.
 
 The icon image is stored as a **straight-alpha RGBA8 blob** (`TARGET × TARGET × 4`
 bytes), not PNG. This trades a little disk space for zero encode/decode cost on
 the hot startup path. Alpha is straight (not premultiplied); the icon shader
 re-premultiplies at sample time.
 
-PRAGMAs applied on open: `journal_mode=WAL`, `synchronous=NORMAL`,
-`temp_store=MEMORY` — good durability/crash-safety for a rebuildable cache at
-low write latency.
+PRAGMAs applied on open: `journal_mode=WAL`, `synchronous=FULL`,
+`temp_store=MEMORY` — the same connection stores user data and icons.
 
 ## Versioning
 
 Two independent version numbers guard against stale data:
 
-- **`SCHEMA_VERSION`** (`icon_cache::SCHEMA_VERSION`, currently `2`) — the
-  on-disk table layout. A mismatch on open wipes the `icons` table so every
-  entry is re-extracted against the new schema.
+- **Schema migrations**: `rusqlite_migration` 1.3.1 (compatible with Rust 1.89
+  and `rusqlite` 0.32) manages SQLite's `user_version`. Numbered SQL files in
+  `migrations/` are embedded and registered in order in `src/database.rs`.
+  `to_latest` runs before normal DB access. Append new migrations; never edit
+  one that has been released. There is no custom schema version table or
+  column-repair logic.
 - **`EXTRACTION_VERSION`** (`icon_cache::EXTRACTION_VERSION`, currently `6`
   on Windows and `9` on macOS) —
   the *extraction algorithm itself* (normalization target size, alpha handling,
@@ -89,8 +80,8 @@ Two independent version numbers guard against stale data:
   game's `.app` bundle, avoiding the low-resolution artwork in
   `appcache/librarycache`.
 
-Bump either constant when you change the corresponding thing; no manual
-migration code is needed.
+Append a migration for schema/data changes. Bump `EXTRACTION_VERSION` only
+when extraction changes. Schema updates do not automatically wipe icons.
 
 ## Cache invalidation
 
@@ -101,32 +92,30 @@ shortcut's current state. The check is `icon_cache::is_cache_valid`:
 cached.image.w == CACHED_ICON_SIZE
     && cached.image.h == CACHED_ICON_SIZE
     && cached.extracted_at_version == EXTRACTION_VERSION
-    && cached.link_mtime    == probe.link_mtime
-    && cached.target_path   == probe.target_path
-    && cached.target_mtime  == probe.target_mtime
+    && cached.source_modified_at == probe.source_modified_at
+    && cached.target_path == probe.target_path
+    && cached.target_modified_at == probe.target_modified_at
     && cached.icon_location == probe.icon_location
     && cached.icon_index    == probe.icon_index
     && cached.provider_icon.as_ref() == probe.provider_icon
 ```
 
-Provider artwork has its own path and mtime, independent of the selected launch
-route and its target metadata. Its two columns are added to older databases
-without discarding existing icon rows or user state. Old rows have no override;
-adding a provider source invalidates only the affected app's icon.
+Provider artwork has its own path and modification time, independent of the selected launch
+route and its target metadata. Adding a provider source invalidates only the
+affected app\'s icon.
 
 A single mismatch → re-extract. Concretely, the cache is invalidated when:
 
 | Condition                              | Why                                            |
 | -------------------------------------- | ---------------------------------------------- |
 | `.lnk` path is new (no row)            | never extracted                                |
-| `.lnk` mtime changed                   | shortcut file was rewritten                    |
+| source modification time changed        | shortcut, Info.plist, or manifest was updated   |
 | resolved target path changed           | shortcut now points elsewhere                  |
-| target mtime changed                   | target exe/dll was updated                     |
+| target modification time changed        | target file was updated                        |
 | `IconLocation` string changed          | shortcut's explicit icon was re-pointed        |
 | provider artwork added, removed, moved, or updated | preferred artwork changed |
 | icon index changed                     | icon within the location changed               |
 | `EXTRACTION_VERSION` changed           | extraction algorithm changed (re-extract all)  |
-| `SCHEMA_VERSION` changed               | schema layout changed (table wiped on open)    |
 | normalized icon size (`CACHED_ICON_SIZE`) changed | atlas cell size changed             |
 
 On startup, valid cache entries are applied **immediately** (no worker round
@@ -147,33 +136,36 @@ trip); only invalid/missing entries are queued for extraction. See
 `last_seen_at` and `deleted_at` are present for future tombstone-style GC; the
 current implementation does eager deletion on retain.
 
-## Recovery from corruption
+## Startup failures
 
-`IconCache::open_or_rebuild` is the entry point. If opening the DB fails (corrupt
-file, unreadable, schema migration error), the launcher:
+`IconCache::open` resolves the path, opens the shared DB and runs migrations.
+Path resolution, open or migration failure exits with a nonzero status before
+normal startup. Migration rollback is handled by the library's transaction.
+An old schema cannot be used by the new executable just because rollback
+succeeded. The next launch attempts the pending migrations normally.
 
-1. deletes the DB file,
-2. tries to open it again (now creating a fresh empty DB),
-3. if *that* also fails, falls back to an in-memory SQLite database so the app
-   keeps running uncached rather than crashing.
+No new user-facing message, dialog, automatic deletion, initialization after
+failure, repair, retry loop, alternate file or in-memory fallback is added.
+A DB newer than the executable's migrations is rejected without downgrading.
 
-A corrupt cache therefore costs at most one cold extraction pass; it never
-blocks startup.
+The old `cache.sqlite3` and `user-state.sqlite3` are not read by the app.
+Pre-release developer data is moved once as a separate maintenance operation,
+not as an application startup feature.
 
 ## Testing
 
-`icon_cache::tests` covers: put/get round-trip, missing entry, each
-invalidation condition (mtime, target path, icon location, extraction version,
-image size), upsert semantics, `forget`, the default-path heuristic, and
-corrupt-file recovery. The DB is opened `:memory:` in tests so nothing touches
-disk.
+`database::tests` covers initial creation, repeated migration, upgrade,
+transaction rollback and future-schema rejection.
+`icon_cache::tests` and `initial_layout_tests` cover icon validity, user-data
+persistence, atomic saves, initial-layout undo and corruption preservation.
+Tests use memory databases or isolated temporary paths, never the user's DB.
 
 ## Known limitations
 
 - No partial reuse: a single field change re-extracts the whole icon. Icons are
   small and extraction is the expensive part, so this is acceptable.
-- WAL/SHM sidecar files live next to the `.sqlite3`; they're recreated
-  automatically and are safe to delete when the launcher isn't running.
+- WAL/SHM sidecars may live next to the `.sqlite3`. Do not manually delete
+  them: the WAL may contain committed data not yet checkpointed.
 - The cache key intentionally avoids `fs::canonicalize` (which would resolve
   Start Menu junctions differently across machines); normalization is purely
   lexical, matching `app_id` normalization.
