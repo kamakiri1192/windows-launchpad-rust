@@ -849,6 +849,9 @@ impl LiquidGlassRenderer {
         if self.settings_panel_completed_scene_enabled {
             uniforms.backdrop_replacement = self.settings_panel_backdrop_replacement;
             uniforms.glass_darkness = self.settings_panel_glass_darkness;
+            // The completed scene already contains lower-layer darkening.
+            // Keep folder panels on the inherited automatic-darkness path.
+            uniforms.auto_darkness_enabled = 0;
         }
         queue.write_buffer(
             &self.settings_panel_uniform_buffer,
@@ -1276,6 +1279,8 @@ impl LiquidGlassRenderer {
         }
         uniforms.backdrop_replacement = self.context_menu_backdrop_replacement;
         uniforms.glass_darkness = self.context_menu_glass_darkness;
+        // Apply only this panel's manual darkness to the completed scene.
+        uniforms.auto_darkness_enabled = 0;
         queue.write_buffer(
             &self.context_menu_uniform_buffer,
             0,
