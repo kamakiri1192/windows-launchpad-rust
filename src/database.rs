@@ -3,10 +3,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
 
 pub(crate) fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![
-        M::up(include_str!("../migrations/001_initial.sql")),
-        M::up(include_str!("../migrations/002_rename_file_timestamps.sql")),
-    ])
+    Migrations::new(vec![M::up(include_str!("../migrations/001_initial.sql"))])
 }
 
 pub(crate) fn migrate(conn: &mut Connection) -> rusqlite_migration::Result<()> {
@@ -30,7 +27,7 @@ mod tests {
         conn.execute("INSERT INTO kv VALUES ('settings', X'0102')", [])
             .unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(version(&conn), 2);
+        assert_eq!(version(&conn), 1);
         let value: Vec<u8> = conn
             .query_row("SELECT value FROM kv", [], |r| r.get(0))
             .unwrap();
@@ -38,14 +35,14 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_rename_preserves_existing_icons_and_user_data() {
+    fn initial_schema_uses_descriptive_timestamps_and_preserves_data_on_rerun() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrations().to_version(&mut conn, 1).unwrap();
+        migrate(&mut conn).unwrap();
         conn.execute_batch(
             "INSERT INTO icons (
-                app_id, link_path, display_name, link_mtime, target_path, target_mtime,
+                app_id, link_path, display_name, source_modified_at, target_path, target_modified_at,
                 icon_location, icon_index, image_w, image_h, image_rgba,
-                extraction_version, last_seen_at, provider_icon_path, provider_icon_mtime
+                extraction_version, last_seen_at, provider_icon_path, provider_icon_modified_at
              ) VALUES ('app', '/Applications/Example.app', 'Example', 123,
                        '/Applications/Example.app/Contents/MacOS/Example', 456,
                        'icon.icns', 0, 1, 1, X'01020304', 9, 789, 'provider.icns', 321);
@@ -78,7 +75,7 @@ mod tests {
         migrate(&mut conn).unwrap();
         migrate(&mut conn).unwrap();
 
-        assert_eq!(version(&conn), 2);
+        assert_eq!(version(&conn), 1);
         assert_eq!(icon_values(&conn), before_icon);
         assert_eq!(user_data(&conn), before_user_data);
         assert_eq!(
@@ -107,19 +104,14 @@ mod tests {
                 .as_nanos()
         ));
         let mut conn = Connection::open(&path).unwrap();
-        migrations().to_version(&mut conn, 1).unwrap();
+        migrate(&mut conn).unwrap();
         let failed = Migrations::new(vec![
             M::up(include_str!("../migrations/001_initial.sql")),
-            M::up(include_str!("../migrations/002_rename_file_timestamps.sql")),
             M::up("INSERT INTO kv VALUES ('new', X'01'); CREATE TABLE added (id INTEGER);"),
             M::up("INSERT INTO missing_table VALUES (1);"),
         ]);
         assert!(failed.to_latest(&mut conn).is_err());
         assert_eq!(version(&conn), 1);
-        assert!(conn.prepare("SELECT link_mtime FROM icons").is_ok());
-        assert!(conn
-            .prepare("SELECT source_modified_at FROM icons")
-            .is_err());
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM kv", [], |r| r.get::<_, i32>(0))
                 .unwrap(),
@@ -139,12 +131,11 @@ mod tests {
         assert_eq!(version(&conn), 1);
         let fixed = Migrations::new(vec![
             M::up(include_str!("../migrations/001_initial.sql")),
-            M::up(include_str!("../migrations/002_rename_file_timestamps.sql")),
             M::up("INSERT INTO kv VALUES ('new', X'01'); CREATE TABLE added (id INTEGER);"),
             M::up("INSERT INTO added VALUES (1);"),
         ]);
         fixed.to_latest(&mut conn).unwrap();
-        assert_eq!(version(&conn), 4);
+        assert_eq!(version(&conn), 3);
         drop(conn);
         std::fs::remove_file(path).unwrap();
     }
@@ -168,7 +159,7 @@ mod tests {
             0
         );
         migrate(&mut conn).unwrap();
-        assert_eq!(version(&conn), 2);
+        assert_eq!(version(&conn), 1);
     }
 
     #[test]

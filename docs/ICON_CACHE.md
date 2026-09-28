@@ -28,8 +28,7 @@ SQLite is bundled on Windows; macOS uses the system SQLite library.
 
 ## Schema
 
-The schema is defined by [001_initial.sql](../migrations/001_initial.sql) and
-[002_rename_file_timestamps.sql](../migrations/002_rename_file_timestamps.sql):
+The schema is defined by [001_initial.sql](../migrations/001_initial.sql):
 
 - `icons`: rebuildable normalized RGBA images and extraction metadata.
 - `kv`: user-owned JSON blobs (`settings`, `launcher_state`, and Windows
@@ -45,7 +44,9 @@ File timestamps use descriptive names rather than `mtime` abbreviations:
 These are not database-row `updated_at` timestamps. Values keep the scanner's
 existing representation: Windows native scans use FILETIME; macOS and Steam
 scans use Unix milliseconds. Only equality is compared; `0` means unavailable.
-Migration 002 renames columns without converting timestamps or deleting data.
+The initial migration uses these names directly. Before the first public release,
+the development database was explicitly reset when consolidating this PR's schema;
+there is no automatic reset or compatibility migration in the application.
 
 Settings and layout resets commit in one transaction; identity reconciliation
 commits its aliases and layout together. Icon reset only deletes `icons` rows.
