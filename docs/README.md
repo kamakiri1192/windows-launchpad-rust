@@ -12,6 +12,8 @@
   Feature-ready refactor plan and migration phases.
 - [GLASS_FOCUS_VEIL.md](GLASS_FOCUS_VEIL.md) - フォルダ表示時に下層シーンを
   ぼかすGlass Focus Veilの目的、描画順、GPU構成、調整方法、視覚QA項目。
+- [DARKNESS.md](DARKNESS.md) - 旧Darkness方式の調査記録。面ごとの適用範囲・
+  描画順・合成式と修正箇所。現方式は[PERCEPTUAL_DARKNESS.md](PERCEPTUAL_DARKNESS.md)を参照。
 - [LIQUID_GLASS_PER_SURFACE_BLUR.md](LIQUID_GLASS_PER_SURFACE_BLUR.md) -
   上層パーツ直前の完成シーンを背景にするLiquid Glassブラーの設計。checkpoint、
   desktopへのflatten、lane別completed blur、backdrop replacement、別パーツへの

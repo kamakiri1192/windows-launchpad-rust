@@ -459,7 +459,7 @@ impl Default for LiquidGlassValues {
     fn default() -> Self {
         Self {
             enabled: true,
-            auto_darkness_enabled: false,
+            auto_darkness_enabled: true,
             auto_darkness_max: 0.16,
             auto_darkness_mode: AutoDarknessModeId::Adaptive,
             thickness: 26.0,
@@ -553,8 +553,8 @@ pub struct SettingsPanelCopy<'a> {
     pub debug_icon_cache_detail: &'a str,
     pub debug_lg_enabled_label: &'a str,
     pub debug_lg_enabled_detail: &'a str,
-    pub debug_lg_auto_darkness_value_label: &'a str,
-    pub debug_lg_auto_darkness_value_detail: &'a str,
+    pub darkness_value_label: &'a str,
+    pub darkness_value_detail: &'a str,
     // ----- Darkness-category row labels -----
     pub darkness_auto_label: &'a str,
     pub darkness_auto_detail: &'a str,
@@ -1111,6 +1111,16 @@ pub fn build_with_ui(
                         .hit_target(SettingsPanelHit::LiquidGlassAutoDarkness.target()),
                 );
 
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.show_auto_darkness_value)
+                        .id(UiId::settings_row("toggle-show-auto-darkness-value"))
+                        .label(copy.darkness_value_label)
+                        .detail(copy.darkness_value_detail)
+                        .hit_target(SettingsPanelHit::AutoDarknessValueToggle.target()),
+                );
+
                 for (mode, (label, detail)) in AutoDarknessModeId::ALL
                     .into_iter()
                     .zip(copy.darkness_update_mode_labels)
@@ -1265,17 +1275,6 @@ pub fn build_with_ui(
                         .label(copy.debug_lg_enabled_label)
                         .detail(copy.debug_lg_enabled_detail)
                         .hit_target(SettingsPanelHit::LiquidGlassEnabled.target()),
-                );
-
-                // Row 4: effective automatic-darkness debug overlay
-                ui.begin_absolute_placement();
-                ui.set_available_width(cw);
-                ui.toggle(
-                    &Toggle::new(input.show_auto_darkness_value)
-                        .id(UiId::settings_row("toggle-show-auto-darkness-value"))
-                        .label(copy.debug_lg_auto_darkness_value_label)
-                        .detail(copy.debug_lg_auto_darkness_value_detail)
-                        .hit_target(SettingsPanelHit::AutoDarknessValueToggle.target()),
                 );
 
                 // Liquid Glass parameter sliders
@@ -1497,37 +1496,37 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   1  window decorations (M)
 //   2  icon cache rebuild (R)
 //   3  Liquid Glass enabled (V)
-//   4  show effective automatic-darkness value
-//   5  thickness slider
-//   6  refractive_index slider
-//   7  saturation slider
-//   8  chromatic_aberration slider
-//   9  blur_radius slider
-//  10  disable chromatic aberration (C)
-//  11  disable edge lighting (E)
-//  12  disable blur (L)
-//  13  "Reset Liquid Glass to defaults" button
-//  14  show backdrop texture (B)
-//  15  show geometry texture (G)
-//  16  show displacement (D)
-//  17  show alpha mask (A)
-//  18  show final glass only (F)
+//   4  thickness slider
+//   5  refractive_index slider
+//   6  saturation slider
+//   7  chromatic_aberration slider
+//   8  blur_radius slider
+//   9  disable chromatic aberration (C)
+//  10  disable edge lighting (E)
+//  11  disable blur (L)
+//  12  "Reset Liquid Glass to defaults" button
+//  13  show backdrop texture (B)
+//  14  show geometry texture (G)
+//  15  show displacement (D)
+//  16  show alpha mask (A)
+//  17  show final glass only (F)
 
 // Darkness row index map:
 //   0  automatic darkness enabled
-//   1  automatic darkness: full-rate mode
-//   2  automatic darkness: adaptive mode
-//   3  automatic darkness: fixed-8-Hz mode
-//   4  automatic darkness maximum slider
-//   5  glass_darkness slider
-//   6  context_menu_glass_darkness slider
-//   7  settings_panel_glass_darkness slider
+//   1  show effective automatic-darkness value
+//   2  automatic darkness: full-rate mode
+//   3  automatic darkness: adaptive mode
+//   4  automatic darkness: fixed-8-Hz mode
+//   5  automatic darkness maximum slider
+//   6  glass_darkness slider
+//   7  context_menu_glass_darkness slider
+//   8  settings_panel_glass_darkness slider
 
 /// Total number of full-row slots the Debug category uses.
-pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 19;
+pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 18;
 
 /// Total number of full-row slots the Darkness category uses.
-pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 8;
+pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 9;
 
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
@@ -1654,8 +1653,8 @@ mod tests {
             debug_icon_cache_detail: "Cache detail",
             debug_lg_enabled_label: "Enable Liquid Glass",
             debug_lg_enabled_detail: "LG detail",
-            debug_lg_auto_darkness_value_label: "Show auto darkness value",
-            debug_lg_auto_darkness_value_detail: "Show effective value detail",
+            darkness_value_label: "Show auto darkness value",
+            darkness_value_detail: "Show effective value detail",
             darkness_auto_label: "Auto backdrop darkness",
             darkness_auto_detail: "Enable backdrop-aware glass darkness",
             darkness_update_mode_labels: [
@@ -2151,8 +2150,8 @@ mod tests {
     }
 
     #[test]
-    fn hit_map_debug_auto_darkness_value_toggle_exists() {
-        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+    fn hit_map_darkness_auto_darkness_value_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Darkness);
         let found = hm
             .regions()
             .iter()
@@ -2165,6 +2164,7 @@ mod tests {
         let darkness = hit_map_for_category(SettingsCategoryId::Darkness);
         let debug = hit_map_for_category(SettingsCategoryId::Debug);
         let targets = [
+            HitTarget::settings_toggle("show-auto-darkness-value"),
             HitTarget::settings_toggle("lg-auto-darkness"),
             HitTarget::settings_toggle("lg-auto-darkness-mode-fixed-8hz"),
             HitTarget::settings_toggle("lg-param-auto-darkness-max"),

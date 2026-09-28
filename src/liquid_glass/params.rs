@@ -35,7 +35,7 @@ impl Default for LiquidGlassParams {
             presentation: [1.0, 1.0, 1.0, 0.0],
             presentation_frame: [0.0, 0.0, 1.0, 1.0],
             presentation_start_offset: 0.0,
-            auto_darkness_enabled: false,
+            auto_darkness_enabled: true,
             auto_darkness_max: 0.16,
             thickness: 26.0,
             refractive_index: 1.42,
