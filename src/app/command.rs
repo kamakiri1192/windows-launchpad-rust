@@ -27,37 +27,22 @@ impl App {
     /// order, folders, hidden apps) into `launcher_state`. Called once at
     /// startup, before the first scan is ingested, so apps are placed in the
     /// user's arrangement from the first frame.
-    ///
-    /// Migration: if the Phase 7 `launcher_state` key is present it is used
-    /// directly. Otherwise the legacy `app_order` + `hidden_ids` binary keys
-    /// are read and converted via [`LauncherState::from_legacy`]. A missing or
-    /// corrupt store is opened read-only for layout purposes. The first scan
-    /// supplies the canonical app set before the initial layout is published.
     pub(crate) fn load_customization(&mut self) {
         self.settings = self.cache.get_settings();
-        #[cfg(windows)]
-        if !self.qa_enabled() {
-            match crate::user_state::load(&self.cache.path().with_file_name("user-state.sqlite3")) {
-                Ok(Some(state)) => {
-                    self.launcher_state = state.layout;
-                    self.catalog_aliases = state.aliases;
-                    self.layout_checkpoint = self.launcher_state.clone();
-                    return;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    self.catalog_store_writable = false;
-                    self.layout_writable = false;
-                    eprintln!("user-state: preserving unreadable store: {error}");
-                    return;
-                }
-            }
-        }
         let loaded = self.cache.load_layout();
         self.layout_initial_fresh = loaded.fresh;
         self.launcher_state = loaded.state;
         self.layout_checkpoint = self.launcher_state.clone();
         self.layout_writable = loaded.writable;
+        #[cfg(windows)]
+        match self.cache.load_identity_aliases() {
+            Ok(aliases) => self.catalog_aliases = aliases,
+            Err(error) => {
+                self.catalog_store_writable = false;
+                self.layout_writable = false;
+                eprintln!("layout: preserving unreadable identity aliases: {error}");
+            }
+        }
     }
 
     /// Persist the current launcher layout so it survives across launches.
@@ -78,18 +63,6 @@ impl App {
         #[cfg(windows)]
         {
             if !self.catalog_store_writable {
-                return;
-            }
-            let state = crate::user_state::UserState::new(
-                self.launcher_state.clone(),
-                self.catalog_aliases.clone(),
-            );
-            if let Err(error) = crate::user_state::save(
-                &self.cache.path().with_file_name("user-state.sqlite3"),
-                &state,
-                &self.launcher_state,
-            ) {
-                eprintln!("user-state: failed to persist layout: {error}");
                 return;
             }
         }

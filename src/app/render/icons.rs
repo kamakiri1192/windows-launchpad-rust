@@ -65,12 +65,7 @@ impl App {
             && self.layout_writable
             && (aliases != self.catalog_aliases || layout != self.launcher_state)
         {
-            let state = crate::user_state::UserState::new(layout.clone(), aliases.clone());
-            if let Err(error) = crate::user_state::save(
-                &self.cache.path().with_file_name("user-state.sqlite3"),
-                &state,
-                &self.launcher_state,
-            ) {
+            if let Err(error) = self.cache.put_layout_and_aliases(&layout, &aliases) {
                 eprintln!("app-catalog: could not commit identity migration: {error}");
                 return;
             }

@@ -1454,7 +1454,7 @@ fn canonical_catalog_initialization_preserves_existing_and_partial_layouts() {
         partial.initial_layout.unwrap().status,
         InitializationStatus::Applied
     );
-    let existing = LauncherState::from_legacy(
+    let existing = LauncherState::from_app_order(
         vec![
             AppId::from_normalized("steam:1173510"),
             AppId::from_normalized("steam:250820"),

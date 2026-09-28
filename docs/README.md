@@ -1,5 +1,6 @@
 # launchpad-windows docs
 
+- [DATABASE_MIGRATION_PLAN.md](DATABASE_MIGRATION_PLAN.md) — 承認済みのDB統一・`rusqlite_migration`導入方針。
 - [INITIAL_FOLDER_LAYOUT_SPEC.md](INITIAL_FOLDER_LAYOUT_SPEC.md) — 初期フォルダ配置の非AI仕様。
   Windows / macOSの19種類のプリセット候補、初回判定、保存、取り消し、受け入れ条件。
 - [AI_FOLDER_ASSIST_SPEC.md](AI_FOLDER_ASSIST_SPEC.md) — 任意のAI整理補助仕様。

@@ -682,7 +682,7 @@ mod tests {
     fn earlier_placement_wins_even_inside_a_folder_and_hidden_intent_survives() {
         let a = AppId::from_normalized("a");
         let b = AppId::from_normalized("b");
-        let mut layout = LauncherState::from_legacy(vec![b.clone(), a.clone()], vec![]);
+        let mut layout = LauncherState::from_app_order(vec![b.clone(), a.clone()], vec![]);
         let mut aliases = IdentityAliases::default();
         let result = scan(
             &mut aliases,
@@ -753,7 +753,7 @@ mod tests {
         );
         lower.source = Source::Shell;
         let legacy = AppId::from_link_path(&upper.entry.link_path);
-        let mut layout = LauncherState::from_legacy(vec![legacy.clone()], vec![]);
+        let mut layout = LauncherState::from_app_order(vec![legacy.clone()], vec![]);
         let mut aliases = IdentityAliases::default();
         let result = scan(
             &mut aliases,
@@ -778,7 +778,7 @@ mod tests {
         let mut layout = LauncherState::default();
         let mut aliases = IdentityAliases::default();
         let first = scan(&mut aliases, &mut layout, vec![app.clone()]);
-        layout = LauncherState::from_legacy(
+        layout = LauncherState::from_app_order(
             vec![legacy.clone(), first.keys().next().unwrap().clone()],
             vec![],
         );

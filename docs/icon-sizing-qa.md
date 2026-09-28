@@ -6,7 +6,7 @@ Issue #48（自由形アイコンの視覚的サイズ自動正規化）の Visu
 
 - ブランチ `feat/icon-visual-sizing-48`
 - 実装: `src/icons/sizing.rs`（分類）+ `src/icons/normalize.rs`（スケール適用）+ `src/icon_cache.rs`（記録）
-- `SCHEMA_VERSION` 1→2、`EXTRACTION_VERSION` バンプ済み → 初回起動で全キャッシュ再抽出
+- 当時は `SCHEMA_VERSION` 1→2で再抽出していた。現在は `rusqlite_migration` によるDB構造管理と、`EXTRACTION_VERSION` による画像の無効化を分離している。
 
 ## 1. ビルド確認
 
@@ -49,18 +49,12 @@ cargo run --release --example icon_audit -- --out /tmp/icon-audit
 
 ### 3.1 初回起動（Cold cache）
 
-`SCHEMA_VERSION` バンプにより既存キャッシュが全件再抽出される。
+現在のDB構造はマイグレーションで管理する。Cold cacheの確認では
+`--reset-cache` でアイコン行だけを削除し、設定・配置を維持する。
 
 ```sh
-# 既存キャッシュのバックアップ（既に実施済みなら skip）
-cp ~/Library/Application\ Support/Launchpad/cache.sqlite3 \
-   ~/Library/Application\ Support/Launchpad/cache.backup-$(date +%Y%m%d).sqlite3
-
-# キャッシュ削除（強制的に cold cache にする）
-rm ~/Library/Application\ Support/Launchpad/cache.sqlite3*
-
-# キャプチャ有効 + release build 起動
-LAUNCHPAD_ALLOW_SCREENSHOT=1 cargo run --release
+# キャプチャ有効 + アイコンのみリセットして起動
+LAUNCHPAD_ALLOW_SCREENSHOT=1 cargo run --release -- --reset-cache
 ```
 
 確認:
@@ -92,7 +86,7 @@ macOS では `LAUNCHPAD_ALLOW_SCREENSHOT=1` でキャプチャ可能。
 キャッシュに category と scale が記録されているか確認:
 
 ```sh
-sqlite3 ~/Library/Application\ Support/Launchpad/cache.sqlite3 \
+sqlite3 ~/Library/Application\ Support/Launchpad/launchpad.sqlite3 \
   "SELECT display_name, category, scale, image_w, image_h FROM icons ORDER BY category, scale LIMIT 30;"
 ```
 
