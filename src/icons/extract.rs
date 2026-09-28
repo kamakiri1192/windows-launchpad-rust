@@ -398,7 +398,7 @@ pub(crate) fn is_application_target(path: &Path) -> bool {
 
 /// Last-modified time of a file as a `u64` Windows file-time, or `0` if it
 /// can't be read. Used purely for equality comparison in cache invalidation.
-pub fn file_mtime(path: &Path) -> u64 {
+pub fn file_modified_at(path: &Path) -> u64 {
     use windows::Win32::Storage::FileSystem::{GetFileAttributesExW, GET_FILEEX_INFO_LEVELS};
 
     let Some(wide) = path_to_wide(path) else {

@@ -16,11 +16,11 @@ fn snapshot(count: usize) -> BTreeMap<AppId, SnapshotEntry> {
                     app_id,
                     name: format!("App {n}"),
                     link_path: format!("steam://rungameid/{n}"),
-                    link_mtime: 0,
+                    source_modified_at: 0,
                     target_path: format!("appmanifest_{n}.acf"),
                     launch_arguments: None,
                     provider_icon: None,
-                    target_mtime: 0,
+                    target_modified_at: 0,
                     icon_location: String::new(),
                     icon_index: 0,
                     version: String::new(),
@@ -275,7 +275,7 @@ fn restart_additions_and_removals_invalidate_undo_but_icon_updates_do_not() {
     let mut icons = snapshot(2);
     icons.values_mut().for_each(|e| {
         e.icon_location = "updated.png".into();
-        e.target_mtime = 8;
+        e.target_modified_at = 8;
     });
     assert!(c
         .prepare_initial_layout(&icons, true, Platform::Windows, false)

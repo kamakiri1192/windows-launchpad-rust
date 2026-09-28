@@ -28,11 +28,24 @@ SQLite is bundled on Windows; macOS uses the system SQLite library.
 
 ## Schema
 
-The canonical schema is [001_initial.sql](../migrations/001_initial.sql):
+The schema is defined by [001_initial.sql](../migrations/001_initial.sql) and
+[002_rename_file_timestamps.sql](../migrations/002_rename_file_timestamps.sql):
 
 - `icons`: rebuildable normalized RGBA images and extraction metadata.
 - `kv`: user-owned JSON blobs (`settings`, `launcher_state`, and Windows
   `identity_aliases`). Initial-layout undo is part of `launcher_state`.
+
+File timestamps use descriptive names rather than `mtime` abbreviations:
+
+- `source_modified_at`: source metadata modification time (Windows shortcut,
+  macOS `Info.plist`, or Steam manifest).
+- `target_modified_at`: target file modification time.
+- `provider_icon_modified_at`: provider artwork modification time.
+
+These are not database-row `updated_at` timestamps. Values keep the scanner's
+existing representation: Windows native scans use FILETIME; macOS and Steam
+scans use Unix milliseconds. Only equality is compared; `0` means unavailable.
+Migration 002 renames columns without converting timestamps or deleting data.
 
 Settings and layout resets commit in one transaction; identity reconciliation
 commits its aliases and layout together. Icon reset only deletes `icons` rows.
@@ -78,15 +91,15 @@ shortcut's current state. The check is `icon_cache::is_cache_valid`:
 cached.image.w == CACHED_ICON_SIZE
     && cached.image.h == CACHED_ICON_SIZE
     && cached.extracted_at_version == EXTRACTION_VERSION
-    && cached.link_mtime    == probe.link_mtime
-    && cached.target_path   == probe.target_path
-    && cached.target_mtime  == probe.target_mtime
+    && cached.source_modified_at == probe.source_modified_at
+    && cached.target_path == probe.target_path
+    && cached.target_modified_at == probe.target_modified_at
     && cached.icon_location == probe.icon_location
     && cached.icon_index    == probe.icon_index
     && cached.provider_icon.as_ref() == probe.provider_icon
 ```
 
-Provider artwork has its own path and mtime, independent of the selected launch
+Provider artwork has its own path and modification time, independent of the selected launch
 route and its target metadata. Adding a provider source invalidates only the
 affected app\'s icon.
 
@@ -95,9 +108,9 @@ A single mismatch → re-extract. Concretely, the cache is invalidated when:
 | Condition                              | Why                                            |
 | -------------------------------------- | ---------------------------------------------- |
 | `.lnk` path is new (no row)            | never extracted                                |
-| `.lnk` mtime changed                   | shortcut file was rewritten                    |
+| source modification time changed        | shortcut, Info.plist, or manifest was updated   |
 | resolved target path changed           | shortcut now points elsewhere                  |
-| target mtime changed                   | target exe/dll was updated                     |
+| target modification time changed        | target file was updated                        |
 | `IconLocation` string changed          | shortcut's explicit icon was re-pointed        |
 | provider artwork added, removed, moved, or updated | preferred artwork changed |
 | icon index changed                     | icon within the location changed               |

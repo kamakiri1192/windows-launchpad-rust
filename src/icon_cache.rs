@@ -66,9 +66,9 @@ pub struct CachedIcon {
     pub app_id: AppId,
     pub link_path: String,
     pub display_name: String,
-    pub link_mtime: u64,
+    pub source_modified_at: u64,
     pub target_path: String,
-    pub target_mtime: u64,
+    pub target_modified_at: u64,
     pub icon_location: String,
     pub icon_index: i32,
     pub provider_icon: Option<IconSource>,
@@ -83,9 +83,9 @@ pub struct CachedIcon {
 #[derive(Debug, Clone)]
 pub struct CacheProbe<'a> {
     pub app_id: &'a AppId,
-    pub link_mtime: u64,
+    pub source_modified_at: u64,
     pub target_path: &'a str,
-    pub target_mtime: u64,
+    pub target_modified_at: u64,
     pub icon_location: &'a str,
     pub icon_index: i32,
     pub provider_icon: Option<&'a IconSource>,
@@ -129,9 +129,9 @@ impl IconCache {
         let conn = self.conn.lock().expect("cache mutex poisoned");
         let row = conn
             .query_row(
-                "SELECT link_path, display_name, link_mtime, target_path, target_mtime,
+                "SELECT link_path, display_name, source_modified_at, target_path, target_modified_at,
                         icon_location, icon_index, image_w, image_h, image_rgba,
-                        extraction_version, category, scale, provider_icon_path, provider_icon_mtime
+                        extraction_version, category, scale, provider_icon_path, provider_icon_modified_at
                  FROM icons WHERE app_id = ?1",
                 params![probe.app_id.as_ref()],
                 |r| {
@@ -140,20 +140,20 @@ impl IconCache {
                     let rgba: Vec<u8> = r.get("image_rgba")?;
                     let cat_str: String = r.get("category")?;
                     let cat = IconCategory::from_str_lossy(&cat_str);
-                    let provider_mtime = r.get::<_, i64>("provider_icon_mtime")? as u64;
+                    let provider_modified_at = r.get::<_, i64>("provider_icon_modified_at")? as u64;
                     Ok(CachedIcon {
                         app_id: probe.app_id.clone(),
                         link_path: r.get::<_, String>("link_path")?,
                         display_name: r.get::<_, String>("display_name")?,
-                        link_mtime: r.get::<_, i64>("link_mtime")? as u64,
+                        source_modified_at: r.get::<_, i64>("source_modified_at")? as u64,
                         target_path: r.get::<_, String>("target_path")?,
-                        target_mtime: r.get::<_, i64>("target_mtime")? as u64,
+                        target_modified_at: r.get::<_, i64>("target_modified_at")? as u64,
                         icon_location: r.get::<_, String>("icon_location")?,
                         icon_index: r.get::<_, i64>("icon_index")? as i32,
                         provider_icon: r.get::<_, Option<String>>("provider_icon_path")?.map(
                             |path| IconSource {
                                 path,
-                                mtime: provider_mtime,
+                                modified_at: provider_modified_at,
                             },
                         ),
                         image: DecodedIcon {
@@ -183,17 +183,17 @@ impl IconCache {
         let conn = self.conn.lock().expect("cache mutex poisoned");
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, target_path,
-                                target_mtime, icon_location, icon_index, image_w, image_h,
+            "INSERT INTO icons (app_id, link_path, display_name, source_modified_at, target_path,
+                                target_modified_at, icon_location, icon_index, image_w, image_h,
                                 image_rgba, extraction_version, category, scale,
-                                last_seen_at, provider_icon_path, provider_icon_mtime)
+                                last_seen_at, provider_icon_path, provider_icon_modified_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
              ON CONFLICT(app_id) DO UPDATE SET
                link_path=excluded.link_path,
                display_name=excluded.display_name,
-               link_mtime=excluded.link_mtime,
+               source_modified_at=excluded.source_modified_at,
                target_path=excluded.target_path,
-               target_mtime=excluded.target_mtime,
+               target_modified_at=excluded.target_modified_at,
                icon_location=excluded.icon_location,
                icon_index=excluded.icon_index,
                image_w=excluded.image_w,
@@ -204,14 +204,14 @@ impl IconCache {
                scale=excluded.scale,
                last_seen_at=excluded.last_seen_at,
                provider_icon_path=excluded.provider_icon_path,
-               provider_icon_mtime=excluded.provider_icon_mtime",
+               provider_icon_modified_at=excluded.provider_icon_modified_at",
             params![
                 entry.app_id.as_ref(),
                 entry.link_path,
                 entry.display_name,
-                entry.link_mtime as i64,
+                entry.source_modified_at as i64,
                 entry.target_path,
-                entry.target_mtime as i64,
+                entry.target_modified_at as i64,
                 entry.icon_location,
                 entry.icon_index as i64,
                 entry.image.w as i64,
@@ -222,7 +222,10 @@ impl IconCache {
                 entry.scale as f64,
                 now_unix(),
                 entry.provider_icon.as_ref().map(|icon| icon.path.as_str()),
-                entry.provider_icon.as_ref().map_or(0, |icon| icon.mtime) as i64,
+                entry
+                    .provider_icon
+                    .as_ref()
+                    .map_or(0, |icon| icon.modified_at) as i64,
             ],
         )?;
         tx.commit()
@@ -518,9 +521,9 @@ pub fn is_cache_valid(probe: &CacheProbe<'_>, cached: &CachedIcon) -> bool {
     cached.image.w == CACHED_ICON_SIZE
         && cached.image.h == CACHED_ICON_SIZE
         && cached.extracted_at_version == EXTRACTION_VERSION
-        && cached.link_mtime == probe.link_mtime
+        && cached.source_modified_at == probe.source_modified_at
         && cached.target_path == probe.target_path
-        && cached.target_mtime == probe.target_mtime
+        && cached.target_modified_at == probe.target_modified_at
         && cached.icon_location == probe.icon_location
         && cached.icon_index == probe.icon_index
         && cached.provider_icon.as_ref() == probe.provider_icon
@@ -635,14 +638,14 @@ mod tests {
         open_at(Path::new(":memory:")).expect("open in-memory cache")
     }
 
-    pub(super) fn entry(app_id: &str, mtime: u64) -> CachedIcon {
+    pub(super) fn entry(app_id: &str, modified_at: u64) -> CachedIcon {
         CachedIcon {
             app_id: AppId::from_normalized(app_id.to_string()),
             link_path: format!("C:\\{app_id}.lnk"),
             display_name: app_id.to_string(),
-            link_mtime: mtime,
+            source_modified_at: modified_at,
             target_path: String::new(),
-            target_mtime: 0,
+            target_modified_at: 0,
             icon_location: String::new(),
             icon_index: 0,
             provider_icon: None,
@@ -653,12 +656,12 @@ mod tests {
         }
     }
 
-    fn probe<'a>(app_id: &'a AppId, mtime: u64) -> CacheProbe<'a> {
+    fn probe<'a>(app_id: &'a AppId, modified_at: u64) -> CacheProbe<'a> {
         CacheProbe {
             app_id,
-            link_mtime: mtime,
+            source_modified_at: modified_at,
             target_path: "",
-            target_mtime: 0,
+            target_modified_at: 0,
             icon_location: "",
             icon_index: 0,
             provider_icon: None,
@@ -688,7 +691,7 @@ mod tests {
         c.put(&e).unwrap();
         let source = IconSource {
             path: "library/game.exe".into(),
-            mtime: 20,
+            modified_at: 20,
         };
         let mut p = probe(&app, 10);
         p.provider_icon = Some(&source);
@@ -700,7 +703,7 @@ mod tests {
             e.provider_icon
         );
         let updated = IconSource {
-            mtime: 21,
+            modified_at: 21,
             ..source.clone()
         };
         p.provider_icon = Some(&updated);
@@ -723,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn mtime_change_invalidates() {
+    fn modified_at_change_invalidates() {
         let c = cache();
         c.put(&entry("app1", 10)).unwrap();
         let app = id("app1");

@@ -217,7 +217,7 @@ impl App {
     /// transparent, resets each app's icon state to `Missing`, then re-queues
     /// the whole app set against the worker — so the visible page refills
     /// progressively without restarting the launcher. The current snapshot
-    /// (names/targets/mtimes) is reused, so no Start Menu rescan is needed.
+    /// (names/targets/modification times) is reused, so no Start Menu rescan is needed.
     pub(crate) fn reset_icons(&mut self) {
         eprintln!("icon-cache: manual reset requested — clearing cache + re-extracting");
 
@@ -269,9 +269,9 @@ impl App {
                     app_id: id.clone(),
                     name: entry.name.clone(),
                     link_path: PathBuf::from(&entry.link_path),
-                    link_mtime: entry.link_mtime,
+                    source_modified_at: entry.source_modified_at,
                     target_path: entry.target_path.clone(),
-                    target_mtime: entry.target_mtime,
+                    target_modified_at: entry.target_modified_at,
                     icon_location: entry.icon_location.clone(),
                     icon_index: entry.icon_index,
                     provider_icon: entry.provider_icon.clone(),
@@ -384,9 +384,9 @@ impl App {
                 app_id: id.clone(),
                 name: entry.name.clone(),
                 link_path: PathBuf::from(&entry.link_path),
-                link_mtime: entry.link_mtime,
+                source_modified_at: entry.source_modified_at,
                 target_path: entry.target_path.clone(),
-                target_mtime: entry.target_mtime,
+                target_modified_at: entry.target_modified_at,
                 icon_location: entry.icon_location.clone(),
                 icon_index: entry.icon_index,
                 provider_icon: entry.provider_icon.clone(),
@@ -440,9 +440,9 @@ impl App {
     pub(crate) fn apply_cache_if_available(&mut self, id: &AppId, entry: &SnapshotEntry) -> usize {
         let probe = CacheProbe {
             app_id: id,
-            link_mtime: entry.link_mtime,
+            source_modified_at: entry.source_modified_at,
             target_path: &entry.target_path,
-            target_mtime: entry.target_mtime,
+            target_modified_at: entry.target_modified_at,
             icon_location: &entry.icon_location,
             icon_index: entry.icon_index,
             provider_icon: entry.provider_icon.as_ref(),
@@ -563,9 +563,9 @@ impl App {
             };
             let probe = CacheProbe {
                 app_id: id,
-                link_mtime: entry.link_mtime,
+                source_modified_at: entry.source_modified_at,
                 target_path: &entry.target_path,
-                target_mtime: entry.target_mtime,
+                target_modified_at: entry.target_modified_at,
                 icon_location: &entry.icon_location,
                 icon_index: entry.icon_index,
                 provider_icon: entry.provider_icon.as_ref(),
@@ -587,9 +587,9 @@ impl App {
                         app_id: id.clone(),
                         name: entry.name.clone(),
                         link_path: PathBuf::from(&entry.link_path),
-                        link_mtime: entry.link_mtime,
+                        source_modified_at: entry.source_modified_at,
                         target_path: entry.target_path.clone(),
-                        target_mtime: entry.target_mtime,
+                        target_modified_at: entry.target_modified_at,
                         icon_location: entry.icon_location.clone(),
                         icon_index: entry.icon_index,
                         provider_icon: entry.provider_icon.clone(),

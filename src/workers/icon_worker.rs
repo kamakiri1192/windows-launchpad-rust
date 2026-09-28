@@ -46,9 +46,9 @@ pub struct IconRequest {
     pub link_path: PathBuf,
     /// Snapshot fields used as the cache key (so the worker can validate /
     /// store against them without re-resolving the `.lnk`).
-    pub link_mtime: u64,
+    pub source_modified_at: u64,
     pub target_path: String,
-    pub target_mtime: u64,
+    pub target_modified_at: u64,
     pub icon_location: String,
     pub icon_index: i32,
     pub provider_icon: Option<IconSource>,
@@ -225,9 +225,9 @@ fn process_one(
         app_id: req.app_id.clone(),
         link_path: req.link_path.to_string_lossy().into_owned(),
         display_name: req.name.clone(),
-        link_mtime: req.link_mtime,
+        source_modified_at: req.source_modified_at,
         target_path: req.target_path.clone(),
-        target_mtime: req.target_mtime,
+        target_modified_at: req.target_modified_at,
         icon_location: req.icon_location.clone(),
         icon_index: req.icon_index,
         provider_icon: req.provider_icon.clone(),
@@ -297,9 +297,9 @@ mod tests {
             app_id: AppId::from_normalized("test:123"),
             name: "Arbitrary label".into(),
             link_path: link.into(),
-            link_mtime: 0,
+            source_modified_at: 0,
             target_path: String::new(),
-            target_mtime: 0,
+            target_modified_at: 0,
             icon_location: String::new(),
             icon_index: 0,
             provider_icon: provider,
@@ -332,7 +332,7 @@ mod tests {
                 link,
                 Some(IconSource {
                     path: path.to_string_lossy().into_owned(),
-                    mtime: 1,
+                    modified_at: 1,
                 }),
             );
             let actual = extract_request_icon(&req).unwrap();
@@ -352,7 +352,7 @@ mod tests {
         let path = temporary_artwork();
         req.provider_icon = Some(IconSource {
             path: path.to_string_lossy().into_owned(),
-            mtime: 1,
+            modified_at: 1,
         });
         let missing = extract_request_icon(&req).unwrap();
         assert_eq!(missing.rgba, expected.rgba);

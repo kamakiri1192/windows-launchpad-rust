@@ -480,8 +480,8 @@ mod tests {
                 name: "same label".into(),
                 link_path: source.into(),
                 target_path: "example.exe".into(),
-                link_mtime: 1,
-                target_mtime: 1,
+                source_modified_at: 1,
+                target_modified_at: 1,
                 icon_location: String::new(),
                 icon_index: 0,
                 provider_icon: None,
@@ -518,7 +518,7 @@ mod tests {
         steam.source = Source::Steam;
         steam.entry.provider_icon = Some(IconSource {
             path: "library/game.exe".into(),
-            mtime: 10,
+            modified_at: 10,
         });
         let unrelated = c("other", Some("steam:456"), None);
         let mut aliases = IdentityAliases::default();
@@ -536,11 +536,11 @@ mod tests {
         let entry = &initial[&id];
         assert_eq!(entry.link_path, shell.entry.link_path);
         assert_eq!(entry.target_path, shell.entry.target_path);
-        assert_eq!(entry.target_mtime, shell.entry.target_mtime);
+        assert_eq!(entry.target_modified_at, shell.entry.target_modified_at);
         assert_eq!(entry.provider_icon, steam.entry.provider_icon);
         assert_eq!(aliases.source_of(&id), Some(Source::Shell));
 
-        steam.entry.provider_icon.as_mut().unwrap().mtime += 1;
+        steam.entry.provider_icon.as_mut().unwrap().modified_at += 1;
         let refreshed = scan(
             &mut aliases,
             &mut layout,

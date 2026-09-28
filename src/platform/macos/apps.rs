@@ -163,9 +163,9 @@ fn snapshot_entry_checked(
         app_id,
         name,
         link_path: bundle_path.to_string_lossy().into_owned(),
-        link_mtime: file_mtime(&info_path),
+        source_modified_at: file_modified_at(&info_path),
         target_path: target_path.to_string_lossy().into_owned(),
-        target_mtime: file_mtime(target_path),
+        target_modified_at: file_modified_at(target_path),
         icon_location: icon_path
             .as_deref()
             .map(|path| path.to_string_lossy().into_owned())
@@ -359,7 +359,7 @@ fn resolve_icon_path(bundle_path: &Path, dictionary: &Dictionary) -> Option<Path
         .find(|path| path.extension().is_some_and(|ext| ext == "icns"))
 }
 
-fn file_mtime(path: &Path) -> u64 {
+fn file_modified_at(path: &Path) -> u64 {
     path.metadata()
         .and_then(|metadata| metadata.modified())
         .ok()
