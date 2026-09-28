@@ -100,7 +100,8 @@ impl App {
 
     /// Persist the current display order so it survives across launches. Called
     /// after a drag-to-reorder completes (and on hide). Phase 7 routes this
-    /// through the unified launcher state.
+    /// through the unified launcher state; this method is kept as the
+    /// edit-mode command target so the command boundary stays stable.
     pub(crate) fn persist_user_order(&mut self) {
         self.persist_launcher_state();
     }
@@ -179,7 +180,7 @@ impl App {
         self.folder_scroll_pending_commit = false;
         // The menu is also transient window state. Reset it synchronously on
         // hide instead of leaving an Opening/Closing menu to capture input
-        // from the launcher beneath it.
+        // after the next summon.
         self.context_menu = crate::features::context_menu::ContextMenuState::default();
         self.clear_context_menu_presentation();
         self.pending_press = None;
@@ -261,7 +262,8 @@ impl App {
         }
         self.visible = true;
         // Record the summon time before the first staged frame. This keeps
-        // the focus grace period aligned with the user's summon action.
+        // the focus grace period aligned with the user's summon action even
+        // though native visibility is intentionally delayed by one frame.
         self.last_summon = Some(Instant::now());
 
         if !was_visible {
@@ -974,7 +976,9 @@ mod tests {
         assert!(prompt.contains("A file version is not necessarily the marketed app version"));
         assert!(prompt.contains("Do not invent a purpose, interface, or tutorial"));
         assert!(prompt.contains("system component, helper, or command-line tool"));
-        assert!(prompt.find("## VERIFY FIRST") < prompt.find("## ANSWER SHAPE"));
+        let verification = prompt.find("## VERIFY FIRST").expect("verification section");
+        let answer = prompt.find("## ANSWER SHAPE").expect("answer section");
+        assert!(verification < answer);
     }
 
     #[test]
@@ -1031,7 +1035,12 @@ mod tests {
         };
         let prompt = build_chatgpt_prompt_for_locale(&info, "en-US");
         assert!(prompt.contains("MysteryApp on"));
-        for label in ["Version:", "Developer:", "Product name:", "Bundle identifier:"] {
+        for label in [
+            "Version:",
+            "Developer:",
+            "Product name:",
+            "Bundle identifier:",
+        ] {
             assert!(!prompt.contains(label), "unexpected metadata {label}");
         }
     }
