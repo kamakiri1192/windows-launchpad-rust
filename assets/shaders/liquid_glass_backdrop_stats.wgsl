@@ -1,3 +1,6 @@
+// Capture-wide diagnostic ONLY. Rendering evaluates the current pixel in the
+// final fragment shader and never waits for this sampled/read-back value.
+// Keep the uniform/state ABI and update modes for existing HUD consumers.
 struct AutoDarknessUniforms {
     now: f32,
     mode: u32,
@@ -26,25 +29,38 @@ var<workgroup> coverage_values: array<f32, 256>;
 var<workgroup> probe_values: array<f32, 16>;
 var<workgroup> run_full_classification: u32;
 
-fn luma(rgb: vec3<f32>) -> f32 {
-    return dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
+fn diagnostic_decode(v: f32) -> f32 {
+    let c = max(v, 0.0);
+    return select(c / 12.92, pow((c + 0.055) / 1.055, 2.4), c > 0.04045);
 }
 
-fn chroma(rgb: vec3<f32>) -> f32 {
-    return max(rgb.r, max(rgb.g, rgb.b)) - min(rgb.r, min(rgb.g, rgb.b));
+fn diagnostic_encode(v: f32) -> f32 {
+    let c = max(v, 0.0);
+    return select(c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055, c > 0.0031308);
 }
 
-fn white_score(rgb: vec3<f32>) -> f32 {
-    let bright = smoothstep(0.68, 0.90, luma(rgb));
-    let neutral = 1.0 - smoothstep(0.10, 0.26, chroma(rgb));
-    return bright * neutral;
+// Equivalent neutral-sRGB attenuation at the sample's luminance, normalized
+// by the configured cap. It is NOT a scene-wide value applied to all glass.
+fn diagnostic_score(rgb: vec3<f32>) -> f32 {
+    let cap = clamp(u.max_darkness, 0.0, 1.0);
+    let linear_rgb = vec3<f32>(diagnostic_decode(rgb.r),
+        diagnostic_decode(rgb.g), diagnostic_decode(rgb.b));
+    let y = dot(linear_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if cap <= 0.0 || y <= 0.0 {
+        return 0.0;
+    }
+    if cap >= 1.0 {
+        return 1.0;
+    }
+    let white = diagnostic_decode(1.0 - cap);
+    let gain = white / (white + (1.0 - white) * clamp(y, 0.0, 1.0));
+    return clamp((1.0 - diagnostic_encode(y * gain) / diagnostic_encode(y)) / cap, 0.0, 1.0);
 }
 
-fn interpolated_darkness(now: f32) -> f32 {
-    let duration = select(0.30, 0.18, state.target_darkness > state.from_darkness);
-    let t = clamp((now - state.transition_started_at) / duration, 0.0, 1.0);
-    let eased = t * t * (3.0 - 2.0 * t);
-    return mix(state.from_darkness, state.target_darkness, eased);
+// Legacy helper name retained for the diagnostic contract. There is no
+// interpolation or history-dependent adaptation in the new color transform.
+fn interpolated_darkness(_now: f32) -> f32 {
+    return clamp(state.target_darkness, 0.0, clamp(u.max_darkness, 0.0, 1.0));
 }
 
 fn sample_grid(grid_size: u32, x: u32, y: u32) -> vec3<f32> {
@@ -57,13 +73,8 @@ fn cs_main(
     @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(local_invocation_index) index: u32,
 ) {
-    // Adaptive mode runs a 4x4 probe for every new capture. Full 16x16
-    // classification wakes immediately when the probe changes, remains at
-    // full rate near the decision boundary, and otherwise settles to 8 Hz.
     if u.mode == 1u && index < 16u {
-        let probe_x = index % 4u;
-        let probe_y = index / 4u;
-        probe_values[index] = white_score(sample_grid(4u, probe_x, probe_y));
+        probe_values[index] = diagnostic_score(sample_grid(4u, index % 4u, index / 4u));
     }
     workgroupBarrier();
 
@@ -71,7 +82,6 @@ fn cs_main(
         let force = (u.flags & 1u) != 0u;
         let elapsed = u.now - state.last_full_update_at;
         var should_run = force || state.initialized == 0u;
-
         if u.mode == 0u {
             should_run = true;
         } else if u.mode == 2u {
@@ -85,25 +95,16 @@ fn cs_main(
             should_run = should_run || elapsed >= 0.125 || probe_delta >= 0.035;
         }
         run_full_classification = select(0u, 1u, should_run);
-    }
-    workgroupBarrier();
-
-    // Keep transition evaluation at the capture/display cadence even when a
-    // stable backdrop skips the expensive 16x16 classification. The final
-    // fragment pass then reads one scalar instead of repeating this math for
-    // every covered pixel.
-    if index == 0u {
+        // Also clamp a stale diagnostic when the maximum is lowered.
         state.displayed_darkness = interpolated_darkness(u.now);
     }
-
+    workgroupBarrier();
     if run_full_classification == 0u {
         return;
     }
 
-    let rgb = sample_grid(16u, local_id.x, local_id.y);
-    coverage_values[index] = white_score(rgb);
+    coverage_values[index] = diagnostic_score(sample_grid(16u, local_id.x, local_id.y));
     workgroupBarrier();
-
     var stride = 128u;
     loop {
         if index < stride {
@@ -117,30 +118,16 @@ fn cs_main(
     }
 
     if index == 0u {
-        let coverage = coverage_values[0] / 256.0;
-        let elapsed = max(u.now - state.last_full_update_at, 0.0);
-        let filter_alpha = select(
-            1.0 - exp(-elapsed / 0.12),
-            1.0,
-            state.initialized == 0u,
-        );
-        let filtered = mix(state.filtered_coverage, coverage, filter_alpha);
-        let next_target = smoothstep(0.55, 0.82, filtered) * clamp(u.max_darkness, 0.0, 1.0);
-
-        if state.initialized == 0u {
-            state.from_darkness = 0.0;
-            state.target_darkness = next_target;
-            state.transition_started_at = u.now;
-            state.initialized = 1u;
-        } else if abs(next_target - state.target_darkness) >= 0.001 {
-            state.from_darkness = state.displayed_darkness;
-            state.target_darkness = next_target;
-            state.transition_started_at = u.now;
-        }
-
-        state.filtered_coverage = filtered;
+        let mean_score = coverage_values[0] / 256.0;
+        let next_target = mean_score * clamp(u.max_darkness, 0.0, 1.0);
+        state.from_darkness = next_target;
+        state.target_darkness = next_target;
+        state.transition_started_at = u.now;
+        state.filtered_coverage = mean_score;
         state.last_full_update_at = u.now;
+        state.initialized = 1u;
         state.classification_count += 1u;
+        state.displayed_darkness = interpolated_darkness(u.now);
         if u.mode == 1u {
             for (var i = 0u; i < 16u; i++) {
                 state.probe_samples[i] = probe_values[i];
