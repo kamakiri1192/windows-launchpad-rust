@@ -14,7 +14,7 @@ that drives re-extraction.
 - A `.lnk` added to the Start Menu while the launcher is open appears in the
   grid (with its icon loaded in the background).
 - A `.lnk` removed from the Start Menu disappears from the grid.
-- A `.lnk` whose mtime / target / `IconLocation` / target-mtime changed gets its
+- A `.lnk` whose modification time / target / `IconLocation` / target modification time changed gets its
   icon re-extracted and replaced.
 - All of the above happens without freezing scrolling, clicks, or exit.
 - While an icon is missing or being re-extracted, the placeholder color tile +
@@ -33,7 +33,7 @@ for both identity and cache invalidation:
 
 - `app_id` (durable catalog ID, legacy path ID or stable `steam:<appid>` id)
 - `name`, `link_path`
-- `link_mtime`, `target_path`, `target_mtime`
+- `source_modified_at`, `target_path`, `target_modified_at`
 - `icon_location`, `icon_index`
 
 On Windows, `app_scan::scan_catalog` collects all AppsFolder entries, Start Menu
@@ -41,7 +41,7 @@ links, desktop links and Steam manifests, with source completion status. The UI
 reconciles identity aliases and user placement before producing the snapshot.
 See [APP_DISCOVERY.md](APP_DISCOVERY.md) for matching and durable migration.
 Other platforms continue to use `scan_start_menu`. Scanning reads metadata and
-mtimes without extracting icon pixels.
+modification times without extracting icon pixels.
 
 Steam discovery remains active when the user disables **Show Steam apps** in
 Settings. The display filter hides Steam entries from both the grid and search,
@@ -58,7 +58,7 @@ updated = ids in both whose entries differ
 ```
 
 `SnapshotEntry::icon_relevant_diff` further classifies an `updated` entry as
-icon-relevant (mtime / target / icon-location / icon-index changed) vs.
+icon-relevant (modification time / target / icon-location / icon-index changed) vs.
 name-only (the icon is unaffected, only the label refreshes).
 
 ## Detection strategy (Phase 4: polling)
@@ -118,7 +118,7 @@ Regular discovery and icon extraction live off the UI thread:
 | ------------------------------------ | --------------------------- |
 | Start Menu recursive scan            | refresh watcher thread      |
 | `.lnk` target/icon-location resolve  | refresh watcher thread      |
-| `GetFileAttributesExW` (mtimes)      | refresh watcher thread      |
+| `GetFileAttributesExW` (modification times)      | refresh watcher thread      |
 | icon extraction (Shell/GDI/COM)      | icon worker thread          |
 | icon-cache writes                    | icon worker thread (via Arc)|
 | Windows ID reconciliation and diff  | UI thread                   |
@@ -148,7 +148,7 @@ do not take this recovery path.
 
 ## Testing
 
-- `app_diff::tests` covers added / removed / updated (mtime + icon-location),
+- `app_diff::tests` covers added / removed / updated (modification time + icon-location),
   name-only changes (updated but not icon-relevant), and the all-three-at-once
   case.
 - `app_scan::tests` verifies a scan returns a well-formed map without panicking

@@ -1,7 +1,7 @@
 //! Scan Start Menu/desktop shortcuts, packaged apps and Steam libraries into records.
 //!
 //! This is the *fast* side of icon loading: it walks the two Start Menu roots,
-//! resolves each `.lnk`'s target + icon location, and reads mtimes — but it
+//! resolves each `.lnk`'s target + icon location, and reads modification times — but it
 //! does **not** touch Shell/GDI for pixels. That separation is what lets us
 //! show the app list + placeholders before any icon is extracted, and what
 //! makes polling-based diff detection cheap.
@@ -162,8 +162,8 @@ pub fn scan_catalog() -> crate::domain::app_catalog::CatalogScan {
                 app_id,
                 name: sc.name,
                 link_path: sc.path.to_string_lossy().into_owned(),
-                link_mtime: extract::file_mtime(&sc.path),
-                target_mtime: extract::file_mtime(Path::new(&meta.target_path)),
+                source_modified_at: extract::file_modified_at(&sc.path),
+                target_modified_at: extract::file_modified_at(Path::new(&meta.target_path)),
                 target_path: meta.target_path,
                 icon_location: meta.icon_location,
                 icon_index: meta.icon_index,

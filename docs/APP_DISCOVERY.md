@@ -44,11 +44,12 @@ placement, including a folder position, and preserves hidden intent. New entries
 receive a one-time app: ID; Steam keeps its provider ID. Reusing a source path
 for a different explicit ID does not inherit the previous application.
 
-user-state.sqlite3, beside the icon cache, stores layout and identity aliases
-in one transaction. It retains the initial migration layout and previous
-transaction as recovery records. The cache is only the migration input. A corrupt
-durable store is reported and never rebuilt/deleted. Icon-cache deletion cannot
-remove durable identity or placement.
+`launchpad.sqlite3` stores icons, settings, layout and identity aliases.
+Layout and identity reconciliation commit in one transaction in its `kv` table.
+There are no separate layout DBs, recovery history keys or legacy-DB fallbacks.
+Startup DB failures exit without deletion or automatic recovery. Icon resets
+delete only `icons` rows and preserve identity and placement.
+See [ICON_CACHE.md](ICON_CACHE.md) for migrations and failure handling.
 
 Failed enumeration protects entries from the affected source; unreadable links
 protect their own locators. Removal requires two complete absent observations.

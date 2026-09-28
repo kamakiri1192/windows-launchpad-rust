@@ -98,21 +98,21 @@ fn scan_steam_apps_at_checked(steam_root: &Path) -> (Vec<SnapshotEntry>, Vec<Str
 
             let icon_path = find_steam_icon(&steam_root, &library, &manifest)
                 .unwrap_or_else(|| fallback_steam_icon(&steam_root));
-            let manifest_mtime = file_mtime(&manifest_path);
-            let icon_mtime = file_mtime(&icon_path);
+            let manifest_modified_at = file_modified_at(&manifest_path);
+            let icon_modified_at = file_modified_at(&icon_path);
             entries.push(SnapshotEntry {
                 launch_arguments: None,
                 app_id: AppId::from_normalized(format!("steam:{}", manifest.app_id)),
                 name: manifest.name,
                 link_path: format!("steam://rungameid/{}", manifest.app_id),
-                link_mtime: manifest_mtime,
+                source_modified_at: manifest_modified_at,
                 target_path: manifest_path.to_string_lossy().into_owned(),
-                target_mtime: manifest_mtime,
+                target_modified_at: manifest_modified_at,
                 icon_location: icon_path.to_string_lossy().into_owned(),
                 icon_index: 0,
                 provider_icon: Some(crate::domain::app_diff::IconSource {
                     path: icon_path.to_string_lossy().into_owned(),
-                    mtime: icon_mtime,
+                    modified_at: icon_modified_at,
                 }),
                 version: String::new(),
                 publisher: String::new(),
@@ -133,7 +133,7 @@ fn fallback_steam_icon(_steam_root: &Path) -> PathBuf {
     PathBuf::from("/Applications/Steam.app")
 }
 
-fn file_mtime(path: &Path) -> u64 {
+fn file_modified_at(path: &Path) -> u64 {
     path.metadata()
         .and_then(|metadata| metadata.modified())
         .ok()
