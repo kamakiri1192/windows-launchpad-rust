@@ -1,10 +1,11 @@
 //! Embedded product catalog; identifiers and sources are documented in
 //! docs/INITIAL_FOLDER_LAYOUT_CATALOG.md.
 use super::super::app_diff::SnapshotEntry;
+mod macos;
 mod products;
 pub(super) mod windows;
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     Windows,
@@ -109,6 +110,20 @@ impl Catalog {
                 "Apple Documents",
                 &[M][..],
             ),
+            (
+                "macos-accessories",
+                "Macアクセサリ",
+                "Mac Accessories",
+                &[M][..],
+            ),
+            (
+                "google-workspace",
+                "Google Workspace",
+                "Google Workspace",
+                &[M][..],
+            ),
+            ("clip-studio", "CLIP STUDIO", "CLIP STUDIO", &[M][..]),
+            ("vocaloid", "VOCALOID", "VOCALOID", &[M][..]),
             ("libreoffice", "LibreOffice", "LibreOffice", &[W, M][..]),
             (
                 "adobe-creative-cloud",
@@ -152,7 +167,7 @@ impl Catalog {
                 "remote-desktop",
                 "リモートデスクトップ",
                 "Remote Desktop",
-                &[W][..],
+                &[W, M][..],
             ),
             (
                 "windows-dev-tools",
@@ -161,8 +176,13 @@ impl Catalog {
                 &[W][..],
             ),
             ("omen", "OMEN", "OMEN", &[W][..]),
-            ("unity-tools", "Unity", "Unity", &[W][..]),
-            ("live2d-cubism", "Live2D Cubism", "Live2D Cubism", &[W][..]),
+            ("unity-tools", "Unity", "Unity", &[W, M][..]),
+            (
+                "live2d-cubism",
+                "Live2D Cubism",
+                "Live2D Cubism",
+                &[W, M][..],
+            ),
             ("razer-tools", "Razer", "Razer", &[W][..]),
             (
                 "windows-accessibility",
@@ -192,17 +212,13 @@ impl Catalog {
                 "jetbrains-ides" => ("JetBrains launcher documentation and Homebrew signed bundle recipes", vec![Rule::JetBrains]),
                 "adobe-creative-cloud" => ("Installed Adobe Windows 2025/2026 shortcuts and executable product/publisher metadata, 2026-09-25", vec![Rule::AdobeCreative]),
                 "libreoffice" => ("https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html", vec![Rule::LibreOffice]),
-                "microsoft-office" => ("https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac and Microsoft Office command-line documentation", vec![
-                    Rule::WindowsOffice,
-                    Rule::MacBundle { bundle: "com.microsoft.Word", product: "word" },
-                    Rule::MacBundle { bundle: "com.microsoft.Excel", product: "excel" },
-                    Rule::MacBundle { bundle: "com.microsoft.Powerpoint", product: "powerpoint" },
-                ]),
+                "microsoft-office" => ("https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac and Microsoft Office command-line documentation", vec![Rule::WindowsOffice]),
                 "steam-library" => ("src/workers/steam_scan.rs manifest records (not name-based)", vec![Rule::Steam]),
                 _ => ("docs/INITIAL_FOLDER_LAYOUT_CATALOG.md", Vec::new()),
             };
             let mut rules = rules;
             products::append_rules(id, &mut rules);
+            macos::append_rules(id, &mut rules);
             Preset { id, japanese_name: ja, english_name: en, platforms, evidence, rules }
         }).collect();
         Self {

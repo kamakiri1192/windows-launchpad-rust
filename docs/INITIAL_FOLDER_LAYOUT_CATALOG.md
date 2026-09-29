@@ -1,7 +1,8 @@
 # 初期フォルダ配置の同梱カタログ
 
-仕様の19候補と追加11候補（Git、Unity、Live2D Cubism、Razer、アクセシビリティ、VRツール、VR Games、リモートデスクトップ、Windows Dev tools、OMEN、Windowsアクセサリ）に対応する。従来のWindowsツールはPC管理へ改めた。定義は `src/domain/initial_layout/catalog.rs`、`catalog/products.rs`、`catalog/windows.rs`。カタログ版は5。
-確認日: 2026-09-25。調査資料は開発時に参照し、実行時にはネットワークへアクセスしない。
+仕様の19候補と追加15候補（Git、Unity、Live2D Cubism、Razer、アクセシビリティ、VRツール、VR Games、リモートデスクトップ、Windows Dev tools、OMEN、Windowsアクセサリ、Macアクセサリ、Google Workspace、CLIP STUDIO、VOCALOID）に対応する。従来のWindowsツールはPC管理へ改めた。定義は `src/domain/initial_layout/catalog.rs`、`catalog/products.rs`、`catalog/windows.rs`、`catalog/macos.rs`。カタログ版は6。
+確認日: Windowsは2026-09-25、Macの追加対応は2026-09-30。調査資料は開発時に参照し、実行時にはネットワークへアクセスしない。
+Macの最新の分類範囲・実機結果・検証方法は[macOSの初期フォルダ分類](MACOS_INITIAL_FOLDER_LAYOUT.md)を参照する。以下の旧版確認資料も識別子の根拠として維持する。
 
 ## 共通の判定
 

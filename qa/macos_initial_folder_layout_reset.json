@@ -1,0 +1,439 @@
+{
+  "name": "macos-initial-folder-layout-reset",
+  "viewport": [
+    1920,
+    1200
+  ],
+  "scale_factor": 1.0,
+  "fps": 15,
+  "duration_ms": 5000,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      {
+        "id": "mac:com.adobe.AfterEffects.application",
+        "name": "Adobe After Effects 2026",
+        "identifier": "com.adobe.AfterEffects.application",
+        "target_path": "/Applications/Adobe After Effects 2026.app"
+      },
+      {
+        "id": "mac:com.adobe.bridge",
+        "name": "Adobe Bridge 2025",
+        "identifier": "com.adobe.bridge",
+        "target_path": "/Applications/Adobe Bridge 2025.app"
+      },
+      {
+        "id": "mac:com.seriflabs.affinitydesigner",
+        "name": "Affinity Designer",
+        "identifier": "com.seriflabs.affinitydesigner",
+        "target_path": "/Applications/Affinity Designer.app"
+      },
+      {
+        "id": "mac:com.seriflabs.affinityphoto",
+        "name": "Affinity Photo",
+        "identifier": "com.seriflabs.affinityphoto",
+        "target_path": "/Applications/Affinity Photo.app"
+      },
+      {
+        "id": "mac:com.apple.Pages",
+        "name": "Pages Creator Studio",
+        "identifier": "com.apple.Pages",
+        "target_path": "/Applications/Pages Creator Studio.app"
+      },
+      {
+        "id": "mac:com.apple.iWork.Keynote",
+        "name": "Keynote",
+        "identifier": "com.apple.iWork.Keynote",
+        "target_path": "/Applications/Keynote.app"
+      },
+      {
+        "id": "mac:jp.co.celsys.CLIPSTUDIO",
+        "name": "CLIP STUDIO",
+        "identifier": "jp.co.celsys.CLIPSTUDIO",
+        "target_path": "/Applications/CLIP STUDIO.app"
+      },
+      {
+        "id": "mac:jp.co.celsys.CLIPSTUDIOPAINT",
+        "name": "CLIP STUDIO PAINT",
+        "identifier": "jp.co.celsys.CLIPSTUDIOPAINT",
+        "target_path": "/Applications/CLIP STUDIO PAINT.app"
+      },
+      {
+        "id": "mac:com.google.drivefs.shortcuts.docs",
+        "name": "Google Docs",
+        "identifier": "com.google.drivefs.shortcuts.docs",
+        "target_path": "/Applications/Google Docs.app"
+      },
+      {
+        "id": "mac:com.google.drivefs.shortcuts.sheets",
+        "name": "Google Sheets",
+        "identifier": "com.google.drivefs.shortcuts.sheets",
+        "target_path": "/Applications/Google Sheets.app"
+      },
+      {
+        "id": "mac:com.jetbrains.PhpStorm",
+        "name": "PhpStorm",
+        "identifier": "com.jetbrains.PhpStorm",
+        "target_path": "/Applications/PhpStorm.app"
+      },
+      {
+        "id": "mac:com.jetbrains.air",
+        "name": "Air",
+        "identifier": "com.jetbrains.air",
+        "target_path": "/Applications/Air.app"
+      },
+      {
+        "id": "mac:com.live2d.cubism.CECubismEditorApp",
+        "name": "Live2D Cubism Editor 5.3",
+        "identifier": "com.live2d.cubism.CECubismEditorApp",
+        "target_path": "/Applications/Live2D Cubism Editor 5.3.app"
+      },
+      {
+        "id": "mac:com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
+        "name": "Live2D Cubism Viewer 5.3",
+        "identifier": "com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
+        "target_path": "/Applications/Live2D Cubism Viewer 5.3.app"
+      },
+      {
+        "id": "mac:com.apple.Dictionary",
+        "name": "Dictionary",
+        "identifier": "com.apple.Dictionary",
+        "target_path": "/Applications/Dictionary.app"
+      },
+      {
+        "id": "mac:com.apple.QuickTimePlayerX",
+        "name": "QuickTime Player",
+        "identifier": "com.apple.QuickTimePlayerX",
+        "target_path": "/Applications/QuickTime Player.app"
+      },
+      {
+        "id": "mac:com.apple.ActivityMonitor",
+        "name": "Activity Monitor",
+        "identifier": "com.apple.ActivityMonitor",
+        "target_path": "/Applications/Activity Monitor.app"
+      },
+      {
+        "id": "mac:com.apple.Automator",
+        "name": "Automator",
+        "identifier": "com.apple.Automator",
+        "target_path": "/Applications/Automator.app"
+      },
+      {
+        "id": "mac:net.maxon.cinema4d",
+        "name": "Cinema 4D",
+        "identifier": "net.maxon.cinema4d",
+        "target_path": "/Applications/Cinema 4D.app"
+      },
+      {
+        "id": "mac:net.maxon.cinema4dclient",
+        "name": "Cinema 4D Team Render Client",
+        "identifier": "net.maxon.cinema4dclient",
+        "target_path": "/Applications/Cinema 4D Team Render Client.app"
+      },
+      {
+        "id": "mac:com.apple.ScreenSharing",
+        "name": "Screen Sharing",
+        "identifier": "com.apple.ScreenSharing",
+        "target_path": "/Applications/Screen Sharing.app"
+      },
+      {
+        "id": "mac:tv.parsec.www",
+        "name": "Parsec",
+        "identifier": "tv.parsec.www",
+        "target_path": "/Applications/Parsec.app"
+      },
+      {
+        "id": "mac:com.steinberg.cubasesoft13",
+        "name": "Cubase LE AI Elements 13",
+        "identifier": "com.steinberg.cubasesoft13",
+        "target_path": "/Applications/Cubase LE AI Elements 13.app"
+      },
+      {
+        "id": "mac:com.steinberg.vst3.GrooveAgentSEStandalone",
+        "name": "Groove Agent SE",
+        "identifier": "com.steinberg.vst3.GrooveAgentSEStandalone",
+        "target_path": "/Applications/Groove Agent SE.app"
+      },
+      {
+        "id": "mac:com.unity3d.UnityEditor5.x",
+        "name": "Unity",
+        "identifier": "com.unity3d.UnityEditor5.x",
+        "target_path": "/Applications/Unity.app"
+      },
+      {
+        "id": "mac:com.unity3d.unityhub",
+        "name": "Unity Hub",
+        "identifier": "com.unity3d.unityhub",
+        "target_path": "/Applications/Unity Hub.app"
+      },
+      {
+        "id": "mac:com.yamaha.VOCALOID-Authorizer",
+        "name": "VOCALOID Authorizer",
+        "identifier": "com.yamaha.VOCALOID-Authorizer",
+        "target_path": "/Applications/VOCALOID Authorizer.app"
+      },
+      {
+        "id": "mac:com.yamaha.VOCALOID6-Editor",
+        "name": "VOCALOID6 Editor",
+        "identifier": "com.yamaha.VOCALOID6-Editor",
+        "target_path": "/Applications/VOCALOID6 Editor.app"
+      },
+      {
+        "id": "mac:com.apple.Safari",
+        "name": "Safari",
+        "identifier": "com.apple.Safari",
+        "target_path": "/Applications/Safari.app"
+      },
+      {
+        "id": "mac:com.apple.calculator",
+        "name": "Calculator",
+        "identifier": "com.apple.calculator",
+        "target_path": "/Applications/Calculator.app"
+      },
+      {
+        "id": "mac:com.apple.systempreferences",
+        "name": "System Settings",
+        "identifier": "com.apple.systempreferences",
+        "target_path": "/Applications/System Settings.app"
+      }
+    ],
+    "items": [
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.AfterEffects.application"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.bridge"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.seriflabs.affinitydesigner"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.seriflabs.affinityphoto"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Pages"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.iWork.Keynote"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.co.celsys.CLIPSTUDIO"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.co.celsys.CLIPSTUDIOPAINT"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.drivefs.shortcuts.docs"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.drivefs.shortcuts.sheets"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.PhpStorm"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.air"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.live2d.cubism.CECubismEditorApp"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Dictionary"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.QuickTimePlayerX"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ActivityMonitor"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Automator"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.maxon.cinema4d"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.maxon.cinema4dclient"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScreenSharing"
+      },
+      {
+        "kind": "app",
+        "id": "mac:tv.parsec.www"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.steinberg.cubasesoft13"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.steinberg.vst3.GrooveAgentSEStandalone"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.unity3d.UnityEditor5.x"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.unity3d.unityhub"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.yamaha.VOCALOID-Authorizer"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.yamaha.VOCALOID6-Editor"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Safari"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.calculator"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.systempreferences"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 0,
+      "type": "initialize_folders",
+      "japanese": true
+    },
+    {
+      "at_ms": 700,
+      "type": "open_folder",
+      "id": "folder-12"
+    },
+    {
+      "at_ms": 1300,
+      "type": "escape"
+    },
+    {
+      "at_ms": 1850,
+      "type": "toggle_settings"
+    },
+    {
+      "at_ms": 2300,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "undo-initial-layout"
+      }
+    },
+    {
+      "at_ms": 2350,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2500,
+      "type": "escape"
+    },
+    {
+      "at_ms": 2850,
+      "type": "toggle_settings"
+    },
+    {
+      "at_ms": 3200,
+      "type": "move",
+      "target": {
+        "kind": "settings_category",
+        "key": "system"
+      }
+    },
+    {
+      "at_ms": 3250,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 3300,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 3600,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "reset-settings"
+      }
+    },
+    {
+      "at_ms": 3650,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 3700,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 3900,
+      "type": "move",
+      "target": {
+        "kind": "settings_category",
+        "key": "apps"
+      }
+    },
+    {
+      "at_ms": 3950,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 4000,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 4300,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "undo-initial-layout"
+      }
+    },
+    {
+      "at_ms": 4350,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 4400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 4500,
+      "type": "escape"
+    }
+  ]
+}

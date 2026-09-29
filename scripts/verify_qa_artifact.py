@@ -123,6 +123,19 @@ def verify_manifest(manifest_path: Path) -> str:
                 ),
             }
         )
+    elif scenario == "macos-initial-folder-layout-reset":
+        counts: list[int] = []
+        for frame in frames:
+            count = frame.get("top_level_item_count")
+            if count is not None and (not counts or counts[-1] != count):
+                counts.append(count)
+        required_states["classification, undo, reset, undo (17/31/17/31 items)"] = (
+            counts == [17, 31, 17, 31]
+        )
+        required_states["generated Unity folder opens with two children"] = any(
+            frame.get("folder_open") and frame.get("active_folder_child_count") == 2
+            for frame in frames
+        )
     missing = [name for name, present in required_states.items() if not present]
     if missing:
         fail(f"scenario never reached: {', '.join(missing)}")
