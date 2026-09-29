@@ -14,7 +14,7 @@ that drives re-extraction.
 - A `.lnk` added to the Start Menu while the launcher is open appears in the
   grid (with its icon loaded in the background).
 - A `.lnk` removed from the Start Menu disappears from the grid.
-- A `.lnk` whose mtime / target / `IconLocation` / target-mtime changed gets its
+- A `.lnk` whose modification time / target / `IconLocation` / target modification time changed gets its
   icon re-extracted and replaced.
 - All of the above happens without freezing scrolling, clicks, or exit.
 - While an icon is missing or being re-extracted, the placeholder color tile +
@@ -31,15 +31,17 @@ BTreeMap<AppId, SnapshotEntry>
 where `SnapshotEntry` (`app_diff::SnapshotEntry`) carries the fields that matter
 for both identity and cache invalidation:
 
-- `app_id` (normalized `.lnk` path or stable `steam:<appid>` id)
+- `app_id` (durable catalog ID, legacy path ID or stable `steam:<appid>` id)
 - `name`, `link_path`
-- `link_mtime`, `target_path`, `target_mtime`
+- `source_modified_at`, `target_path`, `target_modified_at`
 - `icon_location`, `icon_index`
 
-Snapshots are taken by `app_scan::scan_start_menu`, which walks both Start Menu
-roots plus all Steam library manifests and resolves shortcut/icon metadata. It
-reads mtimes — but does **not** touch Shell/GDI for pixels. A scan is cheap
-enough to repeat periodically.
+On Windows, `app_scan::scan_catalog` collects all AppsFolder entries, Start Menu
+links, desktop links and Steam manifests, with source completion status. The UI
+reconciles identity aliases and user placement before producing the snapshot.
+See [APP_DISCOVERY.md](APP_DISCOVERY.md) for matching and durable migration.
+Other platforms continue to use `scan_start_menu`. Scanning reads metadata and
+modification times without extracting icon pixels.
 
 Steam discovery remains active when the user disables **Show Steam apps** in
 Settings. The display filter hides Steam entries from both the grid and search,
@@ -56,7 +58,7 @@ updated = ids in both whose entries differ
 ```
 
 `SnapshotEntry::icon_relevant_diff` further classifies an `updated` entry as
-icon-relevant (mtime / target / icon-location / icon-index changed) vs.
+icon-relevant (modification time / target / icon-location / icon-index changed) vs.
 name-only (the icon is unaffected, only the label refreshes).
 
 ## Detection strategy (Phase 4: polling)
@@ -65,11 +67,14 @@ name-only (the icon is unaffected, only the label refreshes).
 
 1. sleeps an `initial_delay` (default 2s, so first paint + cached-icon fan-out
    happen first),
-2. takes the first snapshot and sends `RefreshMessage::Initial` to the UI,
-3. every `poll_interval` (default 10s), rescans, diffs, and sends
-   `RefreshMessage::Diff(diff)` for any non-empty diff.
+2. on Windows, sends `RefreshMessage::Catalog` with candidates and source status,
+3. every `poll_interval` (default 10s), repeats that scan. The UI reconciles
+   durable IDs before diffing and skips rendering work for an unchanged catalog.
 
-The UI thread's `App::drain_inbox` turns these into `ingest_snapshot` (initial)
+Other platforms send `RefreshMessage::Initial` followed by nonempty
+`RefreshMessage::Diff` messages as before.
+
+The UI thread's `App::drain_inbox` turns reconciled snapshots into `ingest_snapshot` (initial)
 or `apply_diff` (subsequent) calls. Polling is deliberately simple and robust;
 it has none of the edge cases of directory-change notifications (buffer sizing,
 junction loops, overwritten-file semantics).
@@ -102,25 +107,30 @@ hit-test  →  display index  →  registry.apps()[index].app_id  →  AppLaunch
 
 The `AppLaunchInfo` (name + link_path) is **cloned** before the launcher
 dismisses, so even a concurrent rescan that mutated the registry between the
-pick and the `ShellExecuteW` can't launch the wrong app. The pre-existing
+pick and the `ShellExecuteExW` invocation retains the selected locator. The pre-existing
 "dismiss first, launch second" behavior is preserved.
 
 ## Background-safety
 
-Everything expensive lives off the UI thread:
+Regular discovery and icon extraction live off the UI thread:
 
 | Work                                 | Where it runs               |
 | ------------------------------------ | --------------------------- |
 | Start Menu recursive scan            | refresh watcher thread      |
 | `.lnk` target/icon-location resolve  | refresh watcher thread      |
-| `GetFileAttributesExW` (mtimes)      | refresh watcher thread      |
+| `GetFileAttributesExW` (modification times)      | refresh watcher thread      |
 | icon extraction (Shell/GDI/COM)      | icon worker thread          |
-| SQLite writes                        | icon worker thread (via Arc)|
-| diff computation                     | refresh watcher thread      |
+| icon-cache writes                    | icon worker thread (via Arc)|
+| Windows ID reconciliation and diff  | UI thread                   |
+| durable layout/alias transaction    | UI thread                   |
+| other-platform diff computation     | refresh watcher thread      |
 | registry mutation, atlas blit, redraw| UI thread (cheap)           |
 
-The UI thread only ever: receives results, mutates the registry, blits one cell
-to the GPU, and requests a redraw.
+The UI commits layout and aliases together before applying a Windows migration.
+Unchanged state skips the write and redraw. A launch parsing failure can run one
+synchronous recovery scan after dismissing the window; only a changed locator for
+the same durable app is retried. Normal launch and rejected/cancelled invocations
+do not take this recovery path.
 
 ## Future work
 
@@ -138,7 +148,7 @@ to the GPU, and requests a redraw.
 
 ## Testing
 
-- `app_diff::tests` covers added / removed / updated (mtime + icon-location),
+- `app_diff::tests` covers added / removed / updated (modification time + icon-location),
   name-only changes (updated but not icon-relevant), and the all-three-at-once
   case.
 - `app_scan::tests` verifies a scan returns a well-formed map without panicking

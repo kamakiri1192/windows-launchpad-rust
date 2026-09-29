@@ -13,7 +13,7 @@
 //! [`super::command`], per-frame work in [`super::frame`], and renderer/text
 //! adapters in [`super::render`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -93,6 +93,7 @@ pub enum SettingsPressTarget {
     AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
+    UndoInitialLayout,
     /// Liquid Glass master switch (keyboard equivalent: `V`).
     LiquidGlassEnabled,
     /// Automatically add darkness when the captured backdrop is mostly white.
@@ -116,6 +117,19 @@ pub enum SettingsPressTarget {
     SettingsScrollDown,
     Inside,
     Outside,
+}
+
+/// Pointer-capture state for a settings switch. The retained settings layout
+/// does not receive pointer state, so this small shell-owned record carries
+/// the drag origin into the per-frame visual overlay and release handler.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SettingsToggleDrag {
+    pub(crate) target: SettingsPressTarget,
+    pub(crate) start_pointer_x: f32,
+    pub(crate) start_progress: f32,
+    pub(crate) current_progress: f32,
+    pub(crate) overdrag_progress: f32,
+    pub(crate) dragging: bool,
 }
 
 impl PendingPress {
@@ -164,6 +178,7 @@ pub(crate) struct OwnedGridItem {
     pub key: String,
     pub name: String,
     pub uv: Option<crate::icons::UvRect>,
+    pub hide_fill: bool,
     /// Ordered first-page preview slots. `None` retains an undiscovered
     /// child's position without drawing it.
     pub preview_uvs: Vec<Option<crate::icons::UvRect>>,
@@ -214,6 +229,7 @@ pub struct App {
     pub timer: StartupTimer,
     pub qa_runner: Option<crate::qa::QaRunner>,
     pub(crate) profile_scroll: Option<ProfileScroll>,
+    pub(crate) launch_presentation: crate::app::launch_presentation::LaunchPresentation,
 
     // ---- app + icon state ----
     pub registry: AppRegistry,
@@ -222,6 +238,18 @@ pub struct App {
     /// add/remove/re-detect cycles without corruption. Drives the visible grid
     /// order; the registry is now only the discovered-app dataset.
     pub launcher_state: LauncherState,
+    #[cfg(windows)]
+    pub catalog_aliases: crate::domain::app_catalog::IdentityAliases,
+    #[cfg(windows)]
+    pub catalog_presence: crate::domain::app_catalog::Presence,
+    #[cfg(windows)]
+    pub catalog_store_writable: bool,
+    pub layout_initial_fresh: bool,
+    pub layout_checkpoint: LauncherState,
+    pub layout_writable: bool,
+    pub layout_session_changed: bool,
+    pub initial_snapshot_ready: bool,
+    pub settings_reset_pending: bool,
     /// CPU-side fixed-slot atlas; the GPU texture mirrors it.
     pub atlas: IconAtlas,
     /// True once the atlas texture has been allocated+uploaded at least once.
@@ -339,6 +367,9 @@ pub struct App {
     pub pressed_on_control: bool,
     /// Settings overlay target pressed by the current pointer down, if any.
     pub pressed_on_settings: Option<SettingsPressTarget>,
+    /// Captured drag state for a settings toggle, if the pointer moved past
+    /// the toggle's drag threshold while held.
+    pub(crate) settings_toggle_drag: Option<SettingsToggleDrag>,
     /// True while the settings overlay panel is shown on top of the grid.
     pub settings_open: bool,
     /// 0..1 presentation progress for the settings panel open/close animation.
@@ -371,12 +402,18 @@ pub struct App {
     /// When a slider knob is being dragged, the Liquid Glass parameter field
     /// it controls. `None` outside an active drag.
     pub settings_slider_drag: Option<crate::domain::settings::LiquidGlassParamField>,
+    pub(crate) settings_slider_visual_states:
+        HashMap<crate::ui_model::ids::UiId, crate::scroll::Spring>,
     /// Cached HitMap from the previous frame's `build_with_ui` call, used for
     /// hit testing in the current frame's input processing (1-frame delay).
     pub cached_settings_hit_map: Option<crate::layout::hit_map::HitMap>,
     /// Retained settings UI geometry/text. Dynamic scene pixels and the
     /// full-screen settings blur deliberately do not live in this cache.
     pub(crate) settings_render_cache: Option<crate::app::render::SettingsRenderCache>,
+    /// Toggle springs must outlive the retained layout cache so a press and
+    /// release can animate across frames without rebuilding the panel.
+    pub(crate) settings_toggle_visual_states:
+        HashMap<crate::ui_model::ids::UiId, crate::ui::widgets::toggle::ToggleVisualState>,
     /// Timestamp of the last redraw, used to compute a real dt for the control
     /// animations (caret blink + morphs).
     pub last_redraw: Option<Instant>,
@@ -446,8 +483,21 @@ impl App {
             timer,
             qa_runner: crate::qa::QaRunner::from_env(),
             profile_scroll: ProfileScroll::from_env(),
+            launch_presentation: crate::app::launch_presentation::LaunchPresentation::default(),
             registry: AppRegistry::new(),
             launcher_state: LauncherState::new(),
+            #[cfg(windows)]
+            catalog_aliases: Default::default(),
+            #[cfg(windows)]
+            catalog_presence: Default::default(),
+            #[cfg(windows)]
+            catalog_store_writable: true,
+            layout_initial_fresh: false,
+            layout_checkpoint: LauncherState::new(),
+            layout_writable: true,
+            layout_session_changed: false,
+            initial_snapshot_ready: false,
+            settings_reset_pending: false,
             atlas: IconAtlas::new(64),
             atlas_uploaded: false,
             snapshot: BTreeMap::new(),
@@ -496,6 +546,7 @@ impl App {
             pointer_over_control: false,
             pressed_on_control: false,
             pressed_on_settings: None,
+            settings_toggle_drag: None,
             settings_open: false,
             settings_panel_progress: 0.0,
             settings_category_hover: [crate::spring_anim::Channel::rest(0.0);
@@ -515,8 +566,10 @@ impl App {
             settings_scroll_rows: 0,
             settings_scroll: ContinuousScroller::new(ContinuousConfig::default()),
             settings_slider_drag: None,
+            settings_slider_visual_states: HashMap::new(),
             cached_settings_hit_map: None,
             settings_render_cache: None,
+            settings_toggle_visual_states: HashMap::new(),
             last_redraw: None,
             last_frame_dt_ms: 0.0,
             visible: true,
@@ -901,6 +954,7 @@ impl App {
                         item,
                         name: record.name.clone(),
                         uv: record.uv,
+                        hide_fill: record.uv.is_some() && record.hide_tile_fill,
                         preview_uvs: Vec::new(),
                     }
                 })
@@ -921,6 +975,7 @@ impl App {
                         key: item.stable_key(),
                         name: record.name.clone(),
                         uv: record.uv,
+                        hide_fill: record.uv.is_some() && record.hide_tile_fill,
                         preview_uvs: Vec::new(),
                     })
                 }
@@ -950,6 +1005,7 @@ impl App {
                         key: item.stable_key(),
                         name: folder.name.clone(),
                         uv: None,
+                        hide_fill: false,
                         preview_uvs,
                     })
                 }
@@ -1003,6 +1059,23 @@ impl App {
         let visible_count = self.visible_launcher_items().len();
         self.layout
             .classify(w as f32, x, y, scroll_x, visible_count)
+    }
+
+    /// Classify an edit-mode press using only each visible item's icon square.
+    /// Labels remain launchable in normal mode, but count as empty page space
+    /// while editing so clicking a name exits edit mode.
+    pub(crate) fn edit_grid_hit_at_pointer(&self, x: f32, y: f32) -> crate::layout::grid::GridHit {
+        let (w, _h) = self.viewport_phys();
+        let scroll_x = self.scroller.as_ref().map(|s| s.position).unwrap_or(0.0);
+        let visible_count = self.visible_launcher_items().len();
+        crate::layout::edit_mode::press_hit_at(
+            &self.layout,
+            w as f32,
+            x,
+            y,
+            scroll_x,
+            visible_count,
+        )
     }
 
     pub(crate) fn pointer_over_page_glass(&self, x: f32, y: f32) -> bool {

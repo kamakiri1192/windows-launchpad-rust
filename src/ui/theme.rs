@@ -41,7 +41,10 @@ impl Default for ToggleMotionStyle {
             thumb_spring_zeta: 0.82,
             press_scale: 1.04,
             hover_scale: 1.01,
-            max_directional_stretch: 0.06,
+            // A pressed thumb already grows into a short capsule. Dragging
+            // may add up to this bounded amount of extra length, so the
+            // switch feels elastic without turning into an unbounded smear.
+            max_directional_stretch: 0.28,
             max_settle_overshoot: 0.04,
             drag_threshold: 3.0,
         }
@@ -124,7 +127,7 @@ mod tests {
         assert_eq!(s.thumb_spring_zeta, 0.82);
         assert_eq!(s.press_scale, 1.04);
         assert_eq!(s.hover_scale, 1.01);
-        assert_eq!(s.max_directional_stretch, 0.06);
+        assert_eq!(s.max_directional_stretch, 0.28);
         assert_eq!(s.max_settle_overshoot, 0.04);
         assert_eq!(s.drag_threshold, 3.0);
     }

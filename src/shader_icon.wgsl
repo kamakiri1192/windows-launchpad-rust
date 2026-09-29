@@ -23,6 +23,10 @@ struct Uniforms {
     drag_active: f32,
     // Pointer position (screen px) the dragged icon follows while dragging.
     drag_pos: vec2<f32>,
+    // Open-transition values: (progress, opacity, start_scale, max_stagger).
+    presentation: vec4<f32>,
+    // Open-transition motion: (start_offset_fraction, _, _, _).
+    presentation_motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -48,6 +52,7 @@ struct VsOut {
     // Copy of the instance flags so the fragment shader can bypass the frame
     // clip for a dragged (lifted) icon.
     @location(3) flags: f32,
+    @location(4) presentation_alpha: f32,
 };
 
 // Flag bit set in `extra.w` while edit mode is active (icon should wiggle).
@@ -56,6 +61,7 @@ const FLAG_WIGGLE: f32 = 1.0;
 const FLAG_DRAG: f32 = 2.0;
 const FLAG_FIXED: f32 = 4.0;
 const FLAG_GROUP_MOTION: f32 = 32.0;
+
 
 // Unit quad: two triangles covering [0,1]x[0,1].
 @vertex
@@ -158,10 +164,25 @@ fn vs_main(
     let cosr = cos(wiggle_rot);
     let sinr = sin(wiggle_rot);
     let rotated = vec2<f32>(rel.x * cosr - rel.y * sinr, rel.x * sinr + rel.y * cosr);
-    let world = vec2<f32>(
+    var world = vec2<f32>(
         center.x + rotated.x,
         center.y + rotated.y - wiggle_dy - applied_lift,
     );
+
+    // Every miniature belongs to the folder pivot, including during reveal.
+    var reveal_pivot = center;
+    if grouped {
+        reveal_pivot = motion_pivot.xy;
+        if dragged && u.drag_active > 0.5 {
+            reveal_pivot = u.drag_pos;
+        } else if !fixed {
+            reveal_pivot.x += u.scroll_x;
+        }
+    }
+    let item_progress = select(launch_item_progress(reveal_pivot, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation), 1.0, fixed || dragged);
+    let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
+    let gather_offset = launch_gather_offset(reveal_pivot, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
+    world = reveal_pivot + (world - reveal_pivot) * reveal_scale + gather_offset;
 
     // Physical px → clip space. Y is flipped so content origin is top-left.
     let half = u.viewport * 0.5;
@@ -172,14 +193,15 @@ fn vs_main(
 
     var out: VsOut;
     out.pos = vec4<f32>(clip, 0.0, 1.0);
-    out.local = local;
-    out.size_r = vec2<f32>(eff_size, radius);
+    out.local = local * reveal_scale;
+    out.size_r = vec2<f32>(eff_size * reveal_scale, radius * reveal_scale);
     // Map quad corner → atlas UV. c.y=1 is the quad's top edge → v0.
     out.uv = vec2<f32>(
         mix(uvrect.x, uvrect.z, c.x),
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.flags = flags;
+    out.presentation_alpha = u.presentation.y * item_progress;
     return out;
 }
 
@@ -211,7 +233,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
         frame_alpha = smoothstep(aa, -aa, fd);
     }
-    let body_a = mask * frame_alpha;
+    let body_a = mask * frame_alpha * in.presentation_alpha;
 
     // Sample straight-alpha from the atlas, then premultiply for correct
     // blending (the pipeline uses PREMULTIPLIED_ALPHA_BLENDING over the tiles).

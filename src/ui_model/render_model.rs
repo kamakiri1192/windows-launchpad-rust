@@ -128,6 +128,10 @@ pub enum GlassLayer {
     /// scene blur can be captured after the Glass Focus Veil and before the
     /// settings surface itself is composited.
     Settings,
+    /// Glass controls that belong to the settings panel. These render after
+    /// the panel surface so interactive lenses stay legible instead of being
+    /// swallowed by the panel's completed-scene glass.
+    SettingsOverlay,
     /// Context menu glass. Isolated from `Modal` so the menu's glass never
     /// smooth-unions with an open folder panel's glass — they stay visually
     /// distinct even when overlapping. Composited above `Modal`.
@@ -219,8 +223,10 @@ pub enum ControlKind {
     /// Steam logo (context menu: open in Steam). Drawn by kind 20 from SDF
     /// atlas layer 1 (not a procedural SDF).
     SteamLogo,
-    /// Monochrome settings category icons. Drawn from SDF atlas layers 2–7 by
-    /// kinds 21–26 so they stay crisp at compact macOS sidebar sizes.
+    /// Trash can glyph (context menu: delete folder). Kind 21, atlas layer 2.
+    Trash,
+    /// Monochrome settings category icons. Drawn from SDF atlas layers 3–8 by
+    /// kinds 22–27 so they stay crisp at compact macOS sidebar sizes.
     SettingsAppsIcon,
     SettingsSearchIcon,
     SettingsSystemIcon,
@@ -298,6 +304,8 @@ pub struct GlyphBatch {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlyphView {
+    /// Shared owner pivot for a launch reveal; absent for non-grid text.
+    pub presentation_pivot: Option<Point>,
     pub id: UiId,
     pub rect: Rect,
     pub uv: UvRect,

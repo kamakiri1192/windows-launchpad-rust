@@ -1,0 +1,242 @@
+[
+  {
+    "identity": "aumid:com.squirrel.Discord.Discord",
+    "locator": "C:\\Users\\fixture-user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Discord.lnk",
+    "name": "Discord",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\discord\\app-1.0.9258\\discord.exe",
+    "normal": true,
+    "source": "UserStart",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Discord\\app-1.0.9258\\Discord.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:VRChat Creator Companion",
+    "locator": "C:\\Users\\fixture-user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\VRChat Creator Companion.lnk",
+    "name": "VRChat Creator Companion",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\programs\\vrchat creator companion\\creatorcompanion.exe",
+    "normal": true,
+    "source": "UserStart",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Programs\\VRChat Creator Companion\\CreatorCompanion.exe",
+    "valid": false
+  },
+  {
+    "identity": null,
+    "locator": "C:\\Users\\fixture-user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\VRChat Creator Companion\\VRChat Creator Companion.lnk",
+    "name": "VRChat Creator Companion",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\programs\\vrchat creator companion\\creatorcompanion.exe",
+    "normal": true,
+    "source": "UserStart",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Programs\\VRChat Creator Companion\\CreatorCompanion.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\Users\\fixture-user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Steam\\Steam.lnk",
+    "name": "Steam",
+    "native_key": "native:c:\\program files (x86)\\steam\\steam.exe",
+    "normal": true,
+    "source": "UserStart",
+    "target": "C:\\Program Files (x86)\\Steam\\steam.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:com.squirrel.Discord.Discord",
+    "locator": "C:\\Users\\fixture-user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Discord Inc\\Discord.lnk",
+    "name": "Discord",
+    "native_key": null,
+    "normal": true,
+    "source": "UserStart",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Discord\\Update.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Steam\\Steam.lnk",
+    "name": "Steam",
+    "native_key": "native:c:\\program files (x86)\\steam\\steam.exe",
+    "normal": true,
+    "source": "SharedStart",
+    "target": "C:\\Program Files (x86)\\Steam\\Steam.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\iMobie\\FocuSee\\FocuSee.lnk",
+    "name": "FocuSee",
+    "native_key": "native:c:\\program files (x86)\\imobie\\focusee\\focusee.exe",
+    "normal": true,
+    "source": "SharedStart",
+    "target": "C:\\Program Files (x86)\\iMobie\\FocuSee\\FocuSee.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:com.squirrel.Discord.Discord",
+    "locator": "C:\\Users\\fixture-user\\OneDrive\\Desktop\\Discord.lnk",
+    "name": "Discord",
+    "native_key": null,
+    "normal": true,
+    "source": "UserDesktop",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Discord\\Update.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\Users\\fixture-user\\OneDrive\\Desktop\\Unreal Engine.lnk",
+    "name": "Unreal Engine",
+    "native_key": "native:c:\\program files\\epic games\\ue_5.8\\engine\\binaries\\win64\\unrealeditor.exe",
+    "normal": true,
+    "source": "UserDesktop",
+    "target": "C:\\Program Files\\Epic Games\\UE_5.8\\Engine\\Binaries\\Win64\\UnrealEditor.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\Users\\Public\\Desktop\\FocuSee.lnk",
+    "name": "FocuSee",
+    "native_key": "native:c:\\program files (x86)\\imobie\\focusee\\focusee.exe",
+    "normal": true,
+    "source": "SharedDesktop",
+    "target": "C:\\Program Files (x86)\\iMobie\\FocuSee\\FocuSee.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\Users\\Public\\Desktop\\Steam.lnk",
+    "name": "Steam",
+    "native_key": "native:c:\\program files (x86)\\steam\\steam.exe",
+    "normal": true,
+    "source": "SharedDesktop",
+    "target": "C:\\Program Files (x86)\\Steam\\Steam.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:com.squirrel.Discord.Discord",
+    "locator": "shell:AppsFolder\\com.squirrel.Discord.Discord",
+    "name": "Discord",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\discord\\app-1.0.9258\\discord.exe",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Discord\\app-1.0.9258\\Discord.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:VRChat Creator Companion",
+    "locator": "shell:AppsFolder\\VRChat Creator Companion",
+    "name": "VRChat Creator Companion",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\programs\\vrchat creator companion\\creatorcompanion.exe",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Programs\\VRChat Creator Companion\\CreatorCompanion.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}\\iMobie\\FocuSee\\FocuSee.exe",
+    "locator": "shell:AppsFolder\\{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}\\iMobie\\FocuSee\\FocuSee.exe",
+    "name": "FocuSee",
+    "native_key": "native:c:\\program files (x86)\\imobie\\focusee\\focusee.exe",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Program Files (x86)\\iMobie\\FocuSee\\FocuSee.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}\\Steam\\Steam.exe",
+    "locator": "shell:AppsFolder\\{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}\\Steam\\Steam.exe",
+    "name": "Steam",
+    "native_key": "native:c:\\program files (x86)\\steam\\steam.exe",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Program Files (x86)\\Steam\\steam.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:velopack.Fork",
+    "locator": "C:\\Users\\fixture-user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Fork.lnk",
+    "name": "Fork",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\fork\\current\\fork.exe",
+    "normal": true,
+    "source": "UserStart",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Fork\\current\\Fork.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Git\\Git Bash.lnk",
+    "name": "Git Bash",
+    "native_key": "native-args:(\"c:\\\\program files\\\\git\\\\git-bash.exe\", \"--cd-to-home\")",
+    "normal": true,
+    "source": "SharedStart",
+    "target": "C:\\Program Files\\Git\\git-bash.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Git\\Git CMD.lnk",
+    "name": "Git CMD",
+    "native_key": "native-args:(\"c:\\\\program files\\\\git\\\\git-cmd.exe\", \"--cd-to-home\")",
+    "normal": true,
+    "source": "SharedStart",
+    "target": "C:\\Program Files\\Git\\git-cmd.exe",
+    "valid": true
+  },
+  {
+    "identity": null,
+    "locator": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Git\\Git GUI.lnk",
+    "name": "Git GUI",
+    "native_key": "native:c:\\program files\\git\\cmd\\git-gui.exe",
+    "normal": true,
+    "source": "SharedStart",
+    "target": "C:\\Program Files\\Git\\cmd\\git-gui.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:velopack.Fork",
+    "locator": "C:\\Users\\fixture-user\\OneDrive\\Desktop\\Fork.lnk",
+    "name": "Fork",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\fork\\current\\fork.exe",
+    "normal": true,
+    "source": "UserDesktop",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Fork\\current\\Fork.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+    "locator": "shell:AppsFolder\\Microsoft.AutoGenerated.{0FDD9C6B-656B-0F1F-AB08-B1CDBB7067B3}",
+    "name": "Git Bash",
+    "native_key": "native-args:(\"c:\\\\program files\\\\git\\\\git-bash.exe\", \"--cd-to-home\")",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Program Files\\Git\\git-bash.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:Microsoft.AutoGenerated.{29591C0F-7C09-B655-C0EB-8544FCA7D1DE}",
+    "locator": "shell:AppsFolder\\Microsoft.AutoGenerated.{29591C0F-7C09-B655-C0EB-8544FCA7D1DE}",
+    "name": "Git CMD",
+    "native_key": "native-args:(\"c:\\\\program files\\\\git\\\\git-cmd.exe\", \"--cd-to-home\")",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Program Files\\Git\\git-cmd.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:velopack.Fork",
+    "locator": "shell:AppsFolder\\velopack.Fork",
+    "name": "Fork",
+    "native_key": "native:c:\\users\\fixture-user\\appdata\\local\\fork\\current\\fork.exe",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Users\\fixture-user\\AppData\\Local\\Fork\\current\\Fork.exe",
+    "valid": true
+  },
+  {
+    "identity": "aumid:{6D809377-6AF0-444B-8957-A3773F02200E}\\Git\\cmd\\git-gui.exe",
+    "locator": "shell:AppsFolder\\{6D809377-6AF0-444B-8957-A3773F02200E}\\Git\\cmd\\git-gui.exe",
+    "name": "Git GUI",
+    "native_key": "native:c:\\program files\\git\\cmd\\git-gui.exe",
+    "normal": true,
+    "source": "Shell",
+    "target": "C:\\Program Files\\Git\\cmd\\git-gui.exe",
+    "valid": true
+  }
+]

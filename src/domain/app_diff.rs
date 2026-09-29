@@ -9,6 +9,14 @@ use std::collections::BTreeMap;
 
 use crate::domain::app_id::AppId;
 
+/// Artwork supplied by an app provider, independent of its launch route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IconSource {
+    pub path: String,
+    /// Source file's last modification time, not the database row update time.
+    pub modified_at: u64,
+}
+
 /// One shortcut's salient fields at scan time. The fields are exactly the ones
 /// that, if changed, should trigger an icon re-extraction (see
 /// `docs/ICON_CACHE.md` → cache invalidation). Kept small so a snapshot is
@@ -20,19 +28,22 @@ pub struct SnapshotEntry {
     pub name: String,
     /// `.lnk` path on disk.
     pub link_path: String,
-    /// Last-modified time of the `.lnk` (Windows file time, or any monotonic
-    /// int the scanner produces; we only compare for equality).
-    pub link_mtime: u64,
+    /// Source metadata modification time: shortcut on Windows, Info.plist on
+    /// macOS, or manifest for Steam. Scanner-specific units; equality only.
+    pub source_modified_at: u64,
     /// Resolved target path the shortcut points at, expanded, or `""` if the
     /// shortcut had no resolvable target.
     pub target_path: String,
-    /// Target file mtime, or `0`.
-    pub target_mtime: u64,
+    /// Local-only launch identity; None means arguments could not be read.
+    pub launch_arguments: Option<String>,
+    /// Target file's last modification time, or `0` if unavailable.
+    pub target_modified_at: u64,
     /// Shell-reported IconLocation string (may be empty → icon lives in the
     /// target exe).
     pub icon_location: String,
     /// Shell-reported icon index inside `icon_location`.
     pub icon_index: i32,
+    pub provider_icon: Option<IconSource>,
     /// App version string for the ChatGPT-help prompt (macOS
     /// `CFBundleShortVersionString` / Windows exe version resource), or `""`
     /// when the platform could not read one. Not icon-relevant, so it never
@@ -56,11 +67,12 @@ impl SnapshotEntry {
     /// Display-name-only changes do *not* invalidate (the icon is unaffected),
     /// but we still surface them as `Updated` so the label refreshes.
     pub fn icon_relevant_diff(&self, other: &SnapshotEntry) -> bool {
-        self.link_mtime != other.link_mtime
+        self.source_modified_at != other.source_modified_at
             || self.target_path != other.target_path
-            || self.target_mtime != other.target_mtime
+            || self.target_modified_at != other.target_modified_at
             || self.icon_location != other.icon_location
             || self.icon_index != other.icon_index
+            || self.provider_icon != other.provider_icon
     }
 }
 
@@ -115,17 +127,19 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn entry(name: &str, mtime: u64) -> SnapshotEntry {
+    fn entry(name: &str, modified_at: u64) -> SnapshotEntry {
         let path = format!("C:\\ProgramData\\Start Menu\\{name}.lnk");
         SnapshotEntry {
+            launch_arguments: None,
             app_id: AppId::from_link_path(PathBuf::from(&path)),
             name: name.to_string(),
             link_path: path,
-            link_mtime: mtime,
+            source_modified_at: modified_at,
             target_path: String::new(),
-            target_mtime: 0,
+            target_modified_at: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             version: String::new(),
             publisher: String::new(),
             identifier: String::new(),
@@ -167,14 +181,14 @@ mod tests {
     }
 
     #[test]
-    fn detects_updated_mtime() {
+    fn detects_source_modification_time_change() {
         let old = snap(&[entry("A", 1)]);
         let new = snap(&[entry("A", 2)]);
         let d = diff_snapshots(&old, &new);
         assert_eq!(d.updated.len(), 1);
         assert!(d.added.is_empty());
         assert!(d.removed.is_empty());
-        // mtime change is icon-relevant.
+        // modified_at change is icon-relevant.
         assert!(old[&d.updated[0].app_id].icon_relevant_diff(&d.updated[0]));
     }
 

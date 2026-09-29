@@ -24,6 +24,10 @@ click tests:
 - Dragging to the rightmost two columns works.
 - Holding a dragged icon near the page-frame edge autoscrolls by one page.
 - Clicking Done exits edit mode and removes badges/wiggle.
+- Clicking a top-level app name exits edit mode; only its icon image starts a
+  drag or owns its delete badge.
+- The same icon-only press rule applies to apps inside an open folder: clicking
+  a child name exits edit mode without lifting that child.
 - Clicking a delete badge hides that app from the visible grid.
 - Reorder and hidden-app state survive a full process restart.
 
@@ -186,28 +190,21 @@ Recommended flow:
 8. Start the app again with the same temporary `LOCALAPPDATA`.
 9. Capture the restarted screen and verify the order is unchanged.
 
-Also inspect the cache directly. `app_order` is stored in the SQLite `kv` table
-as a compact binary list: `count:u32`, followed by repeated
-`len:u32 + UTF-8 app_id` entries.
+Also inspect the saved layout directly. `launcher_state` is stored as JSON
+in the shared SQLite database's `kv` table.
 
 Example parser:
 
 ```powershell
 $py = 'C:\Users\kamak\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 @'
-import os, sqlite3, struct
-path = os.path.join(os.environ['LOCALAPPDATA'], 'Launchpad', 'cache.sqlite3')
-con = sqlite3.connect(path)
-blob = con.execute("select value from kv where key='app_order'").fetchone()[0]
-pos = 0
-count = struct.unpack_from('<I', blob, pos)[0]
-pos += 4
-for i in range(min(count, 12)):
-    n = struct.unpack_from('<I', blob, pos)[0]
-    pos += 4
-    app_id = blob[pos:pos+n].decode('utf-8')
-    pos += n
-    print(i, app_id)
+import json, pathlib, sqlite3, os
+path = pathlib.Path(os.environ['LOCALAPPDATA']) / 'Launchpad' / 'launchpad.sqlite3'
+con = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+blob = con.execute("select value from kv where key='launcher_state'").fetchone()[0]
+state = json.loads(blob)
+for i, item in enumerate(state['items'][:12]):
+    print(i, item)
 '@ | & $py -
 ```
 
@@ -299,6 +296,12 @@ Before considering an edit-mode visual change complete:
 - Confirm no `launchpad-windows.exe` process is left running from temporary
   QA unless intentionally relaunched for the user.
 
+For the icon-only edit press regression, run `qa/edit_mode_label_exit.json` as
+described in [GPU_SEQUENCE_QA.md](GPU_SEQUENCE_QA.md). In its manifest and
+frames, confirm `editing` becomes `true` after each icon long-press and becomes
+`false` after clicking `grid_item_label` and `folder_child_label`, without a
+new top-level or folder-child drag starting on either label.
+
 ## Phase 8 Folder QA
 
 Folder QA uses the same release build, temporary `LOCALAPPDATA`, screenshot
@@ -306,8 +309,8 @@ opt-in, and GPU self-capture trigger described above. Seed the temporary
 cache's `kv.launcher_state` JSON with at least these cases so the result is
 repeatable without changing the user's real layout:
 
-- an 11-child folder for pagination and a two-item final page;
-- a 3-child folder for the centered incomplete row and narrow dynamic panel;
+- a 17-child folder for pagination and a two-item final page;
+- a 3-child folder for the left-aligned incomplete row and narrow dynamic panel;
 - a long Japanese folder name for title fitting;
 - normal app items before, between, and after folder items.
 
@@ -322,9 +325,11 @@ Validate the following on screen:
    converge exactly at both endpoints.
 4. Press `Esc` during opening and capture the next frames. The spring must
    reverse from its current position, with no snap to an endpoint.
-5. Switch an 11-child folder to its second page. Confirm the final two children
-   are centered and the page indicator changes; return to page one.
-6. Open the 3-child folder and confirm its panel uses a centered single row.
+5. Confirm a full page has five columns and three rows (15 children). Switch a
+   17-child folder to its second page. Confirm the final two children
+   start at the same top-left cell as page one and the page indicator changes;
+   return to page one.
+6. Open the 3-child folder and confirm its row starts at the panel's left padding.
 7. Rename the folder, press Enter, close/reopen, and inspect
    `kv.launcher_state` to confirm persistence. Start another rename and press
    `Esc`; the committed name must remain unchanged. Exercise Japanese text and
@@ -336,6 +341,9 @@ Validate the following on screen:
 10. Long-press and drag to cover app-on-app creation, app-into-folder,
     child reorder, child-to-folder, and child-to-top-level. Verify one-child
     folders dissolve in their original slot.
+11. Verify the fifth column and third row can be clicked and reordered, and
+    hold a child at the side edge to move it onto page two. Repeat at high DPI
+    and with a narrow window; the panel, icons and labels must fit on both axes.
 
 Some Windows automation APIs expose only an atomic drag and cannot express the
 launcher's long-press-then-move gesture. When that limitation applies, record

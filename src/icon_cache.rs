@@ -1,38 +1,30 @@
-//! SQLite-backed on-disk icon cache.
+//! Shared SQLite application store: rebuildable icons and user-owned data.
 //!
-//! Goal: on the second and later launches, never block first paint on Shell/GDI
-//! icon extraction. The cache stores the already-normalized RGBA for each app,
-//! keyed by a stable `AppId`. At startup we read it back in one go and push
-//! those icons straight onto the atlas; only apps whose cache entry is missing
-//! or *invalid* (mtime/icon-location/schema/extraction-version changed) get
-//! re-extracted by the worker.
-//!
-//! Storage location: `%LOCALAPPDATA%\Launchpad\cache.sqlite3` on Windows and
-//! `~/Library/Application Support/Launchpad/cache.sqlite3` on macOS.
-//!
-//! Resilience:
-//!   - If the DB file is corrupt / the schema can't be opened, we delete it and
-//!     rebuild from scratch (see [`IconCache::open_or_rebuild`]).
-//!   - A `schema_version` and `extraction_version` guard against shipping a
-//!     format change that silently serves stale pixels.
-//!   - Writes are batched in a transaction; a failure rolls back and is logged,
-//!     never panicking the UI.
+//! Schema changes run through rusqlite_migration before the store is exposed.
+//! Opening failures leave the database intact and stop normal startup.
+//! Icon resets only clear the icons table, never settings, layout, or aliases.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::domain::app_diff::IconSource;
 use crate::domain::app_id::AppId;
+use crate::domain::initial_layout::{
+    self,
+    catalog::{Catalog, Platform},
+    InitialLayoutRecord, InitializationStatus,
+};
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
 use crate::icons::normalize::DecodedIcon;
 use crate::icons::sizing::IconCategory;
 use crate::startup_timer::{self, prefix};
 
-/// Bumped on any breaking change to the on-disk layout. A mismatch invalidates
-/// every cached icon (they are all re-extracted).
-pub const SCHEMA_VERSION: u32 = 2;
+#[cfg(test)]
+#[path = "initial_layout_cache_tests.rs"]
+mod initial_layout_tests;
 
 /// Bumped when the *extraction* itself changes (new normalization target size,
 /// different alpha handling, a different extraction strategy, etc.) so
@@ -51,10 +43,16 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// v7: macOS FullBleedアイコンの影を本体のサイズ・中心計算から除外。
 /// v7: prefers high-resolution icons from installed macOS Steam app bundles
 /// instead of Steam's small library-cache artwork.
+/// v8: crops macOS FullBleed icons to the hard-alpha body envelope so cached
+/// soft-fringe pixels from the previous normalizer are regenerated.
+/// v9: recognizes dense, symmetric translucent macOS tile bodies when the
+/// opaque envelope contains only non-square foreground artwork.
+/// Windows v6: resolve desktop AppsFolder icons through the Shell image list;
+/// invalidate thumbnail-frame artwork without touching saved app placement.
 #[cfg(target_os = "macos")]
-pub const EXTRACTION_VERSION: u32 = 7;
+pub const EXTRACTION_VERSION: u32 = 9;
 #[cfg(not(target_os = "macos"))]
-pub const EXTRACTION_VERSION: u32 = 5;
+pub const EXTRACTION_VERSION: u32 = 6;
 
 /// Expected edge length of a cached icon's RGBA square. A mismatch invalidates
 /// the entry (matches the `normalized icon size changed` invalidation rule).
@@ -68,11 +66,12 @@ pub struct CachedIcon {
     pub app_id: AppId,
     pub link_path: String,
     pub display_name: String,
-    pub link_mtime: u64,
+    pub source_modified_at: u64,
     pub target_path: String,
-    pub target_mtime: u64,
+    pub target_modified_at: u64,
     pub icon_location: String,
     pub icon_index: i32,
+    pub provider_icon: Option<IconSource>,
     pub image: DecodedIcon,
     pub extracted_at_version: u32,
     pub category: IconCategory,
@@ -84,18 +83,20 @@ pub struct CachedIcon {
 #[derive(Debug, Clone)]
 pub struct CacheProbe<'a> {
     pub app_id: &'a AppId,
-    pub link_mtime: u64,
+    pub source_modified_at: u64,
     pub target_path: &'a str,
-    pub target_mtime: u64,
+    pub target_modified_at: u64,
     pub icon_location: &'a str,
     pub icon_index: i32,
+    pub provider_icon: Option<&'a IconSource>,
 }
 
 /// A opened cache DB. Cheap to share behind a `Mutex` since SQLite serializes
 /// its own writes.
 pub struct IconCache {
     conn: Mutex<Connection>,
-    /// Path to the DB file, kept so `reset()` can delete + recreate it.
+    new_data_area: bool,
+    /// Path to the DB file for diagnostics. Icon resets preserve the kv table.
     path: PathBuf,
 }
 
@@ -108,41 +109,17 @@ impl std::fmt::Debug for IconCache {
 }
 
 impl IconCache {
-    /// Open (or create) the cache at the natural Windows location. On any
-    /// structural failure — corrupt file, unreadable, schema migration failure
-    /// — the DB file is deleted and rebuilt empty so the app keeps running.
-    pub fn open_or_rebuild() -> Self {
-        let path = default_db_path();
+    /// Open the shared database at the OS-provided application data path.
+    pub fn open() -> Result<Self, String> {
+        let path = crate::platform::paths::database_path()?;
         if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "icon-cache: could not create cache dir {}: {e}",
-                    parent.display()
-                );
-            }
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let t = startup_timer::get();
         t.mark(prefix::ICON_CACHE, "cache open");
-
-        match open_at(&path) {
-            Ok(c) => {
-                t.mark(prefix::ICON_CACHE, "cache load");
-                c
-            }
-            Err(e) => {
-                eprintln!(
-                    "icon-cache: opening {} failed ({e}); rebuilding empty cache",
-                    path.display()
-                );
-                let _ = std::fs::remove_file(&path);
-                // Secondary try: if even a fresh create fails, we fall back to
-                // an in-memory DB so the app still runs (just uncached).
-                open_at(&path).unwrap_or_else(|e2| {
-                    eprintln!("icon-cache: rebuild failed ({e2}); using in-memory cache");
-                    open_at(Path::new(":memory:")).expect("in-memory sqlite always opens")
-                })
-            }
-        }
+        let cache = open_at(&path)?;
+        t.mark(prefix::ICON_CACHE, "cache load");
+        Ok(cache)
     }
 
     /// Load the cached entry for `probe`, *if* it is still valid per the
@@ -152,9 +129,9 @@ impl IconCache {
         let conn = self.conn.lock().expect("cache mutex poisoned");
         let row = conn
             .query_row(
-                "SELECT link_path, display_name, link_mtime, target_path, target_mtime,
+                "SELECT link_path, display_name, source_modified_at, target_path, target_modified_at,
                         icon_location, icon_index, image_w, image_h, image_rgba,
-                        extraction_version, category, scale
+                        extraction_version, category, scale, provider_icon_path, provider_icon_modified_at
                  FROM icons WHERE app_id = ?1",
                 params![probe.app_id.as_ref()],
                 |r| {
@@ -163,15 +140,22 @@ impl IconCache {
                     let rgba: Vec<u8> = r.get("image_rgba")?;
                     let cat_str: String = r.get("category")?;
                     let cat = IconCategory::from_str_lossy(&cat_str);
+                    let provider_modified_at = r.get::<_, i64>("provider_icon_modified_at")? as u64;
                     Ok(CachedIcon {
                         app_id: probe.app_id.clone(),
                         link_path: r.get::<_, String>("link_path")?,
                         display_name: r.get::<_, String>("display_name")?,
-                        link_mtime: r.get::<_, i64>("link_mtime")? as u64,
+                        source_modified_at: r.get::<_, i64>("source_modified_at")? as u64,
                         target_path: r.get::<_, String>("target_path")?,
-                        target_mtime: r.get::<_, i64>("target_mtime")? as u64,
+                        target_modified_at: r.get::<_, i64>("target_modified_at")? as u64,
                         icon_location: r.get::<_, String>("icon_location")?,
                         icon_index: r.get::<_, i64>("icon_index")? as i32,
+                        provider_icon: r.get::<_, Option<String>>("provider_icon_path")?.map(
+                            |path| IconSource {
+                                path,
+                                modified_at: provider_modified_at,
+                            },
+                        ),
                         image: DecodedIcon {
                             rgba,
                             w: image_w,
@@ -199,17 +183,17 @@ impl IconCache {
         let conn = self.conn.lock().expect("cache mutex poisoned");
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, target_path,
-                                target_mtime, icon_location, icon_index, image_w, image_h,
+            "INSERT INTO icons (app_id, link_path, display_name, source_modified_at, target_path,
+                                target_modified_at, icon_location, icon_index, image_w, image_h,
                                 image_rgba, extraction_version, category, scale,
-                                last_seen_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                                last_seen_at, provider_icon_path, provider_icon_modified_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
              ON CONFLICT(app_id) DO UPDATE SET
                link_path=excluded.link_path,
                display_name=excluded.display_name,
-               link_mtime=excluded.link_mtime,
+               source_modified_at=excluded.source_modified_at,
                target_path=excluded.target_path,
-               target_mtime=excluded.target_mtime,
+               target_modified_at=excluded.target_modified_at,
                icon_location=excluded.icon_location,
                icon_index=excluded.icon_index,
                image_w=excluded.image_w,
@@ -218,14 +202,16 @@ impl IconCache {
                extraction_version=excluded.extraction_version,
                category=excluded.category,
                scale=excluded.scale,
-               last_seen_at=excluded.last_seen_at",
+               last_seen_at=excluded.last_seen_at,
+               provider_icon_path=excluded.provider_icon_path,
+               provider_icon_modified_at=excluded.provider_icon_modified_at",
             params![
                 entry.app_id.as_ref(),
                 entry.link_path,
                 entry.display_name,
-                entry.link_mtime as i64,
+                entry.source_modified_at as i64,
                 entry.target_path,
-                entry.target_mtime as i64,
+                entry.target_modified_at as i64,
                 entry.icon_location,
                 entry.icon_index as i64,
                 entry.image.w as i64,
@@ -235,6 +221,11 @@ impl IconCache {
                 entry.category.as_str(),
                 entry.scale as f64,
                 now_unix(),
+                entry.provider_icon.as_ref().map(|icon| icon.path.as_str()),
+                entry
+                    .provider_icon
+                    .as_ref()
+                    .map_or(0, |icon| icon.modified_at) as i64,
             ],
         )?;
         tx.commit()
@@ -326,37 +317,6 @@ impl IconCache {
         tx.commit()
     }
 
-    /// Read the user-customized app display order (drag-to-reorder result).
-    /// Returns an empty vec when no order has been stored yet (or the blob is
-    /// unreadable), which makes the registry fall back to name sort.
-    pub fn get_app_order(&self) -> Vec<AppId> {
-        self.kv_get(APP_ORDER_KEY)
-            .map(|b| deserialize_app_ids(&b))
-            .unwrap_or_default()
-    }
-
-    /// Persist the current user display order. Called after a drag-to-reorder
-    /// completes (and on hide) so the layout survives across launches. Cheap
-    /// (one small blob upsert under the existing WAL connection).
-    pub fn put_app_order(&self, ids: &[AppId]) -> rusqlite::Result<()> {
-        let bytes = serialize_app_ids(ids);
-        self.kv_put(APP_ORDER_KEY, &bytes)
-    }
-
-    /// Read the list of apps the user hid via the edit-mode ✕ badge. Empty when
-    /// nothing has been hidden.
-    pub fn get_hidden_ids(&self) -> Vec<AppId> {
-        self.kv_get(HIDDEN_KEY)
-            .map(|b| deserialize_app_ids(&b))
-            .unwrap_or_default()
-    }
-
-    /// Persist the current hidden-app list.
-    pub fn put_hidden_ids(&self, ids: &[AppId]) -> rusqlite::Result<()> {
-        let bytes = serialize_app_ids(ids);
-        self.kv_put(HIDDEN_KEY, &bytes)
-    }
-
     /// Read persisted launcher settings. Missing or corrupt settings fall back
     /// to defaults so a bad preferences blob never blocks startup.
     pub fn get_settings(&self) -> Settings {
@@ -372,32 +332,148 @@ impl IconCache {
         self.kv_put(SETTINGS_KEY, &bytes)
     }
 
-    /// Read the persisted user-owned launcher layout (Phase 7 item-based
-    /// model). When absent or corrupt, returns `None` so the caller can attempt
-    /// the legacy `app_order` + `hidden_ids` migration. A corrupt blob never
-    /// blocks startup: the caller falls back to an empty state.
+    /// Read the saved layout JSON. Strict validation is handled by load_layout.
     pub fn get_launcher_state(&self) -> Option<LauncherState> {
         self.kv_get(LAUNCHER_STATE_KEY)
             .and_then(|b| serde_json::from_slice::<LauncherState>(&b).ok())
     }
 
-    /// Persist the user-owned launcher layout as a JSON blob. Writes also clear
-    /// the legacy `app_order` and `hidden_ids` keys so subsequent loads read the
-    /// canonical Phase 7 format and do not migrate twice.
+    /// Persist the current layout without touching settings or identity aliases.
     pub fn put_launcher_state(&self, state: &LauncherState) -> rusqlite::Result<()> {
-        let bytes = serde_json::to_vec(state)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let tx = conn.transaction()?;
+        write_launcher_state(&tx, state)?;
+        tx.commit()
+    }
+
+    #[cfg(windows)]
+    pub fn load_identity_aliases(
+        &self,
+    ) -> rusqlite::Result<crate::domain::app_catalog::IdentityAliases> {
         let conn = self.conn.lock().expect("cache mutex poisoned");
-        conn.execute(
-            "INSERT INTO kv (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![LAUNCHER_STATE_KEY, bytes],
+        read_blob(&conn, IDENTITY_ALIASES_KEY)?
+            .map(|bytes| serde_json::from_slice(&bytes).map_err(json_error))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    /// Identity reconciliation and its corresponding placement commit together.
+    #[cfg(windows)]
+    pub fn put_layout_and_aliases(
+        &self,
+        state: &LauncherState,
+        aliases: &crate::domain::app_catalog::IdentityAliases,
+    ) -> rusqlite::Result<()> {
+        let bytes = serde_json::to_vec(aliases).map_err(json_error)?;
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let tx = conn.transaction()?;
+        write_launcher_state(&tx, state)?;
+        tx.execute(
+            "INSERT INTO kv(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![IDENTITY_ALIASES_KEY, bytes],
         )?;
-        // Remove the legacy keys so a future load reads the new format and the
-        // migration does not re-run.
-        let _ = conn.execute("DELETE FROM kv WHERE key = ?1", params![APP_ORDER_KEY]);
-        let _ = conn.execute("DELETE FROM kv WHERE key = ?1", params![HIDDEN_KEY]);
-        Ok(())
+        tx.commit()
+    }
+
+    /// A settings reset commits the default preferences and regenerated layout together.
+    pub fn put_settings_and_layout(
+        &self,
+        settings: &Settings,
+        state: &LauncherState,
+    ) -> rusqlite::Result<()> {
+        let bytes = serde_json::to_vec(settings).map_err(json_error)?;
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO kv(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![SETTINGS_KEY, bytes])?;
+        write_launcher_state(&tx, state)?;
+        tx.commit()
+    }
+
+    /// Missing, corrupt and unreadable layouts are deliberately distinct.
+    pub fn load_layout(&self) -> LayoutLoad {
+        let conn = self.conn.lock().expect("cache mutex poisoned");
+        load_layout(&conn, self.new_data_area).unwrap_or_else(|e| {
+            eprintln!("layout: preserving unreadable data: {e}");
+            LayoutLoad::unavailable()
+        })
+    }
+
+    /// Runs on the discovery worker. Save before publishing a usable grid, in
+    /// one transaction with the initialization/undo record inside launcher_state.
+    pub fn prepare_initial_layout(
+        &self,
+        snapshot: &std::collections::BTreeMap<AppId, crate::domain::app_diff::SnapshotEntry>,
+        _complete: bool,
+        platform: Platform,
+        japanese: bool,
+    ) -> LayoutLoad {
+        let mut conn = self.conn.lock().expect("cache mutex poisoned");
+        let result = (|| -> rusqlite::Result<LayoutLoad> {
+            let tx = conn.transaction()?;
+            let mut loaded = load_layout(&tx, self.new_data_area)?;
+            let settings = read_blob(&tx, SETTINGS_KEY)?
+                .map(|b| serde_json::from_slice::<Settings>(&b))
+                .transpose()
+                .map_err(json_error)?
+                .unwrap_or_default();
+            let generation = format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            let catalog = Catalog::bundled(std::env::var("SystemRoot").ok());
+            if loaded.fresh {
+                loaded.state = initial_layout::generate(
+                    snapshot, &settings, platform, japanese, generation, &catalog,
+                )
+                .state;
+            } else {
+                if loaded.state.initial_layout.is_none() {
+                    let status = InitializationStatus::PreservedExisting;
+                    loaded.state.initial_layout =
+                        Some(InitialLayoutRecord::new(status, generation));
+                }
+                if !loaded.state.items.is_empty() || !loaded.state.folders.is_empty() {
+                    loaded.state.customized = true;
+                }
+                let before = loaded.state.clone();
+                let discovered = snapshot.keys().cloned().collect();
+                loaded.state.integrate_discovered_apps(&discovered, |id| {
+                    snapshot.get(id).map(|e| e.name.clone())
+                });
+                loaded.state.normalize(&discovered, false);
+                let membership_changed = loaded
+                    .state
+                    .initial_layout
+                    .as_ref()
+                    .and_then(|r| r.undo.as_ref())
+                    .is_some_and(|u| u.discovered != initial_layout::discovery_signature(snapshot));
+                if before.items != loaded.state.items
+                    || before.folders != loaded.state.folders
+                    || membership_changed
+                {
+                    loaded.state.layout_changed();
+                }
+                loaded.state.customized = true;
+            }
+            write_launcher_state(&tx, &loaded.state)?;
+            tx.commit()?;
+            loaded.fresh = false;
+            Ok(loaded)
+        })();
+        result.unwrap_or_else(|e| {
+            eprintln!("layout: initial save skipped: {e}");
+            // Never publish the grouped proposal after a failed save. Recover
+            // the pre-existing layout if readable, and preserve the original DB.
+            let mut fallback =
+                load_layout(&conn, false).unwrap_or_else(|_| LayoutLoad::unavailable());
+            fallback.writable = false;
+            fallback.state.customized = true;
+            fallback
+        })
     }
 
     /// Generic single-blob read from the `kv` table. Returns `None` when the key
@@ -445,11 +521,12 @@ pub fn is_cache_valid(probe: &CacheProbe<'_>, cached: &CachedIcon) -> bool {
     cached.image.w == CACHED_ICON_SIZE
         && cached.image.h == CACHED_ICON_SIZE
         && cached.extracted_at_version == EXTRACTION_VERSION
-        && cached.link_mtime == probe.link_mtime
+        && cached.source_modified_at == probe.source_modified_at
         && cached.target_path == probe.target_path
-        && cached.target_mtime == probe.target_mtime
+        && cached.target_modified_at == probe.target_modified_at
         && cached.icon_location == probe.icon_location
         && cached.icon_index == probe.icon_index
+        && cached.provider_icon.as_ref() == probe.provider_icon
 }
 
 fn now_unix() -> u64 {
@@ -459,175 +536,89 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// `kv` key under which the user-customized app display order is stored.
-const APP_ORDER_KEY: &str = "app_order";
-/// `kv` key under which the user-hidden app ids are stored.
-const HIDDEN_KEY: &str = "hidden_ids";
-/// `kv` key under which the settings panel preferences are stored.
 const SETTINGS_KEY: &str = "settings";
-/// `kv` key under which the Phase 7 user-owned launcher layout (items,
-/// folders, hidden apps) is stored as JSON. Supersedes `app_order` +
-/// `hidden_ids`; on write the legacy keys are cleared.
 const LAUNCHER_STATE_KEY: &str = "launcher_state";
+#[cfg(windows)]
+const IDENTITY_ALIASES_KEY: &str = "identity_aliases";
 
-/// Serialize a slice of `AppId`s into a compact blob: `count:u32` followed by,
-/// for each id, `len:u32` + the normalized string bytes (little-endian). This
-/// avoids a serde dependency and keeps the format self-describing so future
-/// additions can be detected by length checks.
-fn serialize_app_ids(ids: &[AppId]) -> Vec<u8> {
-    let total: usize = ids.iter().map(|id| id.as_ref().len()).sum();
-    let mut out = Vec::with_capacity(4 + ids.len() * 4 + total);
-    out.extend_from_slice(&(ids.len() as u32).to_le_bytes());
-    for id in ids {
-        let s = id.as_ref();
-        out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-        out.extend_from_slice(s.as_bytes());
-    }
-    out
+#[derive(Debug, Clone)]
+pub struct LayoutLoad {
+    pub state: LauncherState,
+    pub fresh: bool,
+    pub writable: bool,
 }
 
-/// Inverse of [`serialize_app_ids`]. Returns an empty vec on any malformed
-/// input (truncated, bad length, non-UTF-8) so a corrupt blob just falls back
-/// to name-sort instead of panicking.
-fn deserialize_app_ids(bytes: &[u8]) -> Vec<AppId> {
-    parse_app_ids(bytes).unwrap_or_default()
-}
-
-/// Pure parse step: returns `None` on any malformed/truncated input. Split out
-/// so the top-level helper stays `?`-free (its return type is `Vec`, not
-/// `Option`).
-fn parse_app_ids(bytes: &[u8]) -> Option<Vec<AppId>> {
-    let read_u32 = |buf: &[u8], i: usize| -> Option<u32> {
-        let c = buf.get(i..i + 4)?;
-        Some(u32::from_le_bytes(c.try_into().unwrap()))
-    };
-    let mut out = Vec::new();
-    let mut i = 0;
-    let count = read_u32(bytes, i)? as usize;
-    i += 4;
-    out.try_reserve(count).ok()?;
-    for _ in 0..count {
-        let len = read_u32(bytes, i)? as usize;
-        i += 4;
-        let s = std::str::from_utf8(bytes.get(i..i + len)?).ok()?;
-        out.push(AppId::from_normalized(s.to_string()));
-        i += len;
-    }
-    // Reject partial records (count claimed more than we could read).
-    if out.len() == count {
-        Some(out)
-    } else {
-        None
+impl LayoutLoad {
+    fn unavailable() -> Self {
+        let mut state = LauncherState::new();
+        state.customized = true;
+        Self {
+            state,
+            fresh: false,
+            writable: false,
+        }
     }
 }
 
-fn open_at(path: &Path) -> rusqlite::Result<IconCache> {
-    let conn = Connection::open(path)?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
-    conn.pragma_update(None, "temp_store", "MEMORY")?;
-    init_schema(&conn)?;
-    check_schema_version(&conn)?;
-    Ok(IconCache {
-        conn: Mutex::new(conn),
-        path: path.to_path_buf(),
+fn json_error(e: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+}
+
+fn read_blob(conn: &Connection, key: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0))
+        .optional()
+}
+
+fn load_layout(conn: &Connection, new_data_area: bool) -> rusqlite::Result<LayoutLoad> {
+    if let Some(bytes) = read_blob(conn, LAUNCHER_STATE_KEY)? {
+        let state: LauncherState = serde_json::from_slice(&bytes).map_err(json_error)?;
+        let mut normalized = state.clone();
+        normalized.normalize(&Default::default(), false);
+        if normalized != state {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        return Ok(LayoutLoad {
+            state,
+            fresh: false,
+            writable: true,
+        });
+    }
+    let state = LauncherState::new();
+    let has_keys: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM kv)", [], |r| r.get(0))?;
+    let has_icons: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM icons)", [], |r| r.get(0))?;
+    Ok(LayoutLoad {
+        state,
+        fresh: new_data_area && !has_keys && !has_icons,
+        writable: true,
     })
 }
 
-fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_meta (
-            key   TEXT PRIMARY KEY,
-            value INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS icons (
-            app_id             TEXT PRIMARY KEY,
-            link_path          TEXT NOT NULL,
-            display_name       TEXT NOT NULL,
-            link_mtime         INTEGER NOT NULL,
-            target_path        TEXT NOT NULL,
-            target_mtime       INTEGER NOT NULL,
-            icon_location      TEXT NOT NULL,
-            icon_index         INTEGER NOT NULL,
-            image_w            INTEGER NOT NULL,
-            image_h            INTEGER NOT NULL,
-            image_rgba         BLOB NOT NULL,
-            extraction_version INTEGER NOT NULL,
-            category           TEXT NOT NULL DEFAULT 'fullbleed',
-            scale              REAL NOT NULL DEFAULT 1.0,
-            last_seen_at       INTEGER NOT NULL,
-            deleted_at         INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS icons_last_seen ON icons(last_seen_at);
-        CREATE TABLE IF NOT EXISTS kv (
-            key   TEXT PRIMARY KEY,
-            value BLOB NOT NULL
-        );
-        INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?1);
-        INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('extraction_version', ?2);
-        ",
-    )?;
-    // Set the bundled version constants into the meta row (overwriting if the
-    // file pre-existed with an older value — the version mismatch is handled
-    // in `check_schema_version`).
-    conn.execute(
-        "INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![SCHEMA_VERSION as i64],
-    )?;
+fn write_launcher_state(conn: &Connection, state: &LauncherState) -> rusqlite::Result<()> {
+    let bytes = serde_json::to_vec(state).map_err(json_error)?;
+    conn.execute("INSERT INTO kv(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![LAUNCHER_STATE_KEY, bytes])?;
     Ok(())
 }
 
-fn check_schema_version(conn: &Connection) -> rusqlite::Result<()> {
-    let stored: i64 = conn
-        .query_row(
-            "SELECT value FROM schema_meta WHERE key = 'schema_version'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    if stored as u32 != SCHEMA_VERSION {
-        // Schema version mismatch: run any pending column migrations
-        // before wiping cached rows so that subsequent INSERTs succeed.
-        migrate_icons_schema(conn)?;
-        // Wipe icons so everything is re-extracted.
-        conn.execute("DELETE FROM icons", [])?;
-    }
-    Ok(())
-}
-
-/// Add any columns that may be missing in an older icons table schema.
-///
-/// This handles the v1→v2 migration where `category` and `scale` columns were
-/// added. SQLite does not support `ALTER TABLE ADD COLUMN IF NOT EXISTS`, so
-/// we query `PRAGMA table_info` to check for column existence first.
-fn migrate_icons_schema(conn: &Connection) -> rusqlite::Result<()> {
-    // Collect existing column names.
-    let mut stmt = conn.prepare("PRAGMA table_info(icons)")?;
-    let existing: Vec<String> = stmt
-        .query_map([], |r| r.get::<_, String>(1))? // column 1 = name
-        .filter_map(|r| r.ok())
-        .collect();
-
-    if !existing.iter().any(|c| c == "category") {
-        conn.execute(
-            "ALTER TABLE icons ADD COLUMN category TEXT NOT NULL DEFAULT 'fullbleed'",
-            [],
-        )?;
-    }
-    if !existing.iter().any(|c| c == "scale") {
-        conn.execute(
-            "ALTER TABLE icons ADD COLUMN scale REAL NOT NULL DEFAULT 1.0",
-            [],
-        )?;
-    }
-    Ok(())
-}
-
-/// Resolve the platform-native persistent database path. Kept pub(crate) so
-/// docs/tests can reference the same path.
-pub(crate) fn default_db_path() -> PathBuf {
-    crate::platform::paths::cache_db_path()
+fn open_at(path: &Path) -> Result<IconCache, String> {
+    let new_data_area =
+        path == Path::new(":memory:") || !path.try_exists().map_err(|e| e.to_string())?;
+    let mut conn = Connection::open(path).map_err(|e| e.to_string())?;
+    // Reject a too-new schema before making persistent PRAGMA changes.
+    crate::database::migrate(&mut conn).map_err(|e| e.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "synchronous", "FULL")
+        .map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "temp_store", "MEMORY")
+        .map_err(|e| e.to_string())?;
+    Ok(IconCache {
+        conn: Mutex::new(conn),
+        path: path.to_path_buf(),
+        new_data_area,
+    })
 }
 
 #[cfg(test)]
@@ -647,16 +638,17 @@ mod tests {
         open_at(Path::new(":memory:")).expect("open in-memory cache")
     }
 
-    fn entry(app_id: &str, mtime: u64) -> CachedIcon {
+    pub(super) fn entry(app_id: &str, modified_at: u64) -> CachedIcon {
         CachedIcon {
             app_id: AppId::from_normalized(app_id.to_string()),
             link_path: format!("C:\\{app_id}.lnk"),
             display_name: app_id.to_string(),
-            link_mtime: mtime,
+            source_modified_at: modified_at,
             target_path: String::new(),
-            target_mtime: 0,
+            target_modified_at: 0,
             icon_location: String::new(),
             icon_index: 0,
+            provider_icon: None,
             image: fake_icon([1, 2, 3, 255]),
             extracted_at_version: EXTRACTION_VERSION,
             category: IconCategory::FullBleed,
@@ -664,14 +656,15 @@ mod tests {
         }
     }
 
-    fn probe<'a>(app_id: &'a AppId, mtime: u64) -> CacheProbe<'a> {
+    fn probe<'a>(app_id: &'a AppId, modified_at: u64) -> CacheProbe<'a> {
         CacheProbe {
             app_id,
-            link_mtime: mtime,
+            source_modified_at: modified_at,
             target_path: "",
-            target_mtime: 0,
+            target_modified_at: 0,
             icon_location: "",
             icon_index: 0,
+            provider_icon: None,
         }
     }
 
@@ -691,6 +684,41 @@ mod tests {
     }
 
     #[test]
+    fn provider_artwork_roundtrips_and_invalidates_on_add_change_or_removal() {
+        let c = cache();
+        let mut e = entry("app1", 10);
+        let app = id("app1");
+        c.put(&e).unwrap();
+        let source = IconSource {
+            path: "library/game.exe".into(),
+            modified_at: 20,
+        };
+        let mut p = probe(&app, 10);
+        p.provider_icon = Some(&source);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        e.provider_icon = Some(source.clone());
+        c.put(&e).unwrap();
+        assert_eq!(
+            c.get_if_valid(&p).unwrap().unwrap().provider_icon,
+            e.provider_icon
+        );
+        let updated = IconSource {
+            modified_at: 21,
+            ..source.clone()
+        };
+        p.provider_icon = Some(&updated);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        let moved = IconSource {
+            path: "library/new/game.exe".into(),
+            ..source
+        };
+        p.provider_icon = Some(&moved);
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+        p.provider_icon = None;
+        assert!(c.get_if_valid(&p).unwrap().is_none());
+    }
+
+    #[test]
     fn missing_entry_returns_none() {
         let c = cache();
         let app = id("nope");
@@ -698,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn mtime_change_invalidates() {
+    fn modified_at_change_invalidates() {
         let c = cache();
         c.put(&entry("app1", 10)).unwrap();
         let app = id("app1");
@@ -825,11 +853,6 @@ mod tests {
     }
 
     #[test]
-    fn default_db_path_uses_platform_cache_path() {
-        assert_eq!(default_db_path(), crate::platform::paths::cache_db_path());
-    }
-
-    #[test]
     fn is_cache_valid_logic_directly() {
         let e = entry("app1", 10);
         let app = id("app1");
@@ -838,195 +861,14 @@ mod tests {
     }
 
     #[test]
-    fn app_order_round_trips() {
-        let c = cache();
-        let ids = vec![
-            id("c:/programdata/app3.lnk"),
-            id("c:/users/me/app1.lnk"),
-            id("c:/users/me/app2.lnk"),
-        ];
-        c.put_app_order(&ids).unwrap();
-        assert_eq!(c.get_app_order(), ids);
-    }
-
-    #[test]
-    fn app_order_empty_when_unset() {
-        let c = cache();
-        assert!(c.get_app_order().is_empty());
-    }
-
-    #[test]
-    fn app_order_upsert_replaces_previous() {
-        let c = cache();
-        c.put_app_order(&[id("a"), id("b")]).unwrap();
-        c.put_app_order(&[id("c")]).unwrap();
-        assert_eq!(c.get_app_order(), vec![id("c")]);
-    }
-
-    #[test]
-    fn hidden_ids_round_trips() {
-        let c = cache();
-        let ids = vec![id("hidden1"), id("hidden2")];
-        c.put_hidden_ids(&ids).unwrap();
-        assert_eq!(c.get_hidden_ids(), ids);
-    }
-
-    #[test]
-    fn deserialize_rejects_truncated_blob() {
-        // count=3 but only one id follows → must return empty, not panic.
-        let bad = serialize_app_ids(&[id("only")]);
-        // Overwrite the count to claim more entries than exist.
-        let mut bad = bad;
-        bad[0] = 3;
-        assert!(deserialize_app_ids(&bad).is_empty());
-    }
-
-    #[test]
-    fn open_or_rebuild_recovers_from_corrupt_file() {
+    fn corrupt_database_is_preserved_and_open_fails() {
         let tmp = std::env::temp_dir().join(format!(
             "launchpad-test-corrupt-{}.sqlite3",
             std::process::id()
         ));
         std::fs::write(&tmp, b"not a sqlite file").unwrap();
-        // We can't call open_or_rebuild() because it targets the fixed
-        // LOCALAPPDATA path; instead exercise open_at failing + recovering.
         assert!(open_at(&tmp).is_err());
-        std::fs::remove_file(&tmp).ok();
-        // open_at on a fresh memory DB still works:
-        let _ = cache();
-    }
-
-    // -- schema migration (v1 → v2) ---------------------------------------------
-
-    /// Regression test (Bug #48): opening a v1 database (icons table without
-    /// `category` / `scale` columns) must add those columns via ALTER TABLE
-    /// before clearing rows for re-extraction. Without this, the schema version
-    /// is bumped to 2 but the columns remain missing, and subsequent INSERTs
-    /// fail silently because the new column names are not recognised.
-    #[test]
-    fn migration_adds_category_and_scale_columns_to_v1_db() {
-        let conn = Connection::open_in_memory().unwrap();
-
-        // Create v1-style schema (without category/scale columns).
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_meta (
-                key   TEXT PRIMARY KEY,
-                value INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS icons (
-                app_id             TEXT PRIMARY KEY,
-                link_path          TEXT NOT NULL,
-                display_name       TEXT NOT NULL,
-                link_mtime         INTEGER NOT NULL,
-                target_path        TEXT NOT NULL,
-                target_mtime       INTEGER NOT NULL,
-                icon_location      TEXT NOT NULL,
-                icon_index         INTEGER NOT NULL,
-                image_w            INTEGER NOT NULL,
-                image_h            INTEGER NOT NULL,
-                image_rgba         BLOB NOT NULL,
-                extraction_version INTEGER NOT NULL,
-                last_seen_at       INTEGER NOT NULL,
-                deleted_at         INTEGER
-            );
-            INSERT INTO schema_meta(key, value) VALUES ('schema_version', 1);
-        ",
-        )
-        .unwrap();
-
-        // Insert a dummy row — it will be wiped by check_schema_version.
-        conn.execute(
-            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, \
-             target_path, target_mtime, icon_location, icon_index, image_w, image_h, \
-             image_rgba, extraction_version, last_seen_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-            params![
-                "test-app",
-                "",
-                "",
-                0i64,
-                "",
-                0i64,
-                "",
-                0i64,
-                128i64,
-                128i64,
-                vec![0u8; 128 * 128 * 4],
-                5i64,
-                0i64,
-            ],
-        )
-        .unwrap();
-
-        assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM icons", [], |r| r.get::<_, i64>(0))
-                .unwrap(),
-            1
-        );
-
-        // Run the full version-check path (migration + wipe).
-        check_schema_version(&conn).unwrap();
-
-        // Columns must now exist.
-        let mut stmt = conn.prepare("PRAGMA table_info(icons)").unwrap();
-        let cols: Vec<String> = stmt
-            .query_map([], |r| r.get::<_, String>(1))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-        assert!(
-            cols.contains(&"category".to_string()),
-            "category column should exist after migration; got {:?}",
-            cols
-        );
-        assert!(
-            cols.contains(&"scale".to_string()),
-            "scale column should exist after migration; got {:?}",
-            cols
-        );
-
-        // The old row should have been wiped by the version mismatch.
-        assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM icons", [], |r| r.get::<_, i64>(0))
-                .unwrap(),
-            0,
-            "v1 rows should be wiped for re-extraction"
-        );
-
-        // Insert a new row using the migrated columns to confirm they work.
-        conn.execute(
-            "INSERT INTO icons (app_id, link_path, display_name, link_mtime, \
-             target_path, target_mtime, icon_location, icon_index, image_w, image_h, \
-             image_rgba, extraction_version, category, scale, last_seen_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
-            params![
-                "re-extracted",
-                "",
-                "",
-                0i64,
-                "",
-                0i64,
-                "",
-                0i64,
-                128i64,
-                128i64,
-                vec![0u8; 128 * 128 * 4],
-                EXTRACTION_VERSION as i64,
-                "solid",
-                0.74f64,
-                0i64,
-            ],
-        )
-        .unwrap();
-
-        let (cat, scl): (String, f64) = conn
-            .query_row(
-                "SELECT category, scale FROM icons WHERE app_id = 're-extracted'",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(cat, "solid");
-        assert!((scl - 0.74).abs() < 0.001);
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"not a sqlite file");
+        std::fs::remove_file(&tmp).unwrap();
     }
 }

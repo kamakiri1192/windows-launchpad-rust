@@ -50,6 +50,7 @@ impl<'a> From<&'a AppEntry> for GridItem<'a> {
             name: &a.name,
             uv: a.uv,
             preview_uvs: &[],
+            hide_fill: false,
         }
     }
 }
@@ -151,7 +152,10 @@ impl GridLayout {
             } else {
                 -1.0
             };
-            let anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
+            let mut anim = anim.get(idx).copied().unwrap_or(TileAnim::IDLE);
+            if item.hide_fill && item.uv.is_some() {
+                anim.flags |= TileAnim::FLAG_NO_FILL;
+            }
             out.push(TileView {
                 id: UiId::launcher_item(item.key),
                 rect: Rect::new(x, y, self.tile_size, self.tile_size),
@@ -265,7 +269,7 @@ impl GridLayout {
             let tile_y = self.margin_top + r as f32 * (self.tile_size + self.row_gap);
             let label_w = self.tile_size + self.scaled(20.0); // a little wider than the tile
             let label_x = tile_x + (self.tile_size - label_w) * 0.5;
-            let label_y = tile_y + self.tile_size + self.scaled(8.0);
+            let label_y = tile_y + self.tile_size + self.scaled(layout_grid::APP_LABEL_GAP);
             out.push(crate::renderer::text_engine::Label {
                 text: item.name.to_string(),
                 x: label_x,
@@ -319,6 +323,7 @@ mod tests {
                 key: a.id.as_str(),
                 name: a.name.as_str(),
                 uv: a.uv,
+                hide_fill: false,
                 preview_uvs: &[],
             })
             .collect()
@@ -402,6 +407,58 @@ mod tests {
     }
 
     #[test]
+    fn backing_tile_is_hidden_only_for_loaded_fullbleed_icons() {
+        let vw = 1280.0;
+        let g = GridLayout::default().centered(vw);
+        let uv = UvRect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 0.1,
+            v1: 0.1,
+        };
+        let items = [
+            GridItem {
+                key: "fullbleed",
+                name: "FullBleed",
+                uv: Some(uv),
+                hide_fill: true,
+                preview_uvs: &[],
+            },
+            GridItem {
+                key: "freeform",
+                name: "Freeform",
+                uv: Some(uv),
+                hide_fill: false,
+                preview_uvs: &[],
+            },
+            GridItem {
+                key: "missing",
+                name: "Missing",
+                uv: None,
+                hide_fill: true,
+                preview_uvs: &[],
+            },
+        ];
+
+        let tiles = g.build_instances(vw, &items, &[]);
+        assert_ne!(
+            tiles[0].motion.flags & TileAnim::FLAG_NO_FILL,
+            0,
+            "a loaded FullBleed icon must not show the colored backing tile"
+        );
+        assert_eq!(
+            tiles[1].motion.flags & TileAnim::FLAG_NO_FILL,
+            0,
+            "freeform categories keep the colored backing tile"
+        );
+        assert_eq!(
+            tiles[2].motion.flags & TileAnim::FLAG_NO_FILL,
+            0,
+            "an icon that has not loaded keeps the fallback tile"
+        );
+    }
+
+    #[test]
     fn empty_app_list_draws_no_tiles() {
         let vw = 1280.0;
         let g = GridLayout::default().centered(vw);
@@ -448,7 +505,10 @@ mod tests {
         let apps = fake_apps(1);
         let labels = g.build_labels(vw, &view(&apps));
         let label = &labels[0];
-        assert!((label.y - (g.margin_top + g.tile_size + 8.0 * scale)).abs() < 1e-2);
+        assert!(
+            (label.y - (g.margin_top + g.tile_size + layout_grid::APP_LABEL_GAP * scale)).abs()
+                < 1e-2
+        );
         assert!((label.max_width - (g.tile_size + 20.0 * scale)).abs() < 1e-2);
 
         let x = g.margin_left + g.tile_size * 0.5;
@@ -471,6 +531,7 @@ mod tests {
             key: "folder",
             name: "Folder",
             uv: None,
+            hide_fill: false,
             preview_uvs: &previews,
         }];
         let anim = [TileAnim {

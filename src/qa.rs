@@ -25,6 +25,13 @@ pub const HEADLESS_ENV: &str = "LAUNCHPAD_QA_HEADLESS";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QaScenario {
     pub name: String,
+    /// Exercise the same reveal clock used by summon without showing a
+    /// native QA window. Default off for existing interaction scenarios.
+    #[serde(default)]
+    pub launch_reveal: bool,
+    /// Optional physical/logical scale for portable geometry assertions.
+    #[serde(default)]
+    pub scale_factor: Option<f64>,
     #[serde(default = "default_viewport")]
     pub viewport: [u32; 2],
     #[serde(default = "default_fps")]
@@ -158,10 +165,18 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct QaApp {
+    #[serde(default)]
+    pub link_path: Option<String>,
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub target_path: Option<String>,
+    #[serde(default)]
+    pub publisher: String,
+    #[serde(default)]
+    pub identifier: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -188,6 +203,18 @@ pub struct TimedAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QaAction {
+    InitializeFolders {
+        #[serde(default)]
+        japanese: bool,
+    },
+    Focus {
+        focused: bool,
+    },
+    ToggleSettings,
+    /// In-memory renderer fixture; manual darkness with automatic adaptation off.
+    GlassDarkness {
+        value: f32,
+    },
     OpenFolder {
         id: String,
     },
@@ -202,6 +229,20 @@ pub enum QaAction {
     PointerUp,
     TypeText {
         value: String,
+    },
+    SearchText {
+        value: String,
+    },
+    SearchPreedit {
+        value: String,
+    },
+    SearchCommit {
+        value: String,
+    },
+    AssertSearch {
+        query: String,
+        visible_items: usize,
+        menu_active: bool,
     },
     CommitRename,
     Escape,
@@ -296,6 +337,7 @@ fn expand_generated_apps(fixture: &mut QaFixture) -> Result<(), String> {
             fixture.apps.push(QaApp {
                 id: id.clone(),
                 name: format!("{} {index:03}", generated.name_prefix),
+                ..QaApp::default()
             });
             if generated.top_level {
                 fixture.items.push(QaItem::App { id });
@@ -674,18 +716,64 @@ fn validate_context_menu_expectations(scenario: &QaScenario) -> Result<(), Strin
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QaTarget {
-    Point { x: f32, y: f32 },
-    GridItem { index: usize },
-    GridItemPoint { index: usize, x: f32, y: f32 },
-    ContextMenuRow { index: usize },
-    FolderChild { index: usize },
+    SettingsAction {
+        key: String,
+    },
+    SettingsSlider {
+        key: String,
+        progress: f32,
+    },
+    SettingsSliderReset {
+        key: String,
+    },
+    Point {
+        x: f32,
+        y: f32,
+    },
+    SettingsCategory {
+        key: String,
+    },
+    /// Progress along thumb travel; values outside 0..1 exercise overdrag.
+    SettingsToggle {
+        key: String,
+        progress: f32,
+    },
+    GridItem {
+        index: usize,
+    },
+    GridItemPoint {
+        index: usize,
+        x: f32,
+        y: f32,
+    },
+    GridItemLabel {
+        index: usize,
+    },
+    ContextMenuRow {
+        index: usize,
+    },
+    FolderChild {
+        index: usize,
+    },
+    FolderChildLabel {
+        index: usize,
+    },
     FolderTitle,
-    FolderPanel { x: f32, y: f32 },
+    FolderPanel {
+        x: f32,
+        y: f32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QaFrameRecord {
     pub index: u64,
+    /// Physical [x, y, width, height] of each active settings thumb lens.
+    pub settings_toggle_lenses: Vec<[f32; 4]>,
+    pub settings_slider_lenses: Vec<[f32; 4]>,
+    pub settings_slider_drag: Option<String>,
+    pub settings_slider_values: [f32; 9],
+    pub bottom_glass_rects: Vec<[f32; 4]>,
     pub elapsed_ms: u64,
     pub file: String,
     pub editing: bool,
@@ -701,6 +789,8 @@ pub struct QaFrameRecord {
     pub folder_child_drag: bool,
     pub top_level_drag: bool,
     pub top_level_item_count: usize,
+    pub top_level_item_ids: Vec<String>,
+    pub top_level_item_names: Vec<String>,
     pub active_folder_child_count: Option<usize>,
     pub frame_dt_ms: f32,
     pub pointer_x: f32,
@@ -737,6 +827,11 @@ pub struct QaFrameRecord {
 }
 
 struct QaFrameState {
+    settings_slider_lenses: Vec<[f32; 4]>,
+    settings_slider_drag: Option<String>,
+    settings_slider_values: [f32; 9],
+    settings_toggle_lenses: Vec<[f32; 4]>,
+    bottom_glass_rects: Vec<[f32; 4]>,
     editing: bool,
     context_menu_active: bool,
     context_menu_phase: String,
@@ -748,6 +843,8 @@ struct QaFrameState {
     folder_child_drag: bool,
     top_level_drag: bool,
     top_level_item_count: usize,
+    top_level_item_ids: Vec<String>,
+    top_level_item_names: Vec<String>,
     active_folder_child_count: Option<usize>,
     frame_dt_ms: f32,
     pointer_x: f32,
@@ -926,6 +1023,12 @@ impl QaRunner {
         self.scenario.viewport
     }
 
+    pub fn scale_factor(&self) -> Option<f64> {
+        self.scenario
+            .scale_factor
+            .filter(|value| value.is_finite() && *value > 0.0)
+    }
+
     pub fn fixture(&self) -> &QaFixture {
         &self.scenario.fixture
     }
@@ -1014,6 +1117,11 @@ impl QaRunner {
             .and_then(|scroll| folder_scroll_input_target_x.map(|target| scroll.0 - target));
         self.frames.push(QaFrameRecord {
             index: self.frame_index,
+            settings_toggle_lenses: state.settings_toggle_lenses,
+            settings_slider_lenses: state.settings_slider_lenses,
+            settings_slider_drag: state.settings_slider_drag,
+            settings_slider_values: state.settings_slider_values,
+            bottom_glass_rects: state.bottom_glass_rects,
             elapsed_ms,
             file: file.clone(),
             editing: state.editing,
@@ -1029,6 +1137,8 @@ impl QaRunner {
             folder_child_drag: state.folder_child_drag,
             top_level_drag: state.top_level_drag,
             top_level_item_count: state.top_level_item_count,
+            top_level_item_ids: state.top_level_item_ids,
+            top_level_item_names: state.top_level_item_names,
             active_folder_child_count: state.active_folder_child_count,
             frame_dt_ms: state.frame_dt_ms,
             pointer_x: state.pointer_x,
@@ -1431,6 +1541,7 @@ impl App {
         let Some(fixture) = self.qa_runner.as_ref().map(QaRunner::fixture).cloned() else {
             return;
         };
+        self.initial_snapshot_ready = true;
         self.registry = AppRegistry::new();
         self.atlas = crate::renderer::icon_atlas::IconAtlas::new(64);
         self.atlas_uploaded = false;
@@ -1453,14 +1564,23 @@ impl App {
             self.registry.insert(AppRecord {
                 app_id: id,
                 name: app.name.clone(),
-                link_path: PathBuf::from(format!("qa/{}.lnk", app.id)),
-                resolved_target: PathBuf::from(format!("qa/{}.exe", app.id)),
+                link_path: PathBuf::from(
+                    app.link_path
+                        .clone()
+                        .unwrap_or_else(|| format!("qa/{}.lnk", app.id)),
+                ),
+                resolved_target: PathBuf::from(
+                    app.target_path
+                        .clone()
+                        .unwrap_or_else(|| format!("qa/{}.exe", app.id)),
+                ),
                 slot,
                 icon_state: IconState::Loaded,
                 uv: Some(uv),
+                hide_tile_fill: false,
                 version: String::new(),
-                publisher: String::new(),
-                identifier: String::new(),
+                publisher: app.publisher.clone(),
+                identifier: app.identifier.clone(),
             });
         }
         let mut launcher = LauncherState::new();
@@ -1490,10 +1610,15 @@ impl App {
                 .collect(),
         );
         self.launcher_state = launcher;
+        // Fixture writes can grow the atlas before the renderer is present.
+        self.resync_registry_uvs();
     }
 
     pub(crate) fn start_qa(&mut self, now: Instant) {
         if let Some(runner) = self.qa_runner.as_mut() {
+            if runner.scenario.launch_reveal {
+                self.launch_presentation.begin();
+            }
             runner.start(now);
         }
     }
@@ -1511,6 +1636,54 @@ impl App {
 
     fn apply_qa_action(&mut self, action: QaAction) {
         match action {
+            QaAction::InitializeFolders { japanese } => {
+                let snapshot = self
+                    .registry
+                    .apps()
+                    .iter()
+                    .map(|r| {
+                        let entry = crate::domain::app_diff::SnapshotEntry {
+                            provider_icon: None,
+                            app_id: r.app_id.clone(),
+                            name: r.name.clone(),
+                            link_path: r.link_path.to_string_lossy().into_owned(),
+                            source_modified_at: 0,
+                            target_path: r.resolved_target.to_string_lossy().into_owned(),
+                            launch_arguments: Some(String::new()),
+                            target_modified_at: 0,
+                            icon_location: String::new(),
+                            icon_index: 0,
+                            version: String::new(),
+                            publisher: r.publisher.clone(),
+                            identifier: r.identifier.clone(),
+                        };
+                        (entry.app_id.clone(), entry)
+                    })
+                    .collect();
+                self.launcher_state = crate::domain::initial_layout::generate(
+                    &snapshot,
+                    &self.settings,
+                    crate::domain::initial_layout::catalog::Platform::current(),
+                    japanese,
+                    "qa".into(),
+                    &crate::domain::initial_layout::catalog::Catalog::bundled(None),
+                )
+                .state;
+                self.snapshot = snapshot;
+                self.layout_checkpoint = self.launcher_state.clone();
+                // Production publishes placement before the first grid. Do
+                // not animate from the fixture's temporary flat arrangement.
+                self.tile_springs.clear();
+                self.relayout();
+            }
+            QaAction::Focus { focused } => self.handle_action(AppAction::Focused(focused)),
+            QaAction::ToggleSettings => self.handle_action(AppAction::ToggleSettings),
+            QaAction::GlassDarkness { value } => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_liquid_glass_auto_darkness_enabled(false);
+                    renderer.set_liquid_glass_darkness(value.clamp(0.0, 1.0));
+                }
+            }
             QaAction::OpenFolder { id } => {
                 self.open_folder(FolderId::from_normalized(id));
             }
@@ -1545,6 +1718,15 @@ impl App {
                     // runner speed while exercising the production long-press
                     // threshold, slop, and edit-entry path.
                     self.maybe_long_press_into_edit(ready_at);
+                } else if let Some(ready_at) = self
+                    .folders
+                    .pressed_child
+                    .as_ref()
+                    .map(|press| press.start + crate::features::edit_mode::LONG_PRESS_THRESHOLD)
+                {
+                    // Folder children use their own press state but the same
+                    // production long-press threshold and transition.
+                    self.begin_folder_child_edit_drag_if_ready(ready_at);
                 }
             }
             QaAction::PointerUp => {
@@ -1555,11 +1737,40 @@ impl App {
             QaAction::TypeText { value } => {
                 self.handle_action(AppAction::Keyboard(KeyAction::FolderRenameChar(value)));
             }
+            QaAction::SearchText { value } => {
+                self.handle_action(AppAction::Keyboard(KeyAction::OpenSearchAndChar(value)));
+            }
+            QaAction::SearchPreedit { value } => {
+                self.handle_action(AppAction::Ime(winit::event::Ime::Preedit(value, None)));
+            }
+            QaAction::SearchCommit { value } => {
+                self.handle_action(AppAction::Ime(winit::event::Ime::Commit(value)));
+            }
+            QaAction::AssertSearch {
+                query,
+                visible_items,
+                menu_active,
+            } => {
+                assert_eq!(self.visible_search_query(), query, "search query changed");
+                assert_eq!(
+                    self.visible_launcher_items().len(),
+                    visible_items,
+                    "search results changed"
+                );
+                assert_eq!(
+                    self.context_menu.is_active(),
+                    menu_active,
+                    "unexpected menu state"
+                );
+                assert!(self.control.wants_keyboard(), "search field collapsed");
+            }
             QaAction::CommitRename => {
                 self.handle_action(AppAction::Keyboard(KeyAction::CommitFolderRename));
             }
             QaAction::Escape => {
-                let action = if self.folders.rename.is_some() {
+                let action = if self.settings_panel_active() {
+                    KeyAction::CloseSettings
+                } else if self.folders.rename.is_some() {
                     KeyAction::CancelFolderRename
                 } else if self.editing {
                     KeyAction::ExitEditMode
@@ -1738,7 +1949,74 @@ impl App {
 
     fn resolve_qa_target(&self, target: &QaTarget) -> Option<Point> {
         match target {
+            QaTarget::SettingsSlider { key, progress } => {
+                use crate::ui_model::render_model::{ControlKind, InkLane};
+                let id = format!("settings-row:slider-{key}");
+                let track = self
+                    .render_model
+                    .ink
+                    .iter()
+                    .find(|batch| batch.lane == InkLane::Settings)?
+                    .views
+                    .iter()
+                    .find(|view| view.id.as_str() == id && view.kind == ControlKind::SliderTrack)?;
+                Some(Point::new(
+                    track.center.x + (progress - 0.5) * track.stroke * 2.0,
+                    track.center.y,
+                ))
+            }
+            QaTarget::SettingsSliderReset { key } => {
+                use crate::ui_model::render_model::{ControlKind, InkLane};
+                let id = format!("settings-row:slider-{key}");
+                self.render_model
+                    .ink
+                    .iter()
+                    .find(|batch| batch.lane == InkLane::Settings)?
+                    .views
+                    .iter()
+                    .find(|view| view.id.as_str() == id && view.kind == ControlKind::ResetIcon)
+                    .map(|view| view.center)
+            }
+            QaTarget::SettingsAction { key } => self
+                .cached_settings_hit_map
+                .as_ref()?
+                .regions()
+                .iter()
+                .find(|r| r.target == crate::ui_model::hit::HitTarget::settings_action(key))
+                .map(|r| r.rect.center()),
             QaTarget::Point { x, y } => Some(Point::new(*x, *y)),
+            QaTarget::SettingsCategory { key } => self
+                .cached_settings_hit_map
+                .as_ref()?
+                .regions()
+                .iter()
+                .find(|region| {
+                    region.target == crate::ui_model::hit::HitTarget::settings_category(key)
+                })
+                .map(|region| region.rect.center()),
+            QaTarget::SettingsToggle { key, progress } => {
+                use crate::ui_model::render_model::{ControlKind, InkLane};
+                let id = format!("settings-row:toggle-{key}");
+                let track = self
+                    .render_model
+                    .ink
+                    .iter()
+                    .find(|batch| batch.lane == InkLane::Settings)?
+                    .views
+                    .iter()
+                    .find(|view| {
+                        view.id.as_str() == id
+                            && view.kind == ControlKind::RowBackground
+                            && view.corner_radius > 0.0
+                            && (view.corner_radius - view.extent).abs() < 0.5
+                            && view.stroke > view.extent
+                    })?;
+                let travel = (track.stroke - track.extent).max(1.0);
+                Some(Point::new(
+                    track.center.x + (progress - 0.5) * 2.0 * travel,
+                    track.center.y,
+                ))
+            }
             QaTarget::GridItem { index } => self
                 .visible_launcher_items()
                 .get(*index)
@@ -1754,6 +2032,14 @@ impl App {
                         rect.y + rect.height * y.clamp(0.0, 1.0),
                     )
                 }),
+            QaTarget::GridItemLabel { index } => {
+                self.visible_launcher_items().get(*index)?;
+                let (viewport_w, _viewport_h) = self.viewport_phys();
+                let scroll_x = self.scroller.as_ref().map_or(0.0, |s| s.position);
+                let (x, y, width, height) =
+                    crate::layout::grid::label_rect(&self.layout, viewport_w as f32, *index);
+                Some(Point::new(x + scroll_x + width * 0.5, y + height * 0.5))
+            }
             QaTarget::ContextMenuRow { index } => self
                 .context_menu_layout
                 .as_ref()?
@@ -1766,6 +2052,16 @@ impl App {
                 .child_rects
                 .get(*index)
                 .map(|rect| rect.center()),
+            QaTarget::FolderChildLabel { index } => self
+                .folder_layout
+                .as_ref()?
+                .result
+                .render
+                .text
+                .iter()
+                .filter(|text| text.style.role == crate::ui_model::text::TextRole::FolderItemLabel)
+                .nth(*index)
+                .map(|text| text.rect.center()),
             QaTarget::FolderTitle => self
                 .folder_layout
                 .as_ref()
@@ -1781,6 +2077,8 @@ impl App {
     }
 
     pub(crate) fn qa_capture_path(&mut self) -> Option<PathBuf> {
+        // Do not collect or allocate diagnostics during ordinary rendering.
+        self.qa_runner.as_ref()?;
         let editing = self.editing;
         let context_menu_active = self.context_menu.is_active();
         let context_menu_phase = format!("{:?}", self.context_menu.phase);
@@ -1797,6 +2095,30 @@ impl App {
         let folder_child_drag = self.folders.child_drag.is_some();
         let top_level_drag = self.drag_item.is_some();
         let top_level_item_count = self.launcher_state.items.len();
+        let top_level_item_ids = self
+            .launcher_state
+            .items
+            .iter()
+            .map(LauncherItem::stable_key)
+            .collect();
+        let top_level_item_names = self
+            .launcher_state
+            .items
+            .iter()
+            .map(|item| match item {
+                LauncherItem::App(id) => self
+                    .registry
+                    .get(id)
+                    .map(|app| app.name.clone())
+                    .unwrap_or_default(),
+                LauncherItem::Folder(id) => self
+                    .launcher_state
+                    .folders
+                    .get(id)
+                    .map(|folder| folder.name.clone())
+                    .unwrap_or_default(),
+            })
+            .collect();
         let active_folder_child_count = self
             .folders
             .active
@@ -1818,7 +2140,63 @@ impl App {
             });
         let pager = self.qa_pager_snapshot();
         let text_atlas = self.text.as_ref().map(|text| text.atlas_stats());
+        let bottom_glass_rects = self
+            .render_model
+            .glass
+            .iter()
+            .filter(|batch| batch.layer == crate::ui_model::render_model::GlassLayer::Overlay)
+            .flat_map(|batch| &batch.surfaces)
+            .map(|surface| {
+                [
+                    surface.rect.x,
+                    surface.rect.y,
+                    surface.rect.width,
+                    surface.rect.height,
+                ]
+            })
+            .collect();
+        let settings_toggle_lenses = self
+            .render_model
+            .glass
+            .iter()
+            .filter(|batch| {
+                batch.layer == crate::ui_model::render_model::GlassLayer::SettingsOverlay
+            })
+            .flat_map(|batch| &batch.surfaces)
+            .filter(|surface| surface.id.as_str().starts_with("settings-row:toggle-"))
+            .map(|surface| {
+                [
+                    surface.rect.x,
+                    surface.rect.y,
+                    surface.rect.width,
+                    surface.rect.height,
+                ]
+            })
+            .collect();
         self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
+            settings_slider_lenses: self
+                .render_model
+                .glass
+                .iter()
+                .filter(|batch| {
+                    batch.layer == crate::ui_model::render_model::GlassLayer::SettingsOverlay
+                })
+                .flat_map(|batch| &batch.surfaces)
+                .filter(|surface| surface.id.as_str().starts_with("settings-row:slider-"))
+                .map(|surface| {
+                    [
+                        surface.rect.x,
+                        surface.rect.y,
+                        surface.rect.width,
+                        surface.rect.height,
+                    ]
+                })
+                .collect(),
+            settings_slider_drag: self.settings_slider_drag.map(|field| format!("{field:?}")),
+            settings_slider_values: crate::domain::settings::LiquidGlassParamField::ALL
+                .map(|field| field.get(&self.settings.liquid_glass)),
+            settings_toggle_lenses,
+            bottom_glass_rects,
             editing,
             context_menu_active,
             context_menu_phase,
@@ -1830,6 +2208,8 @@ impl App {
             folder_child_drag,
             top_level_drag,
             top_level_item_count,
+            top_level_item_ids,
+            top_level_item_names,
             active_folder_child_count,
             frame_dt_ms: self.last_frame_dt_ms,
             pointer_x: self.pointer_phys_x,
@@ -1891,6 +2271,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn slider_scenario_covers_release_and_lifecycle_cancellation() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/settings_slider_glass.json")).unwrap();
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::Focus { focused: false })));
+        assert!(scenario
+            .actions
+            .iter()
+            .any(|action| matches!(action.action, QaAction::Escape)));
+        for direction in [-0.3, 1.3] {
+            assert!(scenario.actions.iter().any(|action| matches!(action.action,
+                QaAction::Move { target: QaTarget::SettingsSlider { progress, .. } } if progress == direction)));
+        }
+    }
+
+    #[test]
+    fn settings_glass_scenario_covers_both_drag_directions_and_darkness() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/settings_toggle_glass.json")).unwrap();
+        for expected in [-1.0, 2.0] {
+            assert!(scenario.actions.iter().any(|action| matches!(
+                action.action,
+                QaAction::Move { target: QaTarget::SettingsToggle { progress, .. } } if progress == expected
+            )));
+        }
+        for expected in [0.0, 0.8] {
+            assert!(scenario.actions.iter().any(|action| matches!(
+                action.action, QaAction::GlassDarkness { value } if value == expected
+            )));
+        }
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::ToggleSettings))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn scenario_schema_parses_semantic_targets() {
         let value = serde_json::json!({
             "name": "folder",
@@ -1921,6 +2344,33 @@ mod tests {
     }
 
     #[test]
+    fn edit_mode_label_exit_scenario_covers_grid_and_folder_labels() {
+        let scenario: QaScenario =
+            serde_json::from_str(include_str!("../qa/edit_mode_label_exit.json")).unwrap();
+
+        assert!(scenario.actions.iter().any(|action| matches!(
+            action.action,
+            QaAction::Move {
+                target: QaTarget::GridItemLabel { .. }
+            }
+        )));
+        assert!(scenario.actions.iter().any(|action| matches!(
+            action.action,
+            QaAction::Move {
+                target: QaTarget::FolderChildLabel { .. }
+            }
+        )));
+        assert_eq!(
+            scenario
+                .actions
+                .iter()
+                .filter(|action| matches!(action.action, QaAction::LongPress))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn runner_orders_actions_and_sanitizes_run_name() {
         assert_eq!(sanitize_name("Folder QA / 1"), "Folder-QA---1");
     }
@@ -1929,6 +2379,8 @@ mod tests {
     fn slow_wall_clock_cannot_overtake_the_fixed_step_scenario_clock() {
         let mut runner = QaRunner {
             scenario: QaScenario {
+                launch_reveal: false,
+                scale_factor: None,
                 name: "fixed-step-clock".to_owned(),
                 viewport: [1280, 800],
                 fps: 30,

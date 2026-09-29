@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use crate::domain::app_diff::{AppDiff, SnapshotEntry};
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::{AppRecord, IconState};
-use crate::grid;
 use crate::icon_cache::{CacheProbe, CachedIcon};
 use crate::icons::normalize::DecodedIcon;
 use crate::startup_timer::prefix;
@@ -15,6 +14,83 @@ use crate::workers::icon_worker::{IconReason, IconRequest};
 use crate::app::state::App;
 
 impl App {
+    #[cfg(windows)]
+    pub(crate) fn apply_catalog(&mut self, scan: crate::domain::app_catalog::CatalogScan) {
+        for error in &scan.errors {
+            eprintln!("app-catalog: incomplete scan: {error}");
+        }
+        let first_scan = !self.initial_snapshot_ready;
+        let complete = scan.errors.is_empty()
+            && scan.failed_sources.is_empty()
+            && scan.failed_locators.is_empty();
+        let mut aliases = self.catalog_aliases.clone();
+        let mut layout = self.launcher_state.clone();
+        let groups = aliases.groups(scan.candidates);
+        let mut next = aliases.reconcile(groups, &mut layout);
+        let old = self
+            .snapshot
+            .iter()
+            .filter(|(id, _)| aliases.canonical(id) == **id)
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect();
+        self.catalog_presence
+            .retain_observed(&old, &mut next, |id| {
+                !self
+                    .catalog_aliases
+                    .source_of(id)
+                    .is_some_and(|source| scan.failed_sources.contains(&source))
+                    && !old
+                        .get(id)
+                        .is_some_and(|entry| scan.failed_locators.contains(&entry.link_path))
+            });
+        if first_scan {
+            layout = crate::domain::initial_layout::prepare_catalog_layout(
+                layout,
+                &next,
+                &self.settings,
+                self.layout_initial_fresh
+                    && !self.layout_session_changed
+                    && self.layout_writable
+                    && self.catalog_store_writable,
+                complete,
+                crate::domain::initial_layout::japanese_locale(sys_locale::get_locale().as_deref()),
+                &crate::domain::initial_layout::catalog::Catalog::bundled(
+                    std::env::var("SystemRoot").ok(),
+                ),
+            );
+        }
+        // Persist identity and placement in one transaction before changing the UI.
+        if !self.qa_enabled()
+            && self.catalog_store_writable
+            && self.layout_writable
+            && (aliases != self.catalog_aliases || layout != self.launcher_state)
+        {
+            if let Err(error) = self.cache.put_layout_and_aliases(&layout, &aliases) {
+                eprintln!("app-catalog: could not commit identity migration: {error}");
+                return;
+            }
+        }
+        let layout_changed = layout != self.launcher_state;
+        self.catalog_aliases = aliases;
+        self.launcher_state = layout;
+        if first_scan {
+            self.layout_checkpoint = self.launcher_state.clone();
+            self.initial_snapshot_ready = true;
+            self.layout_initial_fresh = false;
+            self.ingest_snapshot(next, true);
+        } else {
+            let diff = crate::domain::app_diff::diff_snapshots(&self.snapshot, &next);
+            if !diff.is_empty() || layout_changed {
+                self.apply_diff(diff);
+            }
+        }
+        if std::mem::take(&mut self.settings_reset_pending) {
+            self.reset_settings_and_layout();
+        } else {
+            self.persist_launcher_state();
+        }
+    }
+
     pub(crate) fn ensure_atlas_uploaded(&mut self) -> bool {
         let needed = self.registry.slot_count().max(1);
         let grew = self.atlas.ensure_capacity(needed);
@@ -40,7 +116,13 @@ impl App {
     /// Apply one freshly-extracted (or cached) icon: write it into the slot,
     /// update the registry UV + state, push the cell to the GPU, and refresh
     /// the icon instance buffer so the new UV is picked up.
-    pub(crate) fn apply_icon(&mut self, app_id: &AppId, image: DecodedIcon, from_cache: bool) {
+    pub(crate) fn apply_icon(
+        &mut self,
+        app_id: &AppId,
+        image: DecodedIcon,
+        hide_tile_fill: bool,
+        from_cache: bool,
+    ) {
         let Some(slot) = self.registry.get(app_id).map(|r| r.slot) else {
             return;
         };
@@ -86,6 +168,7 @@ impl App {
         self.registry.update(app_id, |rec| {
             rec.uv = Some(new_uv);
             rec.icon_state = state;
+            rec.hide_tile_fill = hide_tile_fill;
         });
         // Refresh icon instances so the new UVs are uploaded. Cheap (hundreds
         // of f32s) and keeps the draw call in sync with the atlas.
@@ -113,26 +196,11 @@ impl App {
         }
     }
 
-    /// Rebuild the icon-instance buffer from the current registry + layout and
-    /// push it to the GPU. Called whenever any app's UV may have changed.
+    /// Rebuild the grid instance buffers after an icon or its category changes.
+    /// FullBleed classification affects both the icon UV and the backing-tile
+    /// visibility, so refreshing only the icon buffer would leave a stale fill.
     pub(crate) fn rebuild_icon_instances(&mut self) {
-        let owned = self.grid_items_owned();
-        let items: Vec<grid::GridItem<'_>> = owned
-            .iter()
-            .map(|entry| grid::GridItem {
-                key: entry.key.as_str(),
-                name: entry.name.as_str(),
-                uv: entry.uv,
-                preview_uvs: &entry.preview_uvs,
-            })
-            .collect();
-        let (w, _h) = self.viewport_phys();
-        let visible_items = self.visible_launcher_items();
-        let anim = self.edit_anim(&visible_items);
-        let mut icon_instances = self.layout.build_icon_instances(w as f32, &items, &anim);
-        self.apply_icon_spring_offsets(&visible_items, w as f32, &mut icon_instances);
-        self.suppress_active_folder_grid_icons(&mut icon_instances);
-        self.render_model.icons = Some(icon_instances);
+        self.refresh_spring_instances();
     }
 
     /// Mark an app's icon as failed (placeholder stays), logging the error.
@@ -149,7 +217,7 @@ impl App {
     /// transparent, resets each app's icon state to `Missing`, then re-queues
     /// the whole app set against the worker — so the visible page refills
     /// progressively without restarting the launcher. The current snapshot
-    /// (names/targets/mtimes) is reused, so no Start Menu rescan is needed.
+    /// (names/targets/modification times) is reused, so no Start Menu rescan is needed.
     pub(crate) fn reset_icons(&mut self) {
         eprintln!("icon-cache: manual reset requested — clearing cache + re-extracting");
 
@@ -180,6 +248,7 @@ impl App {
             self.registry.update(id, |rec| {
                 rec.uv = None;
                 rec.icon_state = IconState::Missing;
+                rec.hide_tile_fill = false;
             });
         }
         self.rebuild_icon_instances();
@@ -200,11 +269,12 @@ impl App {
                     app_id: id.clone(),
                     name: entry.name.clone(),
                     link_path: PathBuf::from(&entry.link_path),
-                    link_mtime: entry.link_mtime,
+                    source_modified_at: entry.source_modified_at,
                     target_path: entry.target_path.clone(),
-                    target_mtime: entry.target_mtime,
+                    target_modified_at: entry.target_modified_at,
                     icon_location: entry.icon_location.clone(),
                     icon_index: entry.icon_index,
+                    provider_icon: entry.provider_icon.clone(),
                     reason: IconReason::Fresh,
                 };
                 if handle.requests.send(req).is_err() {
@@ -250,6 +320,7 @@ impl App {
                     slot,
                     icon_state: IconState::Missing,
                     uv: None,
+                    hide_tile_fill: false,
                     version: entry.version.clone(),
                     publisher: entry.publisher.clone(),
                     identifier: entry.identifier.clone(),
@@ -313,11 +384,12 @@ impl App {
                 app_id: id.clone(),
                 name: entry.name.clone(),
                 link_path: PathBuf::from(&entry.link_path),
-                link_mtime: entry.link_mtime,
+                source_modified_at: entry.source_modified_at,
                 target_path: entry.target_path.clone(),
-                target_mtime: entry.target_mtime,
+                target_modified_at: entry.target_modified_at,
                 icon_location: entry.icon_location.clone(),
                 icon_index: entry.icon_index,
+                provider_icon: entry.provider_icon.clone(),
                 reason: if is_initial {
                     IconReason::Fresh
                 } else {
@@ -340,6 +412,9 @@ impl App {
 
         // Relayout once so new tiles + cached icons show up immediately.
         self.relayout();
+        if is_initial {
+            self.timer.mark(prefix::STARTUP, "initial grid interactive");
+        }
         self.request_redraw();
 
         // Dispatch extraction requests to the worker (first page already
@@ -365,11 +440,12 @@ impl App {
     pub(crate) fn apply_cache_if_available(&mut self, id: &AppId, entry: &SnapshotEntry) -> usize {
         let probe = CacheProbe {
             app_id: id,
-            link_mtime: entry.link_mtime,
+            source_modified_at: entry.source_modified_at,
             target_path: &entry.target_path,
-            target_mtime: entry.target_mtime,
+            target_modified_at: entry.target_modified_at,
             icon_location: &entry.icon_location,
             icon_index: entry.icon_index,
+            provider_icon: entry.provider_icon.as_ref(),
         };
         let rec_state = self.registry.get(id).map(|r| r.icon_state);
         if matches!(rec_state, Some(IconState::Loaded | IconState::Cached)) {
@@ -391,12 +467,26 @@ impl App {
 
     /// Apply a cache-served icon without going through the worker.
     pub(crate) fn apply_cached_icon(&mut self, app_id: &AppId, cached: CachedIcon) {
-        self.apply_icon(app_id, cached.image, true);
+        let hide_tile_fill = cached.category == crate::icons::IconCategory::FullBleed;
+        self.apply_icon(app_id, cached.image, hide_tile_fill, true);
     }
 
     /// Apply a refresh diff: add new apps, update changed ones (re-extracting
     /// icons whose cache key moved), and remove gone apps.
     pub(crate) fn apply_diff(&mut self, diff: AppDiff) {
+        let layout_changed = !diff.added.is_empty()
+            || !diff.removed.is_empty()
+            || diff.updated.iter().any(|e| {
+                self.snapshot.get(&e.app_id).is_none_or(|old| {
+                    old.name != e.name
+                        || old.link_path != e.link_path
+                        || old.target_path != e.target_path
+                        || old.launch_arguments != e.launch_arguments
+                })
+            });
+        if layout_changed {
+            self.launcher_state.layout_changed();
+        }
         self.timer
             .mark_with(prefix::APP_REFRESH, "app list refresh", || {
                 format!(
@@ -447,6 +537,7 @@ impl App {
                     slot,
                     icon_state: IconState::Missing,
                     uv: None,
+                    hide_tile_fill: false,
                     version: entry.version.clone(),
                     publisher: entry.publisher.clone(),
                     identifier: entry.identifier.clone(),
@@ -472,11 +563,12 @@ impl App {
             };
             let probe = CacheProbe {
                 app_id: id,
-                link_mtime: entry.link_mtime,
+                source_modified_at: entry.source_modified_at,
                 target_path: &entry.target_path,
-                target_mtime: entry.target_mtime,
+                target_modified_at: entry.target_modified_at,
                 icon_location: &entry.icon_location,
                 icon_index: entry.icon_index,
+                provider_icon: entry.provider_icon.as_ref(),
             };
             match self.cache.get_if_valid(&probe) {
                 Ok(Some(cached)) => {
@@ -495,11 +587,12 @@ impl App {
                         app_id: id.clone(),
                         name: entry.name.clone(),
                         link_path: PathBuf::from(&entry.link_path),
-                        link_mtime: entry.link_mtime,
+                        source_modified_at: entry.source_modified_at,
                         target_path: entry.target_path.clone(),
-                        target_mtime: entry.target_mtime,
+                        target_modified_at: entry.target_modified_at,
                         icon_location: entry.icon_location.clone(),
                         icon_index: entry.icon_index,
+                        provider_icon: entry.provider_icon.clone(),
                         reason: IconReason::Updated,
                     });
                 }
@@ -507,6 +600,9 @@ impl App {
         }
 
         self.sync_launcher_layout_with_registry();
+        if layout_changed {
+            self.persist_launcher_state();
+        }
         self.relayout();
         self.request_redraw();
 

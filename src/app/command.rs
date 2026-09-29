@@ -27,34 +27,44 @@ impl App {
     /// order, folders, hidden apps) into `launcher_state`. Called once at
     /// startup, before the first scan is ingested, so apps are placed in the
     /// user's arrangement from the first frame.
-    ///
-    /// Migration: if the Phase 7 `launcher_state` key is present it is used
-    /// directly. Otherwise the legacy `app_order` + `hidden_ids` binary keys
-    /// are read and converted via [`LauncherState::from_legacy`]. A missing or
-    /// corrupt store is a no-op (state stays empty / non-customized), so a bad
-    /// blob never blocks startup or wipes other settings.
     pub(crate) fn load_customization(&mut self) {
         self.settings = self.cache.get_settings();
-        if let Some(state) = self.cache.get_launcher_state() {
-            self.launcher_state = state;
-            return;
-        }
-        // Legacy migration path: convert the old binary app_order + hidden_ids
-        // keys into the item-based launcher state.
-        let order = self.cache.get_app_order();
-        let hidden = self.cache.get_hidden_ids();
-        if !order.is_empty() || !hidden.is_empty() {
-            self.launcher_state =
-                crate::domain::launcher_state::LauncherState::from_legacy(order, hidden);
+        let loaded = self.cache.load_layout();
+        self.layout_initial_fresh = loaded.fresh;
+        self.launcher_state = loaded.state;
+        self.layout_checkpoint = self.launcher_state.clone();
+        self.layout_writable = loaded.writable;
+        #[cfg(windows)]
+        match self.cache.load_identity_aliases() {
+            Ok(aliases) => self.catalog_aliases = aliases,
+            Err(error) => {
+                self.catalog_store_writable = false;
+                self.layout_writable = false;
+                eprintln!("layout: preserving unreadable identity aliases: {error}");
+            }
         }
     }
 
     /// Persist the current launcher layout so it survives across launches.
     /// Called after a drag-to-reorder, hide/unhide, or folder change. Cheap:
     /// one small JSON blob upsert. Errors are logged but never panic the UI.
-    pub(crate) fn persist_launcher_state(&self) {
-        if self.qa_enabled() {
+    pub(crate) fn persist_launcher_state(&mut self) {
+        self.layout_session_changed = true;
+        if self.launcher_state.items != self.layout_checkpoint.items
+            || self.launcher_state.folders != self.layout_checkpoint.folders
+            || self.launcher_state.hidden_apps != self.layout_checkpoint.hidden_apps
+        {
+            self.launcher_state.layout_changed();
+        }
+        self.layout_checkpoint = self.launcher_state.clone();
+        if self.qa_enabled() || !self.layout_writable {
             return;
+        }
+        #[cfg(windows)]
+        {
+            if !self.catalog_store_writable {
+                return;
+            }
         }
         if let Err(e) = self.cache.put_launcher_state(&self.launcher_state) {
             eprintln!("layout: failed to persist launcher state: {e}");
@@ -65,18 +75,18 @@ impl App {
     /// after a drag-to-reorder completes (and on hide). Phase 7 routes this
     /// through the unified launcher state; this method is kept as the
     /// edit-mode command target so the command boundary stays stable.
-    pub(crate) fn persist_user_order(&self) {
+    pub(crate) fn persist_user_order(&mut self) {
         self.persist_launcher_state();
     }
 
     /// Persist the current hidden-app list. Called after a hide/unhide change.
     /// Phase 7 routes this through the unified launcher state.
-    pub(crate) fn persist_hidden(&self) {
+    pub(crate) fn persist_hidden(&mut self) {
         self.persist_launcher_state();
     }
 
     pub(crate) fn persist_settings(&self) {
-        if self.qa_enabled() {
+        if self.qa_enabled() || !self.layout_writable {
             return;
         }
         if let Err(e) = self.cache.put_settings(&self.settings) {
@@ -132,6 +142,9 @@ impl App {
             self.exit_edit_mode();
         }
         // Close the settings overlay so a re-summon starts clean.
+        self.end_settings_slider_drag();
+        self.pressed_on_settings = None;
+        self.settings_toggle_drag = None;
         self.settings_open = false;
         self.settings_panel_progress = 0.0;
         self.reset_settings_category_hover();
@@ -144,6 +157,7 @@ impl App {
         self.context_menu = crate::features::context_menu::ContextMenuState::default();
         self.clear_context_menu_presentation();
         self.pending_press = None;
+        self.launch_presentation.cancel();
         self.input_router.reset();
         // Drop any in-progress search / IME composition so the next summon
         // starts clean.
@@ -196,17 +210,48 @@ impl App {
     /// Re-centers on the primary monitor so a multi-monitor move doesn't
     /// strand the launcher on the wrong screen.
     pub(crate) fn summon(&mut self) {
-        let Some(r) = self.renderer.as_mut() else {
+        if self.renderer.is_none() {
             return;
-        };
-        debug_log!("summon: showing window (visible was {})", self.visible);
-        r.window.set_visible(true);
-        r.set_backdrop_capture_active(true);
+        }
+        let was_visible = self.visible;
+        // Arm the transition before the native window becomes visible. The
+        // first summon frame is rendered while the window is still hidden so
+        // a resident window cannot expose its old settled swapchain buffer
+        // before the new reveal has reached the compositor.
+        if !was_visible {
+            self.launch_presentation.begin();
+        }
+        // Do not let the hidden interval contribute to the first animation
+        // delta when the launcher is summoned again.
+        self.last_redraw = None;
+        debug_log!("summon: preparing window (visible was {})", was_visible);
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_backdrop_capture_active(true);
+        }
         #[cfg(target_os = "macos")]
         {
             self.awaiting_initial_focus = true;
             self.window_focused = false;
         }
+        self.visible = true;
+        // Record the summon time before the first staged frame. This keeps
+        // the focus grace period aligned with the user's summon action even
+        // though native visibility is intentionally delayed by one frame.
+        self.last_summon = Some(Instant::now());
+
+        if !was_visible {
+            // A hidden native window may retain the last fully-rendered frame
+            // in DWM/CoreAnimation. Render the animation's first frame before
+            // showing it, otherwise the compositor can briefly present the
+            // settled scene and then jump back to the animation's transparent
+            // start state (the visible whole-window flash reported on reopen).
+            self.tick_frame();
+        }
+
+        let Some(r) = self.renderer.as_mut() else {
+            return;
+        };
+        r.window.set_visible(true);
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
         // so we also allow-set-foreground + re-assert focus. If it still fails
@@ -227,10 +272,6 @@ impl App {
         #[cfg(target_os = "macos")]
         crate::platform::macos::integration::activate_application();
         r.window.focus_window();
-        self.visible = true;
-        // Record the summon time so a focus-transition artifact in the next
-        // SUMMON_FOCUS_GRACE is ignored instead of instantly hiding us.
-        self.last_summon = Some(Instant::now());
         self.request_redraw();
         debug_log!("summon: window shown + focus requested");
     }
@@ -250,7 +291,25 @@ impl App {
                 let link_path = info.link_path.clone();
                 let name = info.name.clone();
                 self.hide();
-                match crate::platform::launch::open_shortcut(&link_path) {
+                #[cfg(windows)]
+                let result = {
+                    let id = self
+                        .snapshot
+                        .iter()
+                        .find(|(_, entry)| std::path::Path::new(&entry.link_path) == link_path)
+                        .map(|(id, _)| id.clone());
+                    crate::platform::launch::open_shortcut_with_refresh(&link_path, || {
+                        let id = id?;
+                        self.apply_catalog(crate::workers::app_scan::scan_catalog());
+                        let id = self.catalog_aliases.canonical(&id);
+                        self.snapshot
+                            .get(&id)
+                            .map(|entry| entry.link_path.clone().into())
+                    })
+                };
+                #[cfg(not(windows))]
+                let result = crate::platform::launch::open_shortcut(&link_path);
+                match result {
                     Ok(()) => eprintln!("launched {}", name),
                     Err(err) => eprintln!(
                         "failed to launch {} ({}): {}",
@@ -280,6 +339,20 @@ impl App {
                 match crate::platform::launch::open_url(&url) {
                     Ok(()) => eprintln!("chatgpt help: opened for {}", name),
                     Err(err) => eprintln!("failed to open ChatGPT help for {}: {}", name, err),
+                }
+            }
+            AppCommand::ShowAppProperties(info) => {
+                let name = info.name.clone();
+                let path = properties_target_path(&info);
+                self.hide();
+                match crate::platform::launch::show_properties(&path) {
+                    Ok(()) => eprintln!("opened properties for {} ({})", name, path.display()),
+                    Err(err) => eprintln!(
+                        "failed to open properties for {} ({}): {}",
+                        name,
+                        path.display(),
+                        err
+                    ),
                 }
             }
             AppCommand::OpenInSteam { app_id } => {
@@ -397,10 +470,12 @@ impl App {
 fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     #[cfg(windows)]
     {
-        if info.resolved_target.as_os_str().is_empty() {
-            info.link_path.clone()
-        } else {
+        if info.resolved_target.is_absolute() {
             info.resolved_target.clone()
+        } else {
+            // Protocol launch targets (e.g. steam://) are not filesystem
+            // locations. Reveal the original Shell item/shortcut instead.
+            info.link_path.clone()
         }
     }
     #[cfg(target_os = "macos")]
@@ -409,6 +484,18 @@ fn reveal_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
+        info.link_path.clone()
+    }
+}
+
+/// Native properties should describe the discovered launcher entry itself: a
+/// Windows `.lnk` exposes its shortcut target in the normal Properties dialog,
+/// while macOS uses the `.app` bundle's Finder info window. Fall back to the
+/// resolved target only for unusual records without a link path.
+fn properties_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
+    if info.link_path.as_os_str().is_empty() {
+        info.resolved_target.clone()
+    } else {
         info.link_path.clone()
     }
 }
@@ -707,8 +794,11 @@ mod tests {
         #[cfg(windows)]
         {
             assert_eq!(
-                reveal_target_path(&launch_info()),
-                std::path::PathBuf::from("x.exe")
+                reveal_target_path(&AppLaunchInfo {
+                    resolved_target: std::path::PathBuf::from("C:/Program Files/Example/app.exe"),
+                    ..launch_info()
+                }),
+                std::path::PathBuf::from("C:/Program Files/Example/app.exe")
             );
             // Unresolvable shortcut → the .lnk itself.
             let unresolved = AppLaunchInfo {
@@ -719,6 +809,12 @@ mod tests {
                 reveal_target_path(&unresolved),
                 std::path::PathBuf::from("x.lnk")
             );
+            let protocol = AppLaunchInfo {
+                resolved_target: "steam://rungameid/123".into(),
+                link_path: "shell:AppsFolder\\steam://rungameid/123".into(),
+                ..launch_info()
+            };
+            assert_eq!(reveal_target_path(&protocol), protocol.link_path);
         }
         #[cfg(not(windows))]
         {
@@ -729,6 +825,24 @@ mod tests {
                 std::path::PathBuf::from("x.lnk")
             );
         }
+    }
+
+    #[test]
+    fn properties_target_prefers_the_discovered_link_path() {
+        let info = launch_info();
+        assert_eq!(
+            properties_target_path(&info),
+            std::path::PathBuf::from("x.lnk")
+        );
+
+        let no_link = AppLaunchInfo {
+            link_path: std::path::PathBuf::new(),
+            ..info
+        };
+        assert_eq!(
+            properties_target_path(&no_link),
+            std::path::PathBuf::from("x.exe")
+        );
     }
 
     /// The Steam app id projection strips the `steam:` prefix and yields the

@@ -184,6 +184,7 @@ pub enum SettingsPanelHit {
     AutoDarknessValueToggle,
     ResetCache,
     ResetSettings,
+    UndoInitialLayout,
     /// Liquid Glass master switch (keyboard `V`).
     LiquidGlassEnabled,
     /// Automatically add glass darkness when the captured backdrop is mostly
@@ -331,6 +332,7 @@ impl SettingsPanelHit {
             Self::AutoDarknessValueToggle => HitTarget::settings_toggle("show-auto-darkness-value"),
             Self::ResetCache => HitTarget::settings_action("reset-cache"),
             Self::ResetSettings => HitTarget::settings_action("reset-settings"),
+            Self::UndoInitialLayout => HitTarget::settings_action("undo-initial-layout"),
             Self::LiquidGlassEnabled => HitTarget::settings_toggle("lg-enabled"),
             Self::LiquidGlassAutoDarkness => HitTarget::settings_toggle("lg-auto-darkness"),
             Self::LiquidGlassAutoDarknessMode(mode) => {
@@ -437,6 +439,7 @@ pub struct SettingsPanelInput {
     pub show_fps: bool,
     pub show_auto_darkness_value: bool,
     pub hidden_count: usize,
+    pub initial_undo_available: bool,
     pub progress: f32,
     /// Vertical scroll offset (in rows) for scrollable categories.
     /// Deprecated: Phase 4 migrates to pixel-based ContinuousScroller.
@@ -488,7 +491,7 @@ impl Default for LiquidGlassValues {
     fn default() -> Self {
         Self {
             enabled: true,
-            auto_darkness_enabled: false,
+            auto_darkness_enabled: true,
             auto_darkness_max: 0.16,
             auto_darkness_mode: AutoDarknessModeId::Adaptive,
             thickness: 26.0,
@@ -557,6 +560,7 @@ pub struct SettingsPanelCopy<'a> {
     pub frequent_apps_detail: &'a str,
     pub steam_apps_label: &'a str,
     pub steam_apps_detail: &'a str,
+    pub initial_undo_label: &'a str,
     pub hidden_apps_label: &'a str,
     pub hidden_count_label: &'a str,
     pub search_hidden_label: &'a str,
@@ -581,8 +585,8 @@ pub struct SettingsPanelCopy<'a> {
     pub debug_icon_cache_detail: &'a str,
     pub debug_lg_enabled_label: &'a str,
     pub debug_lg_enabled_detail: &'a str,
-    pub debug_lg_auto_darkness_value_label: &'a str,
-    pub debug_lg_auto_darkness_value_detail: &'a str,
+    pub darkness_value_label: &'a str,
+    pub darkness_value_detail: &'a str,
     // ----- Darkness-category row labels -----
     pub darkness_auto_label: &'a str,
     pub darkness_auto_detail: &'a str,
@@ -677,6 +681,14 @@ pub fn build_with_ui(
 ) -> SettingsPanelModel {
     let scale = sanitize_scale(input.scale_factor);
     let layout = panel_layout(input.viewport, scale);
+    // The developer-only category is unavailable in optimized release builds.
+    // Fall back defensively in case the active category was carried over as Debug.
+    let active_category = if !cfg!(debug_assertions) && input.category == SettingsCategoryId::Debug
+    {
+        SettingsCategoryId::Apps
+    } else {
+        input.category
+    };
     let raw_progress = input.progress.clamp(0.0, 1.0);
     let pop = pop_progress(raw_progress);
     let visual_scale = 0.935 + 0.065 * pop;
@@ -783,6 +795,9 @@ pub fn build_with_ui(
     // Sidebar category buttons
     // ------------------------------------------------------------------
     for (index, (cat_id, label)) in copy.categories.iter().copied().enumerate() {
+        if !cfg!(debug_assertions) && cat_id == SettingsCategoryId::Debug {
+            continue;
+        }
         let row_top = sidebar_row_top(&layout, index, scale);
         let sidebar_w = layout.sidebar_w - 24.0 * scale;
         let row_rect = Rect::new(
@@ -882,8 +897,8 @@ pub fn build_with_ui(
     let cat_label = copy
         .categories
         .iter()
-        .find_map(|(cat, lbl)| (*cat == input.category).then_some(*lbl))
-        .unwrap_or(input.category.key());
+        .find_map(|(cat, lbl)| (*cat == active_category).then_some(*lbl))
+        .unwrap_or(active_category.key());
     ui.begin_absolute_placement();
     ui.set_cursor(content_left, layout.top + HEADER_TOP * scale);
     ui.set_available_width(content_w);
@@ -976,7 +991,7 @@ pub fn build_with_ui(
             ]),
     );
 
-    match input.category {
+    match active_category {
         // ==============================================================
         // Apps
         // ==============================================================
@@ -985,7 +1000,9 @@ pub fn build_with_ui(
             let gap = SEGMENT_GAP * scale;
             let each_w = (content_w - gap * 3.0) / 4.0;
 
-            // Sort label
+            // Sort label occupies the first row slot; the segment buttons get
+            // their own full-height slot below it so they clear the toggle
+            // rows that follow.
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, first_top);
             ui.set_available_width(content_w);
@@ -1064,6 +1081,17 @@ pub fn build_with_ui(
                     .color(MUTED)
                     .align(TextAlign::End),
             );
+            if input.initial_undo_available {
+                ui.begin_absolute_placement();
+                ui.set_cursor(content_left, first_top + ROW_STEP * 5.0 * scale);
+                ui.set_available_width(content_w);
+                ui.button(
+                    &Button::new(copy.initial_undo_label)
+                        .id(UiId::settings_row("undo-initial-layout"))
+                        .chevron_opt(false)
+                        .hit_target(SettingsPanelHit::UndoInitialLayout.target()),
+                );
+            }
         }
 
         // ==============================================================
@@ -1178,6 +1206,16 @@ pub fn build_with_ui(
                         .label(copy.darkness_auto_label)
                         .detail(copy.darkness_auto_detail)
                         .hit_target(SettingsPanelHit::LiquidGlassAutoDarkness.target()),
+                );
+
+                ui.begin_absolute_placement();
+                ui.set_available_width(cw);
+                ui.toggle(
+                    &Toggle::new(input.show_auto_darkness_value)
+                        .id(UiId::settings_row("toggle-show-auto-darkness-value"))
+                        .label(copy.darkness_value_label)
+                        .detail(copy.darkness_value_detail)
+                        .hit_target(SettingsPanelHit::AutoDarknessValueToggle.target()),
                 );
 
                 for (mode, (label, detail)) in AutoDarknessModeId::ALL
@@ -1334,17 +1372,6 @@ pub fn build_with_ui(
                         .label(copy.debug_lg_enabled_label)
                         .detail(copy.debug_lg_enabled_detail)
                         .hit_target(SettingsPanelHit::LiquidGlassEnabled.target()),
-                );
-
-                // Row 4: effective automatic-darkness debug overlay
-                ui.begin_absolute_placement();
-                ui.set_available_width(cw);
-                ui.toggle(
-                    &Toggle::new(input.show_auto_darkness_value)
-                        .id(UiId::settings_row("toggle-show-auto-darkness-value"))
-                        .label(copy.debug_lg_auto_darkness_value_label)
-                        .detail(copy.debug_lg_auto_darkness_value_detail)
-                        .hit_target(SettingsPanelHit::AutoDarknessValueToggle.target()),
                 );
 
                 // Liquid Glass parameter sliders
@@ -1566,37 +1593,37 @@ pub fn sidebar_step(scale_factor: f32) -> f32 {
 //   1  window decorations (M)
 //   2  icon cache rebuild (R)
 //   3  Liquid Glass enabled (V)
-//   4  show effective automatic-darkness value
-//   5  thickness slider
-//   6  refractive_index slider
-//   7  saturation slider
-//   8  chromatic_aberration slider
-//   9  blur_radius slider
-//  10  disable chromatic aberration (C)
-//  11  disable edge lighting (E)
-//  12  disable blur (L)
-//  13  "Reset Liquid Glass to defaults" button
-//  14  show backdrop texture (B)
-//  15  show geometry texture (G)
-//  16  show displacement (D)
-//  17  show alpha mask (A)
-//  18  show final glass only (F)
+//   4  thickness slider
+//   5  refractive_index slider
+//   6  saturation slider
+//   7  chromatic_aberration slider
+//   8  blur_radius slider
+//   9  disable chromatic aberration (C)
+//  10  disable edge lighting (E)
+//  11  disable blur (L)
+//  12  "Reset Liquid Glass to defaults" button
+//  13  show backdrop texture (B)
+//  14  show geometry texture (G)
+//  15  show displacement (D)
+//  16  show alpha mask (A)
+//  17  show final glass only (F)
 
 // Darkness row index map:
 //   0  automatic darkness enabled
-//   1  automatic darkness: full-rate mode
-//   2  automatic darkness: adaptive mode
-//   3  automatic darkness: fixed-8-Hz mode
-//   4  automatic darkness maximum slider
-//   5  glass_darkness slider
-//   6  context_menu_glass_darkness slider
-//   7  settings_panel_glass_darkness slider
+//   1  show effective automatic-darkness value
+//   2  automatic darkness: full-rate mode
+//   3  automatic darkness: adaptive mode
+//   4  automatic darkness: fixed-8-Hz mode
+//   5  automatic darkness maximum slider
+//   6  glass_darkness slider
+//   7  context_menu_glass_darkness slider
+//   8  settings_panel_glass_darkness slider
 
 /// Total number of full-row slots the Debug category uses.
-pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 19;
+pub const DEBUG_CATEGORY_ROW_COUNT: i32 = 18;
 
 /// Total number of full-row slots the Darkness category uses.
-pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 8;
+pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 9;
 
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
@@ -1614,9 +1641,7 @@ pub fn debug_category_overflow_rows() -> i32 {
 }
 
 /// Maximum legacy whole-row scroll offset for the Darkness category. The
-/// preferred 540 px panel now fits all eight compact rows, so this is zero at
-/// the standard size; `ScrollView` still handles genuinely constrained
-/// viewports with pixel-accurate bounds.
+/// `ScrollView` handles constrained viewports with pixel-accurate bounds.
 pub fn darkness_category_overflow_rows() -> i32 {
     let total = DARKNESS_CATEGORY_ROW_COUNT as f32;
     let visible = DEBUG_CATEGORY_VISIBLE_ROWS as f32;
@@ -1702,6 +1727,7 @@ mod tests {
             frequent_apps_detail: "Frequent detail",
             steam_apps_label: "Steam apps",
             steam_apps_detail: "Steam detail",
+            initial_undo_label: "Reset folder grouping",
             hidden_apps_label: "Hidden apps",
             hidden_count_label,
             search_hidden_label: "Search hidden",
@@ -1725,8 +1751,8 @@ mod tests {
             debug_icon_cache_detail: "Cache detail",
             debug_lg_enabled_label: "Enable Liquid Glass",
             debug_lg_enabled_detail: "LG detail",
-            debug_lg_auto_darkness_value_label: "Show auto darkness value",
-            debug_lg_auto_darkness_value_detail: "Show effective value detail",
+            darkness_value_label: "Show auto darkness value",
+            darkness_value_detail: "Show effective value detail",
             darkness_auto_label: "Auto backdrop darkness",
             darkness_auto_detail: "Enable backdrop-aware glass darkness",
             darkness_update_mode_labels: [
@@ -1771,6 +1797,7 @@ mod tests {
             show_fps: false,
             show_auto_darkness_value: false,
             hidden_count: 0,
+            initial_undo_available: false,
             progress: 1.0,
             scroll_rows: 0,
             window_decorated: false,
@@ -2126,6 +2153,31 @@ mod tests {
         assert_eq!(target, SettingsTarget::SortOption { key: "name".into() });
     }
 
+    /// Regression: the sort segment row once overlapped the frequent-apps
+    /// toggle row because the segments kept the full `ROW_H` height but were
+    /// placed only 44 px below the first row top (the next row starts at
+    /// `ROW_STEP` = 62 px).
+    #[test]
+    fn sort_segments_clear_the_frequent_toggle_row() {
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let segment = hm
+            .regions()
+            .iter()
+            .find(|r| r.target == HitTarget::settings_sort_option("name"))
+            .expect("sort segment hit region");
+        let frequent = hm
+            .regions()
+            .iter()
+            .find(|r| r.target == HitTarget::settings_toggle("frequent-apps"))
+            .expect("frequent toggle hit region");
+        assert!(
+            segment.rect.max_y() <= frequent.rect.min_y(),
+            "sort segment row (max_y={}) must sit above the frequent toggle row (min_y={})",
+            segment.rect.max_y(),
+            frequent.rect.min_y()
+        );
+    }
+
     #[test]
     fn app_sort_control_does_not_overlap_the_first_toggle() {
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
@@ -2172,6 +2224,38 @@ mod tests {
                 key: "steam-apps".into()
             }
         );
+    }
+
+    /// Regression: `Label::align(TextAlign::End)` used to be ignored because
+    /// `Ui::label()` copied the style's alignment into the TextView, so the
+    /// hidden-apps count and the version value overflowed to the right of
+    /// their intended right edge instead of ending there.
+    #[test]
+    fn right_aligned_labels_keep_end_alignment() {
+        let cases: [(SettingsCategoryId, &[&str]); 2] = [
+            (SettingsCategoryId::Apps, &["text-hidden-apps-count"]),
+            (SettingsCategoryId::About, &["text-version-value"]),
+        ];
+        for (category, ids) in cases {
+            let inp = input(category);
+            let c = copy("3");
+            let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+            let model = build_with_ui(inp, &c, &mut scroll);
+            for id in ids {
+                let view = model
+                    .result
+                    .render
+                    .text
+                    .iter()
+                    .find(|view| view.id == UiId::settings_row(id))
+                    .unwrap_or_else(|| panic!("{id} label missing in {category:?} category"));
+                assert_eq!(
+                    view.style.align,
+                    TextAlign::End,
+                    "{id} must carry TextAlign::End into its TextView"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2260,8 +2344,8 @@ mod tests {
     }
 
     #[test]
-    fn hit_map_debug_auto_darkness_value_toggle_exists() {
-        let hm = hit_map_for_category(SettingsCategoryId::Debug);
+    fn hit_map_darkness_auto_darkness_value_toggle_exists() {
+        let hm = hit_map_for_category(SettingsCategoryId::Darkness);
         let found = hm
             .regions()
             .iter()
@@ -2274,6 +2358,7 @@ mod tests {
         let darkness = hit_map_for_category(SettingsCategoryId::Darkness);
         let debug = hit_map_for_category(SettingsCategoryId::Debug);
         let targets = [
+            HitTarget::settings_toggle("show-auto-darkness-value"),
             HitTarget::settings_toggle("lg-auto-darkness"),
             HitTarget::settings_toggle("lg-auto-darkness-mode-fixed-8hz"),
             HitTarget::settings_toggle("lg-param-auto-darkness-max"),
@@ -2425,9 +2510,9 @@ mod tests {
     }
 
     #[test]
-    fn darkness_category_fits_without_legacy_row_scroll() {
+    fn darkness_category_overflows_after_update_mode_rows() {
         let n = darkness_category_overflow_rows();
-        assert_eq!(n, 0);
+        assert_eq!(n, 1);
     }
 
     #[test]
@@ -2561,6 +2646,14 @@ mod tests {
             .find(|b| b.layer == GlassLayer::Overlay)
             .map(|b| b.surfaces.len())
             .unwrap_or(0);
+        let toggle_ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .flat_map(|batch| &batch.views)
+            .filter(|view| view.kind == ControlKind::Toggle)
+            .count();
         let ink_count: usize = model.result.render.ink.iter().map(|b| b.views.len()).sum();
         let glyph_count: usize = model
             .result
@@ -2585,18 +2678,22 @@ mod tests {
             avg_us / 1000.0
         );
         eprintln!("  Modal glass shapes: {}", modal_glass);
-        eprintln!("  Overlay glass:      {} (toggle thumbs)", overlay_glass);
+        eprintln!(
+            "  Overlay glass:      {} (pressed toggle thumbs)",
+            overlay_glass
+        );
+        eprintln!("  Plain toggle ink:   {}", toggle_ink);
         eprintln!("  Ink views:          {}", ink_count);
         eprintln!("  Glyph views:        {}", glyph_count);
         eprintln!("  Text views:         {}", text_count);
         eprintln!("  Hit regions:        {}", region_count);
         eprintln!();
 
-        // The Debug category should produce ~11 toggle thumbs (glass overlay
-        // shapes) plus helper shapes. Overlay >= 11 is an indicator.
+        // Resting toggles are plain ink. Glass is created only for the
+        // pointer-held frame by the retained settings visual overlay.
         assert!(
-            overlay_glass >= 11,
-            "expected at least 11 toggle glass thumbs"
+            overlay_glass == 0 && toggle_ink >= 11,
+            "expected resting toggles as plain ink (glass={overlay_glass}, ink={toggle_ink})"
         );
     }
 

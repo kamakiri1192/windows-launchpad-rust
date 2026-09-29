@@ -55,6 +55,7 @@ fn insert_app(reg: &mut AppRegistry, id: &str, name: &str) {
         version: String::new(),
         publisher: String::new(),
         identifier: String::new(),
+        hide_tile_fill: false,
     };
     r.slot = reg.alloc_slot();
     reg.insert(r);
@@ -103,7 +104,7 @@ fn folder_and_app_references_are_stable_across_normalize() {
 
 #[test]
 fn duplicate_app_items_are_deduplicated() {
-    let mut state = LauncherState::from_legacy(vec![app("a"), app("a"), app("b")], vec![]);
+    let mut state = LauncherState::from_app_order(vec![app("a"), app("a"), app("b")], vec![]);
     state.normalize(&HashSet::new(), false);
     let count_a = state
         .items
@@ -132,7 +133,7 @@ fn new_apps_append_in_name_order_without_disturbing_layout() {
     let mut reg = AppRegistry::new();
     insert_app(&mut reg, "b", "Banana");
     insert_app(&mut reg, "a", "Apple");
-    let mut state = LauncherState::from_legacy(vec![app("b"), app("a")], vec![]);
+    let mut state = LauncherState::from_app_order(vec![app("b"), app("a")], vec![]);
 
     // User reversed the order.
     state.reorder_app_items(vec![app("a"), app("b")]);
@@ -234,7 +235,7 @@ fn folder_child_order_persists_through_serde() {
 
 #[test]
 fn hidden_apps_excluded_from_top_level_and_persisted() {
-    let mut state = LauncherState::from_legacy(vec![app("a"), app("b")], vec![app("h")]);
+    let mut state = LauncherState::from_app_order(vec![app("a"), app("b")], vec![app("h")]);
     state.normalize(&discovered(&["a", "b", "h"]), false);
     // Hidden app is not in top-level items.
     assert!(!state.top_level_app_ids().any(|id| id == &app("h")));
@@ -249,7 +250,7 @@ fn hidden_apps_excluded_from_top_level_and_persisted() {
 
 #[test]
 fn legacy_order_and_hidden_migrate_to_launcher_state() {
-    let state = LauncherState::from_legacy(
+    let state = LauncherState::from_app_order(
         vec![app("x"), app("y"), app("z")],
         vec![app("hidden1"), app("hidden2")],
     );
@@ -264,7 +265,7 @@ fn legacy_order_and_hidden_migrate_to_launcher_state() {
 
 #[test]
 fn legacy_empty_order_is_not_customized() {
-    let state = LauncherState::from_legacy(vec![], vec![]);
+    let state = LauncherState::from_app_order(vec![], vec![]);
     assert!(!state.customized);
 }
 
@@ -295,7 +296,7 @@ fn truncated_launcher_state_json_falls_back() {
 
 #[test]
 fn hide_app_preserves_remaining_order() {
-    let mut state = LauncherState::from_legacy(vec![app("a"), app("b"), app("c")], vec![]);
+    let mut state = LauncherState::from_app_order(vec![app("a"), app("b"), app("c")], vec![]);
     state.hide_app(&app("b"));
     assert!(state.is_hidden(&app("b")));
     assert_eq!(
@@ -318,7 +319,7 @@ fn hidden_app_in_top_level_stays_hidden_after_normalize() {
     // damaged persisted state or a legacy migration that kept hidden ids in the
     // order tail) must stay hidden after normalize. The hidden intent wins over
     // the visible placement.
-    let mut state = LauncherState::from_legacy(vec![app("a")], vec![]);
+    let mut state = LauncherState::from_app_order(vec![app("a")], vec![]);
     state.hidden_apps.insert(app("a"));
     state.normalize(&discovered(&["a"]), false);
     assert!(state.is_hidden(&app("a")));
@@ -381,7 +382,7 @@ fn domain_compiles_without_binary_deps() {
 
 #[test]
 fn reorder_does_not_drop_undiscovered_placeholders() {
-    let mut state = LauncherState::from_legacy(vec![app("a"), app("b"), app("gone")], vec![]);
+    let mut state = LauncherState::from_app_order(vec![app("a"), app("b"), app("gone")], vec![]);
     // Only discovered visible apps are in the reorder input.
     state.reorder_app_items(vec![app("b"), app("a")]);
     let ids: Vec<AppId> = state.top_level_app_ids().cloned().collect();
@@ -394,7 +395,7 @@ fn reorder_does_not_drop_undiscovered_placeholders() {
 
 #[test]
 fn normalize_resolves_cross_placement_then_dissolves_undersized_folder() {
-    let mut state = LauncherState::from_legacy(vec![app("a")], vec![]);
+    let mut state = LauncherState::from_app_order(vec![app("a")], vec![]);
     let fid = FolderId::generate(0);
     let mut f = Folder::new(fid, "F");
     f.children = vec![app("a"), app("only_folder")];

@@ -58,9 +58,7 @@ impl App {
             )
         });
         let scroll_x;
-        let dragging;
         if let Some(s) = self.scroller.as_mut() {
-            dragging = s.phase == Phase::Dragging;
             s.tick(now);
             if let Some(position) = profile_scroll_position {
                 s.position = position;
@@ -130,7 +128,11 @@ impl App {
             .as_mut()
             .map(|runner| runner.animation_dt())
             .unwrap_or(wall_anim_dt);
-        let anim_dt = wall_anim_dt;
+        // The QA runner reads back each GPU frame, so wall time can be much
+        // larger than the scenario step. Keep tile springs on the same clock
+        // as the menu to avoid invalid anchors during search transitions.
+        let anim_dt = context_menu_anim_dt;
+        let launch_animating = self.launch_presentation.tick(context_menu_anim_dt);
         if self.editing {
             self.wiggle_phase += anim_dt;
         }
@@ -314,7 +316,9 @@ impl App {
             r.render(&DrawArgs {
                 scroll_x,
                 viewport: vp,
-                defer_backdrop_capture: dragging || qa_enabled,
+                // Live video must keep updating during page drags. Only the
+                // deterministic QA path intentionally freezes the backdrop.
+                defer_backdrop_capture: qa_enabled,
                 time: self.wiggle_phase,
                 drag_active: if self.drag_item.is_some() || self.folders.child_drag.is_some() {
                     1.0
@@ -322,6 +326,8 @@ impl App {
                     0.0
                 },
                 drag_pos: (self.drag_x, self.drag_y),
+                presentation: self.launch_presentation.shader_values(),
+                presentation_motion: self.launch_presentation.motion_values(),
             });
         }
         self.profiler.record_render(render_start.elapsed());
@@ -344,6 +350,7 @@ impl App {
             || folder_child_springs_animating
             || folder_child_page_started
             || folder_scroller_animating
+            || launch_animating
             || self.editing
             || self.profile_scroll.is_some()
             // Debug HUD drives a continuous redraw, but only while the

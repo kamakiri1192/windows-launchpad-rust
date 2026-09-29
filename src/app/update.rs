@@ -7,13 +7,15 @@ use crate::debug_log;
 use crate::domain::app_id::AppId;
 use crate::domain::app_registry::AppLaunchInfo;
 use crate::domain::launcher_item::LauncherItem;
-use crate::domain::settings::{Settings, SortOrder};
+use crate::domain::settings::SortOrder;
 use crate::scroll::{Phase, WheelPhase};
 use crate::workers::icon_worker::IconResult;
 use crate::workers::refresh_watcher::RefreshMessage;
 
 use crate::app::render::settings_press_target_from_hit_target;
-use crate::app::state::{App, PendingPress, SettingsPressTarget, WorkerMessage, CLICK_SLOP_PHYS};
+use crate::app::state::{
+    App, PendingPress, SettingsPressTarget, SettingsToggleDrag, WorkerMessage, CLICK_SLOP_PHYS,
+};
 
 impl App {
     pub(crate) fn input_region_at(&self, x: f32, y: f32) -> crate::input_routing::InputRegion {
@@ -372,13 +374,17 @@ impl App {
         }
         if button == crate::input_routing::PointerButton::Left
             && matches!(decision, RouterAction::Consume)
-            && (self.settings_slider_drag.is_some() || self.pressed_on_settings.is_some())
+            && (self.settings_slider_drag.is_some()
+                || self.settings_toggle_drag.is_some()
+                || self.pressed_on_settings.is_some())
         {
             // If the platform drops the matching routed release (for example
             // when the pointer leaves the client window), never leave a
             // settings slider in a live drag state.
             self.end_settings_slider_drag();
+            self.settings_toggle_drag = None;
             self.pressed_on_settings = None;
+            self.request_redraw();
         }
     }
 
@@ -394,6 +400,89 @@ impl App {
         }
     }
 
+    fn settings_toggle_value(&self, target: SettingsPressTarget) -> Option<bool> {
+        Some(match target {
+            SettingsPressTarget::FrequentToggle => self.settings.frequent_apps_enabled,
+            SettingsPressTarget::SteamToggle => self.settings.show_steam_apps,
+            SettingsPressTarget::SearchHiddenToggle => self.settings.search_includes_hidden,
+            SettingsPressTarget::DebugToggle => self.settings.debug_keys_enabled,
+            SettingsPressTarget::FpsToggle => self.settings.show_fps,
+            SettingsPressTarget::AutoDarknessValueToggle => self.settings.show_auto_darkness_value,
+            SettingsPressTarget::LiquidGlassEnabled => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_enabled())
+                .unwrap_or(self.settings.liquid_glass.enabled),
+            SettingsPressTarget::LiquidGlassAutoDarkness => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_auto_darkness_enabled())
+                .unwrap_or(self.settings.liquid_glass.auto_darkness_enabled),
+            SettingsPressTarget::LiquidGlassAutoDarknessMode(mode) => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_auto_darkness_update_mode() == mode)
+                .unwrap_or(false),
+            SettingsPressTarget::LiquidGlassDebug(flag) => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.liquid_glass_debug_flag(debug_flag_to_renderer(flag)))
+                .unwrap_or(false),
+            SettingsPressTarget::WindowDecorations => self
+                .renderer
+                .as_ref()
+                .map(|renderer| renderer.decorated())
+                .unwrap_or(false),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn begin_settings_toggle_drag(&mut self, target: SettingsPressTarget) {
+        let Some(value) = self.settings_toggle_value(target) else {
+            self.settings_toggle_drag = None;
+            return;
+        };
+        let progress = f32::from(value);
+        self.settings_toggle_drag = Some(SettingsToggleDrag {
+            target,
+            start_pointer_x: self.pointer_phys_x,
+            start_progress: progress,
+            current_progress: progress,
+            overdrag_progress: 0.0,
+            dragging: false,
+        });
+    }
+
+    pub(crate) fn update_settings_toggle_drag(&mut self, pointer_phys_x: f32) {
+        let Some(drag) = self.settings_toggle_drag.as_mut() else {
+            return;
+        };
+        let delta = pointer_phys_x - drag.start_pointer_x;
+        let threshold =
+            crate::ui::Theme::default().toggle_motion.drag_threshold * self.scale_factor.max(0.1);
+        if delta.abs() >= threshold {
+            drag.dragging = true;
+        }
+        let (progress, overdrag_progress) = settings_toggle_drag_projection(
+            drag.start_progress,
+            drag.start_pointer_x,
+            pointer_phys_x,
+            self.scale_factor,
+        );
+        drag.current_progress = progress;
+        drag.overdrag_progress = overdrag_progress;
+        self.request_redraw();
+    }
+
+    pub(crate) fn finish_settings_toggle_drag(&mut self, drag: SettingsToggleDrag) {
+        let target_value = drag.current_progress >= 0.5;
+        if self.settings_toggle_value(drag.target) != Some(target_value) {
+            self.handle_settings_click(drag.target);
+        } else {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn handle_settings_click(&mut self, target: SettingsPressTarget) {
         match target {
             SettingsPressTarget::Close => self.close_settings(),
@@ -406,12 +495,9 @@ impl App {
             SettingsPressTarget::Sort(order) => {
                 self.settings.sort_order = order;
                 if order == SortOrder::Name {
-                    // Reset the user layout to a name-sorted arrangement. Phase 7
-                    // keeps folder/hidden intents but drops the customized flag so
-                    // the next discovered-app integration rebuilds the item list
-                    // from a display-name sort (legacy "名前順" behavior).
-                    self.launcher_state.customized = false;
-                    self.sync_launcher_layout_with_registry();
+                    crate::domain::initial_layout::sort_items(&mut self.launcher_state, |id| {
+                        self.registry.lowercased_name_of(id)
+                    });
                     self.persist_launcher_state();
                     self.relayout();
                 }
@@ -425,6 +511,8 @@ impl App {
             }
             SettingsPressTarget::SteamToggle => {
                 self.settings.show_steam_apps = !self.settings.show_steam_apps;
+                self.launcher_state.layout_changed();
+                self.persist_launcher_state();
                 self.persist_settings();
                 self.close_folder();
                 self.relayout();
@@ -454,19 +542,8 @@ impl App {
                 self.reset_icons();
                 self.request_redraw();
             }
-            SettingsPressTarget::ResetSettings => {
-                self.settings = Settings::default();
-                // Mirror the reset into the renderer's Liquid Glass params so
-                // the on-screen effect matches the now-default settings.
-                self.apply_persisted_liquid_glass_to_renderer();
-                // Reset the user layout entirely (order, folders, hidden).
-                self.launcher_state = crate::domain::launcher_state::LauncherState::new();
-                self.sync_launcher_layout_with_registry();
-                self.persist_settings();
-                self.persist_launcher_state();
-                self.relayout();
-                self.request_redraw();
-            }
+            SettingsPressTarget::UndoInitialLayout => self.undo_initial_layout(),
+            SettingsPressTarget::ResetSettings => self.reset_settings_and_layout(),
             SettingsPressTarget::LiquidGlassEnabled => {
                 let next = !self.settings.liquid_glass.enabled;
                 self.settings.liquid_glass.enabled = next;
@@ -491,14 +568,8 @@ impl App {
                 }
                 self.request_redraw();
             }
-            SettingsPressTarget::LiquidGlassParam(field) => {
-                // Begin a drag. Subsequent pointer moves update the value
-                // via `update_settings_slider_drag`; release commits.
-                self.settings_slider_drag = Some(field);
-                // Also set the value at the press position so a tap without
-                // drag still moves the knob.
-                self.update_settings_slider_drag(self.pointer_phys_x);
-            }
+            // The pointer-down/move/up lifecycle owns numeric sliders.
+            SettingsPressTarget::LiquidGlassParam(_) => {}
             SettingsPressTarget::LiquidGlassParamReset(field) => {
                 let (min, max, default) = field.range();
                 let _ = (min, max);
@@ -908,14 +979,48 @@ impl App {
         };
         for msg in messages {
             match msg {
-                WorkerMessage::Icon(IconResult::Loaded { app_id, image }) => {
-                    self.apply_icon(&app_id, image, false);
+                WorkerMessage::Icon(IconResult::Loaded {
+                    app_id,
+                    image,
+                    hide_tile_fill,
+                }) => {
+                    self.apply_icon(&app_id, image, hide_tile_fill, false);
                 }
                 WorkerMessage::Icon(IconResult::Failed { app_id, error }) => {
                     self.fail_icon(&app_id, error);
                 }
-                WorkerMessage::Refresh(RefreshMessage::Initial(snap)) => {
-                    self.ingest_snapshot(snap, true);
+                #[cfg(windows)]
+                WorkerMessage::Refresh(RefreshMessage::Catalog(scan)) => {
+                    self.apply_catalog(scan);
+                }
+                WorkerMessage::Refresh(RefreshMessage::Initial {
+                    snapshot,
+                    layout,
+                    status,
+                }) => {
+                    debug_log!(
+                        "initial-layout: scan_complete={} writable={}",
+                        status.complete(),
+                        layout.writable
+                    );
+                    if !self.layout_session_changed {
+                        self.launcher_state = layout.state;
+                        self.layout_checkpoint = self.launcher_state.clone();
+                        self.layout_writable = layout.writable;
+                    } else if self.launcher_state.initial_layout.is_none() {
+                        // A user action while discovery ran owns the layout.
+                        // Retain the one-shot marker without adopting a late proposal.
+                        self.launcher_state.initial_layout = Some(crate::domain::initial_layout::InitialLayoutRecord::new(
+                            crate::domain::initial_layout::InitializationStatus::PreservedExisting,
+                            "user-edited-during-discovery".into()));
+                    }
+                    self.initial_snapshot_ready = true;
+                    self.ingest_snapshot(snapshot, true);
+                    if std::mem::take(&mut self.settings_reset_pending) {
+                        self.reset_settings_and_layout();
+                    } else if self.layout_session_changed {
+                        self.persist_launcher_state();
+                    }
                 }
                 WorkerMessage::Refresh(RefreshMessage::Diff(diff)) => {
                     self.apply_diff(diff);
@@ -1013,6 +1118,22 @@ impl App {
         {
             self.drag_item = None;
         }
+        self.relayout();
+        self.request_redraw();
+    }
+
+    /// Remove a folder container while preserving its apps as top-level items.
+    /// The context-menu action is immediate and persists the new layout.
+    pub(crate) fn delete_folder(&mut self, id: &crate::domain::folders::FolderId) {
+        if self.launcher_state.delete_folder(id).is_none() {
+            return;
+        }
+        if self.folders.active.as_ref() == Some(id) {
+            self.close_folder();
+            self.folder_scroller = None;
+            self.folder_scroll_pending_commit = false;
+        }
+        self.persist_launcher_state();
         self.relayout();
         self.request_redraw();
     }
@@ -1144,6 +1265,8 @@ impl App {
         }
         self.pending_press = None;
         self.pressed_on_control = false;
+        self.pressed_on_settings = None;
+        self.settings_toggle_drag = None;
         self.reset_settings_category_hover();
         self.settings_open = true;
         debug_log!("settings: opened");
@@ -1156,11 +1279,12 @@ impl App {
             return;
         }
         self.settings_open = false;
+        self.pressed_on_settings = None;
         self.reset_settings_category_hover();
         // Drop any in-flight slider drag and reset the per-category scroll so
         // the next open starts at the top.
-        self.settings_slider_drag = None;
-        self.pressed_on_settings = None;
+        self.end_settings_slider_drag();
+        self.settings_toggle_drag = None;
         self.reset_settings_scroll();
         debug_log!("settings: closed");
         self.request_redraw();
@@ -1805,7 +1929,7 @@ impl App {
     }
 
     /// Update the held child's preview order for either an occupied child cell
-    /// or an empty 3x3 cell on the current page. Returns `(valid, changed)` so
+    /// or an empty 5x3 cell on the current page. Returns `(valid, changed)` so
     /// release can distinguish a real empty-cell drop from panel chrome.
     fn reorder_folder_child_drag_at(&mut self, x: f32, y: f32) -> (bool, bool) {
         let target_child = match self.folder_hit_target(x, y) {
@@ -1840,7 +1964,7 @@ impl App {
         crate::layout::folder_panel::child_drop_index(
             layout.target_panel_rect,
             crate::ui_model::geometry::Point::new(x, y),
-            self.folders.page,
+            layout.hit_page,
             child_count,
             layout.effective_scale,
         )
@@ -2072,6 +2196,36 @@ impl App {
     }
 }
 
+/// Map a captured settings-toggle pointer displacement onto the thumb's
+/// 0..=1 travel. The physical travel is intentionally bounded to the same
+/// 20-logical-pixel span used by the switch geometry.
+fn settings_toggle_drag_progress(
+    start_progress: f32,
+    start_pointer_x: f32,
+    pointer_phys_x: f32,
+    scale_factor: f32,
+) -> f32 {
+    settings_toggle_drag_projection(
+        start_progress,
+        start_pointer_x,
+        pointer_phys_x,
+        scale_factor,
+    )
+    .0
+}
+
+fn settings_toggle_drag_projection(
+    start_progress: f32,
+    start_pointer_x: f32,
+    pointer_phys_x: f32,
+    scale_factor: f32,
+) -> (f32, f32) {
+    let travel = 20.0 * scale_factor.max(0.1);
+    crate::ui::widgets::toggle::clamp_drag_progress(
+        start_progress + (pointer_phys_x - start_pointer_x) / travel,
+    )
+}
+
 fn folder_page_commit_after_settle(
     position: f32,
     extent: f32,
@@ -2151,6 +2305,30 @@ fn debug_flag_to_renderer(
 #[cfg(test)]
 mod folder_page_commit_tests {
     use super::*;
+
+    #[test]
+    fn settings_toggle_drag_progress_is_bounded() {
+        assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 100.0, 1.0), 0.0);
+        assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 1000.0, 1.0), 1.0);
+        assert_eq!(settings_toggle_drag_progress(1.0, 100.0, -1000.0, 1.0), 0.0);
+        assert_eq!(settings_toggle_drag_progress(0.0, 100.0, 110.0, 2.0), 0.25);
+    }
+
+    #[test]
+    fn settings_toggle_drag_projection_reports_only_endpoint_overdrag() {
+        assert_eq!(
+            settings_toggle_drag_projection(0.0, 100.0, 110.0, 1.0),
+            (0.5, 0.0)
+        );
+        assert_eq!(
+            settings_toggle_drag_projection(0.0, 100.0, 130.0, 1.0),
+            (1.0, 0.5)
+        );
+        assert_eq!(
+            settings_toggle_drag_projection(1.0, 100.0, 70.0, 1.0),
+            (0.0, -0.5)
+        );
+    }
 
     #[test]
     fn half_page_preview_does_not_change_durable_page() {

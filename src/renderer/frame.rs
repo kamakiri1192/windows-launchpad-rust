@@ -56,8 +56,13 @@ impl RenderFrame {
 impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, args: &DrawArgs) {
-        // Update uniforms (tiny, every frame).
         let clip = self.frame_clip;
+        self.liquid_glass.set_presentation(
+            args.presentation,
+            [clip.0, clip.1, clip.2, clip.3],
+            args.presentation_motion[0],
+        );
+        // Update uniforms (tiny, every frame).
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -70,6 +75,8 @@ impl Renderer {
                 frame_radius: clip.4,
                 drag_active: args.drag_active,
                 drag_pos: [args.drag_pos.0, args.drag_pos.1],
+                presentation: args.presentation,
+                presentation_motion: args.presentation_motion,
             }),
         );
 
@@ -279,6 +286,8 @@ impl Renderer {
                 ],
                 frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
                 frame_half_size: [clip.2, clip.3, 0.0, 0.0],
+                presentation: args.presentation,
+                presentation_motion: args.presentation_motion,
             }),
         );
         let profile_scope = self.gpu_profiler.begin("edit_badge_glass", &mut encoder);
@@ -509,6 +518,54 @@ impl Renderer {
             .render_settings_panel(&self.queue, &mut encoder, &view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        // Settings ink (including the switch track) is placed below the
+        // interactive thumb lens. The lens then samples the already-rendered
+        // track, matching the single cooperative glass construction used by
+        // the iOS reference instead of painting the track over the lens.
+        let profile_scope = self
+            .gpu_profiler
+            .begin("settings_underlay_content", &mut encoder);
+        if self.settings_instance_buffer.len() > 0 {
+            if let Some(buf) = self.settings_instance_buffer.as_ref() {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("settings underlay content pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.control_pipeline);
+                pass.set_bind_group(0, &self.control_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..self.settings_instance_buffer.len());
+            }
+        }
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // Settings toggle lenses are deliberately composited after the panel
+        // surface and its underlay content. Capture that completed scene now
+        // so each thumb can refract the actual green/white track below it.
+        if self.liquid_glass.has_settings_control_glass() {
+            self.liquid_glass
+                .prepare_settings_control_scene(&mut encoder, frame.texture());
+        }
+
+        let profile_scope = self
+            .gpu_profiler
+            .begin("settings_control_glass", &mut encoder);
+        self.liquid_glass
+            .render_settings_controls(&self.queue, &mut encoder, &view);
+        self.gpu_profiler.end(&mut encoder, profile_scope);
+
         // Generic fixed modal content, plus settings-specific content, on top
         // of the modal glass.
         let profile_scope = self.gpu_profiler.begin("modal_content", &mut encoder);
@@ -592,14 +649,6 @@ impl Renderer {
                         pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                         pass.set_vertex_buffer(0, buf.slice(..));
                         pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
-                    }
-                }
-                if self.settings_instance_buffer.len() > 0 {
-                    if let Some(buf) = self.settings_instance_buffer.as_ref() {
-                        pass.set_pipeline(&self.control_pipeline);
-                        pass.set_bind_group(0, &self.control_bind_group, &[]);
-                        pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..6, 0..self.settings_instance_buffer.len());
                     }
                 }
                 if self.settings_text_instance_buffer.len() > 0 {
@@ -825,37 +874,48 @@ impl Renderer {
         // control-text pipeline (screen-fixed, no page-frame clip). It runs in
         // its own command buffer after the scene submit so it can `Load` the
         // presented image without disturbing the profiler's second submit.
-        if self.overlay_text_instance_buffer.len() > 0 {
-            if let Some(buf) = self.overlay_text_instance_buffer.as_ref() {
-                let mut overlay_encoder =
-                    self.device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("overlay encoder"),
-                        });
-                {
-                    let mut pass = overlay_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("debug overlay pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
+        if self.overlay_background_instance_buffer.len() > 0
+            || self.overlay_text_instance_buffer.len() > 0
+        {
+            let mut overlay_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("overlay encoder"),
                     });
+            {
+                let mut pass = overlay_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("debug overlay pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                // Paint a single procedural rounded rectangle per line
+                // before the glyphs. This keeps contrast stable without
+                // adding atlas samples or shadow copies per character.
+                if let Some(buf) = self.overlay_background_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.control_pipeline);
+                    pass.set_bind_group(0, &self.control_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..self.overlay_background_instance_buffer.len());
+                }
+                if let Some(buf) = self.overlay_text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.control_text_pipeline);
                     pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..self.overlay_text_instance_buffer.len());
                 }
-                self.queue.submit(std::iter::once(overlay_encoder.finish()));
             }
+            self.queue.submit(std::iter::once(overlay_encoder.finish()));
         }
 
         // Optional QA self-capture: copy the surface texture to a host-readable

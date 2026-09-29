@@ -6,6 +6,7 @@
 
 use crate::app::state::App;
 use crate::renderer::text_engine as text;
+use crate::renderer::DebugOverlayBackground;
 use crate::ui_model::geometry::{Rect, UvRect};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{Color, GlyphLane, GlyphView};
@@ -17,9 +18,16 @@ const OVERLAY_MARGIN_LOGICAL: f32 = 10.0;
 const OVERLAY_FONT_SIZE: f32 = 13.0;
 /// Line height of the debug HUD, in logical px.
 const OVERLAY_LINE_HEIGHT: f32 = 18.0;
-/// Flat white at ~85% alpha — legible over both bright and dark scenes
-/// without the heavy layered shadow the app labels use.
+/// Flat white at ~85% alpha, kept as a single glyph layer so the HUD remains
+/// cheap while its backing plate provides the contrast.
 const OVERLAY_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
+/// Small horizontal/vertical padding around each diagnostic line.
+const OVERLAY_BACKGROUND_PADDING: (f32, f32) = (5.0, 3.0);
+/// A dark translucent plate keeps the HUD readable over both bright wallpaper
+/// and the launcher's light glass without requiring extra glyph samples.
+const OVERLAY_BACKGROUND_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+const OVERLAY_BACKGROUND_OPACITY: f32 = 0.62;
+const OVERLAY_BACKGROUND_RADIUS: f32 = 4.0;
 
 impl App {
     /// Build and upload debug-overlay glyphs for this frame.
@@ -64,6 +72,7 @@ impl App {
         }
 
         let mut glyph_views = Vec::new();
+        let mut backgrounds = Vec::new();
         if !lines.is_empty() {
             // Borrow self immutably first to snapshot the values we need,
             // before we take the mutable text-renderer borrow below.
@@ -88,6 +97,17 @@ impl App {
                     });
                     let center_x = vp_w as f32 - margin - width * 0.5;
                     let center_y = margin + line_height * (line_index as f32 + 0.5);
+                    let (padding_x, padding_y) = (
+                        OVERLAY_BACKGROUND_PADDING.0 * scale,
+                        OVERLAY_BACKGROUND_PADDING.1 * scale,
+                    );
+                    backgrounds.push(DebugOverlayBackground {
+                        center: [center_x, center_y],
+                        half_size: [width * 0.5 + padding_x, line_height * 0.5 + padding_y],
+                        radius: OVERLAY_BACKGROUND_RADIUS * scale,
+                        color: OVERLAY_BACKGROUND_COLOR,
+                        opacity: OVERLAY_BACKGROUND_OPACITY,
+                    });
                     let quads = t.layout_centered_line(&text::CenteredLineSpec {
                         text: label,
                         font_size,
@@ -105,6 +125,10 @@ impl App {
         self.render_model
             .set_glyph_batch(GlyphLane::Overlay, glyph_views);
 
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_debug_overlay_backgrounds(&backgrounds);
+        }
+
         // Keep the text atlas current so the renderer uploads any newly
         // rasterized glyphs (the overlay is the first consumer of digits /
         // colon glyphs on a fresh atlas).
@@ -120,11 +144,13 @@ impl App {
     }
 }
 
+// Sampled equivalent attenuation of the raw capture, not the local material
+// value, not an after-alpha contrast measurement, and not frame-synchronous.
 fn format_auto_darkness_value(enabled: bool, value: f32) -> String {
     if enabled {
-        format!("Dynamic darkness: {:.3}", value.max(0.0))
+        format!("Dynamic Darkness (capture mean): {:.3}", value.max(0.0))
     } else {
-        "Dynamic darkness: OFF".to_owned()
+        "Dynamic Darkness (capture mean): OFF".to_owned()
     }
 }
 
@@ -132,6 +158,7 @@ fn overlay_glyph_views(quads: &[text::GlyphQuad], id: &UiId) -> Vec<GlyphView> {
     quads
         .iter()
         .map(|quad| GlyphView {
+            presentation_pivot: None,
             id: id.clone(),
             rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
             uv: UvRect {
@@ -155,11 +182,11 @@ mod tests {
     fn auto_darkness_overlay_uses_three_decimal_places() {
         assert_eq!(
             format_auto_darkness_value(true, 0.12345),
-            "Dynamic darkness: 0.123"
+            "Dynamic Darkness (capture mean): 0.123"
         );
         assert_eq!(
             format_auto_darkness_value(true, -0.1),
-            "Dynamic darkness: 0.000"
+            "Dynamic Darkness (capture mean): 0.000"
         );
     }
 
@@ -167,7 +194,7 @@ mod tests {
     fn auto_darkness_overlay_says_off_when_feature_is_disabled() {
         assert_eq!(
             format_auto_darkness_value(false, 0.12345),
-            "Dynamic darkness: OFF"
+            "Dynamic Darkness (capture mean): OFF"
         );
     }
 }

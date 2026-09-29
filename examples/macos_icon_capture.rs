@@ -24,7 +24,7 @@ mod macos {
     use serde::Serialize;
 
     const TARGET: u32 = 128;
-    const METADATA_VERSION: u32 = 1;
+    const METADATA_VERSION: u32 = 2;
 
     #[derive(Debug)]
     struct Args {
@@ -53,9 +53,14 @@ mod macos {
         zero_alpha_pixels: usize,
         partial_alpha_pixels: usize,
         opaque_pixels: usize,
+        alpha_ge_224_pixels: usize,
         min_alpha: u8,
         bbox_alpha_gt_10: Option<BoundingBox>,
         bbox_alpha_ge_128: Option<BoundingBox>,
+        bbox_alpha_ge_224: Option<BoundingBox>,
+        alpha_ge_224_fill: Option<f64>,
+        alpha_ge_224_horizontal_symmetry: Option<f64>,
+        alpha_ge_224_vertical_symmetry: Option<f64>,
     }
 
     #[derive(Debug, Serialize)]
@@ -185,25 +190,42 @@ mod macos {
         let mut zero_alpha_pixels = 0;
         let mut partial_alpha_pixels = 0;
         let mut opaque_pixels = 0;
+        let mut alpha_ge_224_pixels = 0;
         let mut min_alpha = u8::MAX;
         for pixel in icon.rgba.chunks_exact(4) {
             let alpha = pixel[3];
             min_alpha = min_alpha.min(alpha);
+            alpha_ge_224_pixels += usize::from(alpha >= 224);
             match alpha {
                 0 => zero_alpha_pixels += 1,
                 255 => opaque_pixels += 1,
                 _ => partial_alpha_pixels += 1,
             }
         }
+        let bbox_alpha_ge_224 = bounding_box(icon, 224);
+        let alpha_ge_224_fill = bbox_alpha_ge_224.as_ref().map(|bounds| {
+            alpha_ge_224_pixels as f64 / (u64::from(bounds.width) * u64::from(bounds.height)) as f64
+        });
+        let (alpha_ge_224_horizontal_symmetry, alpha_ge_224_vertical_symmetry) = bbox_alpha_ge_224
+            .as_ref()
+            .map(|bounds| mask_symmetry(icon, bounds, 224))
+            .map_or((None, None), |(horizontal, vertical)| {
+                (Some(horizontal), Some(vertical))
+            });
         ImageStats {
             width: icon.w,
             height: icon.h,
             zero_alpha_pixels,
             partial_alpha_pixels,
             opaque_pixels,
+            alpha_ge_224_pixels,
             min_alpha,
             bbox_alpha_gt_10: bounding_box(icon, 11),
             bbox_alpha_ge_128: bounding_box(icon, 128),
+            bbox_alpha_ge_224,
+            alpha_ge_224_fill,
+            alpha_ge_224_horizontal_symmetry,
+            alpha_ge_224_vertical_symmetry,
         }
     }
 
@@ -233,6 +255,27 @@ mod macos {
             width: max_x - min_x + 1,
             height: max_y - min_y + 1,
         })
+    }
+
+    fn mask_symmetry(icon: &DecodedIcon, bounds: &BoundingBox, threshold: u8) -> (f64, f64) {
+        let mut horizontal_mismatches = 0u64;
+        let mut vertical_mismatches = 0u64;
+        for local_y in 0..bounds.height {
+            for local_x in 0..bounds.width {
+                let x = bounds.min_x + local_x;
+                let y = bounds.min_y + local_y;
+                let alpha_at =
+                    |x: u32, y: u32| icon.rgba[((y * icon.w + x) * 4 + 3) as usize] >= threshold;
+                let opaque = alpha_at(x, y);
+                horizontal_mismatches += u64::from(opaque != alpha_at(bounds.max_x - local_x, y));
+                vertical_mismatches += u64::from(opaque != alpha_at(x, bounds.max_y - local_y));
+            }
+        }
+        let area = f64::from(bounds.width * bounds.height);
+        (
+            1.0 - horizontal_mismatches as f64 / area,
+            1.0 - vertical_mismatches as f64 / area,
+        )
     }
 
     fn slugify(name: &str) -> String {

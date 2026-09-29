@@ -241,10 +241,17 @@ fn folder_cursor_left_intent(editing: bool, folder_gesture_active: bool) -> Fold
 /// 6. `M` → toggle decorations; `R` (field closed) → reset icon cache;
 ///    otherwise → Liquid Glass debug key delegation.
 ///
-/// Steps 6–7 are gated on `debug_keys_enabled`: when the user has not opted in
-/// from the settings panel, every developer shortcut falls through to
-/// [`KeyAction::None`] (or step 5 takes over for printable text) so production
-/// builds ship with those keys inert.
+/// Steps 6–7 are gated on `debug_keys_enabled`, which the event handler only
+/// enables when the user opted in and the build has debug assertions enabled.
+/// Release builds therefore leave developer shortcuts inert regardless of a
+/// persisted setting value.
+pub(super) const fn debug_keys_enabled_for_build(
+    configured_enabled: bool,
+    debug_assertions_enabled: bool,
+) -> bool {
+    configured_enabled && debug_assertions_enabled
+}
+
 pub fn keyboard_action(
     settings_open: bool,
     editing: bool,
@@ -695,6 +702,12 @@ impl App {
 
     /// Handle an IME event. Gated on `control.wants_keyboard()` by the handler.
     fn handle_ime(&mut self, ime: Ime) {
+        // Match keyboard ownership while a menu is open. Let an existing
+        // composition finish normally, but do not start new search input
+        // behind the menu or discard the committed search string.
+        if self.context_menu.is_active() && self.control.preedit.is_empty() {
+            return;
+        }
         if self.folders.rename.is_some() {
             match ime {
                 Ime::Preedit(value, _) => {
@@ -728,7 +741,10 @@ impl App {
             // IME input with the search field closed: auto-open it so Japanese
             // composition (preedit/commit) can drive instant search too.
             // Suppressed when debug shortcuts are enabled (developer keys win).
-            if self.settings.debug_keys_enabled {
+            if debug_keys_enabled_for_build(
+                self.settings.debug_keys_enabled,
+                cfg!(debug_assertions),
+            ) {
                 return;
             }
             // Close a viewing folder first so the search reflects the grid.
@@ -771,6 +787,7 @@ impl App {
             PressAction::ContextMenu => self.handle_context_menu_pointer_press(px, py),
             PressAction::Settings(target) => {
                 self.pressed_on_settings = Some(target);
+                self.begin_settings_toggle_drag(target);
                 if let Some(field) = settings_slider_field(target) {
                     // A slider owns the pointer from press to release. Starting
                     // here prevents the old bug where the knob began following
@@ -778,12 +795,13 @@ impl App {
                     self.settings_slider_drag = Some(field);
                     self.update_settings_slider_drag(px);
                 }
+                self.request_redraw();
             }
             PressAction::Control => {
                 self.pressed_on_control = true;
             }
             PressAction::EditGrid => {
-                let hit = self.grid_hit_at_pointer(px, py);
+                let hit = self.edit_grid_hit_at_pointer(px, py);
                 let badge_hit = matches!(hit, crate::layout::grid::GridHit::App(idx)
                     if matches!(self.visible_launcher_items().get(idx),
                         Some(crate::domain::launcher_item::LauncherItem::App(_)))
@@ -835,6 +853,13 @@ impl App {
         }
         if self.settings_panel_active() {
             self.update_settings_category_hover(x, y);
+            // The launcher return control is painted from live pointer state,
+            // while the settings layout itself remains cached.
+            self.request_redraw();
+        }
+        if self.settings_toggle_drag.is_some() {
+            self.update_settings_toggle_drag(x);
+            return;
         }
         // Settings overlay slider drag: follow the pointer live.
         if self.settings_slider_drag.is_some() {
@@ -872,16 +897,33 @@ impl App {
         // Commit any in-flight settings slider drag first so the value is
         // persisted even if the release landed outside the slider row.
         self.end_settings_slider_drag();
-        self.pressed_on_settings = None;
+        let had_settings_press = self.pressed_on_settings.is_some();
         // Always clear the control-press flag on release — it was set by the
         // press classifier and must not persist beyond the matching release,
         // otherwise subsequent grid presses would be misclassified through the
         // stale control branch.
         self.pressed_on_control = false;
+        // Settings presses are pointer-capture state, not a persistent
+        // setting. Clear them before the release side effect so the next
+        // frame can show the thumb settling back to its resting glass state.
+        self.pressed_on_settings = None;
+        let settings_toggle_drag = self.settings_toggle_drag.take();
+        if had_settings_press {
+            self.request_redraw();
+        }
         match release_action {
             ReleaseAction::Folder => self.handle_folder_pointer_release(px, py),
             ReleaseAction::ContextMenu => self.handle_context_menu_pointer_release(px, py),
             ReleaseAction::Settings { pressed, released } => {
+                // Slider values belong to the held-pointer lifecycle. Starting
+                // a drag in the click path would latch it after mouse-up.
+                if matches!(pressed, SettingsPressTarget::LiquidGlassParam(_)) {
+                    return;
+                }
+                if let Some(drag) = settings_toggle_drag.filter(|drag| drag.dragging) {
+                    self.finish_settings_toggle_drag(drag);
+                    return;
+                }
                 if pressed == SettingsPressTarget::Outside
                     && released == SettingsPressTarget::Outside
                 {
@@ -948,6 +990,13 @@ impl App {
         // so re-entering the window cannot move a released knob.
         self.end_settings_slider_drag();
         self.pressed_on_settings = None;
+        self.settings_toggle_drag = None;
+        if self.settings_panel_active() {
+            self.pointer_phys_x = -1.0;
+            self.pointer_phys_y = -1.0;
+            self.update_settings_category_hover(-1.0, -1.0);
+            self.request_redraw();
+        }
         let dragging = self
             .scroller
             .as_ref()
@@ -1077,6 +1126,9 @@ impl App {
             return;
         }
         if !focused {
+            self.end_settings_slider_drag();
+            self.pressed_on_settings = None;
+            self.settings_toggle_drag = None;
             // Focus loss is a lifecycle boundary even when an edit/settings
             // exception keeps the window visible. Deliver a single Cancelled
             // to the sticky pager owner, then clear every continuation before
@@ -1329,6 +1381,13 @@ mod tests {
     }
 
     // ---- debug keys ----
+
+    #[test]
+    fn developer_shortcuts_require_user_opt_in_and_debug_build() {
+        assert!(!debug_keys_enabled_for_build(false, true));
+        assert!(debug_keys_enabled_for_build(true, true));
+        assert!(!debug_keys_enabled_for_build(true, false));
+    }
 
     #[test]
     fn key_m_toggles_decorations() {

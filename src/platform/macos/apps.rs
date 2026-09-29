@@ -19,12 +19,17 @@ const MAX_SCAN_DEPTH: usize = 6;
 /// Earlier roots win bundle-id collisions, so a per-user app shadows a local
 /// or system copy with the same identifier.
 pub fn scan_applications() -> BTreeMap<AppId, SnapshotEntry> {
+    scan_applications_checked().0
+}
+
+pub fn scan_applications_checked() -> (BTreeMap<AppId, SnapshotEntry>, bool) {
+    let mut complete = true;
     let mut applications = BTreeMap::new();
     let preferred_languages = preferred_languages();
     for root in application_roots() {
-        scan_root(&root, &preferred_languages, &mut applications);
+        complete &= scan_root(&root, &preferred_languages, &mut applications);
     }
-    applications
+    (applications, complete)
 }
 
 fn application_roots() -> Vec<PathBuf> {
@@ -44,15 +49,25 @@ fn scan_root(
     root: &Path,
     preferred_languages: &[String],
     applications: &mut BTreeMap<AppId, SnapshotEntry>,
-) {
+) -> bool {
+    let mut complete = true;
     let mut pending = VecDeque::from([(root.to_path_buf(), 0usize)]);
     while let Some((directory, depth)) = pending.pop_front() {
-        let Ok(children) = std::fs::read_dir(&directory) else {
-            continue;
+        let children = match std::fs::read_dir(&directory) {
+            Ok(children) => children,
+            Err(e) => {
+                complete &= e.kind() == std::io::ErrorKind::NotFound;
+                continue;
+            }
         };
-        for child in children.flatten() {
+        for child in children {
+            let Ok(child) = child else {
+                complete = false;
+                continue;
+            };
             let path = child.path();
             let Ok(file_type) = child.file_type() else {
+                complete = false;
                 continue;
             };
             let is_app_bundle = path.extension().is_some_and(|ext| ext == "app");
@@ -69,23 +84,37 @@ fn scan_root(
                 continue;
             }
             if is_app_bundle {
-                if let Some(entry) = snapshot_entry(&path, preferred_languages) {
-                    applications.entry(entry.app_id.clone()).or_insert(entry);
+                match snapshot_entry_checked(&path, preferred_languages) {
+                    Ok(Some(entry)) => {
+                        applications.entry(entry.app_id.clone()).or_insert(entry);
+                    }
+                    Ok(None) => {}
+                    Err(()) => complete = false,
                 }
             } else if depth < MAX_SCAN_DEPTH {
                 pending.push_back((path, depth + 1));
             }
         }
     }
+    complete
 }
 
 fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<SnapshotEntry> {
-    let (metadata_bundle, info_path) = locate_metadata_bundle(bundle_path)?;
-    let info = Value::from_file(&info_path).ok()?;
-    let dictionary = info.as_dictionary()?;
+    snapshot_entry_checked(bundle_path, preferred_languages)
+        .ok()
+        .flatten()
+}
+
+fn snapshot_entry_checked(
+    bundle_path: &Path,
+    preferred_languages: &[String],
+) -> Result<Option<SnapshotEntry>, ()> {
+    let (metadata_bundle, info_path) = locate_metadata_bundle(bundle_path).ok_or(())?;
+    let info = Value::from_file(&info_path).map_err(|_| ())?;
+    let dictionary = info.as_dictionary().ok_or(())?;
 
     if dictionary_bool(dictionary, "LSBackgroundOnly") {
-        return None;
+        return Ok(None);
     }
 
     let is_wrapped_ios_app = metadata_bundle != bundle_path;
@@ -97,7 +126,8 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
             bundle_path
                 .file_stem()
                 .map(|name| name.to_string_lossy().into_owned())
-        })?;
+        })
+        .ok_or(())?;
     let name = if is_wrapped_ios_app {
         name
     } else {
@@ -128,22 +158,24 @@ fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<
         .unwrap_or_default();
     let identifier = bundle_id.map(str::to_owned).unwrap_or_default();
 
-    Some(SnapshotEntry {
+    Ok(Some(SnapshotEntry {
+        launch_arguments: None,
         app_id,
         name,
         link_path: bundle_path.to_string_lossy().into_owned(),
-        link_mtime: file_mtime(&info_path),
+        source_modified_at: file_modified_at(&info_path),
         target_path: target_path.to_string_lossy().into_owned(),
-        target_mtime: file_mtime(target_path),
+        target_modified_at: file_modified_at(target_path),
         icon_location: icon_path
             .as_deref()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
         icon_index: 0,
+        provider_icon: None,
         version,
         publisher,
         identifier,
-    })
+    }))
 }
 
 fn preferred_languages() -> Vec<String> {
@@ -327,7 +359,7 @@ fn resolve_icon_path(bundle_path: &Path, dictionary: &Dictionary) -> Option<Path
         .find(|path| path.extension().is_some_and(|ext| ext == "icns"))
 }
 
-fn file_mtime(path: &Path) -> u64 {
+fn file_modified_at(path: &Path) -> u64 {
     path.metadata()
         .and_then(|metadata| metadata.modified())
         .ok()

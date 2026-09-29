@@ -1,11 +1,19 @@
 # launchpad-windows docs
 
+- [DATABASE_MIGRATION_PLAN.md](DATABASE_MIGRATION_PLAN.md) — 承認済みのDB統一・`rusqlite_migration`導入方針。
+- [INITIAL_FOLDER_LAYOUT_SPEC.md](INITIAL_FOLDER_LAYOUT_SPEC.md) — 初期フォルダ配置の非AI仕様。
+  Windows / macOSの19種類のプリセット候補、初回判定、保存、取り消し、受け入れ条件。
+- [AI_FOLDER_ASSIST_SPEC.md](AI_FOLDER_ASSIST_SPEC.md) — 任意のAI整理補助仕様。
+  ルールとの境界、外部送信、初回許可と撤回、プレビュー、Store要件、検証条件。
+
 - [../ARCHITECTURE.md](../ARCHITECTURE.md) - target New Architecture,
   boundaries, data flow, and extension rules.
 - [DF_REARCHITECTURE_PLAN.md](DF_REARCHITECTURE_PLAN.md) - proposed Dynamic
   Feature-ready refactor plan and migration phases.
 - [GLASS_FOCUS_VEIL.md](GLASS_FOCUS_VEIL.md) - フォルダ表示時に下層シーンを
   ぼかすGlass Focus Veilの目的、描画順、GPU構成、調整方法、視覚QA項目。
+- [DARKNESS.md](DARKNESS.md) - 旧Darkness方式の調査記録。面ごとの適用範囲・
+  描画順・合成式と修正箇所。現方式は[PERCEPTUAL_DARKNESS.md](PERCEPTUAL_DARKNESS.md)を参照。
 - [LIQUID_GLASS_PER_SURFACE_BLUR.md](LIQUID_GLASS_PER_SURFACE_BLUR.md) -
   上層パーツ直前の完成シーンを背景にするLiquid Glassブラーの設計。checkpoint、
   desktopへのflatten、lane別completed blur、backdrop replacement、別パーツへの

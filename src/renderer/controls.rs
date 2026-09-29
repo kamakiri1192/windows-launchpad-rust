@@ -87,13 +87,15 @@ pub const KIND_CHATGPT_LOGO: f32 = 19.0;
 /// Steam logo glyph used by the context menu (open in Steam). Drawn by
 /// sampling SDF atlas layer 1 (kind 20), not a procedural SDF.
 pub const KIND_STEAM_LOGO: f32 = 20.0;
-/// Texture-backed monochrome settings category glyphs (atlas layers 2–7).
-pub const KIND_SETTINGS_APPS_ICON: f32 = 21.0;
-pub const KIND_SETTINGS_SEARCH_ICON: f32 = 22.0;
-pub const KIND_SETTINGS_SYSTEM_ICON: f32 = 23.0;
-pub const KIND_SETTINGS_DARKNESS_ICON: f32 = 24.0;
-pub const KIND_SETTINGS_ABOUT_ICON: f32 = 25.0;
-pub const KIND_SETTINGS_DEBUG_ICON: f32 = 26.0;
+/// Trash can glyph used by the context menu (delete folder), atlas layer 2.
+pub const KIND_TRASH: f32 = 21.0;
+/// Texture-backed monochrome settings category glyphs (atlas layers 3–8).
+pub const KIND_SETTINGS_APPS_ICON: f32 = 22.0;
+pub const KIND_SETTINGS_SEARCH_ICON: f32 = 23.0;
+pub const KIND_SETTINGS_SYSTEM_ICON: f32 = 24.0;
+pub const KIND_SETTINGS_DARKNESS_ICON: f32 = 25.0;
+pub const KIND_SETTINGS_ABOUT_ICON: f32 = 26.0;
+pub const KIND_SETTINGS_DEBUG_ICON: f32 = 27.0;
 
 /// Uniform for the bottom-control overlay + text shaders. The bottom control
 /// uses only the viewport; edit badges also use scroll and the page frame clip.
@@ -103,4 +105,6 @@ pub(super) struct ControlUniforms {
     pub(super) viewport_scroll: [f32; 4],
     pub(super) frame_center_radius: [f32; 4],
     pub(super) frame_half_size: [f32; 4],
+    pub(super) presentation: [f32; 4],
+    pub(super) presentation_motion: [f32; 4],
 }

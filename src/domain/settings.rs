@@ -27,9 +27,9 @@ pub struct Settings {
     #[serde(default = "default_show_steam_apps")]
     pub show_steam_apps: bool,
     /// Enables single-key developer shortcuts (`M` decoration toggle, `R`
-    /// icon-cache reset, and the Liquid Glass parameter/debug keys). Off by
-    /// default and on upgrade so production builds ship with debug keys inert
-    /// until the user opts in from the settings panel.
+    /// icon-cache reset, and the Liquid Glass parameter/debug keys) in builds
+    /// with debug assertions. Release builds ignore this value even if it was
+    /// persisted by a previous debug build.
     #[serde(default)]
     pub debug_keys_enabled: bool,
     /// Shows the on-screen FPS overlay (top-right). The frame rate is
@@ -78,7 +78,7 @@ impl Default for Settings {
 pub struct LiquidGlassSettings {
     #[serde(default = "default_lg_enabled")]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_lg_auto_darkness_enabled")]
     pub auto_darkness_enabled: bool,
     #[serde(default = "default_lg_auto_darkness_max")]
     pub auto_darkness_max: f32,
@@ -104,7 +104,7 @@ impl Default for LiquidGlassSettings {
     fn default() -> Self {
         Self {
             enabled: default_lg_enabled(),
-            auto_darkness_enabled: false,
+            auto_darkness_enabled: default_lg_auto_darkness_enabled(),
             auto_darkness_max: default_lg_auto_darkness_max(),
             thickness: default_lg_thickness(),
             refractive_index: default_lg_refractive_index(),
@@ -132,6 +132,10 @@ impl LiquidGlassSettings {
 }
 
 const fn default_lg_enabled() -> bool {
+    true
+}
+
+const fn default_lg_auto_darkness_enabled() -> bool {
     true
 }
 
@@ -369,7 +373,7 @@ mod tests {
             show_auto_darkness_value: true,
             liquid_glass: LiquidGlassSettings {
                 enabled: false,
-                auto_darkness_enabled: true,
+                auto_darkness_enabled: false,
                 auto_darkness_max: 0.24,
                 thickness: 40.0,
                 refractive_index: 1.5,
@@ -463,8 +467,8 @@ mod tests {
     #[test]
     fn older_json_defaults_liquid_glass_to_renderer_baseline() {
         // JSON written by an older build (before Liquid Glass was persisted).
-        // It must decode with the same numeric baseline the renderer boots
-        // with, so existing users see no visual change on upgrade. The values
+        // It must decode with the same baseline the renderer boots with.
+        // Explicitly saved preferences are preserved. The values
         // below are inlined (rather than read from
         // `liquid_glass::LiquidGlassParams::default()`) because this crate is
         // wgpu-free and the renderer lives in the binary target.
@@ -477,6 +481,9 @@ mod tests {
         }"#;
         let decoded: Settings = serde_json::from_slice(json).unwrap();
         assert!(decoded.liquid_glass.enabled);
+        assert!(decoded.liquid_glass.auto_darkness_enabled);
+        let partial: LiquidGlassSettings = serde_json::from_str("{}").unwrap();
+        assert!(partial.auto_darkness_enabled);
         assert_eq!(
             decoded.liquid_glass.auto_darkness_max,
             default_lg_auto_darkness_max()
@@ -513,7 +520,7 @@ mod tests {
         // we inline the constants here).
         let s = LiquidGlassSettings::default();
         assert!(s.enabled);
-        assert!(!s.auto_darkness_enabled);
+        assert!(s.auto_darkness_enabled);
         assert_eq!(s.auto_darkness_max, 0.16);
         assert_eq!(s.thickness, 26.0);
         assert_eq!(s.refractive_index, 1.42);
@@ -529,7 +536,7 @@ mod tests {
     fn liquid_glass_reset_to_defaults_restores_baseline() {
         let mut s = LiquidGlassSettings {
             enabled: false,
-            auto_darkness_enabled: true,
+            auto_darkness_enabled: false,
             auto_darkness_max: 0.9,
             thickness: 6.0,
             refractive_index: 1.02,

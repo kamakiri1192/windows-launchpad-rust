@@ -20,6 +20,10 @@ struct Uniforms {
     drag_active: f32,
     // Pointer position (screen px) the dragged icon follows while dragging.
     drag_pos: vec2<f32>,
+    // Open-transition values: (progress, opacity, start_scale, max_stagger).
+    presentation: vec4<f32>,
+    // Open-transition motion: (start_offset_fraction, _, _, _).
+    presentation_motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -30,7 +34,9 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) presentation_alpha: f32,
 };
+
 
 @vertex
 fn vs_main(
@@ -38,11 +44,9 @@ fn vs_main(
     @location(0) xywh: vec4<f32>,  // (x, y, w, h) top-left + size, content px
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
-    // NOTE: grid text has no clip region. The vertex buffer is the shared
-    // 5-attribute / 80-byte GlyphQuad layout (which also carries clip_rect at
-    // location 3 and clip_radius at location 4 for the control/modal text
-    // shaders), but this grid-text entry point only consumes the first three
-    // locations. Locations 3/4 are uploaded but ignored here.
+    @location(4) radius_pivot: vec4<f32>, // (clip radius, owner x/y, has owner)
+    // Grid text shares the 80-byte GlyphQuad layout. Location 3 is unused;
+    // location 4 carries the explicit owner pivot in the radius padding.
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
@@ -55,7 +59,17 @@ fn vs_main(
     let c = corners[vi];
 
     let origin = vec2<f32>(xywh.x + u.scroll_x, xywh.y);
-    let world = vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w);
+    let glyph_center = select(
+        vec2<f32>(origin.x + xywh.z * 0.5, origin.y + xywh.w * 0.5),
+        radius_pivot.yz + vec2<f32>(u.scroll_x, 0.0),
+        radius_pivot.w > 0.5,
+    );
+    let item_progress = launch_item_progress(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation);
+    let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
+    let gather_offset = launch_gather_offset(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
+    let world = glyph_center + gather_offset
+        + (vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w) - glyph_center)
+            * reveal_scale;
 
     let half_vp = u.viewport * 0.5;
     let clip = vec2<f32>(
@@ -72,6 +86,7 @@ fn vs_main(
         mix(uvrect.w, uvrect.y, c.y),
     );
     out.color = color;
+    out.presentation_alpha = u.presentation.y * item_progress;
     return out;
 }
 
@@ -91,5 +106,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let frame_alpha = smoothstep(1.0, -1.0, fd);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
     // the pipeline's standard alpha blending.
-    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha);
+    return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha * in.presentation_alpha);
 }

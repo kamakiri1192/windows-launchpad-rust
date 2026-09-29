@@ -16,15 +16,19 @@ struct Uniforms {
     viewport_scroll: vec4<f32>,
     frame_center_radius: vec4<f32>,
     frame_half_size: vec4<f32>,
+    presentation: vec4<f32>,
+    // Open-transition motion: (start_offset_fraction, _, _, _). The control
+    // remains fixed in place but shares the full uniform block layout.
+    presentation_motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 // binding 1 + 2 are the shared glyph atlas + sampler (used by the control-text
 // pipeline, unused by this shader). binding 3 is the control-icon SDF atlas —
-// a 2D array texture whose layers 0–1 are the ChatGPT/Steam logos and layers
-// 2–7 are settings category glyphs, each stored as a single-channel signed
+// a 2D array texture whose layers 0–1 are the ChatGPT/Steam logos, layer 2 is
+// the trash can, and layers 3–8 are settings category glyphs, each stored as a single-channel signed
 // distance field (0.5 at the silhouette edge, >0.5 inside). binding 4 is its
-// linear sampler. Kinds 19–26 reconstruct crisp, resolution-independent edges.
+// linear sampler. Kinds 19–27 reconstruct crisp, resolution-independent edges.
 // See
 // examples/generate_logo_sdf.rs and
 // https://jobtalle.com/distance_field_transparency.html.
@@ -55,7 +59,8 @@ struct Uniforms {
 //       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
 //  20 = Steam logo (context menu: open in Steam) — SDF atlas layer 1.
 //       params: (size, alpha, _, _); reconstructs the edge from the SDF atlas.
-//  21–26 = settings category icons — SDF atlas layers 2–7.
+//  21 = trash can (context menu: delete folder) — SDF atlas layer 2.
+//  22–27 = settings category icons — SDF atlas layers 3–8.
 struct InstanceIn {
     @location(0) center: vec2<f32>,  // physical px center of the element
     @location(1) params: vec4<f32>,  // (size_or_radius, alpha, active/extra, _pad)
@@ -173,7 +178,7 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         return size * 1.6;
     }
     if kind > 18.5 {
-        // Texture-backed icons (kinds 19–26): drawn a bit larger than
+        // Texture-backed icons (kinds 19–27): drawn a bit larger than
         // the procedural glyphs' `size * 1.2` so the logos carry similar visual
         // weight to the pencil/folder/etc. icons next to them. Both the vertex
         // shader (here) and the fragment shader's UV mapping must use the same
@@ -181,7 +186,7 @@ fn element_extent(kind: f32, params: vec4<f32>) -> f32 {
         return size * 1.5;
     }
     if kind > 12.5 {
-        // Context-menu glyphs (kinds 13–18): `size` is the full icon extent.
+        // Procedural context-menu glyphs (kinds 13–18): `size` is the full icon extent.
         return size * 1.2;
     }
     if kind > 11.5 && kind < 12.5 {
@@ -496,16 +501,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             1.0 - smoothstep(-1.0, 1.0, stem),
         );
     } else {
-        // Texture-backed icons (kinds 19–26): reconstruct a crisp,
+        // Texture-backed icons (kinds 19–27): reconstruct a crisp,
         // resolution-independent edge from the SDF atlas. The vertex shader
         // sized this kind's quad to a half-extent of `size * 1.5` (larger than
-        // the procedural glyphs' `size * 1.2` so the logos read with similar
+        // the procedural glyphs' `size * 1.2` so the icons read with similar
         // visual weight; see element_extent), so `local` ranges over
         // ±(size * 1.5); map that full quad to [0,1]² UVs. The atlas layer is 0
         // by subtracting the first texture-backed kind from the numeric kind.
         // The texel's red channel is the distance field — 0.5 at the silhouette
         // edge, values above 0.5 inside — and the edge is rebuilt over a single
-        // pixel using `fwidth`, so it never blurs however large the logo is
+        // pixel using `fwidth`, so it never blurs however large the icon is
         // drawn.
         let layer = i32(kind - 19.0 + 0.5);
         let half_extent = max(in.params.x * 1.5, 1.0);
@@ -555,5 +560,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if a <= 0.001 {
         discard;
     }
-    return vec4<f32>(in.color.rgb * a, a);
+    let presentation_a = u.presentation.y;
+    return vec4<f32>(in.color.rgb * a * presentation_a, a * presentation_a);
 }

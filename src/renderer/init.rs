@@ -140,7 +140,14 @@ impl Renderer {
         // Shaders
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tile shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../shader.wgsl"),
+                ]
+                .concat()
+                .into(),
+            ),
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -229,6 +236,8 @@ impl Renderer {
                 frame_radius: frame.4,
                 drag_active: 0.0,
                 drag_pos: [0.0, 0.0],
+                presentation: [1.0, 1.0, 0.84, 0.14],
+                presentation_motion: [0.14, 0.0, 0.0, 0.0],
             }),
         );
 
@@ -319,7 +328,14 @@ impl Renderer {
 
         let text_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("text shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shader_text.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../shader_text.wgsl"),
+                ]
+                .concat()
+                .into(),
+            ),
         });
         let text_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("text pipeline layout"),
@@ -410,7 +426,14 @@ impl Renderer {
         });
         let icon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("icon shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shader_icon.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                [
+                    include_str!("../shader_presentation.wgsl"),
+                    include_str!("../shader_icon.wgsl"),
+                ]
+                .concat()
+                .into(),
+            ),
         });
         let icon_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("icon pipeline layout"),
@@ -509,7 +532,8 @@ impl Renderer {
                 },
                 // Texture-backed control-icon SDF atlas (binding 3) + sampler
                 // (binding 4). Layers 0–1 hold the ChatGPT/Steam logos and
-                // layers 2–7 hold the settings category glyphs. Kinds 19–26 of
+                // layer 2 holds the trash icon and layers 3–8 hold the settings
+                // category glyphs. Kinds 19–27 of
                 // shader_control.wgsl reconstruct crisp edges at any DPI.
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
@@ -710,6 +734,10 @@ impl Renderer {
             control_text_pipeline,
             control_text_bind_group: control_bind_group,
             control_text_instance_buffer: InstanceBuffer::new("control text instance buffer"),
+            debug_overlay_backgrounds: Vec::new(),
+            overlay_background_instance_buffer: InstanceBuffer::new(
+                "overlay background instance buffer",
+            ),
             overlay_text_instance_buffer: InstanceBuffer::new("overlay text instance buffer"),
             settings_instance_buffer: InstanceBuffer::new("settings instance buffer"),
             settings_text_instance_buffer: InstanceBuffer::new("settings text instance buffer"),
@@ -1104,15 +1132,15 @@ fn create_qa_offscreen_texture(
 /// The embedded ChatGPT-logo PNG (rasterized from the source SVG at the
 /// near-black menu label color `#1C1C1E`). Declared here so the bytes are
 /// baked into the binary exactly once.
-/// The embedded ChatGPT-logo SDF texture (64×64 grayscale). Generated from
+/// The embedded ChatGPT-logo SDF texture (128×128 grayscale). Generated from
 /// `assets/icons/chatgpt-logo.png` by `examples/generate_logo_sdf.rs` (JFA +
 /// 1+JFA, see https://jobtalle.com/distance_field_transparency.html). Layer 0
 /// of the brand-logo atlas; the shader reconstructs a crisp edge from it.
 const CHATGPT_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/chatgpt-logo-sdf.png");
 
-/// The embedded Steam-logo SDF texture (64×64 grayscale). Generated from
+/// The embedded Steam-logo SDF texture. Generated from
 /// `assets/icons/steam-logo.png` by `examples/generate_logo_sdf.rs`. Layer 1 of
-/// the brand-logo atlas.
+/// the context-menu SDF atlas.
 const STEAM_LOGO_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/steam-logo-sdf.png");
 
 const SETTINGS_APPS_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/settings-apps-sdf.png");
@@ -1122,9 +1150,11 @@ const SETTINGS_DARKNESS_SDF_PNG: &[u8] =
     include_bytes!("../../assets/icons/settings-darkness-sdf.png");
 const SETTINGS_ABOUT_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/settings-about-sdf.png");
 const SETTINGS_DEBUG_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/settings-debug-sdf.png");
+const TRASH_CAN_SDF_PNG: &[u8] = include_bytes!("../../assets/icons/trash-can-sdf.png");
 
 /// Decode the embedded SDF textures and pack them into a small 2D array. Layers
-/// 0–1 are the ChatGPT/Steam logos and layers 2–7 are settings category icons.
+/// 0–1 are the ChatGPT/Steam logos, layer 2 is the trash icon, and layers 3–8
+/// are settings category icons.
 /// Each layer is a single-channel signed distance field (0.5 at the silhouette
 /// edge, values above 0.5 inside) from which the shader reconstructs a crisp,
 /// resolution-independent edge. Returns
@@ -1138,6 +1168,7 @@ fn create_logo_sdf_atlas(
     let icons = [
         decode_logo_sdf(CHATGPT_LOGO_SDF_PNG, "chatgpt"),
         decode_logo_sdf(STEAM_LOGO_SDF_PNG, "steam"),
+        decode_logo_sdf(TRASH_CAN_SDF_PNG, "trash"),
         decode_logo_sdf(SETTINGS_APPS_SDF_PNG, "settings apps"),
         decode_logo_sdf(SETTINGS_SEARCH_SDF_PNG, "settings search"),
         decode_logo_sdf(SETTINGS_SYSTEM_SDF_PNG, "settings system"),
@@ -1210,7 +1241,7 @@ fn create_logo_sdf_atlas(
 
 /// Decode an embedded 8-bit grayscale SDF PNG into `(side, pixels)`. Returns
 /// the larger of width/height as the per-layer side so non-square sources still
-/// upload cleanly; both current logos are square 64×64.
+/// upload cleanly; all current context-menu SDFs are square 128×128.
 fn decode_logo_sdf(bytes: &[u8], name: &str) -> (u32, Vec<u8>) {
     match image::load_from_memory(bytes) {
         Ok(image) => {

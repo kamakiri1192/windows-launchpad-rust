@@ -16,10 +16,13 @@
 //! them* (item order, folders, hidden apps). The split means an app being
 //! added/removed/re-detected by the OS cannot corrupt the user's arrangement.
 
+pub mod app_catalog;
 pub mod app_diff;
 pub mod app_id;
 pub mod app_registry;
 pub mod folders;
+pub mod initial_layout;
 pub mod launcher_item;
 pub mod launcher_state;
+pub mod name_order;
 pub mod settings;

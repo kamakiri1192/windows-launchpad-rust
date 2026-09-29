@@ -1,0 +1,152 @@
+{
+  "name": "initial-folder-layout-reset",
+  "viewport": [
+    1280,
+    800
+  ],
+  "scale_factor": 1.5,
+  "fps": 15,
+  "duration_ms": 4000,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "apps": [
+      {
+        "id": "steam:620",
+        "name": "Portal 2"
+      },
+      {
+        "id": "steam:570",
+        "name": "Dota 2"
+      },
+      {
+        "id": "qa-browser",
+        "name": "Browser"
+      },
+      {
+        "id": "qa-notes",
+        "name": "Notes"
+      }
+    ],
+    "items": [
+      {
+        "kind": "app",
+        "id": "qa-browser"
+      },
+      {
+        "kind": "app",
+        "id": "steam:570"
+      },
+      {
+        "kind": "app",
+        "id": "qa-notes"
+      },
+      {
+        "kind": "app",
+        "id": "steam:620"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 0,
+      "type": "initialize_folders",
+      "japanese": true
+    },
+    {
+      "at_ms": 850,
+      "type": "toggle_settings"
+    },
+    {
+      "at_ms": 1300,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "undo-initial-layout"
+      }
+    },
+    {
+      "at_ms": 1350,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 1400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 1500,
+      "type": "escape"
+    },
+    {
+      "at_ms": 1850,
+      "type": "toggle_settings"
+    },
+    {
+      "at_ms": 2200,
+      "type": "move",
+      "target": {
+        "kind": "settings_category",
+        "key": "system"
+      }
+    },
+    {
+      "at_ms": 2250,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2300,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2600,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "reset-settings"
+      }
+    },
+    {
+      "at_ms": 2650,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 2700,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 2900,
+      "type": "move",
+      "target": {
+        "kind": "settings_category",
+        "key": "apps"
+      }
+    },
+    {
+      "at_ms": 2950,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 3000,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 3300,
+      "type": "move",
+      "target": {
+        "kind": "settings_action",
+        "key": "undo-initial-layout"
+      }
+    },
+    {
+      "at_ms": 3350,
+      "type": "pointer_down"
+    },
+    {
+      "at_ms": 3400,
+      "type": "pointer_up"
+    },
+    {
+      "at_ms": 3500,
+      "type": "escape"
+    }
+  ]
+}

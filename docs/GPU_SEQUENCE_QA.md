@@ -63,7 +63,11 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `move`: pointer をセマンティックな対象へ移動する。
 - `right_click`: 現在のpointer位置でproduction input routerを通して右クリックする。
 - `pointer_down` / `pointer_up`: production と同じ press/release classifier を通す。
+- `long_press`: 現在のトップレベル項目またはフォルダ子要素を押し、production と同じ長押し閾値・編集モード遷移を決定的な時刻で評価する。
 - `type_text` / `commit_rename`: フォルダ名入力を検証する。
+- `search_text` / `search_preedit` / `search_commit`: 検索入力とIME変換を再生する。
+- `assert_search`: 検索文字列、表示件数、検索欄の維持、メニューの有無を検証する。
+  `qa/search_context_menu.json` は検索結果の右クリック、IME確定、Esc、外側クリック、検索の継続を確認する。
 - `escape` / `exit_edit_mode`: 状態の優先順位を検証する。
 - `scroll_sample`: platform adapterで正規化済みのscroll sampleをproduction
   `AppAction::ScrollSample`へ渡す。`gesture_id`、`timestamp_us`、
@@ -72,7 +76,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
   `direction_inverted_from_device`をproduction `ScrollSampleAdapter`へ渡す。
   `expected_canonical_dx/dy`によりOSが設定反映済みの符号を二重反転していないことを検証する。
 
-`move.target` は絶対座標のほか、`grid_item`、`folder_child`、`folder_title`、フォルダパネル内の相対位置を指定できます。レイアウト変更後も固定座標を書き直さずに同じ意図を再生できます。
+`move.target` は絶対座標のほか、`grid_item`、`grid_item_point`、`grid_item_label`、`folder_child`、`folder_child_label`、`folder_title`、フォルダパネル内の相対位置を指定できます。レイアウト変更後も固定座標を書き直さずに同じ意図を再生できます。`grid_item_label` と `folder_child_label` は、編集モード中にラベルがドラッグ対象にならず終了用の空き領域として働くことを確認するためのセマンティック座標です。
 
 `scroll_sample`の`canonical_dx > 0`はvisible gridが右へ動くproduction内部座標です。
 `scroll_sample`単独ではnative deltaやnatural scrolling設定を検証せず、platform
@@ -108,6 +112,52 @@ scenario load errorです。`scroll_sample`があるのに契約がないscenari
 `raw_dx < 0 / false`をproduction adapterへ通します。両方でraw符号が保持され、軽い払いが
 target page 0を一度だけ選び、release位置から700 ms以内にposition 0 / Idleへ戻ることを
 GPU frameとmanifestで検証します。
+
+## 設定トグルと bottom glass の回帰QA
+
+`qa/settings_toggle_glass.json` は検索・編集モードの歯車を darkness 0 / 0.8
+で比較し、設定の「FPSを表示」を押下・左右ドラッグ・端から超過ドラッグ・解放・
+再オープンします。設定の操作は production の入力経路を通し、
+`glass_darkness` だけは自動darknessを止めてrendererの値をメモリ上で指定します。
+`settings_category` はカテゴリのhit map、`settings_toggle` は実際のトラックから
+座標を解決します。`progress` はつまみの移動範囲（0〜1）で、範囲外は超過ドラッグです。
+
+manifestの `settings_toggle_lenses` / `bottom_glass_rects` は各面の物理座標
+`[x, y, width, height]` を記録します。検証スクリプトは押下時だけのレンズ、
+bottomのdarkness、レンズ中央の緑・透明性、伸長の可視性、設定パネルのキャッシュ汚染を
+画素と状態からチェックします。PythonとPillowが必要です。
+
+```powershell
+$env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\settings_toggle_glass.json).Path
+.\target\release\launchpad-windows.exe
+python scripts/verify_settings_toggle_glass.py target/qa-sequences/settings-toggle-glass-<timestamp>
+```
+
+非表示QAではOSウィンドウだけを隠し、アプリ内部の表示状態は表示中として再生します。
+これにより歯車も通常どおり描画され、設定を開いても実ウィンドウの表示や
+デスクトップ取り込みの再開は行いません。
+
+## 設定スライダーの回帰QA
+
+`qa/settings_slider_glass.json` は数値スライダーの押下開始・保持中の更新・解放確定、
+短いクリック、左右の範囲外ドラッグ、フォーカス喪失、Escapeで閉じる操作、再表示、
+リセットをproductionの入力処理で再生します。解放後にポインターだけを動かし、
+値が追従しないことも確認します。スライダーつまみは通常は単色、保持中だけ
+SettingsOverlayの透明レンズになり、解放時は単色に戻りながら元の大きさへ収束します。
+
+```powershell
+$env:LAUNCHPAD_QA_SCENARIO = (Resolve-Path .\qa\settings_slider_glass.json).Path
+.\target\release\launchpad-windows.exe
+python scripts/verify_settings_slider_glass.py target/qa-sequences/settings-slider-glass-<timestamp>
+```
+
+検証スクリプトにはPillowが必要です。manifestには `settings_slider_drag`、
+`settings_slider_lenses`（物理座標の矩形）、`settings_slider_values` を記録します。
+値の順序は `LiquidGlassParamField::ALL`（thickness, refractive index, saturation,
+auto darkness max, glass darkness, context menu darkness, settings panel darkness,
+chromatic aberration, blur radius）です。値と操作状態に加え、保持中の透明性、
+解放後の単色への復帰、膨らみの上限、周囲のパネルへの影響を画素で検証します。
+併せて `settings_toggle_glass.json` のチェックを実行し、toggle / bottomの回帰を確認します。
 
 ## コンテキストメニューの開閉QA
 
@@ -152,7 +202,7 @@ dismissし、メニューだけ閉じてフォルダーが開いたままにな�
 
 同梱シナリオは次を1本の連番で記録します。
 
-1. 11個の子アプリを持つフォルダの開くアニメーション。
+1. 17個の子アプリを持つフォルダの開くアニメーション（1ページ目は5列×3行、2ページ目は2個）。
 2. 子アプリ長押しによる編集モードと wiggle。
 3. フォルダ内並べ替え。
 4. 太字タイトルの名前編集、文字入力、確定。
@@ -162,7 +212,7 @@ dismissし、メニューだけ閉じてフォルダーが開いたままにな�
 追加シナリオ:
 
 - `qa/folder_creation.json`: アプリ同士の Liquid Glass 融合プレビューから、2アプリのフォルダが作成されて開くまでを記録します。
-- `qa/folder_page_scroll.json`: 18個の子アプリを持つ2ページのフォルダを60fpsで往復スワイプします。スクロール中のフレーム時間、入力追従、ページ遷移、再レイアウト回数を変更前後で比較する回帰計測用です。
+- `qa/folder_page_scroll.json`: 30個の子アプリを持つ2ページのフォルダを60fpsで往復スワイプします。スクロール中のフレーム時間、入力追従、ページ遷移、再レイアウト回数を変更前後で比較する回帰計測用です。
 - `qa/folder_single_page_scroll.json`: 最初の長押しで子アプリをそのまま持ち上げて並べ替えた後、1ページだけのフォルダの空き領域を横方向へ引っ張ります。`folder_child_drag` と `folder_scroll_phase` が同時に競合せず、`folder_scroll_x` がドラッグ中に0へ強制リセットされず、`Dragging` から `Settling` を経て `Idle` に戻ることを60fpsで確認します。
 - `qa/folder_child_page_drag.json`: 子アプリを長押ししたまま右端で保持し、pointerを離さず2ページ目へ送り、そのページのセルへ配置するまでを記録します。端保持の進捗、ページ番号、子ドラッグの所有権が連続することを確認します。
 - `qa/folder_child_exit.json`: 子アプリを長押ししたまま上端からパネル外へ出し、フォルダを閉じながら同じpointerのトップレベルドラッグへ引き継いで配置するまでを記録します。`folder_child_drag` から `top_level_drag` への切り替えと項目数・子数の変化を確認します。
@@ -170,6 +220,7 @@ dismissし、メニューだけ閉じてフォルダーが開いたままにな�
 - `qa/folder_top_level_drag.json`: 閉じたフォルダを長押しして通常アプリと別フォルダの上へ順に移動します。Liquid Glass面と小アイコンが共通中心を保つ一体のプレビューとして最前面で拡大・wiggle・追従し、下のアプリアイコンへ潜らず、別フォルダのLiquid Glassとは融合しないことを確認します。
 - `qa/grid_vertical_reorder.json`: トップレベルのアプリを別の行へ斜めに運び、横距離に引っ張られず対象行へ縦方向に25%入った時点でライブ並べ替えが成立することを確認します。
 - `qa/edit_drag_wiggle_continuity.json`: 先に編集モードへ入り、wiggleが進んだ状態でフォルダと通常アプリを順に持ち上げます。pointer downの前後で回転・上下動の位相が0へ戻らず、ドラッグ中も同じ波形を継続することを60fps連番で確認します。
+- `qa/edit_mode_label_exit.json`: トップレベルとフォルダ内でアイコンを長押しして編集モードへ入り、それぞれのアプリ名をクリックすると項目を持ち上げず編集モードが終了することを確認します。
 - `qa/trackpad_reversal_main.json`: 3ページmain gridで、2ページ目から
   `+0.020P → -0.015P → +0.010P → -0.450P`をreleaseせず入力し、その後
   `+0.700P → -0.850P → -0.300P`のdeep reverseを再生します。

@@ -109,8 +109,9 @@ Toggle
 
 * Trackは中立色のカプセル形状
 * Thumbは先頭側に配置
+* ThumbとTrackは単色の通常Inkで描画する
 * 色だけでなくThumb位置でOFFを示す
-* Liquid Glass効果は無効または非常に弱くする
+* Liquid Glassの形状は生成しない
 * 常時強い屈折、ブラー、シマーを表示しない
 * 背景より目立ちすぎない、静かな見た目にする
 
@@ -118,9 +119,10 @@ Toggle
 
 * TrackへアクセントTintを適用
 * Thumbは末尾側に配置
+* ONは緑、OFFは白〜ニュートラルの単色表示とする
 * Tintは単純な不透明ベタ塗りにせず、背景輝度を反映できる色表現にする
 * Thumb位置でONを示し、色の違いだけに依存しない
-* 静止時のLiquid Glass効果は弱く保つ
+* 静止時のLiquid Glass効果は使用しない
 
 デフォルトTintはプラットフォームに適した緑またはアプリのアクセントカラーとします。
 
@@ -143,7 +145,9 @@ Toggle
 * Liquid Glassの強度を素早く上げる
 * エッジハイライトを強める
 * レンズ効果と屈折を有効化する
-* Track／Thumbの協調した形状をわずかに膨張させる
+* Thumbを中心にぷっくり膨張させ、単色Inkから単一のLiquid Glassレンズへ切り替える
+* 横方向は移動先側へ約80%、反対側へ約20%の割合で膨らませる
+* 上下方向もトラックから少しはみ出す程度に、ばねでぽよんと膨張させる
 * 押下位置に応じてハイライト中心を移動する
 
 押下反応が遅れて見えないようにしてください。
@@ -158,7 +162,10 @@ Thumb上、またはToggleの有効ヒット領域内で水平方向へドラッ
 * ON／OFFの見た目を途中で瞬間的に切り替えない
 * Thumb移動、Tint、屈折、ハイライトを同じ進行度から計算する
 * ドラッグ方向へごく弱いゲル状変形を加えてよい
-* 変形量はドラッグ速度と追従誤差に応じて調整する
+* 押下レンズはトラック端へ到達するまでは横方向へほぼ伸びない
+* トラック端を超えて引っ張った超過距離だけ、引っ張った方向へ弾性変形する
+* 弾性変形には最大値を設け、長くドラッグしても無制限に伸びない
+* 変形量は端からの超過距離に応じて調整する
 * 方向を反転した場合は変形方向も滑らかに反転する
 * ポインターをToggle外へ動かしても、リリースまではPointer Captureを維持する
 
@@ -178,9 +185,8 @@ drag_threshold = 3.0 logical_px;
 * リリース速度の影響は、標準Switchとの比較で必要と確認できた場合のみ追加
 * 着地時に最大1回の控えめなオーバーシュートを許可
 * 複数回振動しない
-* Thumb位置、Tint、ガラス強度を同期して収束させる
-* Thumbが着地する前にLiquid Glassを突然消さない
-* 着地後にLiquid Glass強度を静止状態へ戻す
+* Pointer releaseでLiquid Glassレンズを単色Inkへ戻し、Thumb位置とTintは終端へばねで収束させる
+* 押下中だけガラスを表示し、release後にガラスを残さない
 * 値が変化した場合のみ`changed = true`を返す
 
 # 入力仕様
@@ -259,7 +265,7 @@ pub struct ToggleVisualState {
     pub press_amount: Spring,
     pub glass_activation: Spring,
     pub tint_progress: Spring,
-    pub drag_velocity: f32,
+    pub drag_overflow: f32,
     pub light_origin: Point,
     pub phase: ToggleInteractionPhase,
     pub value_at_press_start: bool,
@@ -284,7 +290,7 @@ pub struct ToggleVisualState {
 * エッジハイライト
 * 内部照明
 * 背景に応じた影の強度
-* 背景に応じた明暗切り替え
+* 背景に応じた明暗切り替え（Toggleレンズでは無効化し、透明感を優先）
 * Tint
 * 軽い形状変形
 * シマー
@@ -299,7 +305,8 @@ glass_activation: f32 // 0.0..=1.0
 目標:
 
 ```text
-Idle      ≈ 0.0〜0.15
+Idle      = 0.0
+Hovered   = 0.0
 Hover     ≈ 0.1〜0.25
 Pressed   → 1.0
 Dragging  ≈ 1.0
@@ -359,7 +366,7 @@ ToggleMotionStyle {
     press_scale: 1.04,
     hover_scale: 1.01,
 
-    max_directional_stretch: 0.06,
+    max_directional_stretch: 0.28,
     max_settle_overshoot: 0.04,
 
     drag_threshold: 3.0,

@@ -18,20 +18,38 @@ struct SteamManifest {
 
 /// Scan every configured Steam library for installed app manifests.
 pub fn scan_steam_apps() -> Vec<SnapshotEntry> {
-    let Some(steam_root) = find_steam_root() else {
-        return Vec::new();
-    };
-
-    scan_steam_apps_at(&steam_root)
+    scan_steam_apps_checked().0
 }
 
-fn scan_steam_apps_at(steam_root: &Path) -> Vec<SnapshotEntry> {
-    let steam_root = steam_root.to_path_buf();
+pub fn scan_steam_apps_checked() -> (Vec<SnapshotEntry>, Vec<String>) {
+    let Some(steam_root) = find_steam_root() else {
+        return (Vec::new(), Vec::new());
+    };
+    scan_steam_apps_at_checked(&steam_root)
+}
 
+#[cfg(test)]
+fn scan_steam_apps_at(steam_root: &Path) -> Vec<SnapshotEntry> {
+    scan_steam_apps_at_checked(steam_root).0
+}
+
+fn scan_steam_apps_at_checked(steam_root: &Path) -> (Vec<SnapshotEntry>, Vec<String>) {
+    let steam_root = steam_root.to_path_buf();
+    let mut errors = Vec::new();
     let mut libraries = vec![steam_root.clone()];
     let library_file = steam_root.join("steamapps").join("libraryfolders.vdf");
-    if let Ok(text) = fs::read_to_string(&library_file) {
-        libraries.extend(parse_library_paths(&text));
+    match fs::read_to_string(&library_file) {
+        Ok(text) => {
+            libraries.extend(parse_library_paths(&text));
+            if !text.contains('{') || !text.trim_end().ends_with('}') {
+                errors.push(format!(
+                    "Incomplete library index: {}",
+                    library_file.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => errors.push(format!("{}: {error}", library_file.display())),
     }
     dedupe_paths(&mut libraries);
 
@@ -39,18 +57,34 @@ fn scan_steam_apps_at(steam_root: &Path) -> Vec<SnapshotEntry> {
     let mut seen_app_ids = HashSet::new();
     for library in libraries {
         let steamapps = library.join("steamapps");
-        let Ok(items) = fs::read_dir(&steamapps) else {
-            continue;
+        let items = match fs::read_dir(&steamapps) {
+            Ok(items) => items,
+            Err(error) => {
+                errors.push(format!("{}: {error}", steamapps.display()));
+                continue;
+            }
         };
-        for item in items.flatten() {
+        for item in items {
+            let item = match item {
+                Ok(item) => item,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", steamapps.display()));
+                    continue;
+                }
+            };
             let manifest_path = item.path();
             if !is_app_manifest(&manifest_path) {
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&manifest_path) else {
-                continue;
+            let text = match fs::read_to_string(&manifest_path) {
+                Ok(text) => text,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", manifest_path.display()));
+                    continue;
+                }
             };
             let Some(manifest) = parse_app_manifest(&text) else {
+                errors.push(format!("Incomplete manifest: {}", manifest_path.display()));
                 continue;
             };
             // Steam installs this shared runtime as an app manifest, but it is
@@ -64,24 +98,29 @@ fn scan_steam_apps_at(steam_root: &Path) -> Vec<SnapshotEntry> {
 
             let icon_path = find_steam_icon(&steam_root, &library, &manifest)
                 .unwrap_or_else(|| fallback_steam_icon(&steam_root));
-            let manifest_mtime = file_mtime(&manifest_path);
-            let icon_mtime = file_mtime(&icon_path);
+            let manifest_modified_at = file_modified_at(&manifest_path);
+            let icon_modified_at = file_modified_at(&icon_path);
             entries.push(SnapshotEntry {
+                launch_arguments: None,
                 app_id: AppId::from_normalized(format!("steam:{}", manifest.app_id)),
                 name: manifest.name,
                 link_path: format!("steam://rungameid/{}", manifest.app_id),
-                link_mtime: manifest_mtime,
+                source_modified_at: manifest_modified_at,
                 target_path: manifest_path.to_string_lossy().into_owned(),
-                target_mtime: icon_mtime,
+                target_modified_at: manifest_modified_at,
                 icon_location: icon_path.to_string_lossy().into_owned(),
                 icon_index: 0,
+                provider_icon: Some(crate::domain::app_diff::IconSource {
+                    path: icon_path.to_string_lossy().into_owned(),
+                    modified_at: icon_modified_at,
+                }),
                 version: String::new(),
                 publisher: String::new(),
                 identifier: String::new(),
             });
         }
     }
-    entries
+    (entries, errors)
 }
 
 #[cfg(windows)]
@@ -94,7 +133,7 @@ fn fallback_steam_icon(_steam_root: &Path) -> PathBuf {
     PathBuf::from("/Applications/Steam.app")
 }
 
-fn file_mtime(path: &Path) -> u64 {
+fn file_modified_at(path: &Path) -> u64 {
     path.metadata()
         .and_then(|metadata| metadata.modified())
         .ok()
@@ -104,10 +143,10 @@ fn file_mtime(path: &Path) -> u64 {
 }
 
 fn find_steam_root() -> Option<PathBuf> {
+    // A registered but temporarily unavailable root is an incomplete scan,
+    // not an empty installed library.
     registry_steam_root()
-        .into_iter()
-        .chain(default_steam_roots())
-        .find(|path| path.join("steamapps").is_dir())
+        .or_else(|| default_steam_roots().find(|path| path.join("steamapps").is_dir()))
 }
 
 #[cfg(windows)]
@@ -185,7 +224,11 @@ fn parse_app_manifest(text: &str) -> Option<SteamManifest> {
     let app_id = value("appid")?;
     let name = value("name")?;
     let install_dir = value("installdir").unwrap_or_default();
-    if app_id.chars().all(|ch| ch.is_ascii_digit()) && !name.trim().is_empty() {
+    if !app_id.is_empty()
+        && text.trim_end().ends_with('}')
+        && app_id.chars().all(|ch| ch.is_ascii_digit())
+        && !name.trim().is_empty()
+    {
         Some(SteamManifest {
             app_id,
             name,
@@ -629,6 +672,32 @@ mod tests {
     fn rejects_non_numeric_app_id() {
         let text = r#""AppState" { "appid" "oops" "name" "Broken" }"#;
         assert_eq!(parse_app_manifest(text), None);
+    }
+
+    #[test]
+    fn unavailable_library_is_reported_without_losing_readable_manifests() {
+        let root = temporary_directory("steam-partial-scan");
+        let steamapps = root.join("steamapps");
+        fs::create_dir_all(&steamapps).unwrap();
+        let missing = root.join("offline-library");
+        fs::write(
+            steamapps.join("libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\" {{ \"1\" {{ \"path\" \"{}\" }} }}",
+                missing.to_string_lossy().replace('\\', "/"),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            steamapps.join("appmanifest_42.acf"),
+            "\"AppState\" { \"appid\" \"42\" \"name\" \"Example\" }",
+        )
+        .unwrap();
+        fs::write(steamapps.join("appmanifest_43.acf"), "incomplete").unwrap();
+        let (entries, errors) = scan_steam_apps_at_checked(&root);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(errors.len(), 2);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

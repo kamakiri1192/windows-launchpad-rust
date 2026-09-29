@@ -67,6 +67,10 @@ pub struct AppRecord {
     pub slot: u32,
     pub icon_state: IconState,
     pub uv: Option<UvRect>,
+    /// True when the loaded icon is FullBleed and therefore supplies its own
+    /// complete tile body. The launcher keeps colored backing tiles for
+    /// freeform/Solid/ThinLine icons and for missing-icon placeholders.
+    pub hide_tile_fill: bool,
     /// App version string for the ChatGPT-help prompt (macOS
     /// `CFBundleShortVersionString` / Windows exe version resource), or `""`
     /// when the platform could not read one.
@@ -272,6 +276,7 @@ mod tests {
             slot: 0,
             icon_state: IconState::Missing,
             uv: None,
+            hide_tile_fill: false,
             version: String::new(),
             publisher: String::new(),
             identifier: String::new(),

@@ -3,9 +3,9 @@
 //! Architecture:
 //! - **Track**: `InkView` (round-rect capsule). Colour interpolates between
 //!   OFF (white, low alpha) and ON (green/tint) via `tint_progress`.
-//! - **Thumb**: `GlassSurface` (circular glass lens). Position follows
-//!   `thumb_progress` with spring physics. `glass_activation` controls glass
-//!   effect intensity: idle ≈ 0, pressed/dragging → 1, settling → decays.
+//! - **Thumb**: solid `InkView` at rest, becoming one Liquid Glass lens only
+//!   while pressed or dragged. Position follows `thumb_progress` with spring
+//!   physics, and the active lens has bounded elastic deformation.
 //! - **HitRegion**: full row (or switch-only area when no label), large enough
 //!   for touch (≥44×44 logical px).
 //! - **State machine**: `ToggleInteractionPhase` with Spring-driven animation.
@@ -37,10 +37,70 @@ const TRACK_OFF: [f32; 4] = [1.0, 1.0, 1.0, 0.14];
 const TRACK_HALF_W: f32 = 22.0;
 /// Logical track half-height (matches `toggle_instances`: 11.0).
 const TRACK_HALF_H: f32 = 11.0;
-/// Thumb radius (matches `toggle_instances`: 6.0).
-const THUMB_RADIUS: f32 = 6.0;
+/// Resting thumb radius. The iOS-style switch thumb nearly fills the track
+/// height; the active lens adds width rather than scaling into a large disk.
+const THUMB_RADIUS: f32 = 8.0;
 /// Thumb offset from track center (matches `toggle_instances`: 10.0).
 const THUMB_OFFSET: f32 = 10.0;
+
+/// Extra vertical room makes the active lens visibly spill just beyond the
+/// track, like a soft liquid capsule being squeezed.
+const PRESS_VERTICAL_EXPANSION: f32 = 0.50;
+/// A 0.30 center offset over the added width yields an 80/20 directional
+/// split: 80% of the press expansion faces the toggle's destination.
+const PRESS_DIRECTIONAL_BIAS: f32 = 0.30;
+/// Feed a little spring velocity into the geometry so press/release has a
+/// visible, bounded "poyo" rather than a purely linear scale change.
+const PRESS_POYO_VELOCITY_GAIN: f32 = 0.012;
+const PRESS_POYO_MAX: f32 = 1.18;
+
+/// Progress overscroll at which the elastic stretch reaches its cap.
+const OVERDRAG_SATURATION_PROGRESS: f32 = 0.75;
+
+/// Clamp a raw drag progress to the switch travel and retain the signed
+/// amount that was pulled beyond either endpoint.
+pub(crate) fn clamp_drag_progress(raw_progress: f32) -> (f32, f32) {
+    let progress = raw_progress.clamp(0.0, 1.0);
+    (progress, raw_progress - progress)
+}
+
+/// Convert endpoint overscroll into a bounded, eased stretch amount.
+pub(crate) fn drag_stretch_from_overdrag(overdrag_progress: f32, max_stretch: f32) -> f32 {
+    let amount = (overdrag_progress.abs() / OVERDRAG_SATURATION_PROGRESS).clamp(0.0, 1.0);
+    let eased = amount * (2.0 - amount);
+    eased * max_stretch
+}
+
+/// Return the offset direction that follows the pull beyond the endpoint.
+/// Negative progress is beyond the left edge and therefore grows left; a
+/// positive overshoot is beyond the right edge and grows right.
+pub(crate) fn overdrag_pull_sign(overdrag_progress: f32) -> f32 {
+    if overdrag_progress < 0.0 {
+        -1.0
+    } else if overdrag_progress > 0.0 {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// Add a small, bounded velocity overshoot to the press amount for the soft
+/// vertical bounce of the active lens.
+pub(crate) fn poyo_press_amount(value: f32, velocity: f32) -> f32 {
+    (value + velocity * PRESS_POYO_VELOCITY_GAIN).clamp(0.0, PRESS_POYO_MAX)
+}
+
+/// Offset a pressed lens so most of its added width faces the destination,
+/// while retaining a smaller amount of material on the opposite side.
+pub(crate) fn directional_press_offset(extra_width: f32, value_at_press_start: bool) -> f32 {
+    let direction = if value_at_press_start { -1.0 } else { 1.0 };
+    direction * extra_width * PRESS_DIRECTIONAL_BIAS
+}
+
+/// Return the vertically expanded active-lens height.
+pub(crate) fn poyo_thumb_height(base_height: f32, value: f32, velocity: f32) -> f32 {
+    base_height * (1.0 + poyo_press_amount(value, velocity) * PRESS_VERTICAL_EXPANSION)
+}
 
 /// Row height used when a label is present.
 const ROW_H: f32 = 46.0;
@@ -201,8 +261,6 @@ pub struct ToggleVisualState {
     pub glass_activation: Spring,
     /// Track tint progress (0..1, mirrors thumb_progress target).
     pub tint_progress: Spring,
-    /// Current drag velocity (px/s).
-    pub drag_velocity: f32,
     /// Pointer position when press began.
     pub light_origin: Point,
     /// Current interaction phase.
@@ -213,6 +271,8 @@ pub struct ToggleVisualState {
     pub drag_start_pointer_x: f32,
     /// Drag tracking: thumb progress at drag start.
     pub drag_start_thumb_progress: f32,
+    /// Signed drag progress beyond the left/right endpoint.
+    pub drag_overflow: f32,
     /// True while pressed but drag threshold not yet exceeded.
     pub pending_drag: bool,
 }
@@ -225,12 +285,12 @@ impl ToggleVisualState {
             press_amount: Spring::at(0.0),
             glass_activation: Spring::at(0.0),
             tint_progress: Spring::at(initial),
-            drag_velocity: 0.0,
             light_origin: Point::new(0.0, 0.0),
             phase: ToggleInteractionPhase::Idle,
             value_at_press_start: value,
             drag_start_pointer_x: 0.0,
             drag_start_thumb_progress: initial,
+            drag_overflow: 0.0,
             pending_drag: false,
         }
     }
@@ -366,6 +426,7 @@ impl Ui {
                 vs.glass_activation.glide_to(0.0);
                 vs.press_amount.glide_to(0.0);
                 vs.phase = ToggleInteractionPhase::Settling;
+                vs.drag_overflow = 0.0;
                 vs.pending_drag = false;
             }
             match vs.phase {
@@ -383,17 +444,17 @@ impl Ui {
                         vs.pending_drag = true;
                         vs.drag_start_pointer_x = pointer.map(|p| p.x).unwrap_or(0.0);
                         vs.drag_start_thumb_progress = vs.thumb_progress.value;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     } else if hovered {
                         vs.phase = ToggleInteractionPhase::Hovered;
-                        vs.glass_activation.glide_to(0.15);
+                        vs.glass_activation.glide_to(0.0);
                         vs.press_amount.glide_to(0.0);
                     } else {
                         vs.phase = ToggleInteractionPhase::Idle;
                     }
                 }
                 ToggleInteractionPhase::Hovered => {
-                    vs.glass_activation.glide_to(0.15);
+                    vs.glass_activation.glide_to(0.0);
                     vs.press_amount.glide_to(0.0);
 
                     if pointer_pressed && hovered {
@@ -405,7 +466,7 @@ impl Ui {
                         vs.pending_drag = true;
                         vs.drag_start_pointer_x = pointer.map(|p| p.x).unwrap_or(0.0);
                         vs.drag_start_thumb_progress = vs.thumb_progress.value;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     } else if !hovered {
                         vs.phase = ToggleInteractionPhase::Idle;
                     }
@@ -423,7 +484,6 @@ impl Ui {
                                 // Transition to dragging.
                                 vs.phase = ToggleInteractionPhase::Dragging;
                                 vs.pending_drag = false;
-                                vs.drag_velocity = 0.0;
                             }
                         }
                     } else {
@@ -448,11 +508,10 @@ impl Ui {
                             // Track half-width maps to thumb travel range.
                             let thumb_travel = THUMB_OFFSET * scale;
                             let progress_delta = dx / (thumb_travel * 2.0);
-                            let mut new_progress = vs.drag_start_thumb_progress + progress_delta;
-                            new_progress = new_progress.clamp(0.0, 1.0);
+                            let raw_progress = vs.drag_start_thumb_progress + progress_delta;
+                            let (new_progress, drag_overflow) = clamp_drag_progress(raw_progress);
+                            vs.drag_overflow = drag_overflow;
 
-                            // Estimate velocity from progress change.
-                            vs.drag_velocity = progress_delta / 0.016; // approximate
                             vs.thumb_progress.snap_to(new_progress);
                             vs.tint_progress.snap_to(new_progress);
                             vs.glass_activation.snap_to(1.0);
@@ -467,7 +526,7 @@ impl Ui {
                         vs.glass_activation.glide_to(0.0);
                         vs.press_amount.glide_to(0.0);
                         vs.phase = ToggleInteractionPhase::Settling;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     }
                 }
                 ToggleInteractionPhase::Settling => {
@@ -483,7 +542,7 @@ impl Ui {
                         vs.pending_drag = true;
                         vs.drag_start_pointer_x = pointer.map(|p| p.x).unwrap_or(0.0);
                         vs.drag_start_thumb_progress = vs.thumb_progress.value;
-                        vs.drag_velocity = 0.0;
+                        vs.drag_overflow = 0.0;
                     }
                 }
                 ToggleInteractionPhase::Disabled => {
@@ -524,6 +583,11 @@ impl Ui {
         let tint_p = vs.tint_progress.value;
         let glass_a = vs.glass_activation.value;
         let press_a = vs.press_amount.value;
+        let poyo_a = if theme.reduce_motion {
+            0.0
+        } else {
+            poyo_press_amount(press_a, vs.press_amount.velocity)
+        };
 
         // Thumb position.
         let thumb_offset = THUMB_OFFSET * scale;
@@ -539,18 +603,41 @@ impl Ui {
         let press_scale = if theme.reduce_motion {
             1.0
         } else {
-            1.0 + (motion.press_scale - 1.0) * press_a
+            1.0 + (motion.press_scale - 1.0) * poyo_a
         };
         let thumb_display_r = thumb_r * press_scale;
 
-        // Directional stretch (drag). Currently unused but reserved for
-        // future glass deformation rendering.
-        let _stretch = if theme.reduce_motion {
+        // The reference switch does not turn into a separate glass track. The
+        // thumb stays at the endpoint while the pointer is still inside
+        // the travel range. Only the excess drag beyond that endpoint becomes
+        // the bounded elastic part of the glass lens.
+        let drag_deformation =
+            if theme.reduce_motion || vs.phase != ToggleInteractionPhase::Dragging {
+                0.0
+            } else {
+                drag_stretch_from_overdrag(vs.drag_overflow, motion.max_directional_stretch)
+            };
+        let press_deformation = if theme.reduce_motion {
             0.0
         } else {
-            let v_clamped = vs.drag_velocity.clamp(-2000.0, 2000.0);
-            (v_clamped / 2000.0) * motion.max_directional_stretch
+            (poyo_a * 0.75 + drag_deformation).min(0.95)
         };
+        let thumb_width = thumb_display_r * 2.0 * (1.0 + press_deformation);
+        let thumb_height = if theme.reduce_motion {
+            thumb_display_r * 2.0
+        } else {
+            poyo_thumb_height(thumb_display_r * 2.0, press_a, vs.press_amount.velocity)
+        };
+        // Once an endpoint is pinned, grow the extra length in the pull
+        // direction to create a bounded rubber-band tail.
+        let press_extra_width = thumb_display_r * 2.0 * (poyo_a * 0.75).min(0.95);
+        let press_offset = directional_press_offset(press_extra_width, vs.value_at_press_start);
+        let drag_offset = if drag_deformation > 0.0 {
+            overdrag_pull_sign(vs.drag_overflow) * thumb_display_r * drag_deformation
+        } else {
+            0.0
+        };
+        let trailing_offset = press_offset + drag_offset;
 
         // ------------------------------------------------------------------
         // a11y adjustments
@@ -694,33 +781,52 @@ impl Ui {
         }
 
         // ------------------------------------------------------------------
-        // Thumb: GlassSurface (circular glass lens)
+        // Thumb: a solid ink capsule at rest. It becomes a single Liquid
+        // Glass lens only while the pointer is held, so idle toggles never
+        // pay for or visually expose a glass surface.
         // ------------------------------------------------------------------
-        let thumb_diam = thumb_display_r * 2.0;
         let thumb_rect = Rect::new(
-            thumb_cx - thumb_display_r,
-            track_cy - thumb_display_r,
-            thumb_diam,
-            thumb_diam,
+            thumb_cx - thumb_width * 0.5 + trailing_offset,
+            track_cy - thumb_height * 0.5,
+            thumb_width,
+            thumb_height,
         );
 
-        // Thumb: always a Liquid Glass lens. The clip region inherited from
-        // the clip_stack (set by ScrollView) is pushed into the GlassSurface
-        // and the renderer must honour it (see GlassShape clip handling).
-        let thumb_glass = GlassSurface {
-            id: t.id.clone(),
-            rect: thumb_rect,
-            radius: thumb_display_r,
-            material: GlassMaterial::Regular,
-            behavior: GlassBehavior::Control,
-            z: Z_CONTROL + 2,
-            clip: None,
-            activation: glass_a,
-            blur_radius: None,
-            backdrop_replacement: 0.0,
-            tint: None,
-        };
-        self.push_glass(GlassLayer::Overlay, thumb_glass);
+        let pressed_glass = matches!(
+            vs.phase,
+            ToggleInteractionPhase::Pressed | ToggleInteractionPhase::Dragging
+        );
+        if pressed_glass {
+            let thumb_glass = GlassSurface {
+                id: t.id.clone(),
+                rect: thumb_rect,
+                radius: thumb_height * 0.5,
+                material: GlassMaterial::Regular,
+                behavior: GlassBehavior::Control,
+                z: Z_CONTROL + 2,
+                clip: None,
+                activation: glass_a.max(0.01),
+                blur_radius: None,
+                backdrop_replacement: 0.0,
+                tint: None,
+            };
+            self.push_glass(GlassLayer::Overlay, thumb_glass);
+        } else {
+            let thumb_alpha = if t.enabled { 0.96 } else { 0.42 };
+            self.push_ink(InkView {
+                id: t.id.clone(),
+                center: thumb_rect.center(),
+                extent: thumb_height * 0.5,
+                opacity: thumb_alpha,
+                scene_blur: 0.0,
+                stroke: thumb_width * 0.5,
+                corner_radius: thumb_height * 0.5,
+                color: Color::rgba(1.0, 1.0, 1.0, thumb_alpha),
+                kind: ControlKind::Toggle,
+                z: Z_CONTROL + 2,
+                clip: None,
+            });
+        }
 
         // ------------------------------------------------------------------
         // Hit region
@@ -835,6 +941,41 @@ mod tests {
         Ui::new(Theme::default(), 800.0, 600.0)
     }
 
+    #[test]
+    fn drag_stretch_starts_only_after_an_endpoint() {
+        let (progress, overdrag) = clamp_drag_progress(0.4);
+        assert!((progress - 0.4).abs() < f32::EPSILON);
+        assert!(overdrag.abs() < f32::EPSILON);
+        let (progress, overdrag) = clamp_drag_progress(1.0);
+        assert!((progress - 1.0).abs() < f32::EPSILON);
+        assert!(overdrag.abs() < f32::EPSILON);
+        let (progress, overdrag) = clamp_drag_progress(1.2);
+        assert!((progress - 1.0).abs() < f32::EPSILON);
+        assert!((overdrag - 0.2).abs() < 1e-6);
+        let (progress, overdrag) = clamp_drag_progress(-0.2);
+        assert!(progress.abs() < f32::EPSILON);
+        assert!((overdrag + 0.2).abs() < 1e-6);
+
+        assert_eq!(drag_stretch_from_overdrag(0.0, 0.28), 0.0);
+        assert!(drag_stretch_from_overdrag(0.2, 0.28) > 0.0);
+        assert_eq!(drag_stretch_from_overdrag(10.0, 0.28), 0.28);
+    }
+
+    #[test]
+    fn endpoint_overdrag_follows_pull_direction() {
+        assert_eq!(overdrag_pull_sign(-0.2), -1.0);
+        assert_eq!(overdrag_pull_sign(0.2), 1.0);
+        assert_eq!(overdrag_pull_sign(0.0), 0.0);
+    }
+
+    #[test]
+    fn pressed_lens_biases_eighty_twenty_toward_destination() {
+        assert!((directional_press_offset(10.0, false) - 3.0).abs() < f32::EPSILON);
+        assert!((directional_press_offset(10.0, true) + 3.0).abs() < f32::EPSILON);
+        assert!(poyo_thumb_height(16.0, 1.0, 0.0) > 22.0);
+        assert!(poyo_press_amount(1.0, 100.0) <= 1.18);
+    }
+
     // ------------------------------------------------------------------
     // Position tests
     // ------------------------------------------------------------------
@@ -844,12 +985,11 @@ mod tests {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(false));
         let (render, _hits, _reg) = ui.take();
-        // Thumb is always a Liquid Glass surface.
-        let glass = render
-            .glass
+        let thumb = render
+            .ink
             .iter()
-            .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Toggle)
             .unwrap();
         let ink = render
             .ink
@@ -858,9 +998,14 @@ mod tests {
             .find(|v| v.kind == ControlKind::RowBackground)
             .unwrap();
         assert!(
-            glass.rect.center().x < ink.center.x,
+            thumb.center.x < ink.center.x,
             "OFF thumb should be left of track center"
         );
+        assert!(render
+            .glass
+            .iter()
+            .flat_map(|b| &b.surfaces)
+            .all(|s| s.behavior != GlassBehavior::Control));
     }
 
     #[test]
@@ -868,11 +1013,11 @@ mod tests {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(true));
         let (render, _hits, _reg) = ui.take();
-        let glass = render
-            .glass
+        let thumb = render
+            .ink
             .iter()
-            .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
+            .flat_map(|b| &b.views)
+            .find(|v| v.kind == ControlKind::Toggle)
             .unwrap();
         let ink = render
             .ink
@@ -881,9 +1026,14 @@ mod tests {
             .find(|v| v.kind == ControlKind::RowBackground)
             .unwrap();
         assert!(
-            glass.rect.center().x > ink.center.x,
+            thumb.center.x > ink.center.x,
             "ON thumb should be right of track center"
         );
+        assert!(render
+            .glass
+            .iter()
+            .flat_map(|b| &b.surfaces)
+            .all(|s| s.behavior != GlassBehavior::Control));
     }
 
     // ------------------------------------------------------------------
@@ -1008,20 +1158,20 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn toggle_off_has_low_glass_activation() {
+    fn toggle_off_is_plain_ink_at_rest() {
         let mut ui = new_ui();
         ui.toggle(&Toggle::new(false));
         let (render, _hits, _reg) = ui.take();
-        let glass = render
+        assert!(render
             .glass
             .iter()
             .flat_map(|b| &b.surfaces)
-            .find(|s| s.behavior == GlassBehavior::Control)
-            .unwrap();
-        assert!(
-            glass.activation < 0.2,
-            "idle activation should be near zero"
-        );
+            .all(|s| s.behavior != GlassBehavior::Control));
+        assert!(render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .any(|v| v.kind == ControlKind::Toggle));
     }
 
     #[test]
@@ -1037,13 +1187,16 @@ mod tests {
             .flat_map(|b| &b.surfaces)
             .find(|s| s.behavior == GlassBehavior::Control)
             .unwrap();
-        // With press, glass_activation target is 1.0; first frame may still be
-        // near initial 0.0 depending on spring, so check it's > idle threshold.
         assert!(
-            glass.activation >= 0.0,
+            glass.activation > 0.0,
             "pressed activation should be non-zero, got {}",
             glass.activation
         );
+        assert!(render
+            .ink
+            .iter()
+            .flat_map(|b| &b.views)
+            .all(|v| v.kind != ControlKind::Toggle));
     }
 
     // ------------------------------------------------------------------

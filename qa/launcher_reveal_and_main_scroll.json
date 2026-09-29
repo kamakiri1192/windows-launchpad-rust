@@ -1,0 +1,95 @@
+{
+  "name": "launcher-reveal-and-main-scroll",
+  "launch_reveal": true,
+  "scale_factor": 1.0,
+  "viewport": [
+    1280,
+    800
+  ],
+  "fps": 60,
+  "duration_ms": 2400,
+  "output_dir": "target/qa-sequences",
+  "scroll_expectations": {
+    "min_samples": 3,
+    "expected_terminal_contacts": 1,
+    "expected_horizontal_releases": 1,
+    "expected_target_decisions": 1,
+    "expected_spring_generations": 1,
+    "expected_releases": [
+      {
+        "gesture_id": 1,
+        "surface": "main",
+        "min_filtered_velocity": -50000,
+        "max_filtered_velocity": -40000,
+        "target_x": -832
+      }
+    ],
+    "required_surfaces": [
+      "main"
+    ]
+  },
+  "fixture": {
+    "apps": [
+      {
+        "id": "mini-a",
+        "name": "Mini A"
+      },
+      {
+        "id": "mini-b",
+        "name": "Mini B"
+      }
+    ],
+    "generated_apps": [
+      {
+        "prefix": "reveal-app",
+        "name_prefix": "Reveal App",
+        "count": 70
+      }
+    ],
+    "folders": [
+      {
+        "id": "reveal-folder",
+        "name": "Reveal Folder",
+        "children": [
+          "mini-a",
+          "mini-b"
+        ]
+      }
+    ],
+    "items": [
+      {
+        "kind": "folder",
+        "id": "reveal-folder"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "at_ms": 700,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 700000,
+      "canonical_dx": 0,
+      "canonical_dy": 0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 716,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 716000,
+      "canonical_dx": -900,
+      "canonical_dy": 0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 732,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 732000,
+      "canonical_dx": 0,
+      "canonical_dy": 0,
+      "contact_phase": "ended"
+    }
+  ]
+}

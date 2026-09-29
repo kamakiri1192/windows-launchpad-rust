@@ -50,6 +50,7 @@ impl App {
                 key: entry.key.as_str(),
                 name: entry.name.as_str(),
                 uv: entry.uv,
+                hide_fill: entry.hide_fill,
                 preview_uvs: &entry.preview_uvs,
             })
             .collect();
@@ -58,7 +59,16 @@ impl App {
         let scale = self.scale_factor;
         let (grid_glyphs, dirty) = if let Some(t) = self.text.as_mut() {
             let labels = self.layout.build_labels(w as f32, &items);
-            let quads = t.layout_labels(&labels, scale);
+            let pivots: Vec<_> = self
+                .layout
+                .build_instances(w as f32, &items, &[])
+                .iter()
+                .map(|tile| {
+                    let center = tile.rect.center();
+                    [center.x, center.y]
+                })
+                .collect();
+            let quads = t.layout_labels_with_pivots(&labels, scale, &pivots);
             let dirty = t.atlas_dirty;
             if dirty {
                 if let Some(r) = self.renderer.as_mut() {
@@ -436,6 +446,7 @@ impl App {
                 key: entry.key.as_str(),
                 name: entry.name.as_str(),
                 uv: entry.uv,
+                hide_fill: entry.hide_fill,
                 preview_uvs: &entry.preview_uvs,
             })
             .collect();
@@ -541,6 +552,9 @@ fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<Gl
     quads
         .iter()
         .map(|quad| GlyphView {
+            presentation_pivot: (quad.clip_radius[3] > 0.5).then(|| {
+                crate::ui_model::geometry::Point::new(quad.clip_radius[1], quad.clip_radius[2])
+            }),
             id: UiId::backdrop("grid-label"),
             rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
             uv: UvRect {

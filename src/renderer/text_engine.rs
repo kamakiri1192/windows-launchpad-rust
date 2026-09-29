@@ -47,7 +47,8 @@ pub struct GlyphQuad {
     /// Sentinel: clip_rect.z <= 0.0 means "no clip".
     pub clip_rect: [f32; 4],
     /// Clip corner radius in physical px (0 = sharp corners).
-    /// Packed as vec4 with padding: (radius, 0, 0, 0).
+    /// Packed as (radius, presentation_pivot_x, presentation_pivot_y, has_pivot).
+    /// Only grid text consumes the pivot; other text shaders use radius only.
     pub clip_radius: [f32; 4],
 }
 
@@ -103,6 +104,7 @@ pub struct Label {
 
 /// Intermediate record from the layout phase.
 struct PlacedGlyph {
+    presentation_pivot: Option<[f32; 2]>,
     physical: PhysicalGlyph,
     /// On-screen glyph origin before applying the raster image placement.
     x: f32,
@@ -293,8 +295,19 @@ impl TextRenderer {
     /// `scale_factor` converts cosmic-text's logical px to physical px (the
     /// units the rest of the renderer uses). Pass the window's scale factor.
     pub fn layout_labels(&mut self, labels: &[Label], scale_factor: f32) -> Vec<GlyphQuad> {
+        self.layout_labels_with_pivots(labels, scale_factor, &[])
+    }
+
+    /// Attach every glyph and shadow to its owner's reveal pivot while
+    /// retaining the single atlas rasterization batch.
+    pub fn layout_labels_with_pivots(
+        &mut self,
+        labels: &[Label],
+        scale_factor: f32,
+        pivots: &[[f32; 2]],
+    ) -> Vec<GlyphQuad> {
         let mut placed = Vec::new();
-        for label in labels {
+        for (index, label) in labels.iter().enumerate() {
             let key = LabelLayoutKey {
                 text: label.text.clone(),
                 max_width_bits: label.max_width.to_bits(),
@@ -326,6 +339,7 @@ impl TextRenderer {
             }
             if let Some(relative) = self.label_layout_cache.get(&key) {
                 placed.extend(relative.iter().map(|glyph| PlacedGlyph {
+                    presentation_pivot: pivots.get(index).copied(),
                     physical: glyph.physical.clone(),
                     x: label.x + glyph.x,
                     y: label.y + glyph.y,
@@ -433,6 +447,7 @@ impl TextRenderer {
                 let x = physical.x as f32;
                 let y = physical.y as f32;
                 placed.push(PlacedGlyph {
+                    presentation_pivot: None,
                     physical,
                     x,
                     y,
@@ -504,6 +519,7 @@ impl TextRenderer {
                 let x = physical.x as f32;
                 let y = physical.y as f32;
                 placed.push(PlacedGlyph {
+                    presentation_pivot: None,
                     physical,
                     x,
                     y,
@@ -590,6 +606,7 @@ impl TextRenderer {
                     let x = physical.x as f32;
                     let y = physical.y as f32;
                     out.push(PlacedGlyph {
+                        presentation_pivot: None,
                         physical,
                         x,
                         y,
@@ -641,7 +658,9 @@ impl TextRenderer {
                 v1: (entry.y + entry.h) as f32 / ah,
                 color: g.color,
                 clip_rect: [0.0; 4],
-                clip_radius: [0.0; 4],
+                clip_radius: g
+                    .presentation_pivot
+                    .map_or([0.0; 4], |p| [0.0, p[0], p[1], 1.0]),
             });
         }
 
@@ -1090,6 +1109,23 @@ mod tests {
         for (before, after) in first.iter().zip(&second) {
             assert!((after.x - before.x - 120.0).abs() < 0.01);
             assert!((after.y - before.y).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn label_reveal_pivot_is_shared_by_all_glyphs_and_shadows() {
+        let mut renderer = TextRenderer::new();
+        let labels = [label("Adobe Premiere Pro 2026", 20.0)];
+        let plain = renderer.layout_labels(&labels, 2.0);
+        let anchored = renderer.layout_labels_with_pivots(&labels, 2.0, &[[62.0, 42.0]]);
+        assert!(!anchored.is_empty());
+        assert_eq!(plain.len(), anchored.len());
+        for (before, after) in plain.iter().zip(&anchored) {
+            assert_eq!(
+                [before.x, before.y, before.u0, before.v0],
+                [after.x, after.y, after.u0, after.v0]
+            );
+            assert_eq!(after.clip_radius, [0.0, 62.0, 42.0, 1.0]);
         }
     }
 
