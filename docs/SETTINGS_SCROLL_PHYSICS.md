@@ -125,12 +125,12 @@ raw      += applied
 position  = rubber(raw)
 ```
 
-`momentum_gain`の理由: AppKitのmomentumはシステムのスクロール加速設定を
-反映するため、設定が速いと中程度のフリックでも内容が端まで飛んでbounceする
-（実機トレース 2026-08-13: 130pxのフリックが972px coast、-362pxのフリックが
-750px coast）。ページャー（`Scroller`）はnative momentumをrouterで隔離して
-自前の減衰を使うため環境に依存しない。設定パネルも同じ感覚のcoastに揃える
-ため、境界内の移動距離を約40%にスケールする。
+`momentum_gain`の経緯: #185ではAppKitのmomentumがシステムのスクロール加速設定を
+反映するため（実機トレース 2026-08-13: 130pxのフリックが972px coast）、ページャー
+（`Scroller`）と同じ感覚のcoastに揃える目的で境界内の移動距離を約40%（0.4）に
+スケールした。2026-08-15にissue #190の一実験として**既定1.0（native momentumの
+素通し）を実機検証したが不採用**となり、0.4に戻している。A/B比較や再試行は
+`LAUNCHPAD_SCROLL_MOMENTUM_GAIN`でリビルドなしに行える。
 
 **端を越えるパケットにはゲインを掛けない。** ゲインを全体に掛けると、端まで
 到達したmomentumが境界を越えられず「ピタッと止まる」見た目になる（stretch
