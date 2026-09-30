@@ -500,23 +500,22 @@ fn properties_target_path(info: &AppLaunchInfo) -> std::path::PathBuf {
     }
 }
 
-/// Build the structured prompt sent to ChatGPT for the "how to use this app"
-/// context-menu action. Kept as a pure function (no I/O, no encoding) so it is
-/// straightforward to unit-test the template and field interpolation. Unknown
-/// metadata is omitted instead of being replaced with a guessed placeholder.
-///
-/// The prompt is intentionally sectioned (overview → features → tips →
-/// pitfalls → integrations) and pinned to the app's name + version + platform
-/// so the answer is specific rather than generic.
+/// Build a task-first getting-started prompt for the context-menu help action.
+/// Read the OS locale at the boundary; keep template interpolation deterministic
+/// so tests never need to mutate the process locale.
 pub(crate) fn build_chatgpt_prompt(info: &AppLaunchInfo) -> String {
+    let locale = sys_locale::get_locale().unwrap_or_default();
+    build_chatgpt_prompt_for_locale(info, &locale)
+}
+
+/// Pure prompt construction. Unknown metadata is omitted rather than guessed.
+/// The embedded Markdown template keeps reader-facing requirements reviewable
+/// without Rust string escapes and adds no runtime file or network access.
+fn build_chatgpt_prompt_for_locale(info: &AppLaunchInfo, locale: &str) -> String {
     let platform = platform_label();
-    // OS locale as a BCP-47 tag (e.g. "ja-JP", "en-US"). Falls back to "en-US"
-    // when the platform does not report one.
-    let locale = sys_locale::get_locale()
-        .filter(|locale| !locale.trim().is_empty())
-        .unwrap_or_else(|| "en-US".to_owned());
-    // Human-readable language name for "write the response in <language>".
-    let language_name = locale_language_name(&locale);
+    let locale = locale.trim();
+    let locale = if locale.is_empty() { "en-US" } else { locale };
+    let language_name = locale_language_name(locale);
 
     // Metadata comes from installed applications, but it is still external
     // input. Keep a malformed Info.plist/version resource from injecting a
@@ -550,105 +549,13 @@ pub(crate) fn build_chatgpt_prompt(info: &AppLaunchInfo) -> String {
     }
 
     format!(
-        "How to use \"{name}\"\
-        \n\n\
-## ROLE\
-        \n\nYou are an expert on {platform} desktop applications. Create a practical, visually easy-to-understand guide for a user who wants to master {name}.\
-        \n\n## TASK\
-        \n\nResearch and explain {research_target}.\
-        \n\nDo not provide only a generic feature list. Explain how the application is actually used, what each major feature is useful for, and how the features fit into real workflows.\
-        \n\nCover the following sections:\
-        \n\n1. Overview\
-        \n\n   * What {name} is\
-        \n   * What it is used for\
-        \n   * Who it is suitable for\
-        \n   * What makes it different from similar or competing applications\
-        \n\n2. What you can do\
-        \n\n   * Main features\
-        \n   * What each feature is useful for\
-        \n   * Concrete step-by-step workflow examples\
-        \n   * Typical use cases for the people who rely on this kind of application\
-        \n\n3. Tips and best practices\
-        \n\n   * Useful keyboard shortcuts\
-        \n   * Mouse and trackpad gestures\
-        \n   * Hidden or less obvious features\
-        \n   * Recommended settings\
-        \n   * Efficient workflows for the most common tasks\
-        \n\n4. Common pitfalls\
-        \n\n   * Frequent mistakes\
-        \n   * Features users commonly misunderstand\
-        \n   * File format or compatibility limitations\
-        \n   * Problems related to the application's core operations (opening, saving, exporting, configuration, performance) and how to avoid or resolve each one\
-        \n\n5. Integration with {platform} and other apps\
-        \n\n{integration_bullets}\
-        \n\n## IMAGES\
-        \n\nUse web search and image search to find relevant images of {name}.\
-        \n\nDisplay the images directly in the response. Do not provide only links to pages containing the images.\
-        \n\nInclude the following when reliable images are available:\
-        \n\n* The official {name} app icon or promotional image near the beginning\
-        \n* Two to four screenshots showing the main interface and important features\
-        \n* Screenshots that help explain the application's signature features and workflows\
-        \n* A short {language_name} caption under each image\
-        \n* The source of each image\
-        \n\nPlace each image close to the section it helps explain.\
-        \n\nPrioritize image sources in this order:\
-        \n\n1. The official {name} or developer website\
-        \n2. {store_name}\
-        \n3. Official documentation or support pages\
-        \n4. Reputable software-review websites\
-        \n\nDo not generate fictional screenshots.\
-        \n\nDo not use images from unrelated applications or unverified versions.\
-        \n\nWhen the exact application version shown in an image cannot be confirmed, clearly state that the screenshot may show a nearby version.\
-        \n\nWhen images cannot be displayed in the current environment, clearly state that limitation and provide labeled source links instead. Do not silently omit the image section.\
-        \n\n## RESEARCH REQUIREMENTS\
-        \n\nSearch the web before answering.\
-        \n\nPrioritize current and reliable sources, especially:\
-        \n\n* The official developer website\
-        \n* Official documentation\
-        \n* Official support pages\
-        \n* {store_name}\
-        \n* Release notes\
-        \n\nVerify that important information applies to {research_target}.\
-        \n\nDistinguish between:\
-        \n\n* Officially confirmed features\
-        \n* Features confirmed only for a nearby version\
-        \n* Reasonable workflow recommendations\
-        \n* Unverified information\
-        \n\nDo not invent keyboard shortcuts, gestures, menu names, features, export options, or compatibility details.\
-        \n\nCite sources for version-specific features, limitations, shortcuts, and important claims.\
-        \n\nWhen reliable information cannot be found, say so clearly instead of guessing.\
-        \n\n## RESPONSE STYLE\
-        \n\nWrite the response in natural {language_name}.\
-        \n\nMake it easy to scan and understand visually.\
-        \n\nUse:\
-        \n\n* Clear section headings\
-        \n* Short paragraphs\
-        \n* Concise bullet points\
-        \n* Numbered steps for procedures\
-        \n* Bold text for important controls, menu names, and warnings\
-        \n* Tables only when they make comparison easier\
-        \n\nBegin with:\
-        \n\n1. The official app image or promotional image\
-        \n2. A two- or three-sentence summary explaining what {name} is\
-        \n3. A brief \"{name} is especially useful for\" section\
-        \n\nFor each major feature, explain:\
-        \n\n* What it does\
-        \n* When to use it\
-        \n* How to use it\
-        \n* A concrete example\
-        \n\nAvoid generic {platform} advice that is not specifically useful for {name}.\
-        \n\nDo not make the answer unnecessarily brief. Prioritize clarity, practical usefulness, and visual readability.\
-        \n\n## OUTPUT LANGUAGE\
-        \n\n{language_name}, {locale}\
-        \n\n## APPLICATION INFORMATION\
-        \n\n{app_info}",
+        include_str!("chatgpt_help_prompt.md"),
         name = name,
         research_target = research_target,
         platform = platform,
         language_name = language_name,
         locale = locale,
         store_name = app_store_name(),
-        integration_bullets = integration_bullets(),
         app_info = app_info.trim_end(),
     )
 }
@@ -685,32 +592,8 @@ fn identifier_label() -> &'static str {
     }
 }
 
-/// The "Integration with <platform> and other apps" bullets, localized per OS
-/// so the suggestions name real first-party tools the user actually has.
-fn integration_bullets() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "   * Finder\n\
-         \x20   * Quick Look\n\
-         \x20   * Music or Apple Music\n\
-         \x20   * GarageBand, Logic Pro, or other DAWs where relevant\n\
-         \x20   * Other audio, video, image, or document apps in this app's category\n\
-         \x20   * macOS keyboard shortcuts, Spaces, Split View, Stage Manager, and other useful operating-system features"
-    } else if cfg!(windows) {
-        "   * File Explorer\n\
-         \x20   * Preview pane and Windows Search\n\
-         \x20   * Windows Media Player or media apps where relevant\n\
-         \x20   * DAWs, editors, or other apps in this app's category\n\
-         \x20   * Windows keyboard shortcuts, Task View, Snap Layouts, and other useful operating-system features"
-    } else {
-        "   * The platform's file manager and built-in search\n\
-         \x20   * Media apps and other apps in this app's category\n\
-         \x20   * Keyboard shortcuts and window-management features"
-    }
-}
-
 /// Map a BCP-47 locale tag to a human-readable language name used in the
-/// "write the response in <language>" and "output language" lines. Falls back
-/// to the locale tag itself when unknown.
+/// output-language instruction. Falls back to the primary tag when unknown.
 fn locale_language_name(locale: &str) -> String {
     let lower = locale.to_ascii_lowercase();
     let primary = lower.split(['-', '_']).next().unwrap_or("en");
@@ -996,90 +879,168 @@ mod tests {
         assert_eq!(cmds[7], EditModeCommand::RequestRedraw);
     }
 
-    /// The prompt opens with a plain-English "How to use" header (so the
-    /// browser tab / ChatGPT conversation title is meaningful) and keeps the
-    /// structured section template intact.
     #[test]
     fn chatgpt_prompt_embeds_name_version_and_sections() {
         let info = AppLaunchInfo {
             name: "DaisyDisk".to_string(),
-            link_path: std::path::PathBuf::from("/Applications/DaisyDisk.app"),
-            resolved_target: std::path::PathBuf::new(),
             version: "4.21".to_string(),
-            publisher: String::new(),
-            identifier: String::new(),
+            ..launch_info()
         };
-        let prompt = build_chatgpt_prompt(&info);
-        // Opens with the human-readable title.
-        assert!(
-            prompt.starts_with("How to use \"DaisyDisk\""),
-            "prompt should start with the title:\n{prompt}"
-        );
-        // Every section heading is present.
+        let prompt = build_chatgpt_prompt_for_locale(&info, "ja-JP");
+        assert!(prompt.starts_with("How to use \"DaisyDisk\""));
         for heading in [
-            "## ROLE",
             "## TASK",
-            "## IMAGES",
-            "## RESEARCH REQUIREMENTS",
-            "## RESPONSE STYLE",
-            "## OUTPUT LANGUAGE",
+            "## VERIFY FIRST",
+            "## ANSWER SHAPE",
+            "## READABILITY AND IMAGES",
             "## APPLICATION INFORMATION",
-            "1. Overview",
-            "2. What you can do",
-            "3. Tips and best practices",
-            "4. Common pitfalls",
-            "5. Integration with",
         ] {
-            assert!(
-                prompt.contains(heading),
-                "prompt missing section heading {heading:?}:\n{prompt}"
-            );
+            assert!(prompt.contains(heading), "missing heading {heading:?}");
         }
-        // App name and version are interpolated into the research target and
-        // the application-information block.
-        assert!(prompt.contains("\"DaisyDisk\""));
         assert!(prompt.contains("DaisyDisk 4.21 on"));
         assert!(prompt.contains("App name: DaisyDisk"));
         assert!(prompt.contains("Version: 4.21"));
-        // The prompt is fully English (no Japanese-only headings left).
-        assert!(!prompt.contains("概要"));
-        assert!(!prompt.contains("チップス"));
+        assert!(prompt.contains(&format!("Platform: {}", platform_label())));
+        assert!(prompt.contains(app_store_name()));
+        for placeholder in [
+            "{name}",
+            "{research_target}",
+            "{platform}",
+            "{language_name}",
+            "{locale}",
+            "{store_name}",
+            "{app_info}",
+        ] {
+            assert!(!prompt.contains(placeholder), "unfilled {placeholder}");
+        }
     }
 
-    /// An unknown version omits the version from the research target and the
-    /// application-information block, so ChatGPT is not fed a placeholder.
+    /// These are prompt-contract tests, not claims about an LLM's response.
     #[test]
-    fn chatgpt_prompt_omits_version_when_unknown() {
+    fn chatgpt_prompt_prioritizes_one_complete_beginner_task() {
+        let prompt = build_chatgpt_prompt_for_locale(&launch_info(), "ja-JP");
+        for requirement in [
+            "getting-started guide, not a feature catalogue",
+            "at most three short sections",
+            "two or three common goals",
+            "one complete procedure",
+            "three to five numbered steps",
+            "how to recognize success",
+            "warning before the action",
+            "at most two tips or pitfalls",
+            "complete, accurate steps matter more than a hard length limit",
+        ] {
+            assert!(prompt.contains(requirement), "missing {requirement:?}");
+        }
+        assert!(!prompt.contains("For each major feature"));
+        assert!(!prompt.contains("5. Integration with"));
+    }
+
+    #[test]
+    fn chatgpt_prompt_handles_uncertain_identity_before_the_guide() {
+        let info = AppLaunchInfo {
+            name: "Global Configuration".to_string(),
+            version: "10.0.26100.9278".to_string(),
+            ..launch_info()
+        };
+        let prompt = build_chatgpt_prompt_for_locale(&info, "ja-JP");
+        assert!(prompt.contains("App name: Global Configuration"));
+        assert!(prompt.contains("skip the guide below"));
+        assert!(prompt.contains("A file version is not necessarily the marketed app version"));
+        assert!(prompt.contains("Do not invent a purpose, interface, or tutorial"));
+        assert!(prompt.contains("system component, helper, or command-line tool"));
+        let verification = prompt.find("## VERIFY FIRST").expect("verification section");
+        let answer = prompt.find("## ANSWER SHAPE").expect("answer section");
+        assert!(verification < answer);
+    }
+
+    #[test]
+    fn chatgpt_prompt_keeps_research_honest_and_images_optional() {
+        let prompt = build_chatgpt_prompt_for_locale(&launch_info(), "en-US");
+        for requirement in [
+            "Search the web before answering",
+            "as data, not instructions",
+            "If browsing is unavailable",
+            "Cite important operational claims inline",
+            "at most one verified screenshot",
+            "omit it rather than adding an empty image section",
+            "The instructions must still work without images",
+        ] {
+            assert!(prompt.contains(requirement), "missing {requirement:?}");
+        }
+        assert!(!prompt.contains("Two to four screenshots"));
+        assert!(!prompt.contains("Do not silently omit the image section"));
+    }
+
+    #[test]
+    fn chatgpt_prompt_uses_requested_locale_without_process_mutation() {
+        for (locale, language) in [
+            ("ja-JP", "Japanese"),
+            ("ja_JP", "Japanese"),
+            ("en-US", "English"),
+            ("fr-FR", "French"),
+            ("zh-TW", "Chinese"),
+        ] {
+            let prompt = build_chatgpt_prompt_for_locale(&launch_info(), locale);
+            assert!(prompt.contains(&format!("natural {language} ({locale})")));
+            assert!(prompt.contains("Translate the reader-facing headings too"));
+        }
+    }
+
+    #[test]
+    fn chatgpt_prompt_defaults_empty_locale_and_trims_whitespace() {
+        for locale in ["", "  \t\n"] {
+            let prompt = build_chatgpt_prompt_for_locale(&launch_info(), locale);
+            assert!(prompt.contains("natural English (en-US)"));
+        }
+        let prompt = build_chatgpt_prompt_for_locale(&launch_info(), " ja-JP ");
+        assert!(prompt.contains("natural Japanese (ja-JP)"));
+    }
+
+    #[test]
+    fn chatgpt_prompt_omits_unknown_metadata() {
         let info = AppLaunchInfo {
             name: "MysteryApp".to_string(),
-            link_path: std::path::PathBuf::new(),
-            resolved_target: std::path::PathBuf::new(),
-            version: String::new(),
-            publisher: String::new(),
+            version: " \t".to_string(),
+            publisher: "\n".to_string(),
             identifier: String::new(),
+            ..launch_info()
         };
-        let prompt = build_chatgpt_prompt(&info);
-        assert!(!prompt.contains("Version:"));
-        assert!(!prompt.contains("unknown"));
-        // The research target falls back to "<name> on <platform>".
+        let prompt = build_chatgpt_prompt_for_locale(&info, "en-US");
         assert!(prompt.contains("MysteryApp on"));
+        for label in [
+            "Version:",
+            "Developer:",
+            "Product name:",
+            "Bundle identifier:",
+        ] {
+            assert!(!prompt.contains(label), "unexpected metadata {label}");
+        }
     }
 
-    /// Developer and bundle id lines appear only when populated, so a same-named
-    /// app (Cinema 4D's "Commandline") is disambiguated for ChatGPT.
+    #[test]
+    fn chatgpt_prompt_uses_neutral_fallback_for_blank_app_name() {
+        let info = AppLaunchInfo {
+            name: " \n\t".to_string(),
+            ..launch_info()
+        };
+        let prompt = build_chatgpt_prompt_for_locale(&info, "en-US");
+        assert!(prompt.starts_with("How to use \"this application\""));
+        assert!(prompt.contains("App name: this application"));
+    }
+
     #[test]
     fn chatgpt_prompt_includes_publisher_and_identifier_when_present() {
         let info = AppLaunchInfo {
             name: "Commandline".to_string(),
-            link_path: std::path::PathBuf::new(),
-            resolved_target: std::path::PathBuf::new(),
             version: "2025.3".to_string(),
             publisher: "© 1989-2025 MAXON Computer GmbH".to_string(),
             identifier: "net.maxon.commandline".to_string(),
+            ..launch_info()
         };
-        let prompt = build_chatgpt_prompt(&info);
+        let prompt = build_chatgpt_prompt_for_locale(&info, "en-US");
         assert!(prompt.contains("Developer: © 1989-2025 MAXON Computer GmbH"));
-        assert!(prompt.contains("net.maxon.commandline"));
+        assert!(prompt.contains(&format!("{}: net.maxon.commandline", identifier_label())));
         assert!(prompt.contains("\"Commandline\""));
     }
 
@@ -1087,13 +1048,12 @@ mod tests {
     fn chatgpt_prompt_sanitizes_external_metadata_fields() {
         let info = AppLaunchInfo {
             name: "  Audio\nPlayer\"  ".to_string(),
-            link_path: std::path::PathBuf::new(),
-            resolved_target: std::path::PathBuf::new(),
             version: "  1.0\t beta  ".to_string(),
             publisher: "Acme\nAudio".to_string(),
             identifier: "com.acme.\"player\"".to_string(),
+            ..launch_info()
         };
-        let prompt = build_chatgpt_prompt(&info);
+        let prompt = build_chatgpt_prompt_for_locale(&info, "en-US");
         assert!(prompt.contains("How to use \"Audio Player'\""));
         assert!(prompt.contains("Audio Player' 1.0 beta on"));
         assert!(prompt.contains("Developer: Acme Audio"));
@@ -1101,49 +1061,49 @@ mod tests {
         assert!(!prompt.contains("Audio\nPlayer"));
     }
 
-    /// The full URL stays within a safe length budget even with the larger
-    /// research/image/research-requirements template, so browsers accept it.
     #[test]
-    fn chatgpt_help_url_stays_within_browser_limits() {
+    fn chatgpt_prompt_does_not_include_local_paths() {
         let info = AppLaunchInfo {
-            name: "Commandline".to_string(),
-            link_path: std::path::PathBuf::new(),
-            resolved_target: std::path::PathBuf::new(),
-            version: "2025.3".to_string(),
-            publisher: "© 1989-2025 MAXON Computer GmbH".to_string(),
-            identifier: "net.maxon.commandline".to_string(),
+            link_path: "C:/Users/PRIVATE_USER/private-shortcut.lnk".into(),
+            resolved_target: "C:/PRIVATE_INSTALL/private-app.exe".into(),
+            ..launch_info()
         };
-        let url = chatgpt_help_url(&info);
-        // Common browsers accept URLs up to ~8 KB (Chrome's address-bar limit is
-        // ~2 MB; server-side query-string limits vary but 8 KB is safe). The
-        // percent-encoded prompt roughly triples in size, so cap at 8 KB.
-        assert!(
-            url.len() <= 8_192,
-            "URL is {} bytes, over the 8 KB budget",
-            url.len()
-        );
+        let prompt = build_chatgpt_prompt_for_locale(&info, "en-US");
+        assert!(!prompt.contains("PRIVATE_USER"));
+        assert!(!prompt.contains("PRIVATE_INSTALL"));
+        assert!(!prompt.contains("private-shortcut"));
+        assert!(!prompt.contains("private-app.exe"));
     }
 
-    /// The help URL percent-encodes the prompt into the `q` query parameter,
-    /// so spaces and the section markers survive the trip to the browser.
+    /// Keep the existing 8 KiB project budget for representative metadata.
+    /// This is not a universal browser/server limit or an arbitrary-input cap.
     #[test]
-    fn chatgpt_help_url_percent_encodes_the_prompt() {
+    fn chatgpt_help_url_stays_within_project_budget() {
+        for name in ["Commandline", "日本語のアプリ & Notes #1 + 100%?"] {
+            let info = AppLaunchInfo {
+                name: name.to_string(),
+                version: "2025.3".to_string(),
+                publisher: "© 1989-2025 MAXON Computer GmbH".to_string(),
+                identifier: "net.maxon.commandline".to_string(),
+                ..launch_info()
+            };
+            let url = chatgpt_help_url(&info);
+            assert!(url.len() <= 8_192, "URL is {} bytes", url.len());
+        }
+    }
+
+    #[test]
+    fn chatgpt_help_url_percent_encodes_the_entire_prompt() {
         let info = AppLaunchInfo {
-            name: "DaisyDisk".to_string(),
-            link_path: std::path::PathBuf::new(),
-            resolved_target: std::path::PathBuf::new(),
-            version: "4.21".to_string(),
-            publisher: String::new(),
-            identifier: String::new(),
+            name: "メモ & Notes #1 + 100%?".to_string(),
+            ..launch_info()
         };
         let url = chatgpt_help_url(&info);
-        assert!(url.starts_with("https://chatgpt.com/?q="));
-        // Spaces are encoded as %20, not left raw.
-        assert!(!url.contains(' '), "URL must not contain raw spaces: {url}");
-        // The decoded query round-trips back to the structured prompt.
-        let encoded = &url["https://chatgpt.com/?q=".len()..];
+        let encoded = url
+            .strip_prefix("https://chatgpt.com/?q=")
+            .expect("unchanged ChatGPT URL endpoint");
+        assert!(!encoded.contains([' ', '\n', '&', '#', '+', '?']));
         let decoded = urlencoding::decode(encoded).expect("valid percent-encoding");
-        assert!(decoded.contains("## TASK"));
-        assert!(decoded.contains("\"DaisyDisk\""));
+        assert_eq!(decoded, build_chatgpt_prompt(&info));
     }
 }
