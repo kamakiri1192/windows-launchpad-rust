@@ -206,8 +206,8 @@ const LABEL_FONT_SIZE: f32 = 14.0;
 const LABEL_LINE_HEIGHT: f32 = 18.0;
 const LABEL_LAYOUT_CACHE_CAPACITY: usize = 4096;
 /// Strong, soft-edged shadow in logical px: (x offset, y offset, alpha).
-/// Shared by app labels, folder labels, and the open-folder title.
-const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
+/// Shared by app labels, folder labels, the open-folder title, and bottom controls.
+pub(crate) const LABEL_SHADOW_LAYERS: &[(f32, f32, f32)] = &[
     (0.0, 1.0, 0.48),
     (0.0, 2.0, 0.26),
     (-0.8, 1.3, 0.18),
@@ -351,14 +351,20 @@ impl TextRenderer {
     }
 
     /// Lay out a single centered line of text with an explicit color, returning
-    /// glyph quads *without* the label drop-shadow. Used by the bottom control
-    /// (search pill label + search field query + placeholder), which draws its
-    /// own crisp text over the Liquid Glass capsule.
+    /// glyph quads *without* the label drop-shadow.
     ///
     /// `spec.center` is the on-screen center of the line in physical px. The
     /// glyph quads are positioned so the line is horizontally centered on it.
     pub fn layout_centered_line(&mut self, spec: &CenteredLineSpec<'_>) -> Vec<GlyphQuad> {
         self.layout_centered_line_weighted(spec, Weight::NORMAL)
+    }
+
+    /// Centered regular-weight text with the same shadow as app labels.
+    pub fn layout_centered_line_with_shadow(
+        &mut self,
+        spec: &CenteredLineSpec<'_>,
+    ) -> Vec<GlyphQuad> {
+        self.layout_centered_line_weighted_with_shadow(spec, Weight::NORMAL)
     }
 
     /// Same as [`layout_centered_line`] but also returns the laid-out line

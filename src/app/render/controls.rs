@@ -67,7 +67,10 @@ impl App {
         let instances = if edit_visual_progress > 0.0 {
             Vec::new()
         } else {
-            build_overlay_instances(&geom, &layers, query_width, caret_blink)
+            with_ink_shadows(
+                build_overlay_instances(&geom, &layers, query_width, caret_blink),
+                scale,
+            )
         };
 
         // 2) Text glyphs (label / query / placeholder). Built via the shared
@@ -131,6 +134,7 @@ impl App {
 
     pub(crate) fn render_gear(&mut self, control_shape: Option<GlassSurface>) {
         // The gear only appears in edit mode, alongside the Done capsule.
+        let scale = self.scale_factor;
         let edit_progress = self.edit_visual_progress();
         let show = self.visible && edit_progress > 0.0 && !self.settings_panel_active();
         // Resolve the gear geometry once (it yields both the glass shape and
@@ -138,7 +142,6 @@ impl App {
         let gear_geom = if show {
             let viewport = self.viewport_phys();
             let frame_bottom = self.frame_bottom_y();
-            let scale = self.scale_factor;
             let done_hw = self
                 .cached_done_width
                 .map(|w| bottom_control::done_half_width(w, scale))
@@ -154,7 +157,9 @@ impl App {
             None
         };
         let gear_shape = gear_geom.map(|(geom, _)| edit_gear_glass_shape(&geom));
-        let gear_instance = gear_geom.map(|(geom, alpha)| edit_gear_instance(&geom, alpha));
+        let gear_instances = gear_geom
+            .map(|(geom, alpha)| with_ink_shadows(vec![edit_gear_instance(&geom, alpha)], scale))
+            .unwrap_or_default();
         self.render_model.set_glass_batch(
             GlassLayer::Overlay,
             self.interaction_glass
@@ -165,7 +170,7 @@ impl App {
                 .collect(),
         );
         self.render_model
-            .set_ink_batch(InkLane::Gear, gear_instance.into_iter().collect());
+            .set_ink_batch(InkLane::Gear, gear_instances);
     }
 
     pub(crate) fn step_edit_control_width(&mut self, dt: f32) -> bool {
@@ -230,6 +235,27 @@ impl App {
 const CONTROL_INK: [f32; 4] = [1.0, 1.0, 1.0, 0.92];
 const DOT_ACTIVE: [f32; 4] = [1.0, 1.0, 1.0, 0.96];
 const DOT_IDLE: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
+
+/// Keep every shadow behind the foreground ink, even when nearby dots overlap.
+fn with_ink_shadows(ink: Vec<InkView>, scale: f32) -> Vec<InkView> {
+    let mut out = Vec::with_capacity(ink.len() * (text::LABEL_SHADOW_LAYERS.len() + 1));
+    for view in &ink {
+        // A blinking caret is an insertion marker rather than an icon.
+        if view.kind == ControlKind::Caret {
+            continue;
+        }
+        for &(dx, dy, alpha) in text::LABEL_SHADOW_LAYERS {
+            let mut shadow = view.clone();
+            shadow.center.x += dx * scale;
+            shadow.center.y += dy * scale;
+            shadow.opacity *= alpha * shadow.color.a;
+            shadow.color = Color::rgba(0.0, 0.0, 0.0, 1.0);
+            out.push(shadow);
+        }
+    }
+    out.extend(ink);
+    out
+}
 
 fn build_overlay_instances(
     geom: &bottom_control::ControlGeometry,
@@ -556,7 +582,7 @@ fn control_text_quads(
             recolor_quads(&mut cache.done, color);
             quads.extend_from_slice(&cache.done);
         } else {
-            let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+            let mut q = t.layout_centered_line_with_shadow(&text::CenteredLineSpec {
                 text: DONE_LABEL,
                 font_size: QUERY_LABEL_SIZE,
                 line_height: QUERY_LABEL_LINE,
@@ -595,7 +621,7 @@ fn control_text_quads(
                     recolor_quads(&mut cache.pill, color);
                     quads.extend_from_slice(&cache.pill);
                 } else {
-                    let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                    let mut q = t.layout_centered_line_with_shadow(&text::CenteredLineSpec {
                         text: "検索",
                         font_size: QUERY_LABEL_SIZE,
                         line_height: QUERY_LABEL_LINE,
@@ -618,7 +644,7 @@ fn control_text_quads(
                         recolor_quads(&mut cache.placeholder, color);
                         quads.extend_from_slice(&cache.placeholder);
                     } else {
-                        let mut q = t.layout_centered_line(&text::CenteredLineSpec {
+                        let mut q = t.layout_centered_line_with_shadow(&text::CenteredLineSpec {
                             text: "検索",
                             font_size: QUERY_LABEL_SIZE,
                             line_height: QUERY_LABEL_LINE,
@@ -640,15 +666,16 @@ fn control_text_quads(
                             recolor_quads(&mut cache.query, color);
                             quads.extend_from_slice(&cache.query);
                         } else {
-                            let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-                                text: &control.query,
-                                font_size: QUERY_LABEL_SIZE,
-                                line_height: QUERY_LABEL_LINE,
-                                family: QUERY_LABEL_FONT,
-                                color,
-                                center: query_center,
-                                scale_factor: scale,
-                            });
+                            let mut q =
+                                t.layout_centered_line_with_shadow(&text::CenteredLineSpec {
+                                    text: &control.query,
+                                    font_size: QUERY_LABEL_SIZE,
+                                    line_height: QUERY_LABEL_LINE,
+                                    family: QUERY_LABEL_FONT,
+                                    color,
+                                    center: query_center,
+                                    scale_factor: scale,
+                                });
                             cache.query = q.clone();
                             quads.append(&mut q);
                         }
@@ -659,15 +686,16 @@ fn control_text_quads(
                             recolor_quads(&mut cache.preedit, color);
                             quads.extend_from_slice(&cache.preedit);
                         } else {
-                            let mut q = t.layout_centered_line(&text::CenteredLineSpec {
-                                text: &control.preedit,
-                                font_size: QUERY_LABEL_SIZE,
-                                line_height: QUERY_LABEL_LINE,
-                                family: QUERY_LABEL_FONT,
-                                color,
-                                center: preedit_center,
-                                scale_factor: scale,
-                            });
+                            let mut q =
+                                t.layout_centered_line_with_shadow(&text::CenteredLineSpec {
+                                    text: &control.preedit,
+                                    font_size: QUERY_LABEL_SIZE,
+                                    line_height: QUERY_LABEL_LINE,
+                                    family: QUERY_LABEL_FONT,
+                                    color,
+                                    center: preedit_center,
+                                    scale_factor: scale,
+                                });
                             cache.preedit = q.clone();
                             quads.append(&mut q);
                         }
@@ -693,14 +721,22 @@ fn control_text_quads(
     quads
 }
 
-/// Overwrite the alpha channel of every quad (the RGB channels are already
-/// the piece's base color from shaping time).
+/// Recolor retained text while preserving each app-label shadow layer's tint
+/// and opacity. `raster_phase` stores all shadow copies before the face quads.
 fn recolor_quads(quads: &mut [text::GlyphQuad], color: [f32; 4]) {
-    for quad in quads {
-        quad.color[0] = color[0];
-        quad.color[1] = color[1];
-        quad.color[2] = color[2];
-        quad.color[3] = color[3];
+    let layer_count = text::LABEL_SHADOW_LAYERS.len();
+    let shadow_count = quads.len() * layer_count / (layer_count + 1);
+    for (index, quad) in quads.iter_mut().enumerate() {
+        if index < shadow_count {
+            quad.color = [
+                0.0,
+                0.0,
+                0.0,
+                text::LABEL_SHADOW_LAYERS[index % layer_count].2 * color[3],
+            ];
+        } else {
+            quad.color = color;
+        }
     }
 }
 
@@ -768,6 +804,39 @@ mod tests {
             visual: bottom_control::Visual::SearchField,
             alpha: 1.0,
         }]
+    }
+
+    #[test]
+    fn bottom_control_icons_share_app_label_shadow_layers() {
+        let icon = ink_view(
+            UiId::bottom_control(),
+            [100.0, 200.0],
+            10.0,
+            0.8,
+            0.0,
+            0.0,
+            CONTROL_INK,
+            ControlKind::Magnifier,
+        );
+        let caret = ink_view(
+            UiId::bottom_control(),
+            [120.0, 200.0],
+            8.0,
+            1.0,
+            1.0,
+            0.0,
+            CONTROL_INK,
+            ControlKind::Caret,
+        );
+        let views = with_ink_shadows(vec![icon.clone(), caret.clone()], 2.0);
+        assert_eq!(views.len(), text::LABEL_SHADOW_LAYERS.len() + 2);
+        for (view, &(dx, dy, alpha)) in views.iter().zip(text::LABEL_SHADOW_LAYERS) {
+            assert_eq!(view.center, Point::new(100.0 + dx * 2.0, 200.0 + dy * 2.0));
+            assert_eq!(view.color, Color::rgba(0.0, 0.0, 0.0, 1.0));
+            assert!((view.opacity - 0.8 * CONTROL_INK[3] * alpha).abs() < 1e-6);
+        }
+        assert_eq!(views[text::LABEL_SHADOW_LAYERS.len()], icon);
+        assert_eq!(views.last(), Some(&caret));
     }
 
     #[test]
@@ -862,6 +931,9 @@ mod tests {
             0.0,
         );
         assert_eq!(first.len(), faded.len());
+        assert_eq!(first.len() % (text::LABEL_SHADOW_LAYERS.len() + 1), 0);
+        let face_start =
+            first.len() * text::LABEL_SHADOW_LAYERS.len() / (text::LABEL_SHADOW_LAYERS.len() + 1);
         for (a, b) in first.iter().zip(faded.iter()) {
             assert_eq!(a.x, b.x);
             assert_eq!(a.y, b.y);
@@ -869,6 +941,12 @@ mod tests {
             assert_eq!(a.color[0..3], b.color[0..3]);
             assert!((b.color[3] - a.color[3] * 0.5).abs() < 1e-6);
         }
+        assert!(first[..face_start]
+            .iter()
+            .all(|quad| quad.color[..3] == [0.0, 0.0, 0.0]));
+        assert!(first[face_start..]
+            .iter()
+            .all(|quad| quad.color[..3] == [1.0, 1.0, 1.0]));
     }
 
     #[test]
