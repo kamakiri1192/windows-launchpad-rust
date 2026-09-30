@@ -1,0 +1,30 @@
+{
+  "name": "launcher-dismiss",
+  "scale_factor": 1.0,
+  "viewport": [1280, 800],
+  "fps": 60,
+  "duration_ms": 2100,
+  "output_dir": "target/qa-sequences",
+  "fixture": {
+    "generated_apps": [
+      { "prefix": "dismiss-app", "name_prefix": "Dismiss App", "count": 35 }
+    ]
+  },
+  "actions": [
+    { "at_ms": 500, "type": "escape" },
+    { "at_ms": 550, "type": "assert_launcher", "visible": true, "closing": true },
+    { "at_ms": 600, "type": "escape" },
+    { "at_ms": 750, "type": "assert_launcher", "visible": false, "closing": false },
+    { "at_ms": 900, "type": "summon" },
+    { "at_ms": 950, "type": "escape" },
+    { "at_ms": 966, "type": "assert_launcher", "visible": true, "closing": true },
+    { "at_ms": 1100, "type": "assert_launcher", "visible": false, "closing": false },
+    { "at_ms": 1200, "type": "summon" },
+    { "at_ms": 1250, "type": "escape" },
+    { "at_ms": 1280, "type": "summon" },
+    { "at_ms": 1350, "type": "assert_launcher", "visible": true, "closing": false },
+    { "at_ms": 1650, "type": "close_requested" },
+    { "at_ms": 1750, "type": "assert_launcher", "visible": true, "closing": true },
+    { "at_ms": 1900, "type": "assert_launcher", "visible": false, "closing": false }
+  ]
+}

@@ -298,52 +298,8 @@ impl ApplicationHandler<UserEvent> for App {
                     winit::keyboard::PhysicalKey::Code(code) => Some(code),
                     winit::keyboard::PhysicalKey::Unidentified(_) => None,
                 };
-                let debug_keys_enabled = super::action::debug_keys_enabled_for_build(
-                    self.settings.debug_keys_enabled,
-                    cfg!(debug_assertions),
-                );
-                let key_action = if is_repeated_escape(event.repeat, key_code) {
-                    // The first Escape press may dismiss the context menu. If
-                    // its key-repeat outlives the close animation, it must not
-                    // fall through to the launcher-level hide shortcut.
-                    KeyAction::None
-                } else if self.context_menu.is_active() {
-                    // ESC dismisses the context menu while it owns input. Once
-                    // closing has started, swallow every key until the short
-                    // visual transition finishes. In particular, an OS key
-                    // repeat from the same Escape press must not hide the
-                    // launcher itself (the repeat guard above also covers the
-                    // first event delivered after the menu reaches Closed).
-                    if self.context_menu.accepts_pointer_input()
-                        && key_code == Some(winit::keyboard::KeyCode::Escape)
-                    {
-                        KeyAction::CloseContextMenu
-                    } else {
-                        KeyAction::None
-                    }
-                } else if self.folders.is_active() && !self.settings_open {
-                    folder_keyboard_action(
-                        self.folders.rename.is_some(),
-                        self.editing,
-                        self.folders
-                            .rename
-                            .as_ref()
-                            .is_none_or(|editor| editor.preedit.is_empty()),
-                        debug_keys_enabled,
-                        key_code,
-                        event.text.as_deref(),
-                    )
-                } else {
-                    keyboard_action(
-                        self.settings_open,
-                        self.editing,
-                        self.control.wants_keyboard(),
-                        self.control.preedit.is_empty(),
-                        debug_keys_enabled,
-                        key_code,
-                        event.text.as_deref(),
-                    )
-                };
+                let key_action =
+                    self.classify_keyboard_action(event.repeat, key_code, event.text.as_deref());
                 AppAction::Keyboard(key_action)
             }
             WindowEvent::Ime(ime) => AppAction::Ime(ime),
@@ -503,6 +459,54 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 impl App {
+    /// Shared by native keyboard events and deterministic QA input.
+    pub(crate) fn classify_keyboard_action(
+        &self,
+        repeat: bool,
+        key_code: Option<winit::keyboard::KeyCode>,
+        text: Option<&str>,
+    ) -> KeyAction {
+        let debug_keys_enabled = super::action::debug_keys_enabled_for_build(
+            self.settings.debug_keys_enabled,
+            cfg!(debug_assertions),
+        );
+        if is_repeated_escape(repeat, key_code) {
+            // A held Esc must not dismiss the launcher after its first press
+            // closed a menu, folder, settings panel, or search field.
+            KeyAction::None
+        } else if self.context_menu.is_active() {
+            if self.context_menu.accepts_pointer_input()
+                && key_code == Some(winit::keyboard::KeyCode::Escape)
+            {
+                KeyAction::CloseContextMenu
+            } else {
+                KeyAction::None
+            }
+        } else if self.folders.is_active() && !self.settings_open {
+            folder_keyboard_action(
+                self.folders.rename.is_some(),
+                self.editing,
+                self.folders
+                    .rename
+                    .as_ref()
+                    .is_none_or(|editor| editor.preedit.is_empty()),
+                debug_keys_enabled,
+                key_code,
+                text,
+            )
+        } else {
+            keyboard_action(
+                self.settings_open,
+                self.editing,
+                self.control.wants_keyboard(),
+                self.control.preedit.is_empty(),
+                debug_keys_enabled,
+                key_code,
+                text,
+            )
+        }
+    }
+
     /// Translate winit wheel input into physical pixels. PixelDelta is already
     /// physical on winit 0.30; applying the scale factor again would make the
     /// paging distance DPI-dependent.

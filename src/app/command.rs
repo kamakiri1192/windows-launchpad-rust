@@ -117,7 +117,24 @@ impl App {
         );
     }
 
-    /// Hide the launcher window and reset transient UI state (search field,
+    /// Keep the native window visible until the shared GPU dismissal finishes.
+    pub(crate) fn begin_hide(&mut self) {
+        if !self.visible || self.launch_presentation.is_closing() {
+            return;
+        }
+        debug_log!("hide: starting launcher dismissal animation");
+        self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::HideWindow);
+        self.pending_press = None;
+        self.pressed_on_control = false;
+        self.launch_presentation.begin_close();
+        self.last_redraw = Some(Instant::now());
+        if let Some(r) = self.renderer.as_mut() {
+            r.window.set_ime_allowed(false);
+        }
+        self.request_redraw();
+    }
+
+    /// Immediately hide the launcher window and reset transient UI state (search field,
     /// scroll position, IME), but keep the process + event loop alive so it
     /// can be summoned again. Idempotent: a no-op if already hidden.
     pub(crate) fn hide(&mut self) {
@@ -213,12 +230,13 @@ impl App {
         if self.renderer.is_none() {
             return;
         }
+        let headless = self.qa_enabled();
         let was_visible = self.visible;
         // Arm the transition before the native window becomes visible. The
         // first summon frame is rendered while the window is still hidden so
         // a resident window cannot expose its old settled swapchain buffer
         // before the new reveal has reached the compositor.
-        if !was_visible {
+        if !was_visible || self.launch_presentation.is_closing() {
             self.launch_presentation.begin();
         }
         // Do not let the hidden interval contribute to the first animation
@@ -226,7 +244,7 @@ impl App {
         self.last_redraw = None;
         debug_log!("summon: preparing window (visible was {})", was_visible);
         if let Some(r) = self.renderer.as_mut() {
-            r.set_backdrop_capture_active(true);
+            r.set_backdrop_capture_active(!headless);
         }
         #[cfg(target_os = "macos")]
         {
@@ -251,7 +269,11 @@ impl App {
         let Some(r) = self.renderer.as_mut() else {
             return;
         };
-        r.window.set_visible(true);
+        r.window.set_visible(!headless);
+        if headless {
+            self.request_redraw();
+            return;
+        }
         // Steal focus. focus_window() can be silently denied by Windows when
         // the foreground already belongs to another app (common after hide()),
         // so we also allow-set-foreground + re-assert focus. If it still fails
@@ -282,7 +304,7 @@ impl App {
     pub(super) fn execute_command(&mut self, command: AppCommand) {
         match command {
             AppCommand::RequestRedraw => self.request_redraw(),
-            AppCommand::HideWindow => self.hide(),
+            AppCommand::HideWindow => self.begin_hide(),
             AppCommand::HideWithClickPassthrough(button) => {
                 self.hide_with_click_passthrough(button)
             }

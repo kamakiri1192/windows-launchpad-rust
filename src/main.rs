@@ -22,7 +22,7 @@
 //! Operation:
 //!   - Left-drag horizontally → page swipe with rubber-band + spring snap.
 //!   - Click an app icon → launch its Start Menu shortcut.
-//!   - Esc → quit.
+//!   - Esc → dismiss the launcher with an animation (the process stays resident).
 
 mod app;
 mod app_icon;

@@ -69,6 +69,8 @@ ffmpeg -framerate 30 -i frame_%06d.png -c:v libx264 -pix_fmt yuv420p folder-inte
 - `assert_search`: 検索文字列、表示件数、検索欄の維持、メニューの有無を検証する。
   `qa/search_context_menu.json` は検索結果の右クリック、IME確定、Esc、外側クリック、検索の継続を確認する。
 - `escape` / `exit_edit_mode`: 状態の優先順位を検証する。
+- `summon` / `close_requested`: 共通の表示・終了処理を再生する。
+- `assert_launcher`: 表示状態と終了アニメーション中かを検証する。
 - `scroll_sample`: platform adapterで正規化済みのscroll sampleをproduction
   `AppAction::ScrollSample`へ渡す。`gesture_id`、`timestamp_us`、
   `canonical_dx/dy`、contact/momentum phase、`sequence_complete`を指定できる。
@@ -112,6 +114,15 @@ scenario load errorです。`scroll_sample`があるのに契約がないscenari
 `raw_dx < 0 / false`をproduction adapterへ通します。両方でraw符号が保持され、軽い払いが
 target page 0を一度だけ選び、release位置から700 ms以内にposition 0 / Idleへ戻ることを
 GPU frameとmanifestで検証します。
+
+## ランチャーの終了アニメーションQA
+
+`qa/launcher_dismiss.json` はEscによる終了、連続したEsc、表示アニメーション中のEsc、
+終了途中の再表示、ウィンドウの閉じる操作を検証します。Escは実際のキーボードイベントと
+同じ分類処理を通ります。`launcher_visible` / `launcher_closing` /
+`launcher_presentation` をmanifestに記録し、透明になるまで表示を維持してから
+非表示になることを確認します。再表示もネイティブウィンドウとデスクトップ取り込みを
+停止したまま再生します。
 
 ## 設定トグルと bottom glass の回帰QA
 

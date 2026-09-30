@@ -40,6 +40,7 @@ def verify(root: Path, require_default_scenarios: bool = True) -> None:
             "context-menu-open",
             "context-menu-dismiss",
             "context-menu-trackpad-secondary-click",
+            "launcher-dismiss",
         }
         missing = expected - scenarios
         if missing:
@@ -75,6 +76,36 @@ def verify_manifest(manifest_path: Path) -> str:
     if not isinstance(scenario, str) or not scenario:
         fail(f"{manifest_path} has no scenario name")
     required_states: dict[str, bool] = {}
+    if scenario == "launcher-dismiss":
+        closing = [frame for frame in frames if frame.get("launcher_closing")]
+        hidden = [frame for frame in frames if frame.get("launcher_visible") is False]
+        required_states.update(
+            {
+                "multiple visible dismissal frames": len(closing) >= 10
+                and all(frame.get("launcher_visible") is True for frame in closing),
+                "fade during dismissal": any(
+                    0 < frame.get("launcher_presentation", [0, 0])[1] < 1
+                    for frame in closing
+                ),
+                "transparent hidden endpoint": bool(hidden)
+                and all(frame.get("launcher_presentation", [1, 1])[:2] == [0, 0] for frame in hidden),
+                "reveal interrupted by Esc": any(
+                    950 <= frame["elapsed_ms"] < 1100 and frame.get("launcher_closing")
+                    for frame in frames
+                ),
+                "summon reverses dismissal": any(
+                    1350 <= frame["elapsed_ms"] < 1650
+                    and frame.get("launcher_visible")
+                    and not frame.get("launcher_closing")
+                    for frame in frames
+                ),
+                "native close uses dismissal": any(
+                    1650 <= frame["elapsed_ms"] < 1850 and frame.get("launcher_closing")
+                    for frame in frames
+                ),
+                "final hidden state": frames[-1].get("launcher_visible") is False,
+            }
+        )
     if scenario in {"folder-interactions", "folder-creation"}:
         required_states["folder open"] = any(frame.get("folder_open") for frame in frames)
     elif scenario in {

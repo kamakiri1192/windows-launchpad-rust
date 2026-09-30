@@ -82,7 +82,7 @@ pub enum SettingsTarget {
 pub enum AppCommand {
     /// Request a redraw of the window.
     RequestRedraw,
-    /// Hide the launcher window (idempotent).
+    /// Dismiss the launcher, hiding the native window when the animation ends (idempotent).
     HideWindow,
     /// Hide the launcher, then replay a left click to the underlying window
     /// (transparent-area click passthrough). Order: hide *before* the click

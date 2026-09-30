@@ -26,7 +26,8 @@ impl App {
             .scroller
             .as_ref()
             .is_some_and(|scroller| scroller.phase == Phase::Dragging);
-        let viewport_owned = modal_active
+        let viewport_owned = self.launch_presentation.is_closing()
+            || modal_active
             || self.editing
             || self.drag_item.is_some()
             || page_dragging
@@ -53,7 +54,8 @@ impl App {
             .scroller
             .as_ref()
             .is_some_and(|scroller| scroller.phase == Phase::Dragging);
-        let viewport_owned = modal_active
+        let viewport_owned = self.launch_presentation.is_closing()
+            || modal_active
             || self.editing
             || self.drag_item.is_some()
             || page_dragging
@@ -192,6 +194,9 @@ impl App {
         button: crate::input_routing::PointerButton,
         pressed: bool,
     ) {
+        if self.launch_presentation.is_closing() {
+            return;
+        }
         use crate::input_routing::{PhysicalPoint, RouterAction};
 
         let point = PhysicalPoint::new(self.pointer_phys_x, self.pointer_phys_y);
