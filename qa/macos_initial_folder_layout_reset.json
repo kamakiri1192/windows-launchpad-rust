@@ -4,207 +4,1596 @@
     1920,
     1200
   ],
-  "scale_factor": 1.0,
+  "scale_factor": 1.5,
   "fps": 15,
-  "duration_ms": 5000,
+  "duration_ms": 8800,
   "output_dir": "target/qa-sequences",
   "fixture": {
     "apps": [
       {
-        "id": "mac:com.adobe.AfterEffects.application",
-        "name": "Adobe After Effects 2026",
-        "identifier": "com.adobe.AfterEffects.application",
-        "target_path": "/Applications/Adobe After Effects 2026.app"
+        "id": "mac:jp.plusplus.virtualyoutuber",
+        "name": "3teneFREE_beta",
+        "identifier": "jp.plusplus.virtualyoutuber",
+        "link_path": "/Applications/3teneFREE_beta.app",
+        "target_path": "/Applications/3teneFREE_beta.app"
+      },
+      {
+        "id": "mac:com.adobe.Acrobat.Pro",
+        "name": "Acrobat",
+        "identifier": "com.adobe.Acrobat.Pro",
+        "link_path": "/Applications/Acrobat.app",
+        "target_path": "/Applications/Acrobat.app"
+      },
+      {
+        "id": "mac:com.adobe.AfterEffects",
+        "name": "Adobe After Effects 2024",
+        "identifier": "com.adobe.AfterEffects",
+        "link_path": "/Applications/Adobe After Effects 2024.app",
+        "target_path": "/Applications/Adobe After Effects 2024.app"
+      },
+      {
+        "id": "mac:com.adobe.AfterEffectsRenderEngine",
+        "name": "Adobe After Effects Render Engine 2026",
+        "identifier": "com.adobe.AfterEffectsRenderEngine",
+        "link_path": "/Applications/Adobe After Effects Render Engine 2026.app",
+        "target_path": "/Applications/Adobe After Effects Render Engine 2026.app"
+      },
+      {
+        "id": "mac:com.adobe.Audition",
+        "name": "Adobe Audition 2026",
+        "identifier": "com.adobe.Audition",
+        "link_path": "/Applications/Adobe Audition 2026.app",
+        "target_path": "/Applications/Adobe Audition 2026.app"
       },
       {
         "id": "mac:com.adobe.bridge",
         "name": "Adobe Bridge 2025",
         "identifier": "com.adobe.bridge",
+        "link_path": "/Applications/Adobe Bridge 2025.app",
         "target_path": "/Applications/Adobe Bridge 2025.app"
+      },
+      {
+        "id": "mac:com.adobe.accmac",
+        "name": "Adobe Content Synchronizer",
+        "identifier": "com.adobe.accmac",
+        "link_path": "/Applications/Adobe Content Synchronizer.app",
+        "target_path": "/Applications/Adobe Content Synchronizer.app"
+      },
+      {
+        "id": "mac:com.adobe.cc.Adobe-Creative-Cloud-Diagnostics",
+        "name": "Adobe Creative Cloud Diagnostics",
+        "identifier": "com.adobe.cc.Adobe-Creative-Cloud-Diagnostics",
+        "link_path": "/Applications/Adobe Creative Cloud Diagnostics.app",
+        "target_path": "/Applications/Adobe Creative Cloud Diagnostics.app"
+      },
+      {
+        "id": "mac:com.adobe.illustrator",
+        "name": "Adobe Illustrator 2026",
+        "identifier": "com.adobe.illustrator",
+        "link_path": "/Applications/Adobe Illustrator 2026.app",
+        "target_path": "/Applications/Adobe Illustrator 2026.app"
+      },
+      {
+        "id": "mac:com.adobe.ame.application.24",
+        "name": "Adobe Media Encoder 2024",
+        "identifier": "com.adobe.ame.application.24",
+        "link_path": "/Applications/Adobe Media Encoder 2024.app",
+        "target_path": "/Applications/Adobe Media Encoder 2024.app"
+      },
+      {
+        "id": "mac:com.adobe.ame.application.25",
+        "name": "Adobe Media Encoder 2025",
+        "identifier": "com.adobe.ame.application.25",
+        "link_path": "/Applications/Adobe Media Encoder 2025.app",
+        "target_path": "/Applications/Adobe Media Encoder 2025.app"
+      },
+      {
+        "id": "mac:com.adobe.ame.application.26",
+        "name": "Adobe Media Encoder 2026",
+        "identifier": "com.adobe.ame.application.26",
+        "link_path": "/Applications/Adobe Media Encoder 2026.app",
+        "target_path": "/Applications/Adobe Media Encoder 2026.app"
+      },
+      {
+        "id": "mac:com.adobe.Photoshop",
+        "name": "Adobe Photoshop 2026",
+        "identifier": "com.adobe.Photoshop",
+        "link_path": "/Applications/Adobe Photoshop 2026.app",
+        "target_path": "/Applications/Adobe Photoshop 2026.app"
+      },
+      {
+        "id": "mac:com.adobe.PremierePro.24",
+        "name": "Adobe Premiere Pro 2024",
+        "identifier": "com.adobe.PremierePro.24",
+        "link_path": "/Applications/Adobe Premiere Pro 2024.app",
+        "target_path": "/Applications/Adobe Premiere Pro 2024.app"
+      },
+      {
+        "id": "mac:com.adobe.PremierePro.25",
+        "name": "Adobe Premiere Pro 2025",
+        "identifier": "com.adobe.PremierePro.25",
+        "link_path": "/Applications/Adobe Premiere Pro 2025.app",
+        "target_path": "/Applications/Adobe Premiere Pro 2025.app"
+      },
+      {
+        "id": "mac:com.adobe.PremierePro.26",
+        "name": "Adobe Premiere Pro 2026",
+        "identifier": "com.adobe.PremierePro.26",
+        "link_path": "/Applications/Adobe Premiere Pro 2026.app",
+        "target_path": "/Applications/Adobe Premiere Pro 2026.app"
       },
       {
         "id": "mac:com.seriflabs.affinitydesigner",
         "name": "Affinity Designer",
         "identifier": "com.seriflabs.affinitydesigner",
+        "link_path": "/Applications/Affinity Designer.app",
         "target_path": "/Applications/Affinity Designer.app"
       },
       {
         "id": "mac:com.seriflabs.affinityphoto",
         "name": "Affinity Photo",
         "identifier": "com.seriflabs.affinityphoto",
+        "link_path": "/Applications/Affinity Photo.app",
         "target_path": "/Applications/Affinity Photo.app"
       },
       {
-        "id": "mac:com.apple.Pages",
-        "name": "Pages Creator Studio",
-        "identifier": "com.apple.Pages",
-        "target_path": "/Applications/Pages Creator Studio.app"
+        "id": "mac:com.adobe.AfterEffects.application",
+        "name": "After Effects",
+        "identifier": "com.adobe.AfterEffects.application",
+        "link_path": "/Applications/After Effects.app",
+        "target_path": "/Applications/After Effects.app"
       },
       {
-        "id": "mac:com.apple.iWork.Keynote",
-        "name": "Keynote",
-        "identifier": "com.apple.iWork.Keynote",
-        "target_path": "/Applications/Keynote.app"
-      },
-      {
-        "id": "mac:jp.co.celsys.CLIPSTUDIO",
-        "name": "CLIP STUDIO",
-        "identifier": "jp.co.celsys.CLIPSTUDIO",
-        "target_path": "/Applications/CLIP STUDIO.app"
-      },
-      {
-        "id": "mac:jp.co.celsys.CLIPSTUDIOPAINT",
-        "name": "CLIP STUDIO PAINT",
-        "identifier": "jp.co.celsys.CLIPSTUDIOPAINT",
-        "target_path": "/Applications/CLIP STUDIO PAINT.app"
-      },
-      {
-        "id": "mac:com.google.drivefs.shortcuts.docs",
-        "name": "Google Docs",
-        "identifier": "com.google.drivefs.shortcuts.docs",
-        "target_path": "/Applications/Google Docs.app"
-      },
-      {
-        "id": "mac:com.google.drivefs.shortcuts.sheets",
-        "name": "Google Sheets",
-        "identifier": "com.google.drivefs.shortcuts.sheets",
-        "target_path": "/Applications/Google Sheets.app"
-      },
-      {
-        "id": "mac:com.jetbrains.PhpStorm",
-        "name": "PhpStorm",
-        "identifier": "com.jetbrains.PhpStorm",
-        "target_path": "/Applications/PhpStorm.app"
+        "id": "mac:jp.co.celsys.AggregateMdul",
+        "name": "AggregateMdul",
+        "identifier": "jp.co.celsys.AggregateMdul",
+        "link_path": "/Applications/AggregateMdul.app",
+        "target_path": "/Applications/AggregateMdul.app"
       },
       {
         "id": "mac:com.jetbrains.air",
         "name": "Air",
         "identifier": "com.jetbrains.air",
+        "link_path": "/Applications/Air.app",
         "target_path": "/Applications/Air.app"
       },
       {
-        "id": "mac:com.live2d.cubism.CECubismEditorApp",
-        "name": "Live2D Cubism Editor 5.3",
-        "identifier": "com.live2d.cubism.CECubismEditorApp",
-        "target_path": "/Applications/Live2D Cubism Editor 5.3.app"
+        "id": "mac:com.apple.airport.airportutility",
+        "name": "AirMacユーティリティ",
+        "identifier": "com.apple.airport.airportutility",
+        "link_path": "/Applications/AirMacユーティリティ.app",
+        "target_path": "/Applications/AirMacユーティリティ.app"
       },
       {
-        "id": "mac:com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
-        "name": "Live2D Cubism Viewer 5.3",
-        "identifier": "com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
-        "target_path": "/Applications/Live2D Cubism Viewer 5.3.app"
+        "id": "mac:com.google.antigravity",
+        "name": "Antigravity",
+        "identifier": "com.google.antigravity",
+        "link_path": "/Applications/Antigravity.app",
+        "target_path": "/Applications/Antigravity.app"
       },
       {
-        "id": "mac:com.apple.Dictionary",
-        "name": "Dictionary",
-        "identifier": "com.apple.Dictionary",
-        "target_path": "/Applications/Dictionary.app"
+        "id": "mac:com.apple.AppStore",
+        "name": "App Store",
+        "identifier": "com.apple.AppStore",
+        "link_path": "/Applications/App Store.app",
+        "target_path": "/Applications/App Store.app"
       },
       {
-        "id": "mac:com.apple.QuickTimePlayerX",
-        "name": "QuickTime Player",
-        "identifier": "com.apple.QuickTimePlayerX",
-        "target_path": "/Applications/QuickTime Player.app"
-      },
-      {
-        "id": "mac:com.apple.ActivityMonitor",
-        "name": "Activity Monitor",
-        "identifier": "com.apple.ActivityMonitor",
-        "target_path": "/Applications/Activity Monitor.app"
+        "id": "mac:com.apple.audio.AudioMIDISetup",
+        "name": "Audio MIDI設定",
+        "identifier": "com.apple.audio.AudioMIDISetup",
+        "link_path": "/Applications/Audio MIDI設定.app",
+        "target_path": "/Applications/Audio MIDI設定.app"
       },
       {
         "id": "mac:com.apple.Automator",
         "name": "Automator",
         "identifier": "com.apple.Automator",
+        "link_path": "/Applications/Automator.app",
         "target_path": "/Applications/Automator.app"
+      },
+      {
+        "id": "mac:barrier",
+        "name": "Barrier",
+        "identifier": "barrier",
+        "link_path": "/Applications/Barrier.app",
+        "target_path": "/Applications/Barrier.app"
+      },
+      {
+        "id": "mac:com.hegenberg.BetterTouchTool",
+        "name": "BetterTouchTool",
+        "identifier": "com.hegenberg.BetterTouchTool",
+        "link_path": "/Applications/BetterTouchTool.app",
+        "target_path": "/Applications/BetterTouchTool.app"
+      },
+      {
+        "id": "mac:org.blenderfoundation.blender",
+        "name": "Blender",
+        "identifier": "org.blenderfoundation.blender",
+        "link_path": "/Applications/Blender.app",
+        "target_path": "/Applications/Blender.app"
+      },
+      {
+        "id": "mac:com.apple.BluetoothFileExchange",
+        "name": "Bluetoothファイル交換",
+        "identifier": "com.apple.BluetoothFileExchange",
+        "link_path": "/Applications/Bluetoothファイル交換.app",
+        "target_path": "/Applications/Bluetoothファイル交換.app"
+      },
+      {
+        "id": "mac:com.apple.bootcampassistant",
+        "name": "Boot Campアシスタント",
+        "identifier": "com.apple.bootcampassistant",
+        "link_path": "/Applications/Boot Campアシスタント.app",
+        "target_path": "/Applications/Boot Campアシスタント.app"
+      },
+      {
+        "id": "mac:net.maxon.python",
+        "name": "c4dpy",
+        "identifier": "net.maxon.python",
+        "link_path": "/Applications/c4dpy.app",
+        "target_path": "/Applications/c4dpy.app"
+      },
+      {
+        "id": "mac:com.supermegaultragroovy.capo3.mac",
+        "name": "Capo",
+        "identifier": "com.supermegaultragroovy.capo3.mac",
+        "link_path": "/Applications/Capo.app",
+        "target_path": "/Applications/Capo.app"
+      },
+      {
+        "id": "mac:com.scenegroup.cavalry",
+        "name": "Cavalry",
+        "identifier": "com.scenegroup.cavalry",
+        "link_path": "/Applications/Cavalry.app",
+        "target_path": "/Applications/Cavalry.app"
+      },
+      {
+        "id": "mac:jp.co.celsys.CertMdul",
+        "name": "CertMdul",
+        "identifier": "jp.co.celsys.CertMdul",
+        "link_path": "/Applications/CertMdul.app",
+        "target_path": "/Applications/CertMdul.app"
+      },
+      {
+        "id": "mac:com.google.Chrome.app.hbblfifohofgngfbjbiimbbcimepbdcb",
+        "name": "Chatbot UI",
+        "identifier": "com.google.Chrome.app.hbblfifohofgngfbjbiimbbcimepbdcb",
+        "link_path": "/Applications/Chatbot UI.app",
+        "target_path": "/Applications/Chatbot UI.app"
+      },
+      {
+        "id": "mac:com.openai.codex",
+        "name": "ChatGPT",
+        "identifier": "com.openai.codex",
+        "link_path": "/Applications/ChatGPT.app",
+        "target_path": "/Applications/ChatGPT.app"
+      },
+      {
+        "id": "mac:com.google.chromeremotedesktop.me2me-host-uninstaller",
+        "name": "Chrome Remote Desktop Host Uninstaller",
+        "identifier": "com.google.chromeremotedesktop.me2me-host-uninstaller",
+        "link_path": "/Applications/Chrome Remote Desktop Host Uninstaller.app",
+        "target_path": "/Applications/Chrome Remote Desktop Host Uninstaller.app"
       },
       {
         "id": "mac:net.maxon.cinema4d",
         "name": "Cinema 4D",
         "identifier": "net.maxon.cinema4d",
+        "link_path": "/Applications/Cinema 4D.app",
         "target_path": "/Applications/Cinema 4D.app"
       },
       {
         "id": "mac:net.maxon.cinema4dclient",
         "name": "Cinema 4D Team Render Client",
         "identifier": "net.maxon.cinema4dclient",
+        "link_path": "/Applications/Cinema 4D Team Render Client.app",
         "target_path": "/Applications/Cinema 4D Team Render Client.app"
       },
       {
-        "id": "mac:com.apple.ScreenSharing",
-        "name": "Screen Sharing",
-        "identifier": "com.apple.ScreenSharing",
-        "target_path": "/Applications/Screen Sharing.app"
+        "id": "mac:net.maxon.cinema4dserver",
+        "name": "Cinema 4D Team Render Server",
+        "identifier": "net.maxon.cinema4dserver",
+        "link_path": "/Applications/Cinema 4D Team Render Server.app",
+        "target_path": "/Applications/Cinema 4D Team Render Server.app"
       },
       {
-        "id": "mac:tv.parsec.www",
-        "name": "Parsec",
-        "identifier": "tv.parsec.www",
-        "target_path": "/Applications/Parsec.app"
+        "id": "mac:jp.co.celsys.CLIPSTUDIO",
+        "name": "CLIP STUDIO",
+        "identifier": "jp.co.celsys.CLIPSTUDIO",
+        "link_path": "/Applications/CLIP STUDIO.app",
+        "target_path": "/Applications/CLIP STUDIO.app"
+      },
+      {
+        "id": "mac:jp.co.celsys.CLIPSTUDIOPAINT",
+        "name": "CLIP STUDIO PAINT",
+        "identifier": "jp.co.celsys.CLIPSTUDIOPAINT",
+        "link_path": "/Applications/CLIP STUDIO PAINT.app",
+        "target_path": "/Applications/CLIP STUDIO PAINT.app"
+      },
+      {
+        "id": "mac:com.microsoft.VSCode",
+        "name": "Code",
+        "identifier": "com.microsoft.VSCode",
+        "link_path": "/Applications/Code.app",
+        "target_path": "/Applications/Code.app"
+      },
+      {
+        "id": "mac:com.apple.ColorSyncUtility",
+        "name": "ColorSyncユーティリティ",
+        "identifier": "com.apple.ColorSyncUtility",
+        "link_path": "/Applications/ColorSyncユーティリティ.app",
+        "target_path": "/Applications/ColorSyncユーティリティ.app"
+      },
+      {
+        "id": "mac:com.todesktop.241012ess7yxs0e",
+        "name": "ComfyUI",
+        "identifier": "com.todesktop.241012ess7yxs0e",
+        "link_path": "/Applications/ComfyUI.app",
+        "target_path": "/Applications/ComfyUI.app"
+      },
+      {
+        "id": "mac:net.maxon.commandline",
+        "name": "Commandline",
+        "identifier": "net.maxon.commandline",
+        "link_path": "/Applications/Commandline.app",
+        "target_path": "/Applications/Commandline.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor.id.Contact-Sheets",
+        "name": "Contact Sheets",
+        "identifier": "com.apple.ScriptEditor.id.Contact-Sheets",
+        "link_path": "/Applications/Adobe Illustrator 2026/Scripting.localized/Contact Sheets.app",
+        "target_path": "/Applications/Adobe Illustrator 2026/Scripting.localized/Contact Sheets.app"
+      },
+      {
+        "id": "mac:com.adobe.acc.AdobeCreativeCloud",
+        "name": "Creative Cloud",
+        "identifier": "com.adobe.acc.AdobeCreativeCloud",
+        "link_path": "/Applications/Creative Cloud.app",
+        "target_path": "/Applications/Creative Cloud.app"
+      },
+      {
+        "id": "mac:com.adobe.Creative-Cloud-Desktop-App",
+        "name": "Creative Cloud Desktop App",
+        "identifier": "com.adobe.Creative-Cloud-Desktop-App",
+        "link_path": "/Applications/Creative Cloud Desktop App.app",
+        "target_path": "/Applications/Creative Cloud Desktop App.app"
+      },
+      {
+        "id": "mac:com.adobe.Install",
+        "name": "Creative Cloud Installer",
+        "identifier": "com.adobe.Install",
+        "link_path": "/Applications/Creative Cloud Installer.app",
+        "target_path": "/Applications/Creative Cloud Installer.app"
+      },
+      {
+        "id": "mac:com.adobe.ACCC.Uninstaller",
+        "name": "Creative Cloud Uninstaller",
+        "identifier": "com.adobe.ACCC.Uninstaller",
+        "link_path": "/Applications/Creative Cloud Uninstaller.app",
+        "target_path": "/Applications/Creative Cloud Uninstaller.app"
+      },
+      {
+        "id": "mac:jp.co.crypton.CryptonProductManager",
+        "name": "Crypton Product Manager",
+        "identifier": "jp.co.crypton.CryptonProductManager",
+        "link_path": "/Applications/Crypton Product Manager.app",
+        "target_path": "/Applications/Crypton Product Manager.app"
       },
       {
         "id": "mac:com.steinberg.cubasesoft13",
         "name": "Cubase LE AI Elements 13",
         "identifier": "com.steinberg.cubasesoft13",
+        "link_path": "/Applications/Cubase LE AI Elements 13.app",
         "target_path": "/Applications/Cubase LE AI Elements 13.app"
+      },
+      {
+        "id": "mac:com.todesktop.230313mzl4w4u92",
+        "name": "Cursor",
+        "identifier": "com.todesktop.230313mzl4w4u92",
+        "link_path": "/Applications/Cursor.app",
+        "target_path": "/Applications/Cursor.app"
+      },
+      {
+        "id": "mac:com.daisydiskapp.DaisyDiskStandAlone",
+        "name": "DaisyDisk",
+        "identifier": "com.daisydiskapp.DaisyDiskStandAlone",
+        "link_path": "/Applications/DaisyDisk.app",
+        "target_path": "/Applications/DaisyDisk.app"
+      },
+      {
+        "id": "steam:3301060",
+        "name": "Desktop Mate",
+        "identifier": "",
+        "link_path": "/Applications/Desktop Mate.app",
+        "target_path": "/Applications/Desktop Mate.app"
+      },
+      {
+        "id": "mac:com.apple.DigitalColorMeter",
+        "name": "Digital Color Meter",
+        "identifier": "com.apple.DigitalColorMeter",
+        "link_path": "/Applications/Digital Color Meter.app",
+        "target_path": "/Applications/Digital Color Meter.app"
+      },
+      {
+        "id": "mac:com.hnc.Discord",
+        "name": "Discord",
+        "identifier": "com.hnc.Discord",
+        "link_path": "/Applications/Discord.app",
+        "target_path": "/Applications/Discord.app"
+      },
+      {
+        "id": "mac:com.adobe.distiller",
+        "name": "Distiller",
+        "identifier": "com.adobe.distiller",
+        "link_path": "/Applications/Distiller.app",
+        "target_path": "/Applications/Distiller.app"
+      },
+      {
+        "id": "mac:com.Syncrosoft.LCC",
+        "name": "eLicenser Control Center",
+        "identifier": "com.Syncrosoft.LCC",
+        "link_path": "/Applications/eLicenser Control Center.app",
+        "target_path": "/Applications/eLicenser Control Center.app"
+      },
+      {
+        "id": "mac:com.apple.FaceTime",
+        "name": "FaceTime",
+        "identifier": "com.apple.FaceTime",
+        "link_path": "/Applications/FaceTime.app",
+        "target_path": "/Applications/FaceTime.app"
+      },
+      {
+        "id": "mac:com.figma.Desktop",
+        "name": "Figma",
+        "identifier": "com.figma.Desktop",
+        "link_path": "/Applications/Figma.app",
+        "target_path": "/Applications/Figma.app"
+      },
+      {
+        "id": "mac:org.filezilla-project.filezilla",
+        "name": "FileZilla",
+        "identifier": "org.filezilla-project.filezilla",
+        "link_path": "/Applications/FileZilla.app",
+        "target_path": "/Applications/FileZilla.app"
+      },
+      {
+        "id": "mac:com.apple.FontBook",
+        "name": "Font Book",
+        "identifier": "com.apple.FontBook",
+        "link_path": "/Applications/Font Book.app",
+        "target_path": "/Applications/Font Book.app"
+      },
+      {
+        "id": "mac:com.DanPristupov.Fork",
+        "name": "Fork",
+        "identifier": "com.DanPristupov.Fork",
+        "link_path": "/Applications/Fork.app",
+        "target_path": "/Applications/Fork.app"
+      },
+      {
+        "id": "mac:com.apple.garageband10",
+        "name": "GarageBand",
+        "identifier": "com.apple.garageband10",
+        "link_path": "/Applications/GarageBand.app",
+        "target_path": "/Applications/GarageBand.app"
+      },
+      {
+        "id": "mac:com.jetbrains.goland",
+        "name": "GoLand",
+        "identifier": "com.jetbrains.goland",
+        "link_path": "/Applications/GoLand.app",
+        "target_path": "/Applications/GoLand.app"
+      },
+      {
+        "id": "mac:com.goodnotesapp.x",
+        "name": "Goodnotes",
+        "identifier": "com.goodnotesapp.x",
+        "link_path": "/Applications/Goodnotes.app",
+        "target_path": "/Applications/Goodnotes.app"
+      },
+      {
+        "id": "mac:com.google.Chrome",
+        "name": "Google Chrome",
+        "identifier": "com.google.Chrome",
+        "link_path": "/Applications/Google Chrome.app",
+        "target_path": "/Applications/Google Chrome.app"
+      },
+      {
+        "id": "mac:com.google.drivefs.shortcuts.docs",
+        "name": "Google Docs",
+        "identifier": "com.google.drivefs.shortcuts.docs",
+        "link_path": "/Applications/Google Docs.app",
+        "target_path": "/Applications/Google Docs.app"
+      },
+      {
+        "id": "mac:com.google.drivefs",
+        "name": "Google Drive",
+        "identifier": "com.google.drivefs",
+        "link_path": "/Applications/Google Drive.app",
+        "target_path": "/Applications/Google Drive.app"
+      },
+      {
+        "id": "mac:com.google.drivefs.shortcuts.sheets",
+        "name": "Google Sheets",
+        "identifier": "com.google.drivefs.shortcuts.sheets",
+        "link_path": "/Applications/Google Sheets.app",
+        "target_path": "/Applications/Google Sheets.app"
+      },
+      {
+        "id": "mac:com.google.drivefs.shortcuts.slides",
+        "name": "Google Slides",
+        "identifier": "com.google.drivefs.shortcuts.slides",
+        "link_path": "/Applications/Google Slides.app",
+        "target_path": "/Applications/Google Slides.app"
+      },
+      {
+        "id": "mac:com.apple.grapher",
+        "name": "Grapher",
+        "identifier": "com.apple.grapher",
+        "link_path": "/Applications/Grapher.app",
+        "target_path": "/Applications/Grapher.app"
       },
       {
         "id": "mac:com.steinberg.vst3.GrooveAgentSEStandalone",
         "name": "Groove Agent SE",
         "identifier": "com.steinberg.vst3.GrooveAgentSEStandalone",
+        "link_path": "/Applications/Groove Agent SE.app",
         "target_path": "/Applications/Groove Agent SE.app"
       },
       {
-        "id": "mac:com.unity3d.UnityEditor5.x",
-        "name": "Unity",
-        "identifier": "com.unity3d.UnityEditor5.x",
-        "target_path": "/Applications/Unity.app"
+        "id": "mac:com.steinberg.vst3.HALionSonicStandalone",
+        "name": "HALion Sonic",
+        "identifier": "com.steinberg.vst3.HALionSonicStandalone",
+        "link_path": "/Applications/HALion Sonic.app",
+        "target_path": "/Applications/HALion Sonic.app"
       },
       {
-        "id": "mac:com.unity3d.unityhub",
-        "name": "Unity Hub",
-        "identifier": "com.unity3d.unityhub",
-        "target_path": "/Applications/Unity Hub.app"
+        "id": "mac:com.apple.iMovieApp",
+        "name": "iMovie",
+        "identifier": "com.apple.iMovieApp",
+        "link_path": "/Applications/iMovie.app",
+        "target_path": "/Applications/iMovie.app"
       },
       {
-        "id": "mac:com.yamaha.VOCALOID-Authorizer",
-        "name": "VOCALOID Authorizer",
-        "identifier": "com.yamaha.VOCALOID-Authorizer",
-        "target_path": "/Applications/VOCALOID Authorizer.app"
+        "id": "mac:com.adobe.InDesign",
+        "name": "InDesign",
+        "identifier": "com.adobe.InDesign",
+        "link_path": "/Applications/InDesign.app",
+        "target_path": "/Applications/InDesign.app"
       },
       {
-        "id": "mac:com.yamaha.VOCALOID6-Editor",
-        "name": "VOCALOID6 Editor",
-        "identifier": "com.yamaha.VOCALOID6-Editor",
-        "target_path": "/Applications/VOCALOID6 Editor.app"
+        "id": "mac:com.jetbrains.intellij",
+        "name": "IntelliJ IDEA Ultimate",
+        "identifier": "com.jetbrains.intellij",
+        "link_path": "/Applications/IntelliJ IDEA Ultimate.app",
+        "target_path": "/Applications/IntelliJ IDEA Ultimate.app"
+      },
+      {
+        "id": "mac:com.apple.ScreenContinuity",
+        "name": "iPhoneミラーリング",
+        "identifier": "com.apple.ScreenContinuity",
+        "link_path": "/Applications/iPhoneミラーリング.app",
+        "target_path": "/Applications/iPhoneミラーリング.app"
+      },
+      {
+        "id": "mac:com.googlecode.iterm2",
+        "name": "iTerm2",
+        "identifier": "com.googlecode.iterm2",
+        "link_path": "/Applications/iTerm2.app",
+        "target_path": "/Applications/iTerm2.app"
+      },
+      {
+        "id": "mac:com.googlecode.iterm2.iTermBrowserPlugin",
+        "name": "iTermBrowserPlugin",
+        "identifier": "com.googlecode.iterm2.iTermBrowserPlugin",
+        "link_path": "/Applications/iTermBrowserPlugin.app",
+        "target_path": "/Applications/iTermBrowserPlugin.app"
+      },
+      {
+        "id": "mac:com.jetbrains.rider",
+        "name": "JetBrains Rider",
+        "identifier": "com.jetbrains.rider",
+        "link_path": "/Applications/JetBrains Rider.app",
+        "target_path": "/Applications/JetBrains Rider.app"
+      },
+      {
+        "id": "mac:com.jetbrains.toolbox",
+        "name": "JetBrains Toolbox",
+        "identifier": "com.jetbrains.toolbox",
+        "link_path": "/Applications/JetBrains Toolbox.app",
+        "target_path": "/Applications/JetBrains Toolbox.app"
+      },
+      {
+        "id": "mac:com.apple.iWork.Keynote",
+        "name": "Keynote",
+        "identifier": "com.apple.iWork.Keynote",
+        "link_path": "/Applications/Keynote.app",
+        "target_path": "/Applications/Keynote.app"
+      },
+      {
+        "id": "mac:dev.kiro.desktop",
+        "name": "Kiro",
+        "identifier": "dev.kiro.desktop",
+        "link_path": "/Applications/Kiro.app",
+        "target_path": "/Applications/Kiro.app"
+      },
+      {
+        "id": "mac:com.hakocat.Koucha",
+        "name": "Koucha",
+        "identifier": "com.hakocat.Koucha",
+        "link_path": "/Applications/Koucha.app",
+        "target_path": "/Applications/Koucha.app"
+      },
+      {
+        "id": "mac:com.turbo.LauncherTurbo",
+        "name": "LauncherTurbo",
+        "identifier": "com.turbo.LauncherTurbo",
+        "link_path": "/Applications/LauncherTurbo.app",
+        "target_path": "/Applications/LauncherTurbo.app"
+      },
+      {
+        "id": "mac:com.apple.launchpad.launcher",
+        "name": "Launchpad",
+        "identifier": "com.apple.launchpad.launcher",
+        "link_path": "/Applications/Launchpad.app",
+        "target_path": "/Applications/Launchpad.app"
+      },
+      {
+        "id": "mac:com.kamakiri1192.launchpad",
+        "name": "Launchpad",
+        "identifier": "com.kamakiri1192.launchpad",
+        "link_path": "/Applications/Launchpad.app",
+        "target_path": "/Applications/Launchpad.app"
+      },
+      {
+        "id": "mac:waikiki.program.Launchpad",
+        "name": "LaunchpadPlus",
+        "identifier": "waikiki.program.Launchpad",
+        "link_path": "/Applications/LaunchpadPlus.app",
+        "target_path": "/Applications/LaunchpadPlus.app"
+      },
+      {
+        "id": "mac:de.monospc.Lightkey",
+        "name": "Lightkey",
+        "identifier": "de.monospc.Lightkey",
+        "link_path": "/Applications/Lightkey.app",
+        "target_path": "/Applications/Lightkey.app"
+      },
+      {
+        "id": "mac:jp.naver.line.mac",
+        "name": "LINE",
+        "identifier": "jp.naver.line.mac",
+        "link_path": "/Applications/LINE.app",
+        "target_path": "/Applications/LINE.app"
+      },
+      {
+        "id": "mac:com.live2d.cubism.CECubismEditorApp",
+        "name": "Live2D Cubism Editor 5.3",
+        "identifier": "com.live2d.cubism.CECubismEditorApp",
+        "link_path": "/Applications/Live2D Cubism Editor 5.3.app",
+        "target_path": "/Applications/Live2D Cubism Editor 5.3.app"
+      },
+      {
+        "id": "mac:com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
+        "name": "Live2D Cubism Viewer (for OW)",
+        "identifier": "com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
+        "link_path": "/Applications/Live2D Cubism Viewer (for OW).app",
+        "target_path": "/Applications/Live2D Cubism Viewer (for OW).app"
+      },
+      {
+        "id": "mac:ai.elementlabs.lmstudio",
+        "name": "LM Studio",
+        "identifier": "ai.elementlabs.lmstudio",
+        "link_path": "/Applications/LM Studio.app",
+        "target_path": "/Applications/LM Studio.app"
+      },
+      {
+        "id": "mac:com.lookingglassfactory.bridge",
+        "name": "Looking Glass Bridge 2.4.5",
+        "identifier": "com.lookingglassfactory.bridge",
+        "link_path": "/Applications/Looking Glass Bridge 2.4.5.app",
+        "target_path": "/Applications/Looking Glass Bridge 2.4.5.app"
+      },
+      {
+        "id": "mac:com.goodsnooze.MenuGPT",
+        "name": "MacGPT",
+        "identifier": "com.goodsnooze.MenuGPT",
+        "link_path": "/Applications/MacGPT.app",
+        "target_path": "/Applications/MacGPT.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor.id.Make-Calendar",
+        "name": "Make Calendar",
+        "identifier": "com.apple.ScriptEditor.id.Make-Calendar",
+        "link_path": "/Applications/Adobe Illustrator 2026/Scripting.localized/Make Calendar.app",
+        "target_path": "/Applications/Adobe Illustrator 2026/Scripting.localized/Make Calendar.app"
+      },
+      {
+        "id": "mac:com.snoize.MIDIMonitor",
+        "name": "MIDI Monitor",
+        "identifier": "com.snoize.MIDIMonitor",
+        "link_path": "/Applications/MIDI Monitor.app",
+        "target_path": "/Applications/MIDI Monitor.app"
+      },
+      {
+        "id": "mac:com.apple.exposelauncher",
+        "name": "Mission Control",
+        "identifier": "com.apple.exposelauncher",
+        "link_path": "/Applications/Mission Control.app",
+        "target_path": "/Applications/Mission Control.app"
+      },
+      {
+        "id": "mac:com.borisfx.mocha4ae_adobe",
+        "name": "Mocha AE",
+        "identifier": "com.borisfx.mocha4ae_adobe",
+        "link_path": "/Applications/Mocha AE.app",
+        "target_path": "/Applications/Mocha AE.app"
+      },
+      {
+        "id": "mac:io.mountainduck",
+        "name": "Mountain Duck",
+        "identifier": "io.mountainduck",
+        "link_path": "/Applications/Mountain Duck.app",
+        "target_path": "/Applications/Mountain Duck.app"
+      },
+      {
+        "id": "mac:com.github.nanoem",
+        "name": "nanoem",
+        "identifier": "com.github.nanoem",
+        "link_path": "/Applications/nanoem.app",
+        "target_path": "/Applications/nanoem.app"
+      },
+      {
+        "id": "mac:com.apple.news",
+        "name": "News",
+        "identifier": "com.apple.news",
+        "link_path": "/Applications/News.app",
+        "target_path": "/Applications/News.app"
+      },
+      {
+        "id": "mac:com.nextcloud.desktopclient",
+        "name": "Nextcloud",
+        "identifier": "com.nextcloud.desktopclient",
+        "link_path": "/Applications/Nextcloud.app",
+        "target_path": "/Applications/Nextcloud.app"
+      },
+      {
+        "id": "mac:lo.cafe.NotchNook",
+        "name": "NotchNook",
+        "identifier": "lo.cafe.NotchNook",
+        "link_path": "/Applications/NotchNook.app",
+        "target_path": "/Applications/NotchNook.app"
+      },
+      {
+        "id": "mac:notion.id",
+        "name": "Notion",
+        "identifier": "notion.id",
+        "link_path": "/Applications/Notion.app",
+        "target_path": "/Applications/Notion.app"
+      },
+      {
+        "id": "mac:notion.id.NotionSafariExtension",
+        "name": "Notion Web Clipper",
+        "identifier": "notion.id.NotionSafariExtension",
+        "link_path": "/Applications/Notion Web Clipper.app",
+        "target_path": "/Applications/Notion Web Clipper.app"
+      },
+      {
+        "id": "mac:com.hottagames.nte",
+        "name": "NTE",
+        "identifier": "com.hottagames.nte",
+        "link_path": "/Applications/NTE.app",
+        "target_path": "/Applications/NTE.app"
+      },
+      {
+        "id": "mac:com.apple.iWork.Numbers",
+        "name": "Numbers",
+        "identifier": "com.apple.iWork.Numbers",
+        "link_path": "/Applications/Numbers.app",
+        "target_path": "/Applications/Numbers.app"
+      },
+      {
+        "id": "mac:com.obsproject.obs-studio",
+        "name": "OBS Studio",
+        "identifier": "com.obsproject.obs-studio",
+        "link_path": "/Applications/OBS Studio.app",
+        "target_path": "/Applications/OBS Studio.app"
+      },
+      {
+        "id": "mac:com.wails.obsctl",
+        "name": "obsctl",
+        "identifier": "com.wails.obsctl",
+        "link_path": "/Applications/obsctl.app",
+        "target_path": "/Applications/obsctl.app"
+      },
+      {
+        "id": "mac:ai.opencode.desktop",
+        "name": "OpenCode",
+        "identifier": "ai.opencode.desktop",
+        "link_path": "/Applications/OpenCode.app",
+        "target_path": "/Applications/OpenCode.app"
+      },
+      {
+        "id": "mac:com.apple.iWork.Pages",
+        "name": "Pages",
+        "identifier": "com.apple.iWork.Pages",
+        "link_path": "/Applications/Pages.app",
+        "target_path": "/Applications/Pages.app"
+      },
+      {
+        "id": "mac:com.apple.Pages",
+        "name": "Pages Creator Studio",
+        "identifier": "com.apple.Pages",
+        "link_path": "/Applications/Pages Creator Studio.app",
+        "target_path": "/Applications/Pages Creator Studio.app"
+      },
+      {
+        "id": "mac:com.parallels.desktop.console",
+        "name": "Parallels Desktop",
+        "identifier": "com.parallels.desktop.console",
+        "link_path": "/Applications/Parallels Desktop.app",
+        "target_path": "/Applications/Parallels Desktop.app"
+      },
+      {
+        "id": "mac:dev.pencil.desktop",
+        "name": "Pencil",
+        "identifier": "dev.pencil.desktop",
+        "link_path": "/Applications/Pencil.app",
+        "target_path": "/Applications/Pencil.app"
+      },
+      {
+        "id": "mac:ai.perplexity.mac",
+        "name": "Perplexity",
+        "identifier": "ai.perplexity.mac",
+        "link_path": "/Applications/Perplexity.app",
+        "target_path": "/Applications/Perplexity.app"
+      },
+      {
+        "id": "mac:com.apple.PhotoBooth",
+        "name": "Photo Booth",
+        "identifier": "com.apple.PhotoBooth",
+        "link_path": "/Applications/Photo Booth.app",
+        "target_path": "/Applications/Photo Booth.app"
+      },
+      {
+        "id": "mac:com.jetbrains.PhpStorm",
+        "name": "PhpStorm",
+        "identifier": "com.jetbrains.PhpStorm",
+        "link_path": "/Applications/PhpStorm.app",
+        "target_path": "/Applications/PhpStorm.app"
+      },
+      {
+        "id": "mac:jp.co.crypton.PiaproStudio",
+        "name": "Piapro Studio NT",
+        "identifier": "jp.co.crypton.PiaproStudio",
+        "link_path": "/Applications/Piapro Studio NT.app",
+        "target_path": "/Applications/Piapro Studio NT.app"
+      },
+      {
+        "id": "mac:com.apple.GenerativePlaygroundApp",
+        "name": "Playground",
+        "identifier": "com.apple.GenerativePlaygroundApp",
+        "link_path": "/Applications/Playground.app",
+        "target_path": "/Applications/Playground.app"
+      },
+      {
+        "id": "mac:com.jetbrains.pycharm",
+        "name": "PyCharm Professional Edition",
+        "identifier": "com.jetbrains.pycharm",
+        "link_path": "/Applications/PyCharm Professional Edition.app",
+        "target_path": "/Applications/PyCharm Professional Edition.app"
+      },
+      {
+        "id": "mac:com.apple.QuickTimePlayerX",
+        "name": "QuickTime Player",
+        "identifier": "com.apple.QuickTimePlayerX",
+        "link_path": "/Applications/QuickTime Player.app",
+        "target_path": "/Applications/QuickTime Player.app"
+      },
+      {
+        "id": "mac:unity.Quixel.Mixer",
+        "name": "Quixel_Mixer_2022.1.1_Beta",
+        "identifier": "unity.Quixel.Mixer",
+        "link_path": "/Applications/Quixel_Mixer_2022.1.1_Beta.app",
+        "target_path": "/Applications/Quixel_Mixer_2022.1.1_Beta.app"
+      },
+      {
+        "id": "mac:com.luckymarmot.Paw",
+        "name": "RapidAPI",
+        "identifier": "com.luckymarmot.Paw",
+        "link_path": "/Applications/RapidAPI.app",
+        "target_path": "/Applications/RapidAPI.app"
+      },
+      {
+        "id": "mac:com.scicotherapylabs.RemoteCodetrolServer",
+        "name": "Remote Codetrol Server",
+        "identifier": "com.scicotherapylabs.RemoteCodetrolServer",
+        "link_path": "/Applications/Remote Codetrol Server.app",
+        "target_path": "/Applications/Remote Codetrol Server.app"
+      },
+      {
+        "id": "mac:org.filezilla-project.remotedrive",
+        "name": "RemoteDrive",
+        "identifier": "org.filezilla-project.remotedrive",
+        "link_path": "/Applications/RemoteDrive.app",
+        "target_path": "/Applications/RemoteDrive.app"
+      },
+      {
+        "id": "mac:com.kyome.RunCat",
+        "name": "RunCat",
+        "identifier": "com.kyome.RunCat",
+        "link_path": "/Applications/RunCat.app",
+        "target_path": "/Applications/RunCat.app"
+      },
+      {
+        "id": "mac:com.jetbrains.rustrover",
+        "name": "RustRover",
+        "identifier": "com.jetbrains.rustrover",
+        "link_path": "/Applications/RustRover.app",
+        "target_path": "/Applications/RustRover.app"
       },
       {
         "id": "mac:com.apple.Safari",
         "name": "Safari",
         "identifier": "com.apple.Safari",
+        "link_path": "/Applications/Safari.app",
         "target_path": "/Applications/Safari.app"
       },
       {
-        "id": "mac:com.apple.calculator",
-        "name": "Calculator",
-        "identifier": "com.apple.calculator",
-        "target_path": "/Applications/Calculator.app"
+        "id": "mac:jp.tuna2134.sbv2-gui",
+        "name": "sbv2-gui",
+        "identifier": "jp.tuna2134.sbv2-gui",
+        "link_path": "/Applications/sbv2-gui.app",
+        "target_path": "/Applications/sbv2-gui.app"
+      },
+      {
+        "id": "mac:com.kyome.ScreenNote",
+        "name": "ScreenNote",
+        "identifier": "com.kyome.ScreenNote",
+        "link_path": "/Applications/ScreenNote.app",
+        "target_path": "/Applications/ScreenNote.app"
+      },
+      {
+        "id": "mac:com.kyome.ScreenPointer",
+        "name": "ScreenPointer",
+        "identifier": "com.kyome.ScreenPointer",
+        "link_path": "/Applications/ScreenPointer.app",
+        "target_path": "/Applications/ScreenPointer.app"
+      },
+      {
+        "id": "mac:com.pilotmoon.scroll-reverser",
+        "name": "Scroll Reverser",
+        "identifier": "com.pilotmoon.scroll-reverser",
+        "link_path": "/Applications/Scroll Reverser.app",
+        "target_path": "/Applications/Scroll Reverser.app"
+      },
+      {
+        "id": "steam:289070",
+        "name": "Sid Meier's Civilization VI",
+        "identifier": "",
+        "link_path": "/Applications/Sid Meier's Civilization VI.app",
+        "target_path": "/Applications/Sid Meier's Civilization VI.app"
+      },
+      {
+        "id": "mac:com.apple.siri.launcher",
+        "name": "Siri",
+        "identifier": "com.apple.siri.launcher",
+        "link_path": "/Applications/Siri.app",
+        "target_path": "/Applications/Siri.app"
+      },
+      {
+        "id": "mac:com.valvesoftware.steam",
+        "name": "Steam",
+        "identifier": "com.valvesoftware.steam",
+        "link_path": "/Applications/Steam.app",
+        "target_path": "/Applications/Steam.app"
+      },
+      {
+        "id": "mac:com.steinberg.SteinbergActivationManager",
+        "name": "Steinberg Activation Manager",
+        "identifier": "com.steinberg.SteinbergActivationManager",
+        "link_path": "/Applications/Steinberg Activation Manager.app",
+        "target_path": "/Applications/Steinberg Activation Manager.app"
+      },
+      {
+        "id": "mac:net.steinberg.elicenser.SteinbergDownloadAssistant",
+        "name": "Steinberg Download Assistant",
+        "identifier": "net.steinberg.elicenser.SteinbergDownloadAssistant",
+        "link_path": "/Applications/Steinberg Download Assistant.app",
+        "target_path": "/Applications/Steinberg Download Assistant.app"
+      },
+      {
+        "id": "mac:com.steinberg.HALionLibraryManager",
+        "name": "Steinberg Library Manager",
+        "identifier": "com.steinberg.HALionLibraryManager",
+        "link_path": "/Applications/Steinberg Library Manager.app",
+        "target_path": "/Applications/Steinberg Library Manager.app"
+      },
+      {
+        "id": "mac:com.superduper.superwhisper",
+        "name": "superwhisper",
+        "identifier": "com.superduper.superwhisper",
+        "link_path": "/Applications/superwhisper.app",
+        "target_path": "/Applications/superwhisper.app"
+      },
+      {
+        "id": "mac:com.dreamtonics.svstudio2.pro",
+        "name": "Synthesizer V Studio 2 Pro",
+        "identifier": "com.dreamtonics.svstudio2.pro",
+        "link_path": "/Applications/Synthesizer V Studio 2 Pro.app",
+        "target_path": "/Applications/Synthesizer V Studio 2 Pro.app"
+      },
+      {
+        "id": "mac:com.dreamtonics.svstudio.basic",
+        "name": "Synthesizer V Studio Basic",
+        "identifier": "com.dreamtonics.svstudio.basic",
+        "link_path": "/Applications/Synthesizer V Studio Basic.app",
+        "target_path": "/Applications/Synthesizer V Studio Basic.app"
+      },
+      {
+        "id": "mac:com.dreamtonics.svstudio.pro",
+        "name": "Synthesizer V Studio Pro",
+        "identifier": "com.dreamtonics.svstudio.pro",
+        "link_path": "/Applications/Synthesizer V Studio Pro.app",
+        "target_path": "/Applications/Synthesizer V Studio Pro.app"
+      },
+      {
+        "id": "mac:com.tinyapp.TablePlus",
+        "name": "TablePlus",
+        "identifier": "com.tinyapp.TablePlus",
+        "link_path": "/Applications/TablePlus.app",
+        "target_path": "/Applications/TablePlus.app"
+      },
+      {
+        "id": "mac:com.apple.backup.launcher",
+        "name": "Time Machine",
+        "identifier": "com.apple.backup.launcher",
+        "link_path": "/Applications/Time Machine.app",
+        "target_path": "/Applications/Time Machine.app"
+      },
+      {
+        "id": "mac:net.hexler.lex",
+        "name": "TouchOSC",
+        "identifier": "net.hexler.lex",
+        "link_path": "/Applications/TouchOSC.app",
+        "target_path": "/Applications/TouchOSC.app"
+      },
+      {
+        "id": "mac:com.apple.TV",
+        "name": "TV",
+        "identifier": "com.apple.TV",
+        "link_path": "/Applications/TV.app",
+        "target_path": "/Applications/TV.app"
+      },
+      {
+        "id": "mac:net.maxon.cinema4d.installer.uninstall",
+        "name": "uninstall",
+        "identifier": "net.maxon.cinema4d.installer.uninstall",
+        "link_path": "/Applications/uninstall.app",
+        "target_path": "/Applications/uninstall.app"
+      },
+      {
+        "id": "mac:net.steinberg.eLicenser.installer.SteinbergDownloadAssistant.uninstall",
+        "name": "Uninstall Steinberg Download Assistant",
+        "identifier": "net.steinberg.eLicenser.installer.SteinbergDownloadAssistant.uninstall",
+        "link_path": "/Applications/Uninstall Steinberg Download Assistant.app",
+        "target_path": "/Applications/Uninstall Steinberg Download Assistant.app"
+      },
+      {
+        "id": "mac:com.unity3d.UnityEditor5.x",
+        "name": "Unity",
+        "identifier": "com.unity3d.UnityEditor5.x",
+        "link_path": "/Applications/Unity.app",
+        "target_path": "/Applications/Unity.app"
+      },
+      {
+        "id": "mac:com.unity3d.bugreporter",
+        "name": "Unity Bug Reporter",
+        "identifier": "com.unity3d.bugreporter",
+        "link_path": "/Applications/Unity Bug Reporter.app",
+        "target_path": "/Applications/Unity Bug Reporter.app"
+      },
+      {
+        "id": "mac:com.unity3d.unityhub",
+        "name": "Unity Hub",
+        "identifier": "com.unity3d.unityhub",
+        "link_path": "/Applications/Unity Hub.app",
+        "target_path": "/Applications/Unity Hub.app"
+      },
+      {
+        "id": "mac:com.microsoft.visual-studio",
+        "name": "Visual Studio",
+        "identifier": "com.microsoft.visual-studio",
+        "link_path": "/Applications/Visual Studio.app",
+        "target_path": "/Applications/Visual Studio.app"
+      },
+      {
+        "id": "mac:org.videolan.vlc",
+        "name": "VLC",
+        "identifier": "org.videolan.vlc",
+        "link_path": "/Applications/VLC.app",
+        "target_path": "/Applications/VLC.app"
+      },
+      {
+        "id": "mac:com.vmware.fusion",
+        "name": "VMware Fusion",
+        "identifier": "com.vmware.fusion",
+        "link_path": "/Applications/VMware Fusion.app",
+        "target_path": "/Applications/VMware Fusion.app"
+      },
+      {
+        "id": "mac:com.yamaha.VOCALOID-Authorizer",
+        "name": "VOCALOID Authorizer",
+        "identifier": "com.yamaha.VOCALOID-Authorizer",
+        "link_path": "/Applications/VOCALOID Authorizer.app",
+        "target_path": "/Applications/VOCALOID Authorizer.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor.id.VOCALOID_Authorizer-Uninstaller",
+        "name": "VOCALOID Authorizer Uninstaller",
+        "identifier": "com.apple.ScriptEditor.id.VOCALOID_Authorizer-Uninstaller",
+        "link_path": "/Applications/VOCALOID Authorizer Uninstaller.app",
+        "target_path": "/Applications/VOCALOID Authorizer Uninstaller.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor.id.VOCALOID-Uninstaller",
+        "name": "VOCALOID Uninstaller",
+        "identifier": "com.apple.ScriptEditor.id.VOCALOID-Uninstaller",
+        "link_path": "/Applications/VOCALOID Uninstaller.app",
+        "target_path": "/Applications/VOCALOID Uninstaller.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor.id.VOCALOID4-API-Uninstaller",
+        "name": "VOCALOID4 API Uninstaller",
+        "identifier": "com.apple.ScriptEditor.id.VOCALOID4-API-Uninstaller",
+        "link_path": "/Applications/VOCALOID4 API Uninstaller.app",
+        "target_path": "/Applications/VOCALOID4 API Uninstaller.app"
+      },
+      {
+        "id": "mac:com.yamaha.VOCALOID6-Editor",
+        "name": "VOCALOID6 Editor",
+        "identifier": "com.yamaha.VOCALOID6-Editor",
+        "link_path": "/Applications/VOCALOID6 Editor.app",
+        "target_path": "/Applications/VOCALOID6 Editor.app"
+      },
+      {
+        "id": "mac:com.apple.VoiceOverUtility",
+        "name": "VoiceOverユーティリティ",
+        "identifier": "com.apple.VoiceOverUtility",
+        "link_path": "/Applications/VoiceOverユーティリティ.app",
+        "target_path": "/Applications/VoiceOverユーティリティ.app"
+      },
+      {
+        "id": "mac:com.soarhap.vrmposing",
+        "name": "VRMポージング・モバイル",
+        "identifier": "com.soarhap.vrmposing",
+        "link_path": "/Applications/VRMポージング・モバイル.app",
+        "target_path": "/Applications/VRMポージング・モバイル.app"
+      },
+      {
+        "id": "mac:net.pixiv.vroid.macosx",
+        "name": "VRoid Studio",
+        "identifier": "net.pixiv.vroid.macosx",
+        "link_path": "/Applications/VRoid Studio.app",
+        "target_path": "/Applications/VRoid Studio.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor.id.Web-Gallery",
+        "name": "Web Gallery",
+        "identifier": "com.apple.ScriptEditor.id.Web-Gallery",
+        "link_path": "/Applications/Adobe Illustrator 2026/Scripting.localized/Web Gallery.app",
+        "target_path": "/Applications/Adobe Illustrator 2026/Scripting.localized/Web Gallery.app"
+      },
+      {
+        "id": "mac:Webcam Motion Capture",
+        "name": "Webcam Motion Capture",
+        "identifier": "Webcam Motion Capture",
+        "link_path": "/Applications/Webcam Motion Capture.app",
+        "target_path": "/Applications/Webcam Motion Capture.app"
+      },
+      {
+        "id": "mac:info.kwcl.WebcamMotionReceiver",
+        "name": "Webcam Motion Receiver",
+        "identifier": "info.kwcl.WebcamMotionReceiver",
+        "link_path": "/Applications/Webcam Motion Receiver.app",
+        "target_path": "/Applications/Webcam Motion Receiver.app"
+      },
+      {
+        "id": "mac:com.atebits.Tweetie2",
+        "name": "X",
+        "identifier": "com.atebits.Tweetie2",
+        "link_path": "/Applications/X.app",
+        "target_path": "/Applications/X.app"
+      },
+      {
+        "id": "mac:com.apple.dt.Xcode",
+        "name": "Xcode",
+        "identifier": "com.apple.dt.Xcode",
+        "link_path": "/Applications/Xcode.app",
+        "target_path": "/Applications/Xcode.app"
+      },
+      {
+        "id": "mac:com.github.th-ch.youtube-music",
+        "name": "YouTube Music",
+        "identifier": "com.github.th-ch.youtube-music",
+        "link_path": "/Applications/YouTube Music.app",
+        "target_path": "/Applications/YouTube Music.app"
+      },
+      {
+        "id": "mac:dev.zcode.app",
+        "name": "ZCode",
+        "identifier": "dev.zcode.app",
+        "link_path": "/Applications/ZCode.app",
+        "target_path": "/Applications/ZCode.app"
+      },
+      {
+        "id": "mac:us.zoom.xos",
+        "name": "zoom.us",
+        "identifier": "us.zoom.xos",
+        "link_path": "/Applications/zoom.us.app",
+        "target_path": "/Applications/zoom.us.app"
+      },
+      {
+        "id": "mac:com.apple.ActivityMonitor",
+        "name": "アクティビティモニタ",
+        "identifier": "com.apple.ActivityMonitor",
+        "link_path": "/Applications/アクティビティモニタ.app",
+        "target_path": "/Applications/アクティビティモニタ.app"
+      },
+      {
+        "id": "mac:media.ics.AnimationImageConverter",
+        "name": "アニメ画像に変換する君",
+        "identifier": "media.ics.AnimationImageConverter",
+        "link_path": "/Applications/アニメ画像に変換する君.app",
+        "target_path": "/Applications/アニメ画像に変換する君.app"
+      },
+      {
+        "id": "mac:com.apple.Image_Capture",
+        "name": "イメージキャプチャ",
+        "identifier": "com.apple.Image_Capture",
+        "link_path": "/Applications/イメージキャプチャ.app",
+        "target_path": "/Applications/イメージキャプチャ.app"
+      },
+      {
+        "id": "mac:com.apple.iCal",
+        "name": "カレンダー",
+        "identifier": "com.apple.iCal",
+        "link_path": "/Applications/カレンダー.app",
+        "target_path": "/Applications/カレンダー.app"
+      },
+      {
+        "id": "mac:com.apple.Console",
+        "name": "コンソール",
+        "identifier": "com.apple.Console",
+        "link_path": "/Applications/コンソール.app",
+        "target_path": "/Applications/コンソール.app"
+      },
+      {
+        "id": "mac:com.apple.SystemProfiler",
+        "name": "システム情報",
+        "identifier": "com.apple.SystemProfiler",
+        "link_path": "/Applications/システム情報.app",
+        "target_path": "/Applications/システム情報.app"
       },
       {
         "id": "mac:com.apple.systempreferences",
-        "name": "System Settings",
+        "name": "システム設定",
         "identifier": "com.apple.systempreferences",
-        "target_path": "/Applications/System Settings.app"
+        "link_path": "/Applications/システム設定.app",
+        "target_path": "/Applications/システム設定.app"
+      },
+      {
+        "id": "mac:com.apple.shortcuts",
+        "name": "ショートカット",
+        "identifier": "com.apple.shortcuts",
+        "link_path": "/Applications/ショートカット.app",
+        "target_path": "/Applications/ショートカット.app"
+      },
+      {
+        "id": "mac:com.apple.ScriptEditor2",
+        "name": "スクリプトエディタ",
+        "identifier": "com.apple.ScriptEditor2",
+        "link_path": "/Applications/スクリプトエディタ.app",
+        "target_path": "/Applications/スクリプトエディタ.app"
+      },
+      {
+        "id": "mac:com.apple.screenshot.launcher",
+        "name": "スクリーンショット",
+        "identifier": "com.apple.screenshot.launcher",
+        "link_path": "/Applications/スクリーンショット.app",
+        "target_path": "/Applications/スクリーンショット.app"
+      },
+      {
+        "id": "mac:com.apple.Stickies",
+        "name": "スティッキーズ",
+        "identifier": "com.apple.Stickies",
+        "link_path": "/Applications/スティッキーズ.app",
+        "target_path": "/Applications/スティッキーズ.app"
+      },
+      {
+        "id": "mac:com.apple.Terminal",
+        "name": "ターミナル",
+        "identifier": "com.apple.Terminal",
+        "link_path": "/Applications/ターミナル.app",
+        "target_path": "/Applications/ターミナル.app"
+      },
+      {
+        "id": "mac:com.gateboxlab.cheerpro",
+        "name": "チアプロ - 集中・継続を応援",
+        "identifier": "com.gateboxlab.cheerpro",
+        "link_path": "/Applications/チアプロ - 集中・継続を応援.app",
+        "target_path": "/Applications/チアプロ - 集中・継続を応援.app"
+      },
+      {
+        "id": "mac:com.apple.Chess",
+        "name": "チェス",
+        "identifier": "com.apple.Chess",
+        "link_path": "/Applications/チェス.app",
+        "target_path": "/Applications/チェス.app"
+      },
+      {
+        "id": "mac:com.apple.TextEdit",
+        "name": "テキストエディット",
+        "identifier": "com.apple.TextEdit",
+        "link_path": "/Applications/テキストエディット.app",
+        "target_path": "/Applications/テキストエディット.app"
+      },
+      {
+        "id": "mac:com.apple.DiskUtility",
+        "name": "ディスクユーティリティ",
+        "identifier": "com.apple.DiskUtility",
+        "link_path": "/Applications/ディスクユーティリティ.app",
+        "target_path": "/Applications/ディスクユーティリティ.app"
+      },
+      {
+        "id": "mac:com.bilibili.trickcal",
+        "name": "トリッカル・もちもちほっペ大作戦",
+        "identifier": "com.bilibili.trickcal",
+        "link_path": "/Applications/トリッカル・もちもちほっペ大作戦.app",
+        "target_path": "/Applications/トリッカル・もちもちほっペ大作戦.app"
+      },
+      {
+        "id": "mac:com.apple.Passwords",
+        "name": "パスワード",
+        "identifier": "com.apple.Passwords",
+        "link_path": "/Applications/パスワード.app",
+        "target_path": "/Applications/パスワード.app"
+      },
+      {
+        "id": "mac:com.apple.helpviewer",
+        "name": "ヒント",
+        "identifier": "com.apple.helpviewer",
+        "link_path": "/Applications/ヒント.app",
+        "target_path": "/Applications/ヒント.app"
+      },
+      {
+        "id": "mac:com.apple.freeform",
+        "name": "フリーボード",
+        "identifier": "com.apple.freeform",
+        "link_path": "/Applications/フリーボード.app",
+        "target_path": "/Applications/フリーボード.app"
+      },
+      {
+        "id": "mac:com.apple.iBooksX",
+        "name": "ブック",
+        "identifier": "com.apple.iBooksX",
+        "link_path": "/Applications/ブック.app",
+        "target_path": "/Applications/ブック.app"
+      },
+      {
+        "id": "mac:com.apple.printcenter",
+        "name": "プリントセンター",
+        "identifier": "com.apple.printcenter",
+        "link_path": "/Applications/プリントセンター.app",
+        "target_path": "/Applications/プリントセンター.app"
+      },
+      {
+        "id": "mac:com.apple.Preview",
+        "name": "プレビュー",
+        "identifier": "com.apple.Preview",
+        "link_path": "/Applications/プレビュー.app",
+        "target_path": "/Applications/プレビュー.app"
+      },
+      {
+        "id": "mac:com.apple.Home",
+        "name": "ホーム",
+        "identifier": "com.apple.Home",
+        "link_path": "/Applications/ホーム.app",
+        "target_path": "/Applications/ホーム.app"
+      },
+      {
+        "id": "mac:com.apple.VoiceMemos",
+        "name": "ボイスメモ",
+        "identifier": "com.apple.VoiceMemos",
+        "link_path": "/Applications/ボイスメモ.app",
+        "target_path": "/Applications/ボイスメモ.app"
+      },
+      {
+        "id": "mac:com.apple.podcasts",
+        "name": "ポッドキャスト",
+        "identifier": "com.apple.podcasts",
+        "link_path": "/Applications/ポッドキャスト.app",
+        "target_path": "/Applications/ポッドキャスト.app"
+      },
+      {
+        "id": "mac:com.apple.Maps",
+        "name": "マップ",
+        "identifier": "com.apple.Maps",
+        "link_path": "/Applications/マップ.app",
+        "target_path": "/Applications/マップ.app"
+      },
+      {
+        "id": "mac:com.apple.Music",
+        "name": "ミュージック",
+        "identifier": "com.apple.Music",
+        "link_path": "/Applications/ミュージック.app",
+        "target_path": "/Applications/ミュージック.app"
+      },
+      {
+        "id": "mac:com.apple.MobileSMS",
+        "name": "メッセージ",
+        "identifier": "com.apple.MobileSMS",
+        "link_path": "/Applications/メッセージ.app",
+        "target_path": "/Applications/メッセージ.app"
+      },
+      {
+        "id": "mac:com.apple.Notes",
+        "name": "メモ",
+        "identifier": "com.apple.Notes",
+        "link_path": "/Applications/メモ.app",
+        "target_path": "/Applications/メモ.app"
+      },
+      {
+        "id": "mac:com.apple.mail",
+        "name": "メール",
+        "identifier": "com.apple.mail",
+        "link_path": "/Applications/メール.app",
+        "target_path": "/Applications/メール.app"
+      },
+      {
+        "id": "mac:com.apple.reminders",
+        "name": "リマインダー",
+        "identifier": "com.apple.reminders",
+        "link_path": "/Applications/リマインダー.app",
+        "target_path": "/Applications/リマインダー.app"
+      },
+      {
+        "id": "mac:com.apple.Photos",
+        "name": "写真",
+        "identifier": "com.apple.Photos",
+        "link_path": "/Applications/写真.app",
+        "target_path": "/Applications/写真.app"
+      },
+      {
+        "id": "mac:com.apple.weather",
+        "name": "天気",
+        "identifier": "com.apple.weather",
+        "link_path": "/Applications/天気.app",
+        "target_path": "/Applications/天気.app"
+      },
+      {
+        "id": "mac:com.apple.findmy",
+        "name": "探す",
+        "identifier": "com.apple.findmy",
+        "link_path": "/Applications/探す.app",
+        "target_path": "/Applications/探す.app"
+      },
+      {
+        "id": "mac:com.apple.clock",
+        "name": "時計",
+        "identifier": "com.apple.clock",
+        "link_path": "/Applications/時計.app",
+        "target_path": "/Applications/時計.app"
+      },
+      {
+        "id": "mac:com.apple.stocks",
+        "name": "株価",
+        "identifier": "com.apple.stocks",
+        "link_path": "/Applications/株価.app",
+        "target_path": "/Applications/株価.app"
+      },
+      {
+        "id": "mac:com.apple.ScreenSharing",
+        "name": "画面共有",
+        "identifier": "com.apple.ScreenSharing",
+        "link_path": "/Applications/画面共有.app",
+        "target_path": "/Applications/画面共有.app"
+      },
+      {
+        "id": "mac:com.apple.MigrateAssistant",
+        "name": "移行アシスタント",
+        "identifier": "com.apple.MigrateAssistant",
+        "link_path": "/Applications/移行アシスタント.app",
+        "target_path": "/Applications/移行アシスタント.app"
+      },
+      {
+        "id": "mac:com.apple.calculator",
+        "name": "計算機",
+        "identifier": "com.apple.calculator",
+        "link_path": "/Applications/計算機.app",
+        "target_path": "/Applications/計算機.app"
+      },
+      {
+        "id": "mac:com.apple.Dictionary",
+        "name": "辞書",
+        "identifier": "com.apple.Dictionary",
+        "link_path": "/Applications/辞書.app",
+        "target_path": "/Applications/辞書.app"
+      },
+      {
+        "id": "mac:com.apple.AddressBook",
+        "name": "連絡先",
+        "identifier": "com.apple.AddressBook",
+        "link_path": "/Applications/連絡先.app",
+        "target_path": "/Applications/連絡先.app"
       }
     ],
     "items": [
       {
         "kind": "app",
-        "id": "mac:com.adobe.AfterEffects.application"
+        "id": "mac:jp.plusplus.virtualyoutuber"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.Acrobat.Pro"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.AfterEffects"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.AfterEffectsRenderEngine"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.Audition"
       },
       {
         "kind": "app",
         "id": "mac:com.adobe.bridge"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.accmac"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.cc.Adobe-Creative-Cloud-Diagnostics"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.illustrator"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.ame.application.24"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.ame.application.25"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.ame.application.26"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.Photoshop"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.PremierePro.24"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.PremierePro.25"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.PremierePro.26"
       },
       {
         "kind": "app",
@@ -216,31 +1605,11 @@
       },
       {
         "kind": "app",
-        "id": "mac:com.apple.Pages"
+        "id": "mac:com.adobe.AfterEffects.application"
       },
       {
         "kind": "app",
-        "id": "mac:com.apple.iWork.Keynote"
-      },
-      {
-        "kind": "app",
-        "id": "mac:jp.co.celsys.CLIPSTUDIO"
-      },
-      {
-        "kind": "app",
-        "id": "mac:jp.co.celsys.CLIPSTUDIOPAINT"
-      },
-      {
-        "kind": "app",
-        "id": "mac:com.google.drivefs.shortcuts.docs"
-      },
-      {
-        "kind": "app",
-        "id": "mac:com.google.drivefs.shortcuts.sheets"
-      },
-      {
-        "kind": "app",
-        "id": "mac:com.jetbrains.PhpStorm"
+        "id": "mac:jp.co.celsys.AggregateMdul"
       },
       {
         "kind": "app",
@@ -248,27 +1617,71 @@
       },
       {
         "kind": "app",
-        "id": "mac:com.live2d.cubism.CECubismEditorApp"
+        "id": "mac:com.apple.airport.airportutility"
       },
       {
         "kind": "app",
-        "id": "mac:com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame"
+        "id": "mac:com.google.antigravity"
       },
       {
         "kind": "app",
-        "id": "mac:com.apple.Dictionary"
+        "id": "mac:com.apple.AppStore"
       },
       {
         "kind": "app",
-        "id": "mac:com.apple.QuickTimePlayerX"
-      },
-      {
-        "kind": "app",
-        "id": "mac:com.apple.ActivityMonitor"
+        "id": "mac:com.apple.audio.AudioMIDISetup"
       },
       {
         "kind": "app",
         "id": "mac:com.apple.Automator"
+      },
+      {
+        "kind": "app",
+        "id": "mac:barrier"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.hegenberg.BetterTouchTool"
+      },
+      {
+        "kind": "app",
+        "id": "mac:org.blenderfoundation.blender"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.BluetoothFileExchange"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.bootcampassistant"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.maxon.python"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.supermegaultragroovy.capo3.mac"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.scenegroup.cavalry"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.co.celsys.CertMdul"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.Chrome.app.hbblfifohofgngfbjbiimbbcimepbdcb"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.openai.codex"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.chromeremotedesktop.me2me-host-uninstaller"
       },
       {
         "kind": "app",
@@ -280,11 +1693,55 @@
       },
       {
         "kind": "app",
-        "id": "mac:com.apple.ScreenSharing"
+        "id": "mac:net.maxon.cinema4dserver"
       },
       {
         "kind": "app",
-        "id": "mac:tv.parsec.www"
+        "id": "mac:jp.co.celsys.CLIPSTUDIO"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.co.celsys.CLIPSTUDIOPAINT"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.microsoft.VSCode"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ColorSyncUtility"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.todesktop.241012ess7yxs0e"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.maxon.commandline"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor.id.Contact-Sheets"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.acc.AdobeCreativeCloud"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.Creative-Cloud-Desktop-App"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.Install"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.ACCC.Uninstaller"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.co.crypton.CryptonProductManager"
       },
       {
         "kind": "app",
@@ -292,23 +1749,315 @@
       },
       {
         "kind": "app",
+        "id": "mac:com.todesktop.230313mzl4w4u92"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.daisydiskapp.DaisyDiskStandAlone"
+      },
+      {
+        "kind": "app",
+        "id": "steam:3301060"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.DigitalColorMeter"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.hnc.Discord"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.adobe.distiller"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.Syncrosoft.LCC"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.FaceTime"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.figma.Desktop"
+      },
+      {
+        "kind": "app",
+        "id": "mac:org.filezilla-project.filezilla"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.FontBook"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.DanPristupov.Fork"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.garageband10"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.goland"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.goodnotesapp.x"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.Chrome"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.drivefs.shortcuts.docs"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.drivefs"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.drivefs.shortcuts.sheets"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.google.drivefs.shortcuts.slides"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.grapher"
+      },
+      {
+        "kind": "app",
         "id": "mac:com.steinberg.vst3.GrooveAgentSEStandalone"
       },
       {
         "kind": "app",
-        "id": "mac:com.unity3d.UnityEditor5.x"
+        "id": "mac:com.steinberg.vst3.HALionSonicStandalone"
       },
       {
         "kind": "app",
-        "id": "mac:com.unity3d.unityhub"
+        "id": "mac:com.apple.iMovieApp"
       },
       {
         "kind": "app",
-        "id": "mac:com.yamaha.VOCALOID-Authorizer"
+        "id": "mac:com.adobe.InDesign"
       },
       {
         "kind": "app",
-        "id": "mac:com.yamaha.VOCALOID6-Editor"
+        "id": "mac:com.jetbrains.intellij"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScreenContinuity"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.googlecode.iterm2"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.googlecode.iterm2.iTermBrowserPlugin"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.rider"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.toolbox"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.iWork.Keynote"
+      },
+      {
+        "kind": "app",
+        "id": "mac:dev.kiro.desktop"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.hakocat.Koucha"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.turbo.LauncherTurbo"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.launchpad.launcher"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.kamakiri1192.launchpad"
+      },
+      {
+        "kind": "app",
+        "id": "mac:waikiki.program.Launchpad"
+      },
+      {
+        "kind": "app",
+        "id": "mac:de.monospc.Lightkey"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.naver.line.mac"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.live2d.cubism.CECubismEditorApp"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame"
+      },
+      {
+        "kind": "app",
+        "id": "mac:ai.elementlabs.lmstudio"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.lookingglassfactory.bridge"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.goodsnooze.MenuGPT"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor.id.Make-Calendar"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.snoize.MIDIMonitor"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.exposelauncher"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.borisfx.mocha4ae_adobe"
+      },
+      {
+        "kind": "app",
+        "id": "mac:io.mountainduck"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.github.nanoem"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.news"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.nextcloud.desktopclient"
+      },
+      {
+        "kind": "app",
+        "id": "mac:lo.cafe.NotchNook"
+      },
+      {
+        "kind": "app",
+        "id": "mac:notion.id"
+      },
+      {
+        "kind": "app",
+        "id": "mac:notion.id.NotionSafariExtension"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.hottagames.nte"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.iWork.Numbers"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.obsproject.obs-studio"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.wails.obsctl"
+      },
+      {
+        "kind": "app",
+        "id": "mac:ai.opencode.desktop"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.iWork.Pages"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Pages"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.parallels.desktop.console"
+      },
+      {
+        "kind": "app",
+        "id": "mac:dev.pencil.desktop"
+      },
+      {
+        "kind": "app",
+        "id": "mac:ai.perplexity.mac"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.PhotoBooth"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.PhpStorm"
+      },
+      {
+        "kind": "app",
+        "id": "mac:jp.co.crypton.PiaproStudio"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.GenerativePlaygroundApp"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.pycharm"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.QuickTimePlayerX"
+      },
+      {
+        "kind": "app",
+        "id": "mac:unity.Quixel.Mixer"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.luckymarmot.Paw"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.scicotherapylabs.RemoteCodetrolServer"
+      },
+      {
+        "kind": "app",
+        "id": "mac:org.filezilla-project.remotedrive"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.kyome.RunCat"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.jetbrains.rustrover"
       },
       {
         "kind": "app",
@@ -316,11 +2065,339 @@
       },
       {
         "kind": "app",
-        "id": "mac:com.apple.calculator"
+        "id": "mac:jp.tuna2134.sbv2-gui"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.kyome.ScreenNote"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.kyome.ScreenPointer"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.pilotmoon.scroll-reverser"
+      },
+      {
+        "kind": "app",
+        "id": "steam:289070"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.siri.launcher"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.valvesoftware.steam"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.steinberg.SteinbergActivationManager"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.steinberg.elicenser.SteinbergDownloadAssistant"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.steinberg.HALionLibraryManager"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.superduper.superwhisper"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.dreamtonics.svstudio2.pro"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.dreamtonics.svstudio.basic"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.dreamtonics.svstudio.pro"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.tinyapp.TablePlus"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.backup.launcher"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.hexler.lex"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.TV"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.maxon.cinema4d.installer.uninstall"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.steinberg.eLicenser.installer.SteinbergDownloadAssistant.uninstall"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.unity3d.UnityEditor5.x"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.unity3d.bugreporter"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.unity3d.unityhub"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.microsoft.visual-studio"
+      },
+      {
+        "kind": "app",
+        "id": "mac:org.videolan.vlc"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.vmware.fusion"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.yamaha.VOCALOID-Authorizer"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor.id.VOCALOID_Authorizer-Uninstaller"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor.id.VOCALOID-Uninstaller"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor.id.VOCALOID4-API-Uninstaller"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.yamaha.VOCALOID6-Editor"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.VoiceOverUtility"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.soarhap.vrmposing"
+      },
+      {
+        "kind": "app",
+        "id": "mac:net.pixiv.vroid.macosx"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor.id.Web-Gallery"
+      },
+      {
+        "kind": "app",
+        "id": "mac:Webcam Motion Capture"
+      },
+      {
+        "kind": "app",
+        "id": "mac:info.kwcl.WebcamMotionReceiver"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.atebits.Tweetie2"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.dt.Xcode"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.github.th-ch.youtube-music"
+      },
+      {
+        "kind": "app",
+        "id": "mac:dev.zcode.app"
+      },
+      {
+        "kind": "app",
+        "id": "mac:us.zoom.xos"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ActivityMonitor"
+      },
+      {
+        "kind": "app",
+        "id": "mac:media.ics.AnimationImageConverter"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Image_Capture"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.iCal"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Console"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.SystemProfiler"
       },
       {
         "kind": "app",
         "id": "mac:com.apple.systempreferences"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.shortcuts"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScriptEditor2"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.screenshot.launcher"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Stickies"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Terminal"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.gateboxlab.cheerpro"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Chess"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.TextEdit"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.DiskUtility"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.bilibili.trickcal"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Passwords"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.helpviewer"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.freeform"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.iBooksX"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.printcenter"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Preview"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Home"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.VoiceMemos"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.podcasts"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Maps"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Music"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.MobileSMS"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Notes"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.mail"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.reminders"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Photos"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.weather"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.findmy"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.clock"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.stocks"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.ScreenSharing"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.MigrateAssistant"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.calculator"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.Dictionary"
+      },
+      {
+        "kind": "app",
+        "id": "mac:com.apple.AddressBook"
       }
     ]
   },
@@ -333,18 +2410,72 @@
     {
       "at_ms": 700,
       "type": "open_folder",
-      "id": "folder-12"
+      "id": "folder-13"
     },
     {
-      "at_ms": 1300,
+      "at_ms": 1600,
       "type": "escape"
     },
     {
-      "at_ms": 1850,
+      "at_ms": 2000,
+      "type": "open_folder",
+      "id": "folder-9"
+    },
+    {
+      "at_ms": 2900,
+      "type": "escape"
+    },
+    {
+      "at_ms": 3900,
+      "type": "move",
+      "target": {
+        "kind": "point",
+        "x": 960.0,
+        "y": 650.0
+      }
+    },
+    {
+      "at_ms": 4000,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 4000000,
+      "canonical_dx": 0,
+      "canonical_dy": 0,
+      "contact_phase": "began"
+    },
+    {
+      "at_ms": 4100,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 4100000,
+      "canonical_dx": -1400,
+      "canonical_dy": 0,
+      "contact_phase": "changed"
+    },
+    {
+      "at_ms": 4200,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 4200000,
+      "canonical_dx": 0,
+      "canonical_dy": 0,
+      "contact_phase": "ended"
+    },
+    {
+      "at_ms": 4250,
+      "type": "scroll_sample",
+      "gesture_id": 1,
+      "timestamp_us": 4250000,
+      "canonical_dx": 0,
+      "canonical_dy": 0,
+      "sequence_complete": true
+    },
+    {
+      "at_ms": 5050,
       "type": "toggle_settings"
     },
     {
-      "at_ms": 2300,
+      "at_ms": 5500,
       "type": "move",
       "target": {
         "kind": "settings_action",
@@ -352,23 +2483,23 @@
       }
     },
     {
-      "at_ms": 2350,
+      "at_ms": 5550,
       "type": "pointer_down"
     },
     {
-      "at_ms": 2400,
+      "at_ms": 5600,
       "type": "pointer_up"
     },
     {
-      "at_ms": 2500,
+      "at_ms": 5700,
       "type": "escape"
     },
     {
-      "at_ms": 2850,
+      "at_ms": 6050,
       "type": "toggle_settings"
     },
     {
-      "at_ms": 3200,
+      "at_ms": 6400,
       "type": "move",
       "target": {
         "kind": "settings_category",
@@ -376,15 +2507,15 @@
       }
     },
     {
-      "at_ms": 3250,
+      "at_ms": 6450,
       "type": "pointer_down"
     },
     {
-      "at_ms": 3300,
+      "at_ms": 6500,
       "type": "pointer_up"
     },
     {
-      "at_ms": 3600,
+      "at_ms": 6800,
       "type": "move",
       "target": {
         "kind": "settings_action",
@@ -392,15 +2523,15 @@
       }
     },
     {
-      "at_ms": 3650,
+      "at_ms": 6850,
       "type": "pointer_down"
     },
     {
-      "at_ms": 3700,
+      "at_ms": 6900,
       "type": "pointer_up"
     },
     {
-      "at_ms": 3900,
+      "at_ms": 7100,
       "type": "move",
       "target": {
         "kind": "settings_category",
@@ -408,15 +2539,15 @@
       }
     },
     {
-      "at_ms": 3950,
+      "at_ms": 7150,
       "type": "pointer_down"
     },
     {
-      "at_ms": 4000,
+      "at_ms": 7200,
       "type": "pointer_up"
     },
     {
-      "at_ms": 4300,
+      "at_ms": 7500,
       "type": "move",
       "target": {
         "kind": "settings_action",
@@ -424,16 +2555,35 @@
       }
     },
     {
-      "at_ms": 4350,
+      "at_ms": 7550,
       "type": "pointer_down"
     },
     {
-      "at_ms": 4400,
+      "at_ms": 7600,
       "type": "pointer_up"
     },
     {
-      "at_ms": 4500,
+      "at_ms": 7700,
       "type": "escape"
     }
-  ]
+  ],
+  "scroll_expectations": {
+    "min_samples": 4,
+    "expected_terminal_contacts": 1,
+    "expected_horizontal_releases": 1,
+    "expected_target_decisions": 1,
+    "expected_spring_generations": 1,
+    "expected_releases": [
+      {
+        "gesture_id": 1,
+        "surface": "main",
+        "min_filtered_velocity": -1000000,
+        "max_filtered_velocity": 0,
+        "target_x": -1248.0
+      }
+    ],
+    "required_surfaces": [
+      "main"
+    ]
+  }
 }

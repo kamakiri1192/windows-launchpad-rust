@@ -129,11 +129,41 @@ def verify_manifest(manifest_path: Path) -> str:
             count = frame.get("top_level_item_count")
             if count is not None and (not counts or counts[-1] != count):
                 counts.append(count)
-        required_states["classification, undo, reset, undo (17/31/17/31 items)"] = (
-            counts == [17, 31, 17, 31]
+        required_states["classification, undo, reset, undo (39/217/39/217 items)"] = (
+            counts == [39, 217, 39, 217]
         )
-        required_states["generated Unity folder opens with two children"] = any(
-            frame.get("folder_open") and frame.get("active_folder_child_count") == 2
+        required_states["development folder opens with fourteen children"] = any(
+            frame.get("folder_open") and frame.get("active_folder_child_count") == 14
+            for frame in frames
+        )
+        required_states["avatar folder opens with nine children"] = any(
+            frame.get("folder_open") and frame.get("active_folder_child_count") == 9
+            for frame in frames
+        )
+        required_states["second main page is reachable"] = any(
+            frame.get("pager_position_x", 0) is not None
+            and frame.get("pager_position_x", 0) < -1200
+            and frame.get("pager_surface") == "main"
+            and not frame.get("folder_open")
+            for frame in frames
+        )
+        required_states["page gesture contract passed"] = (
+            manifest.get("scroll_assertions", {}).get("passed") is True
+        )
+        direct_ids = {
+            "app:mac:com.apple.AppStore", "app:mac:com.google.Chrome", "app:mac:com.apple.Safari",
+            "app:mac:com.valvesoftware.steam", "app:mac:com.apple.systempreferences",
+            "app:mac:com.apple.calculator",
+        }
+        required_states["exactly six reviewed apps and thirty-three folders"] = any(
+            frame.get("top_level_item_count") == 39
+            and set(i for i in frame.get("top_level_item_ids", []) if not i.startswith("folder:")) == direct_ids
+            and len([i for i in frame.get("top_level_item_ids", []) if i.startswith("folder:")]) == 33
+            for frame in frames
+        )
+        required_states["undo restores all 217 fixture IDs"] = any(
+            frame.get("top_level_item_count") == 217
+            and len(set(frame.get("top_level_item_ids", []))) == 217
             for frame in frames
         )
     missing = [name for name, present in required_states.items() if not present]

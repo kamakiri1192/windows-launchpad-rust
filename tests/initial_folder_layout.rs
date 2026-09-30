@@ -635,7 +635,7 @@ fn original_nineteen_and_added_catalog_presets_have_active_rules() {
             .map(|p| p.id)
             .collect::<BTreeSet<_>>()
             .len(),
-        34
+        52
     );
     for preset in catalog.presets {
         assert!(!preset.rules.is_empty(), "{} has no rules", preset.id);

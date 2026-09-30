@@ -60,7 +60,7 @@ fn all_ids(state: &LauncherState) -> Vec<AppId> {
 }
 
 #[test]
-fn installed_mac_metadata_matches_expected_suites_and_rejects_vendor_helpers() {
+fn installed_mac_metadata_matches_suites_purposes_and_rejects_unknown_helpers() {
     let catalog = Catalog::bundled(None);
     for app in observed() {
         let mut e = entry(&app.bundle, &app.name);
@@ -114,7 +114,7 @@ fn mac_first_run_reset_and_undo_preserve_every_app_exactly_once() {
         &catalog,
     );
     let mut state = proposal.state;
-    assert_eq!(state.folders.len(), 14);
+    assert_eq!(state.folders.len(), 15);
     assert_eq!(all_ids(&state).len(), snapshot.len());
     assert_eq!(
         all_ids(&state).into_iter().collect::<BTreeSet<_>>(),
@@ -177,7 +177,6 @@ fn mac_standard_apps_split_accessories_utilities_and_remote_desktop() {
         "com.apple.Safari",
         "com.apple.calculator",
         "com.apple.systempreferences",
-        "com.apple.Notes",
     ] {
         assert_eq!(folder_for(bundle), None);
     }
@@ -211,5 +210,222 @@ fn mac_versions_aliases_and_duplicate_launches_do_not_satisfy_two_product_thresh
         let state = initial_layout::reset(&entries, Platform::Macos, false, 0, &catalog);
         assert!(state.folders.is_empty(), "{bundles:?}");
         assert_eq!(state.items.len(), 2);
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct FullyReviewedApp {
+    id: String,
+    name: String,
+    bundle: String,
+    preset: Option<String>,
+    product: Option<String>,
+    reason: String,
+    directory: Option<String>,
+}
+
+fn fully_reviewed() -> Vec<FullyReviewedApp> {
+    serde_json::from_str(include_str!("fixtures/macos_catalog_full_observed.json")).unwrap()
+}
+
+fn full_snapshot() -> BTreeMap<AppId, SnapshotEntry> {
+    fully_reviewed()
+        .into_iter()
+        .map(|app| {
+            let mut e = entry(&app.bundle, &app.name);
+            e.app_id = AppId::from_normalized(app.id);
+            if let Some(directory) = app.directory {
+                e.link_path = format!(
+                    "/Applications/{directory}/Scripting.localized/{}.app",
+                    app.name
+                );
+            }
+            (e.app_id.clone(), e)
+        })
+        .collect()
+}
+
+#[test]
+fn every_app_in_full_installed_inventory_has_a_reviewed_destination() {
+    let snapshot = full_snapshot();
+    assert_eq!(snapshot.len(), 217);
+    let catalog = Catalog::bundled(None);
+    let proposal = initial_layout::generate(
+        &snapshot,
+        &Settings::default(),
+        Platform::Macos,
+        true,
+        "whole-inventory".into(),
+        &catalog,
+    );
+    assert_eq!(proposal.state.folders.len(), 33);
+    assert_eq!(proposal.state.top_level_app_ids().count(), 6);
+    assert_eq!(proposal.state.folder_child_ids().count(), 211);
+    let ids = all_ids(&proposal.state);
+    assert_eq!(ids.len(), snapshot.len());
+    assert_eq!(
+        ids.into_iter().collect::<BTreeSet<_>>(),
+        snapshot.keys().cloned().collect()
+    );
+    for app in fully_reviewed() {
+        assert!(
+            !app.reason.is_empty(),
+            "{} lacks a reviewed reason",
+            app.name
+        );
+        let e = &snapshot[&AppId::from_normalized(app.id)];
+        if let Some(preset) = app.preset {
+            assert_eq!(
+                catalog.classify(e, Platform::Macos),
+                Some(Classification::Product {
+                    preset: &preset,
+                    product: app.product.unwrap()
+                }),
+                "{}",
+                app.name
+            );
+            assert_eq!(
+                proposal.decisions[&e.app_id],
+                initial_layout::Decision::Grouped(preset),
+                "{}",
+                app.name
+            );
+            if !e.app_id.is_steam() {
+                assert!(!matches!(
+                    catalog.classify(e, Platform::Windows),
+                    Some(Classification::Product { .. })
+                ));
+                let mut renamed = e.clone();
+                renamed.name = "用途を連想できない表示名".into();
+                renamed.publisher = "Unrelated publisher".into();
+                assert_eq!(
+                    catalog.classify(&renamed, Platform::Macos),
+                    catalog.classify(e, Platform::Macos)
+                );
+                renamed.identifier.push_str(".unknown-helper");
+                assert_eq!(catalog.classify(&renamed, Platform::Macos), None);
+            }
+        } else {
+            assert_eq!(
+                catalog.classify(e, Platform::Macos),
+                Some(Classification::KeepTopLevel),
+                "{}",
+                app.name
+            );
+            assert_eq!(
+                proposal.decisions[&e.app_id],
+                initial_layout::Decision::KeepTopLevel
+            );
+        }
+    }
+    let reset = initial_layout::reset(&snapshot, Platform::Macos, true, 10, &catalog);
+    assert_eq!(reset.items, proposal.state.items);
+    assert_eq!(reset.folders, proposal.state.folders);
+    let mut persisted: LauncherState =
+        serde_json::from_str(&serde_json::to_string(&proposal.state).unwrap()).unwrap();
+    assert!(persisted.undo_initial_layout());
+    assert!(persisted.folders.is_empty());
+    assert_eq!(persisted.items.len(), 217);
+}
+
+#[test]
+fn illustrator_generated_script_ids_require_the_verified_suite_directory() {
+    let catalog = Catalog::bundled(None);
+    for bundle in [
+        "com.apple.ScriptEditor.id.Contact-Sheets",
+        "com.apple.ScriptEditor.id.Make-Calendar",
+        "com.apple.ScriptEditor.id.Web-Gallery",
+    ] {
+        let mut e = entry(bundle, "User Script");
+        assert_eq!(catalog.classify(&e, Platform::Macos), None);
+        for directory in [
+            "Adobe Illustrator",
+            "Adobe Illustrator 2024",
+            "Adobe Illustrator 2026",
+        ] {
+            e.link_path = format!("/Applications/{directory}/Scripting.localized/Sample Scripts.localized/User Script.app");
+            assert_eq!(
+                catalog.classify(&e, Platform::Macos),
+                Some(Classification::Product {
+                    preset: "adobe-creative-cloud",
+                    product: "illustrator".into()
+                })
+            );
+        }
+        for directory in [
+            "Adobe Illustrator Helper",
+            "Adobe Illustrator 20xx",
+            "Adobe Illustrator 2026 Extra",
+            "My Adobe Illustrator 2026",
+        ] {
+            e.link_path = format!("/Applications/{directory}/User Script.app");
+            assert_eq!(catalog.classify(&e, Platform::Macos), None);
+        }
+    }
+}
+
+#[test]
+fn mac_purpose_rules_do_not_reclassify_windows_daily_entry_points() {
+    let catalog = Catalog::bundled(None);
+    let mut e = entry("com.microsoft.VSCode", "Code");
+    assert!(matches!(
+        catalog.classify(&e, Platform::Macos),
+        Some(Classification::Product {
+            preset: "macos-development",
+            ..
+        })
+    ));
+    e.target_path = "C:/Program Files/Microsoft VS Code/Code.exe".into();
+    e.identifier.clear();
+    e.launch_arguments = Some(String::new());
+    assert_eq!(
+        catalog.classify(&e, Platform::Windows),
+        Some(Classification::KeepTopLevel)
+    );
+    assert_eq!(catalog.classify(&e, Platform::Macos), None);
+    e.identifier = "com.google.UnknownApp".into();
+    e.name = "Google Docs".into();
+    assert_eq!(catalog.classify(&e, Platform::Macos), None);
+}
+
+#[test]
+fn voice_versions_and_suite_support_tools_do_not_manufacture_two_products() {
+    let catalog = Catalog::bundled(None);
+    for bundles in [
+        vec![
+            "com.dreamtonics.svstudio.basic",
+            "com.dreamtonics.svstudio.pro",
+            "com.dreamtonics.svstudio2.pro",
+        ],
+        vec![
+            "com.adobe.Install",
+            "com.adobe.ACCC.Uninstaller",
+            "com.adobe.accmac",
+        ],
+        vec![
+            "com.googlecode.iterm2",
+            "com.googlecode.iterm2.iTermBrowserPlugin",
+        ],
+        vec!["notion.id", "notion.id.NotionSafariExtension"],
+        vec![
+            "net.maxon.cinema4d",
+            "net.maxon.python",
+            "net.maxon.cinema4d.installer.uninstall",
+        ],
+        vec![
+            "jp.co.celsys.CLIPSTUDIO",
+            "jp.co.celsys.CertMdul",
+            "jp.co.celsys.AggregateMdul",
+        ],
+    ] {
+        let snapshot = bundles
+            .iter()
+            .map(|b| {
+                let e = entry(b, b);
+                (e.app_id.clone(), e)
+            })
+            .collect();
+        let state = initial_layout::reset(&snapshot, Platform::Macos, true, 0, &catalog);
+        assert!(state.folders.is_empty(), "{bundles:?}");
     }
 }

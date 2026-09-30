@@ -1,70 +1,72 @@
-# macOSの初期フォルダ分類（カタログv6）
+# macOSの初期フォルダ分類（カタログv7）
 
-2026-09-30にMac実機のアプリの `Info.plist` と、productionのアプリスキャナーを使って確認した。
-同梱ルールは `src/domain/initial_layout/catalog/macos.rs`、実測メタデータの正例・負例は `tests/fixtures/macos_catalog_observed.json` にある。
-元からあるMacのルールを同じモジュールへ移し、Windowsの判定条件は維持している。
+Mac実機のアプリを全件確認し、製品セットと用途別の初期フォルダを実装した。
+**270個のアプリ束と1件のSteam manifestを監査し、表示対象217件を33フォルダ・6単体へ分類した。未判定は0件。**
+[全件の所属・理由・除外記録](MACOS_APP_CLASSIFICATION_AUDIT.md)に、一件ずつ判断を記載している。
 
 ## 分類方針
 
-- `CFBundleIdentifier` の完全一致で製品を判定する。名前、翻訳、配置場所、著作権表記、メーカーの接頭辞だけでは決めない。
-- 同じ製品群の異なる製品・付属機能が2種類以上あるときだけフォルダを作る。同じアプリの複数版や重複した起動対象だけでは作らない。
-- 初回と設定の「設定をリセット」で適用する。更新時に既存のフォルダ・手動配置へ自動適用しない。生成直後は「フォルダ分けをリセット」で取り消せる。
-- Macのトップレベルとフォルダ内は従来どおり名前順。不明なアプリは直接表示し、検出済みのアプリを削除しない。
-- 実行時の外部通信やAIの使用はない。アプリ本体やApplicationsディレクトリの配置も変更しない。
+- Adobe、Affinity、Steinberg、Maxon、Unity、JetBrains、Live2D、CLIP STUDIO、VOCALOID、Apple文書アプリ、Google Workspace等の製品セットを優先する。
+- セット外の既知アプリは、開発、AI・音声入力、3D・アバター、デザイン、写真・画像、映像・配信・演出、音楽制作、音声・歌声合成、連絡・通話、メモ・予定・作業、メディア再生、ファイル転送・同期、仮想マシン、Macカスタマイズ、デバイス連携、生活情報、ゲーム、PDFへ分類する。
+- ブラウザ・Store・OS設定・電卓・Steamクライアントは日常の入口として直接表示する。
+- `CFBundleIdentifier` の完全一致で判定する。数値版は同じ製品キーにまとめる。表示名・メーカー接頭辞・著作権・OSのカテゴリ宣言だけでは決めない。
+- Illustrator同梱のAppleScriptサンプルだけは、汎用のScript Editor生成IDに加えて所有ディレクトリを確認する。
+- 製品の診断・導入・削除・補助ツールも所属先を明示し、未知のヘルパーを接頭辞で一括分類しない。補助ツールや版違いだけで2製品条件を満たさないよう、所有製品と同じキーを使う。
+- 異なる製品・独立機能と起動対象が2種類以上あるときだけフォルダを作る。不明なアプリや条件未達の単体は直接表示に残す。
+- 初回と設定の「設定をリセット」で適用する。生成直後は「フォルダ分けをリセット」で取り消せる。既存ユーザーの保存済み配置へ自動適用しない。
+- トップレベルもフォルダ内もMacでは名前順。アプリ本体、Applications内の配置、OS設定は変更しない。実行時の外部通信やAIは不要。
 
-## 追加・修正した分類
+Windowsの既存ルール・優先順は維持する。カタログの新しい用途プリセットはMac専用。
 
-| フォルダ | 今回の対応 | 境界 |
-| --- | --- | --- |
-| macOSユーティリティ | 従来のアクティビティモニタ・コンソール・ディスクユーティリティに、ターミナル、システム情報、Audio MIDI設定、移行アシスタント、プリントセンター、AirMac、Bluetoothファイル交換、Boot Camp、ColorSync、Digital Color Meter、Grapher、VoiceOver、スクリプトエディタ、Automator、Font Book、イメージキャプチャを追加 | Appleの管理・診断・自動化ツールの明示した19 ID。Apple製全アプリは含めない |
-| Macアクセサリ | テキストエディット、スクリーンショット、QuickTime Player、辞書、ボイスメモ、スティッキーズ | 新規プリセット。Safari・電卓・設定・メモ等は直接表示 |
-| Adobe Creative Cloud | After Effects 2026の `com.adobe.AfterEffects.application`、Bridge、InDesign、Creative Cloud本体を追加 | AE旧IDと新IDは同じ製品。Helper・CCXProcess・Core Sync・installer・uninstaller・プラグイン・Render Engineは追加しない |
-| Maxon | Cinema 4DにCommandline、Team Render Client、Team Render Serverを追加 | `net.maxon.commandline` / `cinema4dclient` / `cinema4dserver`。Python環境・uninstaller等を接頭辞で一括分類しない |
-| Steinberg | Cubase LE/AI/Elements (`com.steinberg.cubasesoft<数値版>`)、単体のGroove Agent SEとHALion Sonic、Activation Manager、Library Manager、Download Assistantを追加 | Cubaseの別版・エディションは同じ製品キー。VSTプラグインやアンインストーラは追加しない |
-| JetBrains | 実機にあるRustRoverとAirを追加 | 既存IDE・Toolboxに完全一致IDを追加。未知の `com.jetbrains.*` は収納しない |
-| Unity | MacでもEditor・Hub・Bug Reporterを同じプリセットへ | `com.unity3d.UnityEditor5.x` / `unityhub` / `bugreporter`。Editorだけの複数インストールではフォルダを作らない |
-| Live2D Cubism | MacのEditorとViewerを追加 | `com.live2d.cubism.CECubismEditorApp` と実測したViewerの完全なID |
-| Google Workspace | Google Docs・Sheets・Slidesの起動アプリ | 新規プリセット。`com.google.drivefs.shortcuts.docs` / `sheets` / `slides`。Google Drive同期アプリやChromeは含めない |
-| CLIP STUDIO | CLIP STUDIO本体とPAINT | 新規プリセット。`jp.co.celsys.CLIPSTUDIO` / `CLIPSTUDIOPAINT`。認証・内部モジュールは含めない |
-| VOCALOID | VOCALOID6 EditorとVOCALOID Authorizer | 新規プリセット。`com.yamaha.VOCALOID6-Editor` / `VOCALOID-Authorizer`。アンインストーラや音源を合成しない |
-| リモートデスクトップ | MacのParsecと画面共有を追加 | `tv.parsec.www` / `com.apple.ScreenSharing`。2製品条件を満たす検出結果だけで生成 |
+## 全量スキャンへの対応
 
-Apple文書アプリ、Affinity、Office、Final Cut、Logic、その他の既存Macルールも継続する。
-Officeの3 IDは既存の公式資料によるルールを移したもので、今回の実機にOfficeを導入して確認したものではない。
+通常のMacスキャンとSteam providerを併合して監査する。
+以前はMacのアプリ束だけを監査していたため、Steam manifestを漏らしていた。
+また、Steamの生成ショートカット2件はXML末尾のNULで読み取りに失敗し、スキャンをpartialとしていた。
 
-今回のParsecは `LSBackgroundOnly=true` のため、既存スキャナーの除外方針により検出結果へ入らない。
-実機では画面共有だけなのでリモートデスクトップフォルダを作らず、画面共有を直接表示する。
-102件のメタデータfixtureと31件のGPU fixtureは分類器の検証用であり、すべての項目がスキャナーの表示対象になることを意味しない。
+生成された `run.sh` が厳密な `open steam://run/<数字>` の場合だけNUL付きXMLを復旧し、`steam:<ID>` として識別する。
+Desktop Mateのmanifestとショートカットは一件に統合し、Civilization VIのショートカットも保持する。
+スクリプトを実行せず、任意の破損アプリや追加コマンド付きスクリプトは復旧しない。既に読み取れていたショートカットのパスIDは維持し、保存済み配置の識別子を変更しない。
 
-## 実機の読取専用診断
+監査は通常の深さ制限を超える2個の旧Mocha AEも記録するが、通常の検出範囲は拡大しない。
+Parsec等のバックグラウンド専用7個、同じ識別子の重複44個も全件記録する。
+`LSBackgroundOnly=true` の除外は既存のスキャナー方針。プラグインや埋め込みアプリから起動項目を合成しない。
+
+## 実機結果
+
+| 配置案 | 検出件数 | 単体 | フォルダ | フォルダ内 | トップレベル合計 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v6、全providerを併合（partial） | 216 | 141 | 13 | 75 | 154 |
+| v7、Steamショートカット対応後（complete） | 217 | 6 | 33 | 211 | 39 |
+
+v7では新たに読み取れたCivilization VIを加え、全217件を一度ずつ保持する。
+収納率を目的に無理にまとめず、用途と関連製品を確認したものだけを分類した。
+全33フォルダの内容と、直接表示6件の理由は[全件監査表](MACOS_APP_CLASSIFICATION_AUDIT.md)で確認できる。
 
 ```sh
-cargo run --locked --example macos_initial_layout_audit > target/macos-layout-audit.json
+cargo run --locked --example macos_initial_layout_audit > target/macos-layout-full-audit.json
 ```
 
-productionのスキャナーから配置案だけを生成する。保存済みのDBや実際の配置へ適用しない。
-レポートはフォルダ名・アプリ名・Bundle IDを出力し、ユーザーの絶対パスは出力しない。
-
-同じ215アプリを旧v5とv6で比較した結果:
-
-| カタログ | 単体アプリ | フォルダ | フォルダ内アプリ | トップレベル合計 |
-| --- | ---: | ---: | ---: | ---: |
-| v5 | 190 | 5 | 25 | 195 |
-| v6 | 140 | 13 | 75 | 153 |
-
-v6のフォルダ内訳は、Adobe 14、Affinity 2、Steinberg 6、Unity 3、VOCALOID 2、Apple文書アプリ4、CLIP STUDIO 2、Google Workspace 3、JetBrains 8、Live2D 2、Macアクセサリ6、macOSユーティリティ19、Maxon 4。
-全215アプリを重複なく保持する。既存の読み取れないbundleがあるためスキャン完了状態はpartialであり、この件数はその時点の取得済み集合に対する結果。
+監査exampleは保存DBへ触れず、全providerの配置案とアプリ束の検出・重複・除外をJSONに出力する。
+ホームパスのユーザー名は `~` に置換する。別端末や追加アプリのある環境では件数が変わる。
 
 ## 検証
 
-`tests/macos_initial_folder_layout.rs` で以下を検証する:
+`tests/macos_initial_folder_layout.rs` は実機217件の期待する所属を固定し、次を検証する。
 
-- 実測102件のIDで所属・製品キー・非対象アプリを判定し、表示名・配置先・著作権変更やヘルパーIDの誤検出を防ぐ。
-- 初回、明示的リセット、保存後の取り消しで、全アプリを一度ずつ保持する。
-- Mac標準アプリをアクセサリ・ユーティリティ・画面共有へ分け、日常アプリは直接表示する。
-- AEの旧新ID、Cubaseの別エディション、Premiereの版違い、Unity/PAINTの重複だけではフォルダを生成しない。
+- 全217件の所属・製品キー・判断理由。33フォルダ・6単体・211子要素、未判定なし、欠落・重複なし。
+- 初回、明示的なリセット、保存後の取り消しで全件を保持する。
+- 表示名・著作権変更、未知のヘルパー、Mac用IDをWindowsへ適用する誤分類を防ぐ。
+- Synthesizer VのBasic/Pro/2 Pro、AE・Cubase・Premiereの版違い、同じ製品の補助ツールだけではフォルダを作らない。
+- IllustratorのサンプルIDは所有ディレクトリを確認し、個人スクリプトを分類しない。
+- WindowsのVS Code等の入口を直接表示する既存動作を維持する。
 
-GPUシナリオは `qa/macos_initial_folder_layout_reset.json`。実測IDを使う31アプリから14フォルダ＋3単体を生成し、Unityフォルダの開閉と、productionの設定UI経由の取り消し→設定リセット→取り消しを再生する。
+`src/platform/macos/apps.rs` では、SteamのNUL付きXMLと同じIDへの統合、生成スクリプトの厳密な認識、任意の破損XMLの拒否、通常スキャンと全量監査の表示対象の一致を検証する。
+
+GPUシナリオ `qa/macos_initial_folder_layout_reset.json` も217件全件を使う。表示倍率1.5を指定し、Macから後続の倍率通知が来てもQAの指定を維持する。
+生成直後の39項目、開発ツール14子・3Dアバター9子の開閉、2ページ目、設定UIでの取り消し→設定リセット→取り消しを再生する。
+検証器は39→217→39→217の件数遷移と、6単体・33フォルダ・取り消し後の217個のIDを検査する。
+アイコンはQA用fixture画像。実アプリアイコンの外観確認は含まない。
 
 ```sh
 LAUNCHPAD_ALLOW_SCREENSHOT=1 LAUNCHPAD_QA_HEADLESS=1 \
@@ -73,12 +75,14 @@ cargo run --release --locked
 python3 scripts/verify_qa_artifact.py target/qa-sequences --allow-partial
 ```
 
-検証器はトップレベル件数が17→31→17→31と変化すること、生成したUnityフォルダが2アプリを持って開くことを確認する。
-fixtureのアイコンはQA用の色付き画像。productionのGPU描画と設定操作を検証するもので、実アプリアイコンの見え方の検証とは分ける。
-PRの `qa:macos-visual` ラベルでもこのシナリオを実行し、PNG・manifest・ログをartifactへ含める。
+Mac実機のMetal描画で134フレームをキャプチャし、上記の件数・ID・フォルダ開閉・ページ移動の契約が成功した（1920×1200、表示倍率1.5）。
 
-Mac実機のMetal描画で76フレームをキャプチャし、上記の件数遷移とフォルダ開閉を確認した（1920×1200）。
+PRの `qa:macos-visual` ラベルも同じ全件シナリオを実行する。
 
-![Macの初期分類のQA画像（アイコンはfixture）](images/macos-initial-layout-qa.png)
+![217アプリから生成した初期配置の1ページ目](images/macos-initial-layout-qa.png)
 
-![UnityとUnity Hubが入った生成フォルダ](images/macos-initial-layout-unity-qa.png)
+![生成した開発ツールフォルダ](images/macos-initial-layout-development-qa.png)
+
+![生成した3D・アバターフォルダ](images/macos-initial-layout-avatar-qa.png)
+
+![初期配置の2ページ目](images/macos-initial-layout-page2-qa.png)

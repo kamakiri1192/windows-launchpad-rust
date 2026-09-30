@@ -471,7 +471,13 @@ impl App {
                 self.execute_command(AppCommand::RequestRedraw);
             }
             AppAction::ScaleFactorChanged { scale_factor } => {
-                self.scale_factor = scale_factor as f32;
+                // Native initialization/move events must not overwrite the
+                // scenario's portable geometry contract after window creation.
+                self.scale_factor = self
+                    .qa_runner
+                    .as_ref()
+                    .and_then(|runner| runner.scale_factor())
+                    .unwrap_or(scale_factor) as f32;
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.notify_window_moved();
                 }

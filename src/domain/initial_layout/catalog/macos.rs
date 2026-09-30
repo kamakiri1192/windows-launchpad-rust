@@ -16,9 +16,366 @@ pub(super) fn append_rules(preset: &'static str, rules: &mut Vec<Rule>) {
             rules.push(Rule::MacVersionedBundle { prefix, product });
         }
     }
+    if preset == "adobe-creative-cloud" {
+        for bundle in [
+            "com.apple.ScriptEditor.id.Contact-Sheets",
+            "com.apple.ScriptEditor.id.Make-Calendar",
+            "com.apple.ScriptEditor.id.Web-Gallery",
+        ] {
+            rules.push(Rule::MacBundleInDirectory {
+                bundle,
+                directory: "Adobe Illustrator",
+                product: "illustrator",
+            });
+        }
+    }
+}
+
+pub(super) fn keep_top_level(bundle: &str) -> bool {
+    matches!(
+        bundle,
+        "com.apple.AppStore"
+            | "com.apple.Safari"
+            | "com.google.Chrome"
+            | "com.microsoft.edgemac"
+            | "com.apple.systempreferences"
+            | "com.apple.calculator"
+            | "com.valvesoftware.steam"
+    )
 }
 
 const MAC_BUNDLES: &[(&str, &str, &str)] = &[
+    // Full installed-application audit: exact purposes and suite support tools.
+    (
+        "adobe-creative-cloud",
+        "com.adobe.AfterEffectsRenderEngine",
+        "after-effects",
+    ),
+    ("adobe-creative-cloud", "com.adobe.accmac", "creative-cloud"),
+    (
+        "adobe-creative-cloud",
+        "com.adobe.cc.Adobe-Creative-Cloud-Diagnostics",
+        "creative-cloud",
+    ),
+    (
+        "adobe-creative-cloud",
+        "com.adobe.Creative-Cloud-Desktop-App",
+        "creative-cloud",
+    ),
+    (
+        "adobe-creative-cloud",
+        "com.adobe.Install",
+        "creative-cloud",
+    ),
+    (
+        "adobe-creative-cloud",
+        "com.adobe.ACCC.Uninstaller",
+        "creative-cloud",
+    ),
+    (
+        "adobe-creative-cloud",
+        "com.borisfx.mocha4ae_adobe",
+        "after-effects",
+    ),
+    ("clip-studio", "jp.co.celsys.AggregateMdul", "launcher"),
+    ("clip-studio", "jp.co.celsys.CertMdul", "launcher"),
+    ("maxon-creative", "net.maxon.python", "cinema-4d"),
+    (
+        "maxon-creative",
+        "net.maxon.cinema4d.installer.uninstall",
+        "cinema-4d",
+    ),
+    ("steinberg-creative", "com.Syncrosoft.LCC", "elicenser"),
+    (
+        "steinberg-creative",
+        "net.steinberg.eLicenser.installer.SteinbergDownloadAssistant.uninstall",
+        "download-assistant",
+    ),
+    (
+        "vocaloid",
+        "com.apple.ScriptEditor.id.VOCALOID_Authorizer-Uninstaller",
+        "authorizer",
+    ),
+    (
+        "vocaloid",
+        "com.apple.ScriptEditor.id.VOCALOID-Uninstaller",
+        "editor",
+    ),
+    (
+        "vocaloid",
+        "com.apple.ScriptEditor.id.VOCALOID4-API-Uninstaller",
+        "editor",
+    ),
+    ("remote-desktop", "barrier", "barrier"),
+    (
+        "remote-desktop",
+        "com.google.chromeremotedesktop.me2me-host-uninstaller",
+        "chrome-remote-desktop",
+    ),
+    ("macos-development", "com.google.antigravity", "antigravity"),
+    ("macos-development", "com.microsoft.VSCode", "vscode"),
+    (
+        "macos-development",
+        "com.todesktop.230313mzl4w4u92",
+        "cursor",
+    ),
+    ("macos-development", "com.DanPristupov.Fork", "fork"),
+    ("macos-development", "com.googlecode.iterm2", "iterm"),
+    (
+        "macos-development",
+        "com.googlecode.iterm2.iTermBrowserPlugin",
+        "iterm",
+    ),
+    ("macos-development", "dev.kiro.desktop", "kiro"),
+    ("macos-development", "ai.opencode.desktop", "opencode"),
+    ("macos-development", "com.luckymarmot.Paw", "rapidapi"),
+    (
+        "macos-development",
+        "com.scicotherapylabs.RemoteCodetrolServer",
+        "remote-codetrol",
+    ),
+    ("macos-development", "com.tinyapp.TablePlus", "tableplus"),
+    (
+        "macos-development",
+        "com.microsoft.visual-studio",
+        "visual-studio",
+    ),
+    ("macos-development", "com.apple.dt.Xcode", "xcode"),
+    ("macos-development", "dev.zcode.app", "zcode"),
+    (
+        "macos-ai-assistants",
+        "com.google.Chrome.app.hbblfifohofgngfbjbiimbbcimepbdcb",
+        "chatbot-ui",
+    ),
+    ("macos-ai-assistants", "com.openai.codex", "chatgpt-codex"),
+    (
+        "macos-ai-assistants",
+        "ai.elementlabs.lmstudio",
+        "lm-studio",
+    ),
+    ("macos-ai-assistants", "com.goodsnooze.MenuGPT", "macgpt"),
+    ("macos-ai-assistants", "ai.perplexity.mac", "perplexity"),
+    (
+        "macos-ai-assistants",
+        "com.superduper.superwhisper",
+        "superwhisper",
+    ),
+    ("macos-avatar-3d", "jp.plusplus.virtualyoutuber", "3tene"),
+    (
+        "macos-avatar-3d",
+        "org.blenderfoundation.blender",
+        "blender",
+    ),
+    (
+        "macos-avatar-3d",
+        "com.lookingglassfactory.bridge",
+        "looking-glass-bridge",
+    ),
+    ("macos-avatar-3d", "com.github.nanoem", "nanoem"),
+    ("macos-avatar-3d", "unity.Quixel.Mixer", "quixel-mixer"),
+    ("macos-avatar-3d", "com.soarhap.vrmposing", "vrm-posing"),
+    ("macos-avatar-3d", "net.pixiv.vroid.macosx", "vroid-studio"),
+    (
+        "macos-avatar-3d",
+        "Webcam Motion Capture",
+        "webcam-motion-capture",
+    ),
+    (
+        "macos-avatar-3d",
+        "info.kwcl.WebcamMotionReceiver",
+        "webcam-motion-receiver",
+    ),
+    ("macos-design", "com.scenegroup.cavalry", "cavalry"),
+    ("macos-design", "com.figma.Desktop", "figma"),
+    ("macos-design", "dev.pencil.desktop", "pencil"),
+    ("macos-image", "com.todesktop.241012ess7yxs0e", "comfyui"),
+    ("macos-image", "com.apple.PhotoBooth", "photo-booth"),
+    (
+        "macos-image",
+        "com.apple.GenerativePlaygroundApp",
+        "image-playground",
+    ),
+    (
+        "macos-image",
+        "media.ics.AnimationImageConverter",
+        "animation-image-converter",
+    ),
+    ("macos-image", "com.apple.Photos", "photos"),
+    ("macos-video-live", "com.apple.iMovieApp", "imovie"),
+    ("macos-video-live", "de.monospc.Lightkey", "lightkey"),
+    ("macos-video-live", "com.obsproject.obs-studio", "obs"),
+    ("macos-video-live", "com.wails.obsctl", "obsctl"),
+    (
+        "macos-music-production",
+        "com.supermegaultragroovy.capo3.mac",
+        "capo",
+    ),
+    (
+        "macos-music-production",
+        "com.apple.garageband10",
+        "garageband",
+    ),
+    (
+        "macos-music-production",
+        "com.snoize.MIDIMonitor",
+        "midi-monitor",
+    ),
+    ("macos-music-production", "net.hexler.lex", "touchosc"),
+    (
+        "macos-voice-synthesis",
+        "jp.co.crypton.CryptonProductManager",
+        "crypton-product-manager",
+    ),
+    (
+        "macos-voice-synthesis",
+        "jp.co.crypton.PiaproStudio",
+        "piapro-studio",
+    ),
+    ("macos-voice-synthesis", "jp.tuna2134.sbv2-gui", "sbv2-gui"),
+    (
+        "macos-voice-synthesis",
+        "com.dreamtonics.svstudio2.pro",
+        "synthesizer-v",
+    ),
+    (
+        "macos-voice-synthesis",
+        "com.dreamtonics.svstudio.basic",
+        "synthesizer-v",
+    ),
+    (
+        "macos-voice-synthesis",
+        "com.dreamtonics.svstudio.pro",
+        "synthesizer-v",
+    ),
+    ("macos-communication", "com.hnc.Discord", "discord"),
+    ("macos-communication", "com.apple.FaceTime", "facetime"),
+    ("macos-communication", "jp.naver.line.mac", "line"),
+    ("macos-communication", "com.atebits.Tweetie2", "x"),
+    ("macos-communication", "us.zoom.xos", "zoom"),
+    ("macos-communication", "com.apple.MobileSMS", "messages"),
+    ("macos-communication", "com.apple.mail", "mail"),
+    ("macos-communication", "com.apple.AddressBook", "contacts"),
+    ("macos-productivity", "com.goodnotesapp.x", "goodnotes"),
+    ("macos-productivity", "com.hakocat.Koucha", "koucha"),
+    ("macos-productivity", "notion.id", "notion"),
+    (
+        "macos-productivity",
+        "notion.id.NotionSafariExtension",
+        "notion",
+    ),
+    ("macos-productivity", "com.apple.iCal", "calendar"),
+    ("macos-productivity", "com.gateboxlab.cheerpro", "cheerpro"),
+    ("macos-productivity", "com.apple.freeform", "freeform"),
+    ("macos-productivity", "com.apple.Notes", "notes"),
+    ("macos-productivity", "com.apple.reminders", "reminders"),
+    ("macos-productivity", "com.apple.clock", "clock"),
+    ("macos-media", "com.apple.TV", "tv"),
+    ("macos-media", "org.videolan.vlc", "vlc"),
+    (
+        "macos-media",
+        "com.github.th-ch.youtube-music",
+        "youtube-music",
+    ),
+    ("macos-media", "com.apple.iBooksX", "books"),
+    ("macos-media", "com.apple.podcasts", "podcasts"),
+    ("macos-media", "com.apple.Music", "music"),
+    (
+        "macos-files",
+        "org.filezilla-project.filezilla",
+        "filezilla",
+    ),
+    ("macos-files", "com.google.drivefs", "google-drive"),
+    ("macos-files", "io.mountainduck", "mountain-duck"),
+    ("macos-files", "com.nextcloud.desktopclient", "nextcloud"),
+    (
+        "macos-files",
+        "org.filezilla-project.remotedrive",
+        "remotedrive",
+    ),
+    (
+        "macos-virtual-machines",
+        "com.parallels.desktop.console",
+        "parallels",
+    ),
+    (
+        "macos-virtual-machines",
+        "com.vmware.fusion",
+        "vmware-fusion",
+    ),
+    (
+        "macos-customization",
+        "com.hegenberg.BetterTouchTool",
+        "bettertouchtool",
+    ),
+    (
+        "macos-customization",
+        "com.turbo.LauncherTurbo",
+        "launcher-turbo",
+    ),
+    (
+        "macos-customization",
+        "com.apple.launchpad.launcher",
+        "apple-launchpad",
+    ),
+    (
+        "macos-customization",
+        "com.kamakiri1192.launchpad",
+        "liquid-start",
+    ),
+    (
+        "macos-customization",
+        "waikiki.program.Launchpad",
+        "launchpad-plus",
+    ),
+    ("macos-customization", "lo.cafe.NotchNook", "notchnook"),
+    ("macos-customization", "com.kyome.ScreenNote", "screen-note"),
+    (
+        "macos-customization",
+        "com.kyome.ScreenPointer",
+        "screen-pointer",
+    ),
+    (
+        "macos-customization",
+        "com.pilotmoon.scroll-reverser",
+        "scroll-reverser",
+    ),
+    (
+        "macos-devices",
+        "com.apple.ScreenContinuity",
+        "iphone-mirroring",
+    ),
+    ("macos-devices", "com.apple.Home", "home"),
+    ("macos-devices", "com.apple.findmy", "find-my"),
+    ("macos-information", "com.apple.news", "news"),
+    ("macos-information", "com.apple.Maps", "maps"),
+    ("macos-information", "com.apple.weather", "weather"),
+    ("macos-information", "com.apple.stocks", "stocks"),
+    ("macos-games", "com.hottagames.nte", "nte"),
+    ("macos-games", "com.apple.Chess", "chess"),
+    ("macos-games", "com.bilibili.trickcal", "trickcal"),
+    ("macos-pdf", "com.adobe.Acrobat.Pro", "acrobat"),
+    ("macos-pdf", "com.adobe.distiller", "distiller"),
+    ("macos-pdf", "com.apple.Preview", "preview"),
+    (
+        "macos-utilities",
+        "com.daisydiskapp.DaisyDiskStandAlone",
+        "daisydisk",
+    ),
+    (
+        "macos-utilities",
+        "com.apple.exposelauncher",
+        "mission-control",
+    ),
+    ("macos-utilities", "com.kyome.RunCat", "runcat"),
+    ("macos-utilities", "com.apple.siri.launcher", "siri"),
+    (
+        "macos-utilities",
+        "com.apple.backup.launcher",
+        "time-machine",
+    ),
+    ("macos-utilities", "com.apple.shortcuts", "shortcuts"),
+    ("macos-utilities", "com.apple.Passwords", "passwords"),
+    ("macos-utilities", "com.apple.helpviewer", "tips"),
     // Additional application metadata observed on macOS, 2026-09-30.
     (
         "macos-utilities",

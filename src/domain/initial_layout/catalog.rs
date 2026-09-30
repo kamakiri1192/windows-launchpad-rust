@@ -5,7 +5,7 @@ mod macos;
 mod products;
 pub(super) mod windows;
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     Windows,
@@ -52,6 +52,11 @@ pub enum Rule {
     },
     MacVersionedBundle {
         prefix: &'static str,
+        product: &'static str,
+    },
+    MacBundleInDirectory {
+        bundle: &'static str,
+        directory: &'static str,
         product: &'static str,
     },
     MacCorelSuite,
@@ -124,6 +129,79 @@ impl Catalog {
             ),
             ("clip-studio", "CLIP STUDIO", "CLIP STUDIO", &[M][..]),
             ("vocaloid", "VOCALOID", "VOCALOID", &[M][..]),
+            ("macos-development", "開発ツール", "Development", &[M][..]),
+            (
+                "macos-ai-assistants",
+                "AI・音声入力",
+                "AI & Dictation",
+                &[M][..],
+            ),
+            ("macos-avatar-3d", "3D・アバター", "3D & Avatars", &[M][..]),
+            ("macos-design", "デザイン", "Design", &[M][..]),
+            ("macos-image", "写真・画像", "Photos & Images", &[M][..]),
+            (
+                "macos-video-live",
+                "映像・配信・演出",
+                "Video & Live Production",
+                &[M][..],
+            ),
+            (
+                "macos-music-production",
+                "音楽制作",
+                "Music Production",
+                &[M][..],
+            ),
+            (
+                "macos-voice-synthesis",
+                "音声・歌声合成",
+                "Voice Synthesis",
+                &[M][..],
+            ),
+            (
+                "macos-communication",
+                "連絡・通話",
+                "Communication",
+                &[M][..],
+            ),
+            (
+                "macos-productivity",
+                "メモ・予定・作業",
+                "Notes & Planning",
+                &[M][..],
+            ),
+            ("macos-media", "メディア再生", "Media", &[M][..]),
+            (
+                "macos-files",
+                "ファイル転送・同期",
+                "File Transfer & Sync",
+                &[M][..],
+            ),
+            (
+                "macos-virtual-machines",
+                "仮想マシン",
+                "Virtual Machines",
+                &[M][..],
+            ),
+            (
+                "macos-customization",
+                "Macカスタマイズ",
+                "Mac Customization",
+                &[M][..],
+            ),
+            (
+                "macos-devices",
+                "デバイス連携",
+                "Connected Devices",
+                &[M][..],
+            ),
+            (
+                "macos-information",
+                "生活情報",
+                "Everyday Information",
+                &[M][..],
+            ),
+            ("macos-games", "ゲーム", "Games", &[M][..]),
+            ("macos-pdf", "PDF", "PDF", &[M][..]),
             ("libreoffice", "LibreOffice", "LibreOffice", &[W, M][..]),
             (
                 "adobe-creative-cloud",
@@ -234,25 +312,30 @@ impl Catalog {
     ) -> Option<Classification<'_>> {
         let file = basename(&entry.target_path).to_lowercase();
         // Explicit exclusions run before Steam and product rules. Do not use publisher alone.
-        if matches!(
-            file.as_str(),
-            "steam.exe"
-                | "devenv.exe"
-                | "code.exe"
-                | "msedge.exe"
-                | "onedrive.exe"
-                | "teams.exe"
-                | "ms-teams.exe"
-                | "acrord32.exe"
-                | "calc.exe"
-        ) || matches!(
-            entry.identifier.as_str(),
-            "com.valvesoftware.steam"
-                | "com.microsoft.VSCode"
-                | "com.microsoft.teams"
-                | "com.microsoft.OneDrive"
-                | "com.microsoft.edgemac"
-        ) {
+        if (platform == Platform::Windows
+            && matches!(
+                file.as_str(),
+                "steam.exe"
+                    | "devenv.exe"
+                    | "code.exe"
+                    | "msedge.exe"
+                    | "onedrive.exe"
+                    | "teams.exe"
+                    | "ms-teams.exe"
+                    | "acrord32.exe"
+                    | "calc.exe"
+            ))
+            || (platform == Platform::Macos && macos::keep_top_level(&entry.identifier))
+            || (platform == Platform::Windows
+                && matches!(
+                    entry.identifier.as_str(),
+                    "com.valvesoftware.steam"
+                        | "com.microsoft.VSCode"
+                        | "com.microsoft.teams"
+                        | "com.microsoft.OneDrive"
+                        | "com.microsoft.edgemac"
+                ))
+        {
             return Some(Classification::KeepTopLevel);
         }
         // Explicit VR app IDs take precedence; unlisted Steam titles stay in the library.
@@ -303,6 +386,27 @@ impl Catalog {
     }
 
     fn match_rule(&self, rule: &Rule, e: &SnapshotEntry, platform: Platform) -> Option<String> {
+        if let Rule::MacBundleInDirectory {
+            bundle,
+            directory,
+            product,
+        } = rule
+        {
+            // Script Editor-generated IDs alone do not establish suite ownership.
+            return (platform == Platform::Macos
+                && e.identifier == *bundle
+                && std::path::Path::new(&e.link_path).components().any(|part| {
+                    part.as_os_str().to_str().is_some_and(|part| {
+                        part == *directory
+                            || part.strip_prefix(directory).is_some_and(|suffix| {
+                                suffix.strip_prefix(' ').is_some_and(|year| {
+                                    year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit())
+                                })
+                            })
+                    })
+                }))
+            .then(|| product.to_string());
+        }
         if let Rule::MacBundle { bundle, product } = rule {
             return (platform == Platform::Macos && e.identifier == *bundle)
                 .then(|| product.to_string());
