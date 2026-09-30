@@ -23,11 +23,50 @@ pub fn scan_applications() -> BTreeMap<AppId, SnapshotEntry> {
 }
 
 pub fn scan_applications_checked() -> (BTreeMap<AppId, SnapshotEntry>, bool) {
+    scan_applications_inner(None)
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum BundleScanOutcome {
+    Detected { id: AppId },
+    Duplicate { id: AppId },
+    BackgroundOnly { bundle: String },
+    OutsideScanDepth { bundle: String },
+    Unreadable,
+}
+
+/// Diagnostic inventory includes bundles intentionally omitted from the app grid.
+/// Repeated visits to the same path (the explicit Utilities root) count once.
+pub struct ApplicationBundleAudit {
+    pub applications: BTreeMap<AppId, SnapshotEntry>,
+    pub complete: bool,
+    pub bundles: BTreeMap<PathBuf, BundleScanOutcome>,
+}
+
+pub fn audit_application_bundles() -> ApplicationBundleAudit {
+    let mut bundles = BTreeMap::new();
+    let (applications, complete) = scan_applications_inner(Some(&mut bundles));
+    ApplicationBundleAudit {
+        applications,
+        complete,
+        bundles,
+    }
+}
+
+fn scan_applications_inner(
+    mut audit: Option<&mut BTreeMap<PathBuf, BundleScanOutcome>>,
+) -> (BTreeMap<AppId, SnapshotEntry>, bool) {
     let mut complete = true;
     let mut applications = BTreeMap::new();
     let preferred_languages = preferred_languages();
     for root in application_roots() {
-        complete &= scan_root(&root, &preferred_languages, &mut applications);
+        complete &= scan_root_audited(
+            &root,
+            &preferred_languages,
+            &mut applications,
+            audit.as_deref_mut(),
+        );
     }
     (applications, complete)
 }
@@ -45,10 +84,20 @@ fn application_roots() -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(test)]
 fn scan_root(
     root: &Path,
     preferred_languages: &[String],
     applications: &mut BTreeMap<AppId, SnapshotEntry>,
+) -> bool {
+    scan_root_audited(root, preferred_languages, applications, None)
+}
+
+fn scan_root_audited(
+    root: &Path,
+    preferred_languages: &[String],
+    applications: &mut BTreeMap<AppId, SnapshotEntry>,
+    mut audit: Option<&mut BTreeMap<PathBuf, BundleScanOutcome>>,
 ) -> bool {
     let mut complete = true;
     let mut pending = VecDeque::from([(root.to_path_buf(), 0usize)]);
@@ -56,18 +105,18 @@ fn scan_root(
         let children = match std::fs::read_dir(&directory) {
             Ok(children) => children,
             Err(e) => {
-                complete &= e.kind() == std::io::ErrorKind::NotFound;
+                complete &= depth > MAX_SCAN_DEPTH || e.kind() == std::io::ErrorKind::NotFound;
                 continue;
             }
         };
         for child in children {
             let Ok(child) = child else {
-                complete = false;
+                complete &= depth > MAX_SCAN_DEPTH;
                 continue;
             };
             let path = child.path();
             let Ok(file_type) = child.file_type() else {
-                complete = false;
+                complete &= depth > MAX_SCAN_DEPTH;
                 continue;
             };
             let is_app_bundle = path.extension().is_some_and(|ext| ext == "app");
@@ -84,19 +133,64 @@ fn scan_root(
                 continue;
             }
             if is_app_bundle {
+                if depth > MAX_SCAN_DEPTH {
+                    if let Some(audit) = audit.as_deref_mut() {
+                        audit
+                            .entry(path.clone())
+                            .or_insert(BundleScanOutcome::OutsideScanDepth {
+                                bundle: audit_bundle_identifier(&path),
+                            });
+                    }
+                    continue;
+                }
                 match snapshot_entry_checked(&path, preferred_languages) {
                     Ok(Some(entry)) => {
+                        if let Some(audit) = audit.as_deref_mut() {
+                            let outcome = if applications.contains_key(&entry.app_id) {
+                                BundleScanOutcome::Duplicate {
+                                    id: entry.app_id.clone(),
+                                }
+                            } else {
+                                BundleScanOutcome::Detected {
+                                    id: entry.app_id.clone(),
+                                }
+                            };
+                            audit.entry(path.clone()).or_insert(outcome);
+                        }
                         applications.entry(entry.app_id.clone()).or_insert(entry);
                     }
-                    Ok(None) => {}
-                    Err(()) => complete = false,
+                    Ok(None) => {
+                        if let Some(audit) = audit.as_deref_mut() {
+                            let bundle = audit_bundle_identifier(&path);
+                            audit
+                                .entry(path.clone())
+                                .or_insert(BundleScanOutcome::BackgroundOnly { bundle });
+                        }
+                    }
+                    Err(()) => {
+                        complete = false;
+                        if let Some(audit) = audit.as_deref_mut() {
+                            audit.entry(path).or_insert(BundleScanOutcome::Unreadable);
+                        }
+                    }
                 }
-            } else if depth < MAX_SCAN_DEPTH {
+            } else if depth < MAX_SCAN_DEPTH || audit.is_some() {
                 pending.push_back((path, depth + 1));
             }
         }
     }
     complete
+}
+
+fn audit_bundle_identifier(path: &Path) -> String {
+    locate_metadata_bundle(path)
+        .and_then(|(_, info)| application_info(&info, path).ok())
+        .and_then(|(info, _)| {
+            info.as_dictionary()
+                .and_then(|d| dictionary_string(d, "CFBundleIdentifier"))
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
 }
 
 fn snapshot_entry(bundle_path: &Path, preferred_languages: &[String]) -> Option<SnapshotEntry> {
@@ -110,7 +204,7 @@ fn snapshot_entry_checked(
     preferred_languages: &[String],
 ) -> Result<Option<SnapshotEntry>, ()> {
     let (metadata_bundle, info_path) = locate_metadata_bundle(bundle_path).ok_or(())?;
-    let info = Value::from_file(&info_path).map_err(|_| ())?;
+    let (info, recovered_steam_id) = application_info(&info_path, bundle_path)?;
     let dictionary = info.as_dictionary().ok_or(())?;
 
     if dictionary_bool(dictionary, "LSBackgroundOnly") {
@@ -134,7 +228,11 @@ fn snapshot_entry_checked(
         prefer_descriptive_bundle_name(bundle_path, name)
     };
     let bundle_id = dictionary_string(dictionary, "CFBundleIdentifier");
-    let app_id = AppId::from_macos_bundle(bundle_id, bundle_path);
+    // Successfully parsed legacy shortcuts keep their existing path identity.
+    // Only previously unreadable, verified Steam shortcuts gain a new game ID.
+    let app_id = recovered_steam_id
+        .map(|id| AppId::from_normalized(format!("steam:{id}")))
+        .unwrap_or_else(|| AppId::from_macos_bundle(bundle_id, bundle_path));
 
     let executable = dictionary_string(dictionary, "CFBundleExecutable").map(|name| {
         if metadata_bundle == bundle_path {
@@ -176,6 +274,43 @@ fn snapshot_entry_checked(
         publisher,
         identifier,
     }))
+}
+
+/// Steam's generated macOS shortcuts can have NUL padding after the XML.
+/// Accept that specific format only after verifying the generated launch script;
+/// arbitrary damaged application metadata must still mark the scan incomplete.
+fn application_info(info_path: &Path, bundle_path: &Path) -> Result<(Value, Option<String>), ()> {
+    if let Ok(info) = Value::from_file(info_path) {
+        return Ok((info, None));
+    }
+    let bytes = std::fs::read(info_path).map_err(|_| ())?;
+    let end = bytes.iter().rposition(|byte| *byte != 0).ok_or(())? + 1;
+    if end == bytes.len() {
+        return Err(());
+    }
+    let info = Value::from_reader(std::io::Cursor::new(&bytes[..end])).map_err(|_| ())?;
+    let dictionary = info.as_dictionary().ok_or(())?;
+    let id = steam_shortcut_id(bundle_path, dictionary).ok_or(())?;
+    Ok((info, Some(id)))
+}
+
+fn steam_shortcut_id(bundle_path: &Path, dictionary: &Dictionary) -> Option<String> {
+    if dictionary_string(dictionary, "CFBundleIdentifier").is_some()
+        || dictionary_string(dictionary, "CFBundleExecutable") != Some("run.sh")
+        || dictionary_string(dictionary, "CFBundleIconFile") != Some("shortcut.icns")
+    {
+        return None;
+    }
+    let script = std::fs::read_to_string(bundle_path.join("Contents/MacOS/run.sh")).ok()?;
+    let lines: Vec<_> = script
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let ["#!/bin/bash", "# autogenerated file - do not edit", launch] = lines.as_slice() else {
+        return None;
+    };
+    let id = launch.strip_prefix("open steam://run/")?;
+    (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())).then(|| id.to_owned())
 }
 
 fn preferred_languages() -> Vec<String> {
@@ -476,6 +611,121 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn padded_steam_shortcuts_use_game_identity_without_executing_scripts() {
+        let root = temporary_directory("steam-shortcut");
+        let bundle = root.join("Civilization VI.app");
+        let macos = bundle.join("Contents/MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        let script =
+            "#!/bin/bash\n# autogenerated file - do not edit\n\nopen steam://run/289070\n\n";
+        std::fs::write(macos.join("run.sh"), script).unwrap();
+        let mut info = Dictionary::new();
+        info.insert("CFBundleExecutable".into(), Value::String("run.sh".into()));
+        info.insert(
+            "CFBundleIconFile".into(),
+            Value::String("shortcut.icns".into()),
+        );
+        let info_path = bundle.join("Contents/Info.plist");
+        Value::Dictionary(info).to_file_xml(&info_path).unwrap();
+        // Existing readable shortcuts must retain their saved-layout identity.
+        let legacy = snapshot_entry_checked(&bundle, &[]).unwrap().unwrap();
+        assert_eq!(legacy.app_id, AppId::from_macos_bundle(None, &bundle));
+        let mut bytes = std::fs::read(&info_path).unwrap();
+        bytes.extend_from_slice(&[0, 0]);
+        std::fs::write(&info_path, bytes).unwrap();
+        let entry = snapshot_entry_checked(&bundle, &[]).unwrap().unwrap();
+        assert_eq!(entry.app_id.as_str(), "steam:289070");
+        assert_eq!(entry.name, "Civilization VI");
+        let mut apps = BTreeMap::new();
+        let mut audit = BTreeMap::new();
+        assert!(scan_root_audited(&root, &[], &mut apps, Some(&mut audit)));
+        assert_eq!(apps.len(), 1);
+        // Anything beyond the verified generated command must remain a scan error.
+        for malicious in [
+            "open steam://run/289070; touch unexpected",
+            "open steam://run/289070\ntouch unexpected",
+            "open steam://run/289070?extra=1",
+            "open steam://run/not-a-number",
+        ] {
+            std::fs::write(
+                macos.join("run.sh"),
+                format!("#!/bin/bash\n# autogenerated file - do not edit\n{malicious}\n"),
+            )
+            .unwrap();
+            assert!(snapshot_entry_checked(&bundle, &[]).is_err(), "{malicious}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nul_padded_regular_apps_still_mark_scan_incomplete() {
+        let root = temporary_directory("padded-regular-app");
+        let bundle = root.join("Damaged.app");
+        std::fs::create_dir_all(bundle.join("Contents")).unwrap();
+        let info = Value::Dictionary(Dictionary::from_iter([(
+            "CFBundleIdentifier",
+            Value::String("com.example.damaged".into()),
+        )]));
+        let path = bundle.join("Contents/Info.plist");
+        info.to_file_xml(&path).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.push(0);
+        std::fs::write(path, bytes).unwrap();
+        assert!(snapshot_entry_checked(&bundle, &[]).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn audit_accounts_for_duplicates_background_apps_and_deep_bundles() {
+        let root = temporary_directory("full-bundle-audit");
+        let write_bundle = |path: &Path, id: &str, background: bool| {
+            std::fs::create_dir_all(path.join("Contents")).unwrap();
+            let mut info = Dictionary::new();
+            info.insert("CFBundleIdentifier".into(), Value::String(id.into()));
+            info.insert("CFBundleName".into(), Value::String("Test App".into()));
+            info.insert("LSBackgroundOnly".into(), Value::Boolean(background));
+            Value::Dictionary(info)
+                .to_file_xml(path.join("Contents/Info.plist"))
+                .unwrap();
+        };
+        write_bundle(&root.join("App.app"), "com.example.app", false);
+        write_bundle(&root.join("Copy.app"), "com.example.app", false);
+        write_bundle(&root.join("Background.app"), "com.example.background", true);
+        let deep = root.join("1/2/3/4/5/6/7/Deep.app");
+        write_bundle(&deep, "com.example.deep", false);
+        let mut production = BTreeMap::new();
+        assert!(scan_root(&root, &[], &mut production));
+        let mut audited = BTreeMap::new();
+        let mut bundles = BTreeMap::new();
+        assert!(scan_root_audited(
+            &root,
+            &[],
+            &mut audited,
+            Some(&mut bundles)
+        ));
+        assert_eq!(
+            production.keys().collect::<Vec<_>>(),
+            audited.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(audited.len(), 1);
+        assert_eq!(bundles.len(), 4);
+        assert_eq!(
+            bundles
+                .values()
+                .filter(|b| matches!(b, BundleScanOutcome::Duplicate { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            matches!(&bundles[&root.join("Background.app")], BundleScanOutcome::BackgroundOnly { bundle } if bundle == "com.example.background")
+        );
+        assert!(
+            matches!(&bundles[&deep], BundleScanOutcome::OutsideScanDepth { bundle } if bundle == "com.example.deep")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

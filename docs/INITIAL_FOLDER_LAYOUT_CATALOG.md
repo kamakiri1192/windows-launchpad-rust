@@ -1,7 +1,10 @@
 # 初期フォルダ配置の同梱カタログ
 
-仕様の19候補と追加11候補（Git、Unity、Live2D Cubism、Razer、アクセシビリティ、VRツール、VR Games、リモートデスクトップ、Windows Dev tools、OMEN、Windowsアクセサリ）に対応する。従来のWindowsツールはPC管理へ改めた。定義は `src/domain/initial_layout/catalog.rs`、`catalog/products.rs`、`catalog/windows.rs`。カタログ版は5。
-確認日: 2026-09-25。調査資料は開発時に参照し、実行時にはネットワークへアクセスしない。
+仕様の19候補と追加15候補（Git、Unity、Live2D Cubism、Razer、アクセシビリティ、VRツール、VR Games、リモートデスクトップ、Windows Dev tools、OMEN、Windowsアクセサリ、Macアクセサリ、Google Workspace、CLIP STUDIO、VOCALOID）に対応する。従来のWindowsツールはPC管理へ改めた。定義は `src/domain/initial_layout/catalog.rs`、`catalog/products.rs`、`catalog/windows.rs`、`catalog/macos.rs`。カタログ版は7。全52プリセット（従来34とMac専用用途18）を持つ。
+確認日: Windowsは2026-09-25、Macの追加対応は2026-09-30。調査資料は開発時に参照し、実行時にはネットワークへアクセスしない。
+v7ではMac専用の18用途プリセットと、確認済みの製品補助ツールを追加した。[全件監査表](MACOS_APP_CLASSIFICATION_AUDIT.md)に217件の所属と270個の検出元を記録する。
+
+Macの最新の分類範囲・実機結果・検証方法は[macOSの初期フォルダ分類](MACOS_INITIAL_FOLDER_LAYOUT.md)を参照する。以下の旧版確認資料も識別子の根拠として維持する。
 
 ## 共通の判定
 
@@ -16,24 +19,24 @@
 | ID | Windows | macOS | 境界 |
 | --- | --- | --- | --- |
 | `windows-tools`（PC管理） | ディスククリーンアップ、ドライブ最適化、iSCSI、メモリ診断、ODBC、回復ドライブ、レジストリエディタ、パフォーマンス/リソースモニタ、システム構成・情報、管理コンソール、Windowsセキュリティ、バックアップ、問い合わせ、フィードバック、NVIDIA設定、Ut Video/x264設定 | — | OS配下の限定exe・mscと引数、既知のShell ID。単なる表示名やrundll32/mmcだけで判定しない。設定・電卓・エクスプローラー・Storeは直接表示 |
-| `macos-utilities` | — | アクティビティモニタ、コンソール、ディスクユーティリティ | `com.apple.ActivityMonitor` / `Console` / `DiskUtility`。Apple製全体をまとめない |
+| `macos-utilities` | — | OS標準の管理・診断・自動化と確認済み管理アプリ27件 | 実測したIDの完全一致。Apple製全体をまとめない |
 | `microsoft-office` | `Microsoft Office`配下の`WINWORD.exe`、`EXCEL.EXE`、`POWERPNT.EXE` | `com.microsoft.Word` / `Excel` / `Powerpoint` | Teams・Edge・OneDriveは外へ残す |
 | `apple-documents` | — | Pages、Numbers、Keynote | `com.apple.iWork.*`の旧IDと`com.apple.Pages` / `Numbers` / `Keynote`。新旧同製品を別製品として数えない |
 | `libreoffice` | `soffice.exe`の`--writer` / `--calc` / `--impress` / `--draw` / `--math` / `--base`、および`swriter` / `scalc` / `simpress` / `sdraw` / `smath` / `sbase`の個別exe | `org.libreoffice.script` | 同じコンポーネントの起動方法違いを別製品として数えない。Macの単一アプリからWriter等を合成しない |
-| `adobe-creative-cloud` | Photoshop、Illustrator、After Effects、Audition、Media Encoder、Premiere Pro/Premiere | 同じ6製品 | Creative CloudクライアントもWindowsで含める。Reader・更新用ヘルパーは外へ残す |
+| `adobe-creative-cloud` | Photoshop、Illustrator、After Effects、Audition、Media Encoder、Premiere Pro/Premiere | 制作アプリ・管理クライアント・確認済み付属ツール | WindowsのReader・更新用ヘルパーは外へ残す。Macの導入・診断・同期・削除・レンダリング・Illustratorサンプルは明示したIDだけを含める |
 | `affinity-legacy` | `Affinity`配下のDesigner、Photo、Publisherのexe | Designer / Photo / Publisherのv1・v2の独立bundle | 統合版を3アプリへ分解しない。v1とv2だけでは別製品にならない |
 | `coreldraw-suite` | `Corel`配下の`CorelDRW.exe`、`CorelPP.exe` | CorelDRAW、PHOTO-PAINT | Painterやインストーラを混ぜない。Store版DRAWと版付きsuite IDに対応 |
 | `cyberlink-director-suite` | `CyberLink`配下のPowerDirector、PhotoDirector、AudioDirector、ColorDirector | PowerDirector、PhotoDirector | MacにWindows専用製品のルールを適用しない |
 | `final-cut-suite` | — | Final Cut Pro、Motion、Compressor | 買い切り版とCreator StudioのIDを同一製品にまとめる |
 | `logic-suite` | — | Logic Pro、MainStage | GarageBandや音源ライブラリは混ぜない |
 | `blackmagic-creative` | `Blackmagic Design`配下の`Resolve.exe`、`Fusion.exe` | DaVinci Resolve、単体Fusion | Resolve内のFusionページや機器ドライバを独立アプリとして扱わない |
-| `maxon-creative` | Cinema 4D、ZBrush（Maxon/Pixologicの配置） | Cinema 4D、ZBrush | WindowsはCommandline、Team Render Client/Serverも付属機能として含める。プラグインは加えない |
-| `steinberg-creative` | `Steinberg`配下のCubase、Dorico、WaveLab | Cubase、Dorico、WaveLab | Download Assistant、Activation Manager、VSTは混ぜない |
+| `maxon-creative` | Cinema 4D、ZBrush（Maxon/Pixologicの配置） | Cinema 4D、ZBrush、Commandline、Team Render、c4dpy、削除ツール | 付属機能は確認したIDのみ。Python・削除はCinema 4Dと同じ製品キー。未知のプラグインは加えない |
+| `steinberg-creative` | `Steinberg`配下のCubase、Dorico、WaveLab | Cubase、Dorico、WaveLab、単体音源と認証・ライブラリ・導入管理 | Macの確認済み管理IDは含める。VST/AUを独立アプリとして合成しない |
 | `native-instruments-standalone` | `Native Instruments`配下のKontakt、Reaktorのexe | Kontakt、Reaktorの単体bundle | Native Access、音源ライブラリ、VST/AUは混ぜない |
-| `jetbrains-ides` | IntelliJ IDEA、PyCharm、WebStorm、PhpStorm、CLion、GoLand、Rider、RubyMine、DataGrip | 同じ9製品 | Windowsはexe・ProductName・JetBrainsのCompanyNameを照合。Toolboxも同じフォルダに含める |
+| `jetbrains-ides` | IntelliJ IDEA、PyCharm、WebStorm、PhpStorm、CLion、GoLand、Rider、RubyMine、DataGrip | 既存IDE、RustRover、Air、Toolbox | Windowsはexe・ProductName・JetBrainsのCompanyNameを照合。Toolboxも同じフォルダに含める |
 | `autodesk-creative` | `Autodesk`配下のAutoCAD、Maya、3ds Max | AutoCAD、Maya | 3ds MaxのMacルールは作らない。ライセンス管理・更新ツールは混ぜない |
 | `visual-studio-tools` | VCの4種類の環境設定プロンプト、Developer Command Prompt、Developer PowerShell | — | Microsoftのcmd/PowerShellとVS配下のスクリプト・モジュールを照合。IDE・VS Codeは外へ残す |
-| `steam-library` | manifest由来のゲーム・制作アプリ | 同左 | 表示名に「Steam」が含まれるだけのアプリは判定しない。Steamクライアントは外へ残す |
+| `steam-library` | manifest由来のゲーム・制作アプリ | manifestと検証済みSteam生成ショートカット | 表示名に「Steam」が含まれるだけのアプリは判定しない。Steamクライアントは外へ残す |
 
 ## 識別情報の確認資料
 

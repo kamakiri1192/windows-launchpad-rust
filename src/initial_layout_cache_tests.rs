@@ -371,6 +371,10 @@ fn layout_and_settings_round_trip_on_disk_and_too_new_db_is_unchanged() {
     assert!(open_at(&path).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), before);
     std::fs::remove_file(&path).unwrap();
+    // macOS SQLite can leave sidecars after rejecting a newer schema.
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
     std::fs::remove_dir(root).unwrap();
 }
 
