@@ -8,7 +8,7 @@ use crate::scroll::ContinuousScroller;
 use crate::ui::context::Ui;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::color_from_array;
-use crate::ui::widgets::{Button, ButtonStyle, IconButton, Label, Slider, Toggle};
+use crate::ui::widgets::{Button, ButtonStyle, Label, Slider, Toggle};
 use crate::ui_model::geometry::{Insets, Point, Rect};
 use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
@@ -21,16 +21,8 @@ use crate::ui_model::text::{TextAlign, TextRole, TextStyle, TextWeight};
 pub const TITLE_FONT: &str = ".SF NS";
 #[cfg(not(target_os = "macos"))]
 pub const TITLE_FONT: &str = "Yu Gothic UI";
-pub const TITLE_SIZE: f32 = 22.0;
-pub const TITLE_LINE: f32 = 26.0;
-pub const CLOSE_HALF: f32 = 10.0;
-/// Half-size of the invisible close-button hit circle. The visible × glyph is
-/// only `CLOSE_HALF` (radius 10 logical px), which is too tight to tap/click
-/// reliably. We keep the visible size small but enlarge the hit target to the
-/// Windows-recommended minimum touch size (diameter 32 px).
-pub const CLOSE_HIT_HALF: f32 = 16.0;
-pub const HEADER_SIZE: f32 = 21.0;
-pub const HEADER_LINE: f32 = 28.0;
+pub const HEADER_SIZE: f32 = 20.0;
+pub const HEADER_LINE: f32 = 26.0;
 pub const LABEL_SIZE: f32 = 14.0;
 pub const LABEL_LINE: f32 = 20.0;
 pub const DETAIL_SIZE: f32 = 12.0;
@@ -38,19 +30,33 @@ pub const DETAIL_LINE: f32 = 18.0;
 pub const OPEN_DURATION: f32 = 0.28;
 pub const CLOSE_DURATION: f32 = 0.18;
 
-const PANEL_HALF_W: f32 = 380.0;
-const PANEL_HALF_H: f32 = 255.0;
-const PANEL_RADIUS: f32 = 28.0;
-const SIDEBAR_W: f32 = 210.0;
-const SIDEBAR_TOP: f32 = 78.0;
-const SIDEBAR_ROW_H: f32 = 38.0;
-const SIDEBAR_STEP: f32 = 44.0;
-const CONTENT_PAD: f32 = 34.0;
-const CONTENT_TOP: f32 = 92.0;
+const PANEL_W: f32 = 800.0;
+const PANEL_H: f32 = 540.0;
+const PANEL_OUTER_MARGIN: f32 = 24.0;
+const PANEL_RADIUS: f32 = 26.0;
+const HEADER_TOP: f32 = 20.0;
+const RETURN_BUTTON_W: f32 = 112.0;
+const RETURN_BUTTON_H: f32 = 30.0;
+const RETURN_BUTTON_TOP: f32 = 15.0;
+const RETURN_BUTTON_RIGHT: f32 = 16.0;
+const RETURN_LABEL_SIZE: f32 = 12.0;
+const DIVIDER_TOP: f32 = 12.0;
+const DIVIDER_BOTTOM: f32 = 28.0;
+const SIDEBAR_W: f32 = 220.0;
+const SIDEBAR_TOP: f32 = 12.0;
+const SIDEBAR_ROW_H: f32 = 36.0;
+const SIDEBAR_STEP: f32 = 38.0;
+const SIDEBAR_ICON_EXTENT: f32 = 11.0;
+const SIDEBAR_ICON_CENTER_X: f32 = 23.0;
+const SIDEBAR_LABEL_X: f32 = 44.0;
+const CONTENT_PAD: f32 = 32.0;
+const CONTENT_TOP: f32 = 68.0;
 const ROW_H: f32 = 46.0;
-const ROW_STEP: f32 = 62.0;
+const ROW_STEP: f32 = 58.0;
 const SEGMENT_H: f32 = 32.0;
-const SEGMENT_GAP: f32 = 8.0;
+const SEGMENT_GAP: f32 = 4.0;
+const SORT_SEGMENT_TOP: f32 = 26.0;
+const SORT_CONTROLS_BOTTOM_GAP: f32 = 18.0;
 
 pub const INK: [f32; 4] = [
     MENU_LABEL_RGB[0],
@@ -62,7 +68,7 @@ pub const MUTED: [f32; 4] = [
     MENU_LABEL_RGB[0],
     MENU_LABEL_RGB[1],
     MENU_LABEL_RGB[2],
-    0.58,
+    0.68,
 ];
 pub const DIM: [f32; 4] = [
     MENU_LABEL_RGB[0],
@@ -129,6 +135,17 @@ impl SettingsCategoryId {
             Self::Darkness => 3,
             Self::About => 4,
             Self::Debug => 5,
+        }
+    }
+
+    pub const fn icon_kind(self) -> ControlKind {
+        match self {
+            Self::Apps => ControlKind::SettingsAppsIcon,
+            Self::Search => ControlKind::SettingsSearchIcon,
+            Self::System => ControlKind::SettingsSystemIcon,
+            Self::Darkness => ControlKind::SettingsDarknessIcon,
+            Self::About => ControlKind::SettingsAboutIcon,
+            Self::Debug => ControlKind::SettingsDebugIcon,
         }
     }
 }
@@ -380,17 +397,32 @@ impl SettingsPanelLayout {
         self.top + CONTENT_TOP * scale
     }
 
+    pub fn sort_segment_top(&self, scale: f32) -> f32 {
+        self.first_row_top(scale) + SORT_SEGMENT_TOP * scale
+    }
+
+    pub fn app_rows_top(&self, scale: f32) -> f32 {
+        self.sort_segment_top(scale) + (SEGMENT_H + SORT_CONTROLS_BOTTOM_GAP) * scale
+    }
+
     pub fn row_size(&self, scale: f32) -> (f32, f32) {
         let left = self.content_left(scale);
         (self.content_right(scale) - left, ROW_H * scale)
     }
 
-    pub fn close_center(&self, scale: f32) -> (f32, f32) {
-        let button_radius = CLOSE_HALF * scale;
-        (
-            self.left + self.hw * 2.0 - button_radius * 2.0,
-            self.top + button_radius * 2.0,
+    pub fn return_rect(&self, scale: f32) -> Rect {
+        let width = RETURN_BUTTON_W * scale;
+        Rect::new(
+            self.panel_right() - RETURN_BUTTON_RIGHT * scale - width,
+            self.top + RETURN_BUTTON_TOP * scale,
+            width,
+            RETURN_BUTTON_H * scale,
         )
+    }
+
+    pub fn close_center(&self, scale: f32) -> (f32, f32) {
+        let center = self.return_rect(scale).center();
+        (center.x, center.y)
     }
 }
 
@@ -520,7 +552,7 @@ impl LiquidGlassDebugState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsPanelCopy<'a> {
-    pub title: &'a str,
+    pub return_label: &'a str,
     pub categories: [(SettingsCategoryId, &'a str); SettingsCategoryId::COUNT],
     pub sort_orders: [(SortOrderId, &'a str); 4],
     pub sort_label: &'a str,
@@ -594,12 +626,16 @@ pub fn panel_layout(viewport: (u32, u32), scale_factor: f32) -> SettingsPanelLay
     let (width, height) = viewport;
     let cx = width as f32 * 0.5;
     let cy = height as f32 * 0.5;
-    let hw = PANEL_HALF_W * scale;
-    let hh = PANEL_HALF_H * scale;
-    let radius = PANEL_RADIUS * scale;
+    let available_w = (width as f32 - PANEL_OUTER_MARGIN * 2.0 * scale).max(0.0);
+    let available_h = (height as f32 - PANEL_OUTER_MARGIN * 2.0 * scale).max(0.0);
+    let panel_w = (PANEL_W * scale).min(available_w);
+    let panel_h = (PANEL_H * scale).min(available_h);
+    let hw = panel_w * 0.5;
+    let hh = panel_h * 0.5;
+    let radius = (PANEL_RADIUS * scale).min(hw).min(hh);
     let left = cx - hw;
     let top = cy - hh;
-    let sidebar_w = SIDEBAR_W * scale;
+    let sidebar_w = (SIDEBAR_W * scale).min(panel_w * 0.36);
 
     SettingsPanelLayout {
         cx,
@@ -614,6 +650,10 @@ pub fn panel_layout(viewport: (u32, u32), scale_factor: f32) -> SettingsPanelLay
     }
 }
 
+fn sidebar_row_top(layout: &SettingsPanelLayout, index: usize, scale: f32) -> f32 {
+    layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale
+}
+
 pub fn contains(layout: &SettingsPanelLayout, point: Point) -> bool {
     point.x >= layout.left
         && point.x <= layout.panel_right()
@@ -623,11 +663,7 @@ pub fn contains(layout: &SettingsPanelLayout, point: Point) -> bool {
 
 pub fn hit_close(layout: &SettingsPanelLayout, scale_factor: f32, point: Point) -> bool {
     let scale = sanitize_scale(scale_factor);
-    let hit_radius = CLOSE_HIT_HALF * scale;
-    let (button_x, button_y) = layout.close_center(scale);
-    let dx = point.x - button_x;
-    let dy = point.y - button_y;
-    dx * dx + dy * dy <= hit_radius * hit_radius
+    layout.return_rect(scale).contains(point)
 }
 
 /// Build the settings panel using the new Liquid Glass UI foundation
@@ -735,48 +771,15 @@ pub fn build_with_ui(
     ));
 
     // ------------------------------------------------------------------
-    // Title
-    // ------------------------------------------------------------------
-    ui.begin_absolute_placement();
-    ui.set_cursor(layout.left + 24.0 * scale, layout.top + 18.0 * scale);
-    ui.set_available_width(layout.hw * 2.0 - 48.0 * scale);
-    ui.label(
-        &Label::new(copy.title)
-            .id(UiId::settings_row("text-title"))
-            .style(TextStyle::new(
-                TextRole::SettingsTitle,
-                TITLE_SIZE,
-                color_from_array(INK),
-                TextWeight::Regular,
-                TextAlign::Start,
-            ))
-            .color(INK),
-    );
-
-    // ------------------------------------------------------------------
-    // Close button
-    // ------------------------------------------------------------------
-    let (close_cx, close_cy) = layout.close_center(scale);
-    let close_hit_r = CLOSE_HIT_HALF * scale;
-    ui.begin_absolute_placement();
-    ui.set_cursor(close_cx - close_hit_r, close_cy - close_hit_r);
-    ui.icon_button(
-        &IconButton::new(ControlKind::CloseButton)
-            .id(UiId::settings_close())
-            .visual_radius(CLOSE_HALF)
-            .hit_radius(CLOSE_HIT_HALF)
-            .tint(INK)
-            .hit_target(SettingsPanelHit::Close.target()),
-    );
-
-    // ------------------------------------------------------------------
     // Sidebar vertical divider (InkView directly — Divider widget is
     // horizontal only)
     // ------------------------------------------------------------------
+    let divider_top = layout.top + DIVIDER_TOP * scale;
+    let divider_bottom = layout.panel_bottom() - DIVIDER_BOTTOM * scale;
     let sidebar_div = InkView {
         id: UiId::settings_row("sidebar-divider"),
-        center: Point::new(layout.right_left, layout.cy),
-        extent: layout.hh - 28.0 * scale,
+        center: Point::new(layout.right_left, (divider_top + divider_bottom) * 0.5),
+        extent: (divider_bottom - divider_top) * 0.5,
         opacity: DIM[3],
         scene_blur: 0.0,
         stroke: 0.55 * scale,
@@ -795,7 +798,7 @@ pub fn build_with_ui(
         if !cfg!(debug_assertions) && cat_id == SettingsCategoryId::Debug {
             continue;
         }
-        let row_top = layout.top + SIDEBAR_TOP * scale + index as f32 * SIDEBAR_STEP * scale;
+        let row_top = sidebar_row_top(&layout, index, scale);
         let sidebar_w = layout.sidebar_w - 24.0 * scale;
         let row_rect = Rect::new(
             layout.left + 12.0 * scale,
@@ -838,6 +841,22 @@ pub fn build_with_ui(
             z: Z_CONTROL,
             clip: None,
         });
+        ui.push_ink(InkView {
+            id: UiId::settings_row(format!("category-icon-{}", cat_id.key())),
+            center: Point::new(
+                row_rect.x + SIDEBAR_ICON_CENTER_X * scale,
+                row_rect.center().y,
+            ),
+            extent: SIDEBAR_ICON_EXTENT * scale,
+            opacity: 0.82 + 0.14 * selection_amount + 0.04 * hover_amount,
+            scene_blur: 0.0,
+            stroke: 0.0,
+            corner_radius: 0.0,
+            color: Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+            kind: cat_id.icon_kind(),
+            z: Z_CONTROL + 1,
+            clip: None,
+        });
         let id = UiId::settings_row(format!("category-{}", cat_id.key()));
         ui.push_hit(HitRegion::new(
             id.clone(),
@@ -847,7 +866,7 @@ pub fn build_with_ui(
         ));
         ui.begin_absolute_placement();
         ui.set_cursor(
-            row_rect.x + 16.0 * scale,
+            row_rect.x + SIDEBAR_LABEL_X * scale,
             row_top + (SIDEBAR_ROW_H - LABEL_SIZE) * 0.5 * scale,
         );
         ui.set_available_width(sidebar_w);
@@ -881,7 +900,7 @@ pub fn build_with_ui(
         .find_map(|(cat, lbl)| (*cat == active_category).then_some(*lbl))
         .unwrap_or(active_category.key());
     ui.begin_absolute_placement();
-    ui.set_cursor(content_left, layout.top + 32.0 * scale);
+    ui.set_cursor(content_left, layout.top + HEADER_TOP * scale);
     ui.set_available_width(content_w);
     ui.label(
         &Label::new(cat_label)
@@ -890,10 +909,86 @@ pub fn build_with_ui(
                 TextRole::SettingsHeader,
                 HEADER_SIZE,
                 Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
-                TextWeight::Bold,
+                TextWeight::Medium,
                 TextAlign::Start,
             ))
             .color([MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0]),
+    );
+
+    // This is navigation within the launcher rather than a task-completion
+    // dialog. Name the destination instead of asking people to "close" or
+    // "finish" settings; the four tiles reinforce the spatial return to the
+    // launchpad behind this card.
+    let return_rect = layout.return_rect(scale);
+    let return_hovered = input
+        .pointer_pos
+        .is_some_and(|point| return_rect.contains(point));
+    let return_opacity = if return_hovered && input.pointer_pressed {
+        0.18
+    } else if return_hovered {
+        0.12
+    } else {
+        0.06
+    };
+    ui.push_ink(InkView {
+        id: UiId::settings_row("return-background"),
+        center: return_rect.center(),
+        extent: return_rect.height * 0.5,
+        opacity: return_opacity,
+        scene_blur: 0.0,
+        stroke: return_rect.width * 0.5,
+        corner_radius: return_rect.height * 0.5,
+        color: Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+        kind: ControlKind::RowBackground,
+        z: Z_CONTROL,
+        clip: None,
+    });
+    ui.push_hit(HitRegion::new(
+        UiId::settings_close(),
+        return_rect,
+        SettingsPanelHit::Close.target(),
+        Z_CONTROL + 2,
+    ));
+    ui.push_ink(InkView {
+        id: UiId::settings_row("return-icon"),
+        center: Point::new(return_rect.x + 18.0 * scale, return_rect.center().y),
+        extent: 7.0 * scale,
+        opacity: 0.78,
+        scene_blur: 0.0,
+        stroke: 0.0,
+        corner_radius: 0.0,
+        color: Color::rgba(MENU_LABEL_RGB[0], MENU_LABEL_RGB[1], MENU_LABEL_RGB[2], 1.0),
+        kind: ControlKind::SettingsAppsIcon,
+        z: Z_CONTROL + 1,
+        clip: None,
+    });
+    ui.begin_absolute_placement();
+    ui.set_cursor(
+        return_rect.x + 30.0 * scale,
+        return_rect.y + (return_rect.height - RETURN_LABEL_SIZE * scale) * 0.5,
+    );
+    ui.set_available_width(return_rect.width - 36.0 * scale);
+    ui.label(
+        &Label::new(copy.return_label)
+            .id(UiId::settings_row("return-label"))
+            .style(TextStyle::new(
+                TextRole::SettingsRow,
+                RETURN_LABEL_SIZE,
+                Color::rgba(
+                    MENU_LABEL_RGB[0],
+                    MENU_LABEL_RGB[1],
+                    MENU_LABEL_RGB[2],
+                    0.82,
+                ),
+                TextWeight::Medium,
+                TextAlign::Center,
+            ))
+            .color([
+                MENU_LABEL_RGB[0],
+                MENU_LABEL_RGB[1],
+                MENU_LABEL_RGB[2],
+                0.82,
+            ]),
     );
 
     match active_category {
@@ -901,6 +996,7 @@ pub fn build_with_ui(
         // Apps
         // ==============================================================
         SettingsCategoryId::Apps => {
+            let segment_top = layout.sort_segment_top(scale);
             let gap = SEGMENT_GAP * scale;
             let each_w = (content_w - gap * 3.0) / 4.0;
 
@@ -908,7 +1004,7 @@ pub fn build_with_ui(
             // their own full-height slot below it so they clear the toggle
             // rows that follow.
             ui.begin_absolute_placement();
-            ui.set_cursor(content_left, first_top + 8.0 * scale);
+            ui.set_cursor(content_left, first_top);
             ui.set_available_width(content_w);
             ui.label(
                 &Label::new(copy.sort_label)
@@ -917,7 +1013,6 @@ pub fn build_with_ui(
             );
 
             // Sort segment buttons
-            let segment_top = first_top + ROW_STEP * scale;
             for (seg_idx, (order, label)) in copy.sort_orders.iter().copied().enumerate() {
                 let left = content_left + seg_idx as f32 * (each_w + gap);
                 ui.begin_absolute_placement();
@@ -931,13 +1026,15 @@ pub fn build_with_ui(
                         } else {
                             ButtonStyle::Plain
                         })
+                        .height(SEGMENT_H)
                         .chevron_opt(false)
                         .hit_target(SettingsPanelHit::Sort(order).target()),
                 );
             }
 
             // Frequent apps toggle
-            let y = first_top + ROW_STEP * 2.0 * scale;
+            let app_rows_top = layout.app_rows_top(scale);
+            let y = app_rows_top;
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, y);
             ui.set_available_width(content_w);
@@ -950,7 +1047,7 @@ pub fn build_with_ui(
             );
 
             // Steam apps toggle
-            let y = first_top + ROW_STEP * 3.0 * scale;
+            let y = app_rows_top + ROW_STEP * scale;
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, y);
             ui.set_available_width(content_w);
@@ -963,7 +1060,7 @@ pub fn build_with_ui(
             );
 
             // Hidden apps row (chevron, no toggle)
-            let y = first_top + ROW_STEP * 4.0 * scale;
+            let y = app_rows_top + ROW_STEP * 2.0 * scale;
             ui.begin_absolute_placement();
             ui.set_cursor(content_left, y);
             ui.set_available_width(content_w);
@@ -1531,9 +1628,9 @@ pub const DARKNESS_CATEGORY_ROW_COUNT: i32 = 9;
 /// Half-row offset (in row units) contributed by the three section headers.
 pub const DEBUG_CATEGORY_SECTION_HEADER_ROW_OFFSET: f32 = 1.5;
 
-/// How many rows are visible without scrolling. Matches the fixed panel
-/// height: `(PANEL_HALF_H*2 - CONTENT_TOP) / ROW_STEP ≈ 6.7`.
-pub const DEBUG_CATEGORY_VISIBLE_ROWS: i32 = 6;
+/// How many full rows are visible without scrolling at the preferred panel
+/// height: `(PANEL_H - CONTENT_TOP) / ROW_STEP ≈ 7.8`.
+pub const DEBUG_CATEGORY_VISIBLE_ROWS: i32 = 7;
 
 /// Maximum scroll offset (in whole rows) for the Debug category. Returns 0
 /// when everything fits.
@@ -1543,7 +1640,8 @@ pub fn debug_category_overflow_rows() -> i32 {
     (total - visible).ceil() as i32 - 1
 }
 
-/// Maximum scroll offset (in whole rows) for the Darkness category.
+/// Maximum legacy whole-row scroll offset for the Darkness category. The
+/// `ScrollView` handles constrained viewports with pixel-accurate bounds.
 pub fn darkness_category_overflow_rows() -> i32 {
     let total = DARKNESS_CATEGORY_ROW_COUNT as f32;
     let visible = DEBUG_CATEGORY_VISIBLE_ROWS as f32;
@@ -1609,7 +1707,7 @@ mod tests {
 
     fn copy<'a>(hidden_count_label: &'a str) -> SettingsPanelCopy<'a> {
         SettingsPanelCopy {
-            title: "Settings",
+            return_label: "Back to Launchpad",
             categories: [
                 (SettingsCategoryId::Apps, "Apps"),
                 (SettingsCategoryId::Search, "Search"),
@@ -1736,15 +1834,25 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn panel_layout_matches_current_centered_geometry() {
+    fn panel_layout_uses_balanced_centered_columns() {
         let layout = layout();
         assert_eq!(layout.cx, 640.0);
         assert_eq!(layout.cy, 400.0);
-        assert_eq!(layout.hw, 380.0);
-        assert_eq!(layout.hh, 255.0);
-        assert_eq!(layout.left, 260.0);
-        assert_eq!(layout.top, 145.0);
-        assert_eq!(layout.right_left, 470.0);
+        assert_eq!(layout.hw, 400.0);
+        assert_eq!(layout.hh, 270.0);
+        assert_eq!(layout.left, 240.0);
+        assert_eq!(layout.top, 130.0);
+        assert_eq!(layout.sidebar_w, 220.0);
+        assert_eq!(layout.right_left, 460.0);
+        assert_eq!(layout.row_size(1.0).0, 516.0);
+        assert!((layout.sidebar_w / (layout.hw * 2.0) - 0.275).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn panel_layout_keeps_an_outer_margin_in_small_viewports() {
+        let layout = panel_layout((720, 480), 1.0);
+        assert_eq!(layout.rect(), Rect::new(24.0, 24.0, 672.0, 432.0));
+        assert!(layout.content_right(1.0) > layout.content_left(1.0));
     }
 
     #[test]
@@ -1894,13 +2002,81 @@ mod tests {
             .find(|view| view.id == UiId::settings_row("sidebar-divider"))
             .expect("sidebar divider");
         let expected_layout = layout();
+        let divider_top = sidebar_divider.center.y - sidebar_divider.extent;
+        let divider_bottom = sidebar_divider.center.y + sidebar_divider.extent;
 
-        assert!((sidebar_divider.extent - (expected_layout.hh - 28.0)).abs() < f32::EPSILON);
+        assert!((divider_top - (expected_layout.top + DIVIDER_TOP)).abs() < f32::EPSILON);
+        assert!(
+            (divider_bottom - (expected_layout.panel_bottom() - DIVIDER_BOTTOM)).abs()
+                < f32::EPSILON
+        );
         assert!((sidebar_divider.stroke - 0.55).abs() < f32::EPSILON);
         assert!(!settings_ink
             .views
             .iter()
             .any(|view| view.id == UiId::settings_row("bottom-divider")));
+    }
+
+    #[test]
+    fn navigation_heading_and_launcher_return_follow_shared_alignment_lines() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let text = &model.result.render.text;
+        let find_text = |id: &str| {
+            text.iter()
+                .find(|view| view.id == UiId::settings_row(id))
+                .unwrap_or_else(|| panic!("missing settings text: {id}"))
+        };
+
+        let heading = find_text("category-heading");
+        let sidebar_apps = find_text("category-apps");
+        let sort_label = find_text("text-sort-label");
+        let return_label = find_text("return-label");
+
+        assert_eq!(sidebar_apps.rect.center().y, heading.rect.center().y);
+        assert_eq!(return_label.rect.center().y, heading.rect.center().y);
+        assert_eq!(heading.rect.x, sort_label.rect.x);
+        assert!(!text
+            .iter()
+            .any(|view| view.id == UiId::settings_row("text-title")));
+    }
+
+    #[test]
+    fn sidebar_categories_use_one_continuous_row_rhythm() {
+        let layout = layout();
+        for index in 1..SettingsCategoryId::COUNT {
+            let previous = sidebar_row_top(&layout, index - 1, 1.0);
+            let current = sidebar_row_top(&layout, index, 1.0);
+            assert!((current - previous - SIDEBAR_STEP).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn sidebar_categories_emit_matching_sdf_icons() {
+        let inp = input(SettingsCategoryId::Apps);
+        let c = copy("0");
+        let mut scroll = ContinuousScroller::new(ContinuousConfig::default());
+        let model = build_with_ui(inp, &c, &mut scroll);
+        let settings_ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .expect("settings ink batch");
+
+        for category in SettingsCategoryId::ALL {
+            let icon = settings_ink
+                .views
+                .iter()
+                .find(|view| {
+                    view.id == UiId::settings_row(format!("category-icon-{}", category.key()))
+                })
+                .unwrap_or_else(|| panic!("missing category icon: {}", category.key()));
+            assert_eq!(icon.kind, category.icon_kind());
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1944,7 +2120,7 @@ mod tests {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         for (index, category) in SettingsCategoryId::ALL.into_iter().enumerate() {
-            let y = layout.top + SIDEBAR_TOP + index as f32 * SIDEBAR_STEP + SIDEBAR_ROW_H * 0.5;
+            let y = sidebar_row_top(&layout, index, 1.0) + SIDEBAR_ROW_H * 0.5;
             let target = hit_settings_target(&hm, Point::new(layout.left + 30.0, y)).unwrap();
             assert_eq!(
                 target,
@@ -1972,7 +2148,7 @@ mod tests {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         let content_left = layout.content_left(1.0);
-        let segment_y = layout.first_row_top(1.0) + ROW_STEP + ROW_H * 0.5;
+        let segment_y = layout.sort_segment_top(1.0) + SEGMENT_H * 0.5;
         let target = hit_settings_target(&hm, Point::new(content_left + 10.0, segment_y)).unwrap();
         assert_eq!(target, SettingsTarget::SortOption { key: "name".into() });
     }
@@ -2003,11 +2179,29 @@ mod tests {
     }
 
     #[test]
+    fn app_sort_control_does_not_overlap_the_first_toggle() {
+        let hm = hit_map_for_category(SettingsCategoryId::Apps);
+        let sort = hm
+            .regions()
+            .iter()
+            .find(|region| region.target == HitTarget::settings_sort_option("name"))
+            .expect("name sort segment");
+        let frequent = hm
+            .regions()
+            .iter()
+            .find(|region| region.target == HitTarget::settings_toggle("frequent-apps"))
+            .expect("frequent apps toggle");
+
+        assert!(sort.rect.max_y() < frequent.rect.y);
+        assert!((frequent.rect.y - sort.rect.max_y() - SORT_CONTROLS_BOTTOM_GAP).abs() < 1e-6);
+    }
+
+    #[test]
     fn hit_map_frequent_toggle() {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         let x = layout.content_left(1.0) + 10.0;
-        let y = layout.first_row_top(1.0) + ROW_STEP * 2.0 + ROW_H * 0.5;
+        let y = layout.app_rows_top(1.0) + ROW_H * 0.5;
         let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
         assert_eq!(
             target,
@@ -2022,7 +2216,7 @@ mod tests {
         let layout = layout();
         let hm = hit_map_for_category(SettingsCategoryId::Apps);
         let x = layout.content_left(1.0) + 10.0;
-        let y = layout.first_row_top(1.0) + ROW_STEP * 3.0 + ROW_H * 0.5;
+        let y = layout.app_rows_top(1.0) + ROW_STEP + ROW_H * 0.5;
         let target = hit_settings_target(&hm, Point::new(x, y)).unwrap();
         assert_eq!(
             target,
@@ -2270,44 +2464,30 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Close button
+    // Return-to-launcher button
     // ------------------------------------------------------------------
 
     #[test]
-    fn hit_close_enlarges_target_beyond_visible_glyph() {
+    fn hit_close_matches_the_visible_launcher_return_button() {
         let layout = layout();
-        let (cx, cy) = layout.close_center(1.0);
-        let dirs = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
-        for (dx, dy) in dirs {
-            let on_glyph = Point::new(cx + dx * CLOSE_HALF, cy + dy * CLOSE_HALF);
-            assert!(
-                hit_close(&layout, 1.0, on_glyph),
-                "glyph boundary should hit: ({dx}, {dy})"
-            );
-            let in_slop = Point::new(
-                cx + dx * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
-                cy + dy * ((CLOSE_HALF + CLOSE_HIT_HALF) * 0.5),
-            );
-            assert!(
-                hit_close(&layout, 1.0, in_slop),
-                "slop ring should hit: ({dx}, {dy})"
-            );
-            let beyond = Point::new(
-                cx + dx * (CLOSE_HIT_HALF + 0.5),
-                cy + dy * (CLOSE_HIT_HALF + 0.5),
-            );
-            assert!(
-                !hit_close(&layout, 1.0, beyond),
-                "point beyond hit radius should miss: ({dx}, {dy})"
-            );
-        }
+        let rect = layout.return_rect(1.0);
+
+        assert!(hit_close(&layout, 1.0, rect.center()));
+        assert!(hit_close(&layout, 1.0, Point::new(rect.x, rect.center().y)));
+        assert!(!hit_close(
+            &layout,
+            1.0,
+            Point::new(rect.x - 0.5, rect.center().y)
+        ));
     }
 
     #[test]
-    fn hit_close_scales_hit_radius_with_dpi() {
+    fn hit_close_scales_launcher_return_button_with_dpi() {
         let layout = layout();
-        let (cx, cy) = layout.close_center(1.5);
-        assert!(hit_close(&layout, 1.5, Point::new(cx + 20.0, cy)));
+        let rect = layout.return_rect(1.5);
+        assert_eq!(rect.width, RETURN_BUTTON_W * 1.5);
+        assert_eq!(rect.height, RETURN_BUTTON_H * 1.5);
+        assert!(hit_close(&layout, 1.5, rect.center()));
     }
 
     // ------------------------------------------------------------------
@@ -2330,13 +2510,9 @@ mod tests {
     }
 
     #[test]
-    fn darkness_overflow_rows_is_positive() {
+    fn darkness_category_overflows_after_update_mode_rows() {
         let n = darkness_category_overflow_rows();
-        assert!(n > 0, "Darkness category should overflow, got {n}");
-        assert!(
-            n < DARKNESS_CATEGORY_ROW_COUNT,
-            "overflow exceeds row count"
-        );
+        assert_eq!(n, 1);
     }
 
     #[test]

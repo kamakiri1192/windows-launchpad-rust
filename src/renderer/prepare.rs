@@ -16,8 +16,9 @@ use crate::ui_model::render_model::{
 use super::controls::{
     ControlInstance, KIND_CARET, KIND_CHATGPT_LOGO, KIND_CHECK, KIND_CHEVRON, KIND_CLOSE, KIND_DOT,
     KIND_EYE_OFF, KIND_FOLDER, KIND_GEAR, KIND_INFO, KIND_MAGNIFIER, KIND_MINUS, KIND_PENCIL,
-    KIND_PLUS, KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK,
-    KIND_STEAM_LOGO, KIND_TRASH,
+    KIND_PLUS, KIND_RESET_ICON, KIND_ROUND_RECT, KIND_SETTINGS_ABOUT_ICON, KIND_SETTINGS_APPS_ICON,
+    KIND_SETTINGS_DARKNESS_ICON, KIND_SETTINGS_DEBUG_ICON, KIND_SETTINGS_SEARCH_ICON,
+    KIND_SETTINGS_SYSTEM_ICON, KIND_SLIDER_KNOB, KIND_SLIDER_TRACK, KIND_STEAM_LOGO, KIND_TRASH,
 };
 use super::counters::Category;
 use super::icon_pipeline::IconInstance;
@@ -157,6 +158,12 @@ fn control_kind(kind: &ControlKind) -> f32 {
         ControlKind::ChatGptLogo => KIND_CHATGPT_LOGO,
         ControlKind::SteamLogo => KIND_STEAM_LOGO,
         ControlKind::Trash => KIND_TRASH,
+        ControlKind::SettingsAppsIcon => KIND_SETTINGS_APPS_ICON,
+        ControlKind::SettingsSearchIcon => KIND_SETTINGS_SEARCH_ICON,
+        ControlKind::SettingsSystemIcon => KIND_SETTINGS_SYSTEM_ICON,
+        ControlKind::SettingsDarknessIcon => KIND_SETTINGS_DARKNESS_ICON,
+        ControlKind::SettingsAboutIcon => KIND_SETTINGS_ABOUT_ICON,
+        ControlKind::SettingsDebugIcon => KIND_SETTINGS_DEBUG_ICON,
         ControlKind::Plus => KIND_PLUS,
         ControlKind::Minus => KIND_MINUS,
         ControlKind::Info => KIND_INFO,

@@ -372,6 +372,20 @@ impl App {
             | RouterAction::EndPageDrag
             | RouterAction::LaunchpadOwns => {}
         }
+        if button == crate::input_routing::PointerButton::Left
+            && matches!(decision, RouterAction::Consume)
+            && (self.settings_slider_drag.is_some()
+                || self.settings_toggle_drag.is_some()
+                || self.pressed_on_settings.is_some())
+        {
+            // If the platform drops the matching routed release (for example
+            // when the pointer leaves the client window), never leave a
+            // settings slider in a live drag state.
+            self.end_settings_slider_drag();
+            self.settings_toggle_drag = None;
+            self.pressed_on_settings = None;
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn settings_hit_target(&self, x: f32, y: f32) -> SettingsPressTarget {

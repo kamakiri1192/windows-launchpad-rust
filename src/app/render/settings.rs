@@ -8,6 +8,7 @@ use crate::layout::hit_map::HitMap;
 use crate::renderer::text_engine as text;
 use crate::ui_model;
 use crate::ui_model::geometry::{Point, Rect, UvRect};
+use crate::ui_model::hit::{HitTarget, SettingsTarget};
 use crate::ui_model::ids::UiId;
 use crate::ui_model::render_model::{
     Color, ControlKind, GlassBehavior, GlassLayer, GlassMaterial, GlassSurface, GlyphLane,
@@ -399,11 +400,24 @@ impl App {
             self.profiler.record_settings_apply(clone_start.elapsed());
         }
 
+        if let Some(settings_ink) = self
+            .render_model
+            .ink
+            .iter_mut()
+            .find(|batch| batch.lane == InkLane::Settings)
+        {
+            apply_settings_return_hover(
+                &mut settings_ink.views,
+                self.cached_settings_hit_map.as_ref(),
+                Some(Point::new(self.pointer_phys_x, self.pointer_phys_y)),
+                self.pressed_on_settings == Some(SettingsPressTarget::Close),
+            );
+        }
+
         // `render_gear` refreshes the shared Overlay lane every frame. Settings
         // toggle lenses use their own later lane so the panel surface cannot
-        // cover them. No panel-AABB culling is used: every settings surface
-        // remains available to the renderer and its own clip contract controls
-        // visibility.
+        // cover them. Every settings surface remains available to the renderer;
+        // its clip contract controls visibility.
         let mut settings_overlay = self
             .settings_render_cache
             .as_ref()
@@ -975,6 +989,43 @@ fn apply_settings_toggle_visuals(
     animating
 }
 
+/// Apply live pointer feedback to the destination-oriented launcher return
+/// control without invalidating the retained settings layout cache.
+fn apply_settings_return_hover(
+    ink: &mut [InkView],
+    hits: Option<&HitMap>,
+    pointer: Option<ui_model::geometry::Point>,
+    pressed: bool,
+) {
+    let hovered = hits
+        .zip(pointer)
+        .and_then(|(hits, pointer)| hits.hit_test(pointer))
+        .is_some_and(|region| {
+            matches!(
+                &region.target,
+                HitTarget::Settings {
+                    target: SettingsTarget::Close
+                }
+            )
+        });
+    let background_opacity = if hovered && pressed {
+        0.18
+    } else if hovered {
+        0.12
+    } else {
+        0.06
+    };
+    let tile_opacity = if hovered { 0.96 } else { 0.78 };
+
+    for view in ink {
+        if view.id == UiId::settings_row("return-background") {
+            view.opacity = background_opacity;
+        } else if view.id == UiId::settings_row("return-icon") {
+            view.opacity = tile_opacity;
+        }
+    }
+}
+
 pub(crate) fn settings_category_id(
     category: SettingsCategory,
 ) -> layout::settings_panel::SettingsCategoryId {
@@ -1022,7 +1073,7 @@ fn settings_panel_copy<'a>(
     hidden_count_label: &'a str,
 ) -> layout::settings_panel::SettingsPanelCopy<'a> {
     layout::settings_panel::SettingsPanelCopy {
-        title: SETTINGS_TITLE,
+        return_label: "ランチャーへ",
         categories: [
             (
                 layout::settings_panel::SettingsCategoryId::Apps,
@@ -1069,7 +1120,7 @@ fn settings_panel_copy<'a>(
         ],
         sort_label: "並び順",
         frequent_apps_label: "よく使うアプリ",
-        frequent_apps_detail: "ホーム画面に表示するための準備設定",
+        frequent_apps_detail: "使用履歴をもとに、よく使うアプリを表示します",
         steam_apps_label: "Steamアプリを表示",
         steam_apps_detail: "インストール済みのSteamゲームとアプリを一覧に表示します",
         initial_undo_label: if crate::domain::initial_layout::japanese_locale(
@@ -1249,7 +1300,6 @@ fn debug_flag_from_key(key: &str) -> LiquidGlassDebugFlag {
     }
 }
 
-const SETTINGS_TITLE: &str = "設定";
 /// Title font for the settings panel.
 const SETTINGS_TITLE_FONT: &str = text::UI_FONT_FAMILY;
 
@@ -1926,7 +1976,11 @@ mod tests {
             .any(|view| is_toggle(&view.id) && view.kind == ControlKind::Toggle));
 
         // Hover does not turn the switch into glass.
-        let hover_point = Point::new(940.0, 280.0);
+        let hover_point = ink_of(&base)
+            .iter()
+            .find(|view| is_toggle(&view.id) && view.kind == ControlKind::Toggle)
+            .expect("debug toggle thumb")
+            .center;
         let mut live_input = input;
         live_input.pointer_pos = Some(hover_point);
         live_input.pointer_pressed = false;
@@ -1950,6 +2004,61 @@ mod tests {
         assert!(ink_of(&pressed_live)
             .iter()
             .all(|view| !(is_toggle(&view.id) && view.kind == ControlKind::Toggle)));
+    }
+
+    #[test]
+    fn settings_return_hover_overlay_tracks_hover_and_press() {
+        let input = test_input();
+        let copy = settings_panel_copy("0 件");
+        let mut scroll =
+            crate::scroll::ContinuousScroller::new(crate::scroll::ContinuousConfig::default());
+        let model = layout::settings_panel::build_with_ui(input, &copy, &mut scroll);
+        let mut ink = model
+            .result
+            .render
+            .ink
+            .iter()
+            .find(|batch| batch.lane == InkLane::Settings)
+            .expect("settings ink batch")
+            .views
+            .clone();
+        let return_point = model
+            .result
+            .hits
+            .regions()
+            .iter()
+            .find(|region| region.id == UiId::settings_close())
+            .expect("launcher return hit region")
+            .rect
+            .center();
+        let opacity = |views: &[InkView], id: &str| {
+            views
+                .iter()
+                .find(|view| view.id == UiId::settings_row(id))
+                .unwrap_or_else(|| panic!("missing settings ink: {id}"))
+                .opacity
+        };
+
+        apply_settings_return_hover(
+            &mut ink,
+            Some(&model.result.hits),
+            Some(return_point),
+            false,
+        );
+        assert_eq!(opacity(&ink, "return-background"), 0.12);
+        assert_eq!(opacity(&ink, "return-icon"), 0.96);
+
+        apply_settings_return_hover(&mut ink, Some(&model.result.hits), Some(return_point), true);
+        assert_eq!(opacity(&ink, "return-background"), 0.18);
+
+        apply_settings_return_hover(
+            &mut ink,
+            Some(&model.result.hits),
+            Some(Point::new(600.0, 380.0)),
+            false,
+        );
+        assert_eq!(opacity(&ink, "return-background"), 0.06);
+        assert_eq!(opacity(&ink, "return-icon"), 0.78);
     }
 
     #[test]

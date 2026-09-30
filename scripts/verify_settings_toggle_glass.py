@@ -55,7 +55,9 @@ def verify(root):
     require(max(abs(a - b) for a, b in zip(light_color, dark_color)) <= 2,
             "global darkness changed the lens interior")
     # Two separated points on the flat green track must remain the same color.
-    uncovered_track = light_image.getpixel((1094, 190))
+    # The settings layout can move the switch when its header or row spacing
+    # changes. Sample the same track just left of the lens in this frame.
+    uncovered_track = light_image.getpixel((round(x - 16), center[1]))
     require(max(abs(a - b) for a, b in zip(light_color, uncovered_track)) <= 3,
             f"lens adds a film/tint: {light_color} vs track {uncovered_track}")
 
