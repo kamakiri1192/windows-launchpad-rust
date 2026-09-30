@@ -147,6 +147,11 @@ path = "examples/icon_audit.rs"
 # Release: keep optimized rendering without LTO; this avoids rustc/MSVC
 # STATUS_ACCESS_VIOLATION crashes seen in wgpu/naga linker-plugin-lto builds.
 [profile.release]
+# Do not ship debug metadata or linker symbols in release binaries. This raises
+# the cost of casual inspection, but is not a security boundary against
+# disassembly or decompilation.
+debug = false
+strip = "symbols"
 lto = false
 codegen-units = 1
 panic = "abort"
