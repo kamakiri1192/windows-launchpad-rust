@@ -456,6 +456,23 @@ impl App {
     /// passthrough, persist, reset) run through [`Self::execute_command`] so
     /// they share the single command boundary.
     pub(crate) fn handle_action(&mut self, action: AppAction) {
+        // Dismissal is visual-only. Keep lifecycle/worker/summon events flowing,
+        // but do not start a new interaction while the launcher disappears.
+        if self.launch_presentation.is_closing()
+            && matches!(
+                action,
+                AppAction::Keyboard(_)
+                    | AppAction::Ime(_)
+                    | AppAction::PointerPress(_)
+                    | AppAction::PointerMoved { .. }
+                    | AppAction::PointerButton { .. }
+                    | AppAction::PointerRelease(_)
+                    | AppAction::CursorLeft
+                    | AppAction::ScrollSample(_)
+            )
+        {
+            return;
+        }
         match action {
             AppAction::CloseRequested => {
                 self.execute_command(AppCommand::HideWindow);
@@ -510,7 +527,7 @@ impl App {
                 self.execute_command(AppCommand::Summon);
             }
             AppAction::ToggleSettings => {
-                if !self.visible {
+                if !self.visible || self.launch_presentation.is_closing() {
                     self.execute_command(AppCommand::Summon);
                 }
                 self.toggle_settings();
@@ -1054,6 +1071,7 @@ impl App {
             || self.editing
             || long_press_pending
             || folder_long_press_pending
+            || self.launch_presentation.is_active()
             || self.qa_capture_due()
             || self.profile_scroll.is_some()
             // Only keep redrawing for the debug HUD while the window is

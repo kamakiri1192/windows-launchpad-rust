@@ -210,6 +210,12 @@ pub enum QaAction {
     Focus {
         focused: bool,
     },
+    Summon,
+    CloseRequested,
+    AssertLauncher {
+        visible: bool,
+        closing: bool,
+    },
     ToggleSettings,
     /// In-memory renderer fixture; manual darkness with automatic adaptation off.
     GlassDarkness {
@@ -768,6 +774,9 @@ pub enum QaTarget {
 #[derive(Debug, Clone, Serialize)]
 pub struct QaFrameRecord {
     pub index: u64,
+    pub launcher_visible: bool,
+    pub launcher_closing: bool,
+    pub launcher_presentation: [f32; 4],
     /// Physical [x, y, width, height] of each active settings thumb lens.
     pub settings_toggle_lenses: Vec<[f32; 4]>,
     pub settings_slider_lenses: Vec<[f32; 4]>,
@@ -827,6 +836,9 @@ pub struct QaFrameRecord {
 }
 
 struct QaFrameState {
+    launcher_visible: bool,
+    launcher_closing: bool,
+    launcher_presentation: [f32; 4],
     settings_slider_lenses: Vec<[f32; 4]>,
     settings_slider_drag: Option<String>,
     settings_slider_values: [f32; 9],
@@ -1117,6 +1129,9 @@ impl QaRunner {
             .and_then(|scroll| folder_scroll_input_target_x.map(|target| scroll.0 - target));
         self.frames.push(QaFrameRecord {
             index: self.frame_index,
+            launcher_visible: state.launcher_visible,
+            launcher_closing: state.launcher_closing,
+            launcher_presentation: state.launcher_presentation,
             settings_toggle_lenses: state.settings_toggle_lenses,
             settings_slider_lenses: state.settings_slider_lenses,
             settings_slider_drag: state.settings_slider_drag,
@@ -1677,6 +1692,20 @@ impl App {
                 self.relayout();
             }
             QaAction::Focus { focused } => self.handle_action(AppAction::Focused(focused)),
+            QaAction::Summon => self.handle_action(AppAction::Summon),
+            QaAction::CloseRequested => self.handle_action(AppAction::CloseRequested),
+            QaAction::AssertLauncher { visible, closing } => {
+                let elapsed_ms = self.qa_runner.as_ref().map(|runner| runner.next_capture_ms);
+                assert_eq!(
+                    self.visible, visible,
+                    "QA launcher visibility at {elapsed_ms:?}ms"
+                );
+                assert_eq!(
+                    self.launch_presentation.is_closing(),
+                    closing,
+                    "QA launcher dismissal at {elapsed_ms:?}ms"
+                );
+            }
             QaAction::ToggleSettings => self.handle_action(AppAction::ToggleSettings),
             QaAction::GlassDarkness { value } => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -1768,19 +1797,11 @@ impl App {
                 self.handle_action(AppAction::Keyboard(KeyAction::CommitFolderRename));
             }
             QaAction::Escape => {
-                let action = if self.settings_panel_active() {
-                    KeyAction::CloseSettings
-                } else if self.folders.rename.is_some() {
-                    KeyAction::CancelFolderRename
-                } else if self.editing {
-                    KeyAction::ExitEditMode
-                } else if self.context_menu.is_active() {
-                    KeyAction::CloseContextMenu
-                } else if self.folders.is_active() {
-                    KeyAction::CloseFolder
-                } else {
-                    KeyAction::None
-                };
+                let action = self.classify_keyboard_action(
+                    false,
+                    Some(winit::keyboard::KeyCode::Escape),
+                    None,
+                );
                 self.handle_action(AppAction::Keyboard(action));
             }
             QaAction::ExitEditMode => {
@@ -2174,6 +2195,9 @@ impl App {
             })
             .collect();
         self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
+            launcher_visible: self.visible,
+            launcher_closing: self.launch_presentation.is_closing(),
+            launcher_presentation: self.launch_presentation.shader_values(),
             settings_slider_lenses: self
                 .render_model
                 .glass

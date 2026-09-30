@@ -332,6 +332,12 @@ impl App {
         }
         self.profiler.record_render(render_start.elapsed());
 
+        // Present the transparent endpoint before changing native visibility.
+        // Launch/click-passthrough commands still use the immediate hide path.
+        if self.visible && self.launch_presentation.is_hidden() {
+            self.hide();
+        }
+
         if !self.first_frame_rendered {
             self.first_frame_rendered = true;
             self.timer.mark(prefix::STARTUP, "first frame rendered");

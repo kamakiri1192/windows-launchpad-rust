@@ -370,8 +370,8 @@ fn layout_and_settings_round_trip_on_disk_and_too_new_db_is_unchanged() {
     let before = std::fs::read(&path).unwrap();
     assert!(open_at(&path).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    std::fs::remove_file(&path).unwrap();
-    std::fs::remove_dir(root).unwrap();
+    // A rejected SQLite open can leave WAL/SHM sidecars in this test-owned directory.
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
