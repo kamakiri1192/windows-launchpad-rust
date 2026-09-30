@@ -38,3 +38,6 @@ Desktop.ini
 
 # Local-only scratch / generated logs
 tmp/
+
+# Local package signing keys (never commit)
+*.pfx

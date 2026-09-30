@@ -14,6 +14,8 @@ fn main() {
         }
         winresource::WindowsResource::new()
             .set_icon("assets/app-icon-liquid-glass-neutral.ico")
+            .set("ProductName", "Liquid Start")
+            .set("FileDescription", "Liquid Start")
             .compile()
             .expect("embed Windows app icon resource");
     }
