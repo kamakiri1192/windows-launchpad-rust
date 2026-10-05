@@ -10,6 +10,7 @@ const BLUR_UNIFORMS_SIZE: u64 = 16;
 const SCENE_FLATTEN_UNIFORMS_SIZE: u64 = 32;
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const TINT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const AUTO_DARKNESS_UNIFORMS_SIZE: u64 = 16;
 const AUTO_DARKNESS_STATE_SIZE: u64 = 96;
@@ -764,6 +765,64 @@ fn all_wgsl_shaders_compile_with_wgpu_validation() {
 }
 
 #[test]
+fn liquid_glass_geometry_outputs_match_mrt_targets() {
+    use wgpu::naga::{Binding, Scalar, ScalarKind, ShaderStage, TypeInner, VectorSize};
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let targets = geometry_color_targets();
+    let expected = [
+        ("geometry", wgpu::TextureFormat::Rgba16Float),
+        ("tint", wgpu::TextureFormat::Rgba8Unorm),
+    ];
+
+    for path in [
+        "assets/shaders/liquid_glass_geometry.wgsl",
+        "assets/shaders/liquid_glass_badge_geometry.wgsl",
+    ] {
+        let source = read_shader_source(&manifest_dir.join(path));
+        let module = wgpu::naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|err| panic!("{path}: {}", err.emit_to_string(&source)));
+        let fragment = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.stage == ShaderStage::Fragment && entry.name == "fs_main")
+            .unwrap_or_else(|| panic!("{path}: missing fs_main fragment entry point"));
+        let result = fragment.function.result.as_ref().expect("fragment outputs");
+        let TypeInner::Struct { members, .. } = &module.types[result.ty].inner else {
+            panic!("{path}: expected geometry and tint fragment outputs");
+        };
+        assert_eq!(members.len(), targets.len(), "{path}: MRT output count");
+
+        for (location, (name, format)) in expected.into_iter().enumerate() {
+            let member = members
+                .iter()
+                .find(|member| member.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("{path}: missing {name} output"));
+            assert!(
+                matches!(member.binding, Some(Binding::Location { location: actual, .. })
+                    if actual == location as u32),
+                "{path}: {name} must write to location {location}"
+            );
+            assert_eq!(
+                module.types[member.ty].inner,
+                TypeInner::Vector {
+                    size: VectorSize::Quad,
+                    scalar: Scalar {
+                        kind: ScalarKind::Float,
+                        width: 4,
+                    },
+                },
+                "{path}: {name} must write vec4<f32>"
+            );
+            let target = targets[location].as_ref().expect("MRT color target");
+            assert_eq!(target.format, format, "{path}: {name} target format");
+            assert_eq!(target.blend, None, "{path}: {name} must replace its target");
+            assert_eq!(target.write_mask, wgpu::ColorWrites::ALL);
+        }
+    }
+}
+
+#[test]
 fn renderer_render_pipelines_compile_with_wgpu_validation() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -963,10 +1022,10 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
     let geometry_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("test liquid glass geometry bgl"),
         entries: &[
-            uniform_entry(0, wgpu::ShaderStages::FRAGMENT, GLASS_UNIFORMS_SIZE),
+            uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT, GLASS_UNIFORMS_SIZE),
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -1032,6 +1091,12 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         &manifest_dir.join("assets/shaders/liquid_glass_geometry.wgsl"),
     )
     .await;
+    let badge_geometry_shader = create_shader_module_checked(
+        device,
+        "assets/shaders/liquid_glass_badge_geometry.wgsl",
+        &manifest_dir.join("assets/shaders/liquid_glass_badge_geometry.wgsl"),
+    )
+    .await;
     let final_shader = create_shader_module_checked(
         device,
         "assets/shaders/liquid_glass_final.wgsl",
@@ -1074,8 +1139,16 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         "test liquid glass geometry pipeline",
         &geometry_pipeline_layout,
         &geometry_shader,
-        GEOMETRY_FORMAT,
-        None,
+        &geometry_color_targets(),
+    )
+    .await;
+    let _badge_geometry_pipeline = create_fullscreen_render_pipeline_checked(
+        device,
+        "liquid glass sparse badge geometry pipeline",
+        "test liquid glass sparse badge geometry pipeline",
+        &geometry_pipeline_layout,
+        &badge_geometry_shader,
+        &geometry_color_targets(),
     )
     .await;
 
@@ -1090,8 +1163,7 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         "test liquid glass blur downsample pipeline",
         &blur_pipeline_layout,
         &blur_downsample_shader,
-        BLUR_FORMAT,
-        None,
+        &[Some(color_target(BLUR_FORMAT, None))],
     )
     .await;
     let _blur_upsample_pipeline = create_fullscreen_render_pipeline_checked(
@@ -1100,8 +1172,7 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         "test liquid glass blur upsample pipeline",
         &blur_pipeline_layout,
         &blur_upsample_shader,
-        BLUR_FORMAT,
-        None,
+        &[Some(color_target(BLUR_FORMAT, None))],
     )
     .await;
 
@@ -1117,8 +1188,7 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         "test liquid glass scene flatten pipeline",
         &scene_flatten_pipeline_layout,
         &scene_flatten_shader,
-        BLUR_FORMAT,
-        None,
+        &[Some(color_target(BLUR_FORMAT, None))],
     )
     .await;
 
@@ -1151,24 +1221,20 @@ async fn create_liquid_glass_render_pipelines(device: &wgpu::Device, manifest_di
         "test liquid glass final pipeline",
         &final_pipeline_layout,
         &final_shader,
-        SURFACE_FORMAT,
-        Some(premultiplied_blend()),
+        &[Some(color_target(
+            SURFACE_FORMAT,
+            Some(premultiplied_blend()),
+        ))],
     )
     .await;
 }
 
-async fn create_shader_module_checked(
-    device: &wgpu::Device,
-    label: &str,
-    path: &Path,
-) -> wgpu::ShaderModule {
+fn read_shader_source(path: &Path) -> String {
     let source = fs::read_to_string(path).unwrap_or_else(|err| {
         panic!("failed to read WGSL shader {}: {err}", path.display());
     });
 
-    let source = if source.contains("launch_item_progress(")
-        && !source.contains("fn launch_item_progress(")
-    {
+    if source.contains("launch_item_progress(") && !source.contains("fn launch_item_progress(") {
         [
             include_str!("../src/shader_presentation.wgsl"),
             source.as_str(),
@@ -1176,7 +1242,15 @@ async fn create_shader_module_checked(
         .concat()
     } else {
         source
-    };
+    }
+}
+
+async fn create_shader_module_checked(
+    device: &wgpu::Device,
+    label: &str,
+    path: &Path,
+) -> wgpu::ShaderModule {
+    let source = read_shader_source(path);
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -1209,8 +1283,7 @@ async fn create_fullscreen_render_pipeline_checked(
     pipeline_label: &str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
-    blend: Option<wgpu::BlendState>,
+    targets: &[Option<wgpu::ColorTargetState>],
 ) -> wgpu::RenderPipeline {
     create_render_pipeline_checked(
         device,
@@ -1228,7 +1301,7 @@ async fn create_fullscreen_render_pipeline_checked(
                 module: shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(color_target(format, blend))],
+                targets,
             }),
             primitive: triangle_list_no_cull(),
             depth_stencil: None,
@@ -1238,6 +1311,15 @@ async fn create_fullscreen_render_pipeline_checked(
         },
     )
     .await
+}
+
+fn geometry_color_targets() -> [Option<wgpu::ColorTargetState>; 2] {
+    // Keep the attachment order in sync with both geometry shaders and the
+    // production pipelines: location 0 = geometry, location 1 = tint.
+    [
+        Some(color_target(GEOMETRY_FORMAT, None)),
+        Some(color_target(TINT_FORMAT, None)),
+    ]
 }
 
 fn uniform_entry(
