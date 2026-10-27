@@ -32,6 +32,16 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
+// The scene is linear-premultiplied when sampled through its sRGB view.
+// Capture/blur textures deliberately store encoded SDR RGB for material math.
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    return select(c / 12.92, pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c > vec3<f32>(0.04045));
+}
+fn linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
+    let c = max(rgb, vec3<f32>(0.0));
+    return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c > vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let backdrop_size_u = textureDimensions(backdrop_texture, 0);
@@ -54,6 +64,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_texture, scene_sampler, scene_uv);
     let desktop = textureSample(backdrop_texture, scene_sampler, capture_uv);
     let scene_alpha = clamp(scene.a, 0.0, 1.0);
-    let flattened_rgb = scene.rgb + desktop.rgb * (1.0 - scene_alpha);
-    return vec4<f32>(flattened_rgb, 1.0);
+    let flattened_rgb = scene.rgb + srgb_to_linear(desktop.rgb) * (1.0 - scene_alpha);
+    return vec4<f32>(linear_to_srgb(flattened_rgb), 1.0);
 }
+

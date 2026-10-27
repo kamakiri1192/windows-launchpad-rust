@@ -1,0 +1,2 @@
+# Isolated headless shader validation; not an application dependency.
+wgpu==0.32.0

@@ -486,6 +486,7 @@ impl Renderer {
         );
         let focus_blur =
             FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
+        let presentation = super::presentation::SurfacePresentation::new(&device, &config);
         let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
@@ -688,6 +689,7 @@ impl Renderer {
             surface_format,
             liquid_glass,
             focus_blur,
+            presentation,
             gpu_profiler,
             below_settings_epoch: 0,
             below_menu_epoch: 0,
@@ -782,6 +784,8 @@ impl Renderer {
             self.config.height,
         );
         self.focus_blur
+            .resize(&self.device, self.config.width, self.config.height);
+        self.presentation
             .resize(&self.device, self.config.width, self.config.height);
     }
 

@@ -101,9 +101,12 @@ impl Renderer {
             eprintln!("renderer has neither a surface nor an offscreen target");
             return;
         };
-        let view = frame
+        let surface_view = frame
             .texture()
             .create_view(&TextureViewDescriptor::default());
+        // Keep every in-app layer in linear-premultiplied sample space. Only
+        // the final unblended pass converts to the OS stored-channel contract.
+        let view = self.presentation.view();
         let focus_blur_params = self
             .prepared_model
             .ink
@@ -502,7 +505,7 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 &mut self.gpu_profiler,
-                frame.texture(),
+                &self.presentation.texture,
             );
             self.completed_scene_cache = Some((settings_scene_key, CompletedSceneLane::Settings));
             encoder = self
@@ -556,7 +559,7 @@ impl Renderer {
         // so each thumb can refract the actual green/white track below it.
         if self.liquid_glass.has_settings_control_glass() {
             self.liquid_glass
-                .prepare_settings_control_scene(&mut encoder, frame.texture());
+                .prepare_settings_control_scene(&mut encoder, &self.presentation.texture);
         }
 
         let profile_scope = self
@@ -748,7 +751,7 @@ impl Renderer {
 
         // The context blur must see the exact pixels below the menu, including
         // top-level icons and any modal/folder content. Finish those writes,
-        // copy the pre-menu swapchain, flatten it over the desktop capture,
+        // copy the completed in-app target, flatten it over the desktop capture,
         // and blur that completed scene before encoding the menu itself.
         if self.liquid_glass.has_context_menu_glass()
             && self.completed_scene_cache != Some((menu_scene_key, CompletedSceneLane::ContextMenu))
@@ -759,7 +762,7 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 &mut self.gpu_profiler,
-                frame.texture(),
+                &self.presentation.texture,
             );
             self.completed_scene_cache = Some((menu_scene_key, CompletedSceneLane::ContextMenu));
             encoder = self
@@ -869,7 +872,7 @@ impl Renderer {
         self.liquid_glass.begin_auto_darkness_debug_readback();
         self.gpu_profiler.finish_frame(&self.queue);
 
-        // Debug HUD pass: drawn last, directly on the final surface view, so
+        // Debug HUD pass: drawn last, on the completed in-app view, so
         // diagnostics sit above every glass/modal layer. Reuses the
         // control-text pipeline (screen-fixed, no page-frame clip). It runs in
         // its own command buffer after the scene submit so it can `Load` the
@@ -917,6 +920,15 @@ impl Renderer {
             }
             self.queue.submit(std::iter::once(overlay_encoder.finish()));
         }
+
+        let mut present_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("OS presentation encoder"),
+                });
+        self.presentation
+            .present(&mut present_encoder, &surface_view);
+        self.queue.submit(std::iter::once(present_encoder.finish()));
 
         // Optional QA self-capture: copy the surface texture to a host-readable
         // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.

@@ -95,6 +95,7 @@ impl LiquidGlassRenderer {
             self.last_capture_at = Some(Instant::now());
         }
         if captured {
+            self.has_captured_backdrop = true;
             self.capture_sequence = self.capture_sequence.wrapping_add(1);
         }
         let next_status = self.capture.status();
@@ -113,7 +114,7 @@ impl LiquidGlassRenderer {
             }
         }
 
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -123,6 +124,9 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        // The sampled backdrop is already in this pixel. Alpha is coverage,
+        // not material transparency; otherwise the OS adds sharp desktop again.
+        uniforms.backdrop_replacement = if self.has_captured_backdrop { 1.0 } else { 0.0 };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let global_blur = self.blur_profile(self.params.blur_radius);

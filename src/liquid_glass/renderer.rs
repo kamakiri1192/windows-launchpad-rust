@@ -331,6 +331,8 @@ pub struct LiquidGlassRenderer {
     /// capture frame, invalidates caches derived from the rendered scene.
     content_epoch: u64,
     capture_sequence: u64,
+    // Initial/fallback pixels are not a captured desktop and must not hide it.
+    has_captured_backdrop: bool,
     gpu_backdrop_texture: Option<wgpu::Texture>,
     using_gpu_backdrop: bool,
     gpu_backdrop_is_copy_target: bool,
@@ -1469,6 +1471,7 @@ impl LiquidGlassRenderer {
             blur_dirty: true,
             content_epoch: 0,
             capture_sequence: 0,
+            has_captured_backdrop: false,
             last_geometry_key: None,
             stats: RenderStats::new(),
         }
@@ -1543,6 +1546,7 @@ impl LiquidGlassRenderer {
         ) = create_settings_control_scene_texture(device, width, height, self.surface_format);
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
+        self.has_captured_backdrop = false;
         self.backdrop_stats_dirty = true;
         self.backdrop_mapping = BackdropMapping::full(width, height);
         self.gpu_backdrop_texture = None;

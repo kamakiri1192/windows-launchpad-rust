@@ -34,6 +34,7 @@ mod init;
 mod prepare;
 #[cfg(target_os = "windows")]
 mod present_stats;
+mod presentation;
 mod resources;
 mod text;
 pub(crate) mod text_engine;
@@ -85,6 +86,7 @@ pub struct Renderer {
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
+    presentation: presentation::SurfacePresentation,
     gpu_profiler: gpu_profile::GpuProfilerState,
     /// Bumped whenever `prepare` observes changes in the model lanes that are
     /// composited below each completed-scene checkpoint, so the checkpoint
