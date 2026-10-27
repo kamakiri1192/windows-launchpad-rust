@@ -47,8 +47,9 @@ pipeline. Toggle lenses likewise decode only their desktop fallback.
 
 Base panels replace the captured desktop only after
 an actual frame has arrived; resize resets this availability. Initial fallback
-pixels keep the prior translucent behavior. Grid/drag overlays, small controls, and badges retain
-their material policies: their desktop-only sources do not contain all lower
+pixels keep the prior translucent behavior. The search/page/Done bottom bar uses its own pre-bar completed-scene
+checkpoint and replaces that filtered backdrop when capture is ready. Gear,
+interaction outlines, grid/drag overlays, and badges retain their material policies: their desktop-only sources do not contain all lower
 in-app content, so forcing them opaque would punch through that content. Menu/settings transition replacement values and tint
 defaults are unchanged.
 
@@ -69,6 +70,9 @@ completed-scene fixtures also pass through nested glass. Presentation coverage
 checks PreMultiplied and PostMultiplied output, sRGB and Unorm attachments,
 alpha 0/0.25/0.5/1, and gray/color inputs. An end-to-end half-covered glass
 fixture checks the encoded-premultiplied OS bytes, not only the in-app target.
+
+For bottom-bar checkpoint, icon/drag retention, and fallback regressions, see
+[BOTTOM_BAR_COMPLETED_SCENE_GPU_QA.md](BOTTOM_BAR_COMPLETED_SCENE_GPU_QA.md).
 
 ## Recorded cloud validation
 

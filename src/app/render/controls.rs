@@ -108,7 +108,7 @@ impl App {
     }
 
     /// Upload the control ink/text. Glass submission waits until
-    /// [`render_gear`] has resolved both members of the overlay lane.
+    /// [`render_gear`] has resolved the separate capsule and interaction lanes.
     fn upload_control_overlay(
         &mut self,
         atlas_dirty: bool,
@@ -155,14 +155,11 @@ impl App {
         };
         let gear_shape = gear_geom.map(|(geom, _)| edit_gear_glass_shape(&geom));
         let gear_instance = gear_geom.map(|(geom, alpha)| edit_gear_instance(&geom, alpha));
-        self.render_model.set_glass_batch(
-            GlassLayer::Overlay,
-            self.interaction_glass
-                .iter()
-                .cloned()
-                .chain(control_shape)
-                .chain(gear_shape)
-                .collect(),
+        set_bottom_control_glass_batches(
+            &mut self.render_model,
+            &self.interaction_glass,
+            control_shape,
+            gear_shape,
         );
         self.render_model
             .set_ink_batch(InkLane::Gear, gear_instance.into_iter().collect());
@@ -386,6 +383,21 @@ fn glyph_views(id: UiId, quads: &[text::GlyphQuad]) -> Vec<GlyphView> {
         .collect()
 }
 
+// Route by ownership rather than screen bounds or shape_type: compact windows
+// and dragged items can overlap the capsule without becoming its backdrop lane.
+fn set_bottom_control_glass_batches(
+    model: &mut crate::ui_model::render_model::RenderModel,
+    interaction: &[GlassSurface],
+    capsule: Option<GlassSurface>,
+    gear: Option<GlassSurface>,
+) {
+    model.set_glass_batch(GlassLayer::BottomBar, capsule.into_iter().collect());
+    model.set_glass_batch(
+        GlassLayer::Overlay,
+        interaction.iter().cloned().chain(gear).collect(),
+    );
+}
+
 fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSurface> {
     (geom.half_size.0 >= 1.0).then(|| GlassSurface {
         id: UiId::bottom_control(),
@@ -402,7 +414,8 @@ fn control_glass_shape(geom: &bottom_control::ControlGeometry) -> Option<GlassSu
         clip: None,
         activation: 0.0,
         blur_radius: None,
-        backdrop_replacement: 0.0,
+        // The dedicated lane gates this completed-scene policy on capture readiness.
+        backdrop_replacement: 1.0,
         tint: None,
     })
 }
@@ -733,6 +746,65 @@ fn caret_visibility(control: &bottom_control::BottomControl) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_page_done_capsules_never_share_interaction_or_gear_lane() {
+        // All visuals use control_glass_shape; exercise narrow search, paging,
+        // expanded field, and Done-width morphs at the same overlapping bounds.
+        for half_width in [30.0, 72.0, 160.0, 44.0] {
+            let mut geom = test_geom((100.0, 80.0));
+            geom.half_size.0 = half_width;
+            let capsule = control_glass_shape(&geom).unwrap();
+            assert_eq!(capsule.backdrop_replacement, 1.0);
+            let mut interaction = capsule.clone();
+            interaction.id = UiId::launcher_item("drag-over-capsule");
+            interaction.activation = 1.0;
+            interaction.backdrop_replacement = 0.0;
+            let gear = edit_gear_glass_shape(&crate::layout::control_geometry::EditGearGeometry {
+                center: geom.center,
+                radius: 12.0,
+                glass_radius: 24.0,
+            });
+            assert_eq!(gear.backdrop_replacement, 0.0);
+            let mut model = crate::ui_model::render_model::RenderModel::new();
+            set_bottom_control_glass_batches(
+                &mut model,
+                &[interaction.clone()],
+                Some(capsule.clone()),
+                Some(gear.clone()),
+            );
+            let bar = model
+                .glass
+                .iter()
+                .find(|batch| batch.layer == GlassLayer::BottomBar)
+                .unwrap();
+            assert_eq!(bar.surfaces, [capsule]);
+            let overlay = model
+                .glass
+                .iter()
+                .find(|batch| batch.layer == GlassLayer::Overlay)
+                .unwrap();
+            assert_eq!(overlay.surfaces, [interaction.clone(), gear]);
+            // Hiding the capsule clears only its lane; a drag lens stays present.
+            set_bottom_control_glass_batches(&mut model, &[interaction.clone()], None, None);
+            assert!(model
+                .glass
+                .iter()
+                .find(|batch| batch.layer == GlassLayer::BottomBar)
+                .unwrap()
+                .surfaces
+                .is_empty());
+            assert_eq!(
+                model
+                    .glass
+                    .iter()
+                    .find(|batch| batch.layer == GlassLayer::Overlay)
+                    .unwrap()
+                    .surfaces,
+                [interaction]
+            );
+        }
+    }
 
     fn test_geom(center: (f32, f32)) -> bottom_control::ControlGeometry {
         bottom_control::ControlGeometry {

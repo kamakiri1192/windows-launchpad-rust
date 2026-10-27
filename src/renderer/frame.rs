@@ -388,6 +388,32 @@ impl Renderer {
             .render_control(&self.queue, &mut encoder, scene_view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
+        // The bottom capsule is a backdrop-replacing surface, unlike hover/
+        // interaction glass. Capture the finished lower scene (including a
+        // dragged icon) before drawing it; never sample the capsule itself.
+        if self.liquid_glass.has_bottom_bar_glass() {
+            self.gpu_profiler.resolve(&mut encoder);
+            self.queue.submit(std::iter::once(encoder.finish()));
+            self.liquid_glass.prepare_bottom_bar_scene_blur(
+                &self.device,
+                &self.queue,
+                &mut self.gpu_profiler,
+                self.focus_blur.scene_texture(),
+            );
+            // The completed-scene workspace is shared serially with settings/
+            // menus. Their cached pixels no longer describe its contents.
+            self.completed_scene_cache = None;
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("bottom bar and control content encoder"),
+                });
+            let profile_scope = self.gpu_profiler.begin("bottom_bar_glass", &mut encoder);
+            self.liquid_glass
+                .render_bottom_bar(&self.queue, &mut encoder, scene_view);
+            self.gpu_profiler.end(&mut encoder, profile_scope);
+        }
+
         let profile_scope = self.gpu_profiler.begin("control_content", &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -189,10 +189,22 @@ impl FocusBlurRenderer {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        let (scene_texture, scene_view) =
-            create_texture(device, "focus scene texture", width, height, format);
-        let (blur_texture, blur_view) =
-            create_texture(device, "focus blur texture", width, height, format);
+        let (scene_texture, scene_view) = create_texture(
+            device,
+            "focus scene texture",
+            width,
+            height,
+            format,
+            wgpu::TextureUsages::COPY_SRC,
+        );
+        let (blur_texture, blur_view) = create_texture(
+            device,
+            "focus blur texture",
+            width,
+            height,
+            format,
+            wgpu::TextureUsages::empty(),
+        );
         let blur_levels = create_blur_levels(device, width, height, format);
         let blur_down_bind_groups = create_down_bind_groups(
             device,
@@ -240,6 +252,11 @@ impl FocusBlurRenderer {
         }
     }
 
+    /// Read-only checkpoint source for glass drawn above the completed lower scene.
+    pub(super) fn scene_texture(&self) -> &wgpu::Texture {
+        &self.scene_texture
+    }
+
     pub(super) fn scene_view(&self) -> &wgpu::TextureView {
         &self.scene_view
     }
@@ -250,10 +267,22 @@ impl FocusBlurRenderer {
         if self.size == (width, height) {
             return;
         }
-        let (scene_texture, scene_view) =
-            create_texture(device, "focus scene texture", width, height, self.format);
-        let (blur_texture, blur_view) =
-            create_texture(device, "focus blur texture", width, height, self.format);
+        let (scene_texture, scene_view) = create_texture(
+            device,
+            "focus scene texture",
+            width,
+            height,
+            self.format,
+            wgpu::TextureUsages::COPY_SRC,
+        );
+        let (blur_texture, blur_view) = create_texture(
+            device,
+            "focus blur texture",
+            width,
+            height,
+            self.format,
+            wgpu::TextureUsages::empty(),
+        );
         let blur_levels = create_blur_levels(device, width, height, self.format);
         self.blur_down_bind_groups = create_down_bind_groups(
             device,
@@ -474,6 +503,7 @@ fn create_texture(
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    extra_usage: wgpu::TextureUsages,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -486,7 +516,9 @@ fn create_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | extra_usage,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -507,6 +539,7 @@ fn create_blur_levels(
             (width / divisor).max(1),
             (height / divisor).max(1),
             format,
+            wgpu::TextureUsages::empty(),
         )
     })
 }

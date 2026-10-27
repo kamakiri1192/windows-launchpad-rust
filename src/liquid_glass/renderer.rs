@@ -4,7 +4,9 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+mod bottom_bar;
 mod frame;
+use bottom_bar::BottomBarLane;
 mod resources;
 use resources::*;
 
@@ -276,6 +278,7 @@ pub struct LiquidGlassRenderer {
     control_shape_count: u32,
     control_shape_capacity: usize,
     control_shapes: Vec<GlassShape>,
+    bottom_bar: Option<BottomBarLane>,
     control_geometry_texture: wgpu::Texture,
     control_geometry_view: wgpu::TextureView,
     control_tint_texture: wgpu::Texture,
@@ -325,6 +328,7 @@ pub struct LiquidGlassRenderer {
     overlay_tint_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
+    bound_backdrop_view: wgpu::TextureView,
     backdrop_mapping: BackdropMapping,
     /// Monotonic counters feeding the renderer's scene-content epoch: any
     /// change to glass params/debug state, or any newly consumed desktop
@@ -1357,6 +1361,7 @@ impl LiquidGlassRenderer {
             control_shape_count: 0,
             control_shape_capacity: 2,
             control_shapes: Vec::new(),
+            bottom_bar: None,
             control_geometry_texture,
             control_geometry_view,
             control_tint_texture,
@@ -1400,6 +1405,7 @@ impl LiquidGlassRenderer {
             overlay_tint_texture,
             overlay_tint_view,
             backdrop_texture,
+            bound_backdrop_view: backdrop_view.clone(),
             backdrop_view,
             backdrop_mapping,
             gpu_backdrop_texture: None,
@@ -1926,6 +1932,8 @@ impl LiquidGlassRenderer {
             &self.auto_darkness_state_buffer,
             &self.auto_darkness_uniform_buffer,
         );
+        self.bound_backdrop_view = backdrop_view.clone();
+        self.rebuild_bottom_bar_bind_groups(device);
     }
 
     fn bind_cpu_backdrop(&mut self, device: &wgpu::Device) {
@@ -1939,13 +1947,16 @@ impl LiquidGlassRenderer {
         if self.debug.show_backdrop_texture {
             return CaptureRegion::full(width, height);
         }
-        let groups: [&[GlassShape]; 9] = [
+        let groups: [&[GlassShape]; 10] = [
             &self.base_shapes,
             &self.grid_overlay_shapes,
             &self.drag_overlay_shapes,
             &self.badge_shapes,
             &self.modal_badge_shapes,
             &self.control_shapes,
+            self.bottom_bar
+                .as_ref()
+                .map_or(&[], |lane| lane.shapes.as_slice()),
             &self.settings_control_shapes,
             &self.settings_panel_shapes,
             &self.context_menu_shapes,
@@ -2292,9 +2303,8 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// Replace the fixed overlay lane atomically. The bottom control and gear
-    /// share one SDF field, so updating them together avoids rebuilding or
-    /// uploading the lane twice when both shapes change in the same frame.
+    /// Replace interaction lenses and the gear atomically. The bottom capsule
+    /// has a separate completed-scene lane and must never enter this SDF union.
     pub fn set_overlay_shapes(
         &mut self,
         device: &wgpu::Device,

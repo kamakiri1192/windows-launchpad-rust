@@ -7,7 +7,7 @@ on:
       - 'src/liquid_glass/**'
       - 'src/renderer/**'
       - 'src/shader_surface_present.wgsl'
-      - 'tools/liquid_glass_gpu_*'
+      - 'tools/liquid_glass_*'
       - '.github/workflows/liquid-glass-gpu.yml'
 
 permissions:
@@ -30,3 +30,7 @@ jobs:
         env:
           WGPU_BACKEND_TYPE: Vulkan
         run: python tools/liquid_glass_gpu_test.py --output /tmp/liquid-glass-results
+      - name: Verify bottom-bar completed-scene readback
+        env:
+          WGPU_BACKEND_TYPE: Vulkan
+        run: python tools/liquid_glass_bar_gpu_test.py --output /tmp/liquid-glass-bar-results

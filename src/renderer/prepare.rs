@@ -437,6 +437,11 @@ impl Renderer {
                     self.liquid_glass
                         .set_drag_overlay_shapes(&self.device, &self.queue, &shapes);
                 }
+                GlassLayer::BottomBar => {
+                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    self.liquid_glass
+                        .set_bottom_bar_shapes(&self.device, &self.queue, &shapes);
+                }
                 GlassLayer::Overlay => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
                     self.liquid_glass
@@ -799,6 +804,19 @@ mod tests {
             backdrop_replacement: 0.0,
             tint: None,
         }
+    }
+
+    #[test]
+    fn bottom_bar_changes_invalidate_both_completed_scene_caches() {
+        let mut model = RenderModel::new();
+        model.set_glass_batch(GlassLayer::BottomBar, vec![surface("capsule", 0, 100.0)]);
+        let prepared = RenderModel::new();
+        assert!(Renderer::below_lanes_differ(&model, &prepared, false));
+        assert!(Renderer::below_lanes_differ(&model, &prepared, true));
+        let mut moved = model.clone();
+        moved.glass[0].surfaces[0].rect.x += 10.0;
+        assert!(Renderer::below_lanes_differ(&moved, &model, false));
+        assert!(Renderer::below_lanes_differ(&moved, &model, true));
     }
 
     #[test]

@@ -2144,7 +2144,13 @@ impl App {
             .render_model
             .glass
             .iter()
-            .filter(|batch| batch.layer == crate::ui_model::render_model::GlassLayer::Overlay)
+            .filter(|batch| {
+                matches!(
+                    batch.layer,
+                    crate::ui_model::render_model::GlassLayer::Overlay
+                        | crate::ui_model::render_model::GlassLayer::BottomBar
+                )
+            })
             .flat_map(|batch| &batch.surfaces)
             .map(|surface| {
                 [

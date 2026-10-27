@@ -123,6 +123,9 @@ pub enum GlassLayer {
     /// the same SDF union, and is composited immediately before drag content.
     DragOverlay,
     Overlay,
+    /// Bottom search/page/Done capsule. Samples the completed lower scene,
+    /// separate from interaction lenses and gear even when their bounds overlap.
+    BottomBar,
     Modal,
     /// Settings panel glass. Isolated from folder/modal glass so its completed
     /// scene blur can be captured after the Glass Focus Veil and before the

@@ -938,6 +938,33 @@ impl LiquidGlassRenderer {
             && self.settings_panel_shape_count > 0
     }
 
+    /// Prepare only the bottom capsule from the completed lower in-app scene.
+    /// Interaction/gear glass remains on its existing translucent lane.
+    pub fn prepare_bottom_bar_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
+        pre_bar_scene: &wgpu::Texture,
+    ) {
+        if !self.has_bottom_bar_glass() || !self.has_captured_backdrop {
+            return;
+        }
+        let bounds = completed_scene_screen_bounds(
+            self.bottom_bar_shapes(),
+            self.texture_size.0,
+            self.texture_size.1,
+        );
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            profiler,
+            pre_bar_scene,
+            self.params.blur_radius,
+            bounds,
+        );
+    }
+
     /// Capture every layer already rendered to the transparent swapchain,
     /// flatten it over the real desktop capture, then build the menu's blur.
     /// This must run after modal content and before `render_context_menu_glass`.
