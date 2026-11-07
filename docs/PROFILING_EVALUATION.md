@@ -418,3 +418,6 @@ QA telemetry:
 conclusion:
 next experiment:
 ~~~
+
+PR #237のMac実測、共通描画最適化、再計測手順と検証範囲は
+[PR237_GLASS_PERFORMANCE.md](PR237_GLASS_PERFORMANCE.md) を参照。
