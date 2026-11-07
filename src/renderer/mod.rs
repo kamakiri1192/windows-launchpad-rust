@@ -26,6 +26,7 @@ mod counters;
 mod focus_blur;
 mod fps;
 mod frame;
+mod frame_metrics;
 pub(crate) mod gpu_profile;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
@@ -88,6 +89,7 @@ pub struct Renderer {
     focus_blur: focus_blur::FocusBlurRenderer,
     presentation: presentation::SurfacePresentation,
     gpu_profiler: gpu_profile::GpuProfilerState,
+    pub(crate) frame_metrics: frame_metrics::FrameMetrics,
     /// Bumped whenever `prepare` observes changes in the model lanes that are
     /// composited below each completed-scene checkpoint, so the checkpoint
     /// caches can detect stale inputs without being invalidated by the

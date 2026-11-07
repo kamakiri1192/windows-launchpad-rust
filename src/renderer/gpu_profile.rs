@@ -19,6 +19,14 @@ mod enabled {
 
     pub(crate) struct GpuScope(Option<GpuProfilerQuery>);
 
+    impl GpuScope {
+        pub(crate) fn timestamp_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+            self.0
+                .as_ref()
+                .and_then(GpuProfilerQuery::render_pass_timestamp_writes)
+        }
+    }
+
     #[derive(Default)]
     struct ScopeSamples {
         milliseconds: VecDeque<f64>,
@@ -110,6 +118,18 @@ mod enabled {
                 self.profiler
                     .as_ref()
                     .map(|profiler| profiler.begin_query(label, encoder)),
+            )
+        }
+
+        pub(crate) fn begin_pass(
+            &self,
+            label: &'static str,
+            encoder: &mut wgpu::CommandEncoder,
+        ) -> GpuScope {
+            GpuScope(
+                self.profiler
+                    .as_ref()
+                    .map(|profiler| profiler.begin_pass_query(label, encoder)),
             )
         }
 
@@ -276,6 +296,12 @@ mod disabled {
     pub(crate) struct GpuScope;
     pub(crate) struct GpuProfilerState;
 
+    impl GpuScope {
+        pub(crate) fn timestamp_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+            None
+        }
+    }
+
     impl GpuProfilerState {
         pub(crate) fn required_features(_adapter_features: wgpu::Features) -> wgpu::Features {
             wgpu::Features::empty()
@@ -294,6 +320,14 @@ mod disabled {
         }
 
         pub(crate) fn end(&self, _encoder: &mut wgpu::CommandEncoder, _scope: GpuScope) {}
+
+        pub(crate) fn begin_pass(
+            &self,
+            _label: &'static str,
+            _encoder: &mut wgpu::CommandEncoder,
+        ) -> GpuScope {
+            GpuScope
+        }
 
         pub(crate) fn resolve(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
 

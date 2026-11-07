@@ -48,6 +48,7 @@ if [[ -e "$output_dir" ]]; then
 fi
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
+export LAUNCHPAD_FRAME_METRICS="$output_dir/frame-metrics.csv"
 
 {
   echo "commit=$(git rev-parse HEAD)"

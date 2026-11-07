@@ -101,6 +101,7 @@ impl Renderer {
             eprintln!("renderer has neither a surface nor an offscreen target");
             return;
         };
+        self.frame_metrics.mark(1);
         let surface_view = frame
             .texture()
             .create_view(&TextureViewDescriptor::default());
@@ -409,8 +410,12 @@ impl Renderer {
                     label: Some("bottom bar and control content encoder"),
                 });
             let profile_scope = self.gpu_profiler.begin("bottom_bar_glass", &mut encoder);
-            self.liquid_glass
-                .render_bottom_bar(&self.queue, &mut encoder, scene_view);
+            self.liquid_glass.render_bottom_bar(
+                &self.queue,
+                &mut encoder,
+                scene_view,
+                &self.gpu_profiler,
+            );
             self.gpu_profiler.end(&mut encoder, profile_scope);
         }
 
@@ -896,7 +901,6 @@ impl Renderer {
         self.gpu_profiler.resolve(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
         self.liquid_glass.begin_auto_darkness_debug_readback();
-        self.gpu_profiler.finish_frame(&self.queue);
 
         // Debug HUD pass: drawn last, on the completed in-app view, so
         // diagnostics sit above every glass/modal layer. Reuses the
@@ -952,9 +956,18 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("OS presentation encoder"),
                 });
-        self.presentation
-            .present(&mut present_encoder, &surface_view);
+        let profile_scope = self
+            .gpu_profiler
+            .begin_pass("surface_presentation", &mut present_encoder);
+        self.presentation.present_with_timestamps(
+            &mut present_encoder,
+            &surface_view,
+            profile_scope.timestamp_writes(),
+        );
+        self.gpu_profiler.end(&mut present_encoder, profile_scope);
+        self.gpu_profiler.resolve(&mut present_encoder);
         self.queue.submit(std::iter::once(present_encoder.finish()));
+        self.gpu_profiler.finish_frame(&self.queue);
 
         // Optional QA self-capture: copy the surface texture to a host-readable
         // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.
@@ -962,7 +975,10 @@ impl Renderer {
             self.save_frame_png(frame.texture(), path);
         }
 
+        self.frame_metrics.mark(2);
         frame.present();
+        self.frame_metrics.mark(3);
+        self.frame_metrics.finish();
         self.note_presentation();
     }
 

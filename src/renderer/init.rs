@@ -135,6 +135,11 @@ impl Renderer {
         if let Some(surface) = &surface {
             surface.configure(&device, &config);
         }
+        eprintln!(
+            "render configuration: adapter={:?} viewport={}x{} scale={} present={:?} alpha={:?} format={:?}",
+            adapter.get_info(), config.width, config.height, window.scale_factor(),
+            config.present_mode, config.alpha_mode, config.format,
+        );
         let qa_offscreen = qa_headless.then(|| create_qa_offscreen_texture(&device, &config));
 
         // Shaders
@@ -691,6 +696,7 @@ impl Renderer {
             focus_blur,
             presentation,
             gpu_profiler,
+            frame_metrics: super::frame_metrics::FrameMetrics::new(),
             below_settings_epoch: 0,
             below_menu_epoch: 0,
             completed_scene_cache: None,

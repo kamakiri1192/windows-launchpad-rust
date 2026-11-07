@@ -1113,7 +1113,7 @@ impl LiquidGlassRenderer {
         let mut flatten_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass context menu scene flatten encoder"),
         });
-        let flatten_scope = profiler.begin("completed_scene_flatten", &mut flatten_encoder);
+        let flatten_scope = profiler.begin_pass("completed_scene_flatten", &mut flatten_encoder);
         {
             let mut pass = flatten_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass context menu scene flatten pass"),
@@ -1127,7 +1127,7 @@ impl LiquidGlassRenderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: flatten_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1433,7 +1433,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
-        let profile_scope = profiler.begin(down_scopes[i], &mut encoder);
+        let profile_scope = profiler.begin_pass(down_scopes[i], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1447,7 +1447,7 @@ fn encode_blur_profile(
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: profile_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1475,7 +1475,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
-        let profile_scope = profiler.begin(up_scopes[j], &mut encoder);
+        let profile_scope = profiler.begin_pass(up_scopes[j], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1489,7 +1489,7 @@ fn encode_blur_profile(
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: profile_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

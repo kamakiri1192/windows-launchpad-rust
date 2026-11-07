@@ -179,6 +179,7 @@ impl LiquidGlassRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        profiler: &crate::renderer::gpu_profile::GpuProfilerState,
     ) {
         if !self.has_bottom_bar_glass() {
             return;
@@ -203,6 +204,7 @@ impl LiquidGlassRenderer {
         queue.write_buffer(&lane.uniforms, 0, bytemuck::bytes_of(&uniforms));
         // Re-evaluate animated shape coverage each frame, independently of the
         // interaction SDF and without merging nearby unrelated surfaces.
+        let geometry_scope = profiler.begin_pass("bottom_bar_geometry_pass", encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bottom bar glass geometry"),
@@ -227,7 +229,7 @@ impl LiquidGlassRenderer {
                     }),
                 ],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: geometry_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -235,6 +237,8 @@ impl LiquidGlassRenderer {
             pass.set_bind_group(0, &lane.geometry_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        profiler.end(encoder, geometry_scope);
+        let material_scope = profiler.begin_pass("bottom_bar_material_pass", encoder);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bottom bar glass completed-scene material"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -247,7 +251,7 @@ impl LiquidGlassRenderer {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: material_scope.timestamp_writes(),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -262,6 +266,8 @@ impl LiquidGlassRenderer {
             &[],
         );
         pass.draw(0..3, 0..1);
+        drop(pass);
+        profiler.end(encoder, material_scope);
     }
 }
 
@@ -394,7 +400,12 @@ mod tests {
                 let gap = ((24 * width + 50) * 4) as usize;
                 let draw = |renderer: &LiquidGlassRenderer| {
                     let mut encoder = device.create_command_encoder(&Default::default());
-                    renderer.render_bottom_bar(&queue, &mut encoder, &view);
+                    renderer.render_bottom_bar(
+                        &queue,
+                        &mut encoder,
+                        &view,
+                        &crate::renderer::gpu_profile::GpuProfilerState::new(&device),
+                    );
                     queue.submit([encoder.finish()]);
                     pixels(&device, &queue, &output)
                 };

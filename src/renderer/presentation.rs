@@ -138,6 +138,15 @@ impl SurfacePresentation {
     }
 
     pub fn present(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+        self.present_with_timestamps(encoder, target, None);
+    }
+
+    pub fn present_with_timestamps(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OS surface presentation pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -150,7 +159,7 @@ impl SurfacePresentation {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
             multiview_mask: None,
         });

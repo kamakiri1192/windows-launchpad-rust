@@ -313,6 +313,7 @@ impl App {
                     }
                 }
             }
+            r.frame_metrics.begin(now);
             r.render(&DrawArgs {
                 scroll_x,
                 viewport: vp,
