@@ -170,7 +170,16 @@ final class CatalogStore
                 "$this->storage/releases/{$doc["version"]}.json",
                 $bytes,
             );
-            self::atomic("$this->public/catalog-v1.json", $bytes);
+            // Distribution is compact; human-readable recovery files remain private.
+            self::atomic(
+                "$this->public/catalog-v1.json",
+                json_encode(
+                    $doc,
+                    JSON_UNESCAPED_UNICODE |
+                        JSON_UNESCAPED_SLASHES |
+                        JSON_THROW_ON_ERROR,
+                ),
+            );
             self::atomic("$this->storage/draft.json", $bytes);
             return ["draft" => $this->draft(), "status" => $this->status()];
         });

@@ -49,6 +49,15 @@ try {
         "version increases",
     );
     $doc = $published["draft"]["document"];
+    $publicBytes = file_get_contents($root . "/public/catalog-v1.json");
+    check(
+        json_decode($publicBytes, true) === $doc,
+        "compact release preserves all data",
+    );
+    check(
+        strlen($publicBytes) < strlen(Contract::encode($doc)),
+        "public release omits formatting bytes",
+    );
     $doc["apps"][0]["name"] = "Edited";
     $saved = $store->save($doc, $published["draft"]["revision"]);
     check(

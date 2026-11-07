@@ -5,6 +5,8 @@ use crate::domain::initial_layout::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::hash_map::RandomState,
+    hash::BuildHasher,
     io::Read,
     path::{Path, PathBuf},
     sync::{OnceLock, RwLock},
@@ -13,12 +15,81 @@ use std::{
 
 static ACTIVE: OnceLock<RwLock<Option<CatalogDocument>>> = OnceLock::new();
 const INTERVAL: u64 = 24 * 60 * 60;
+const MAX_DELAY: u64 = INTERVAL + INTERVAL / 4;
+const STARTUP_MIN: u64 = 30;
+const STARTUP_MAX: u64 = 30 * 60;
+const OVERDUE_GRACE: u64 = 5 * 60;
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct Schedule {
+    recorded_at: u64,
+    due_at: u64,
+    failures: u32,
+}
+impl Schedule {
+    fn valid_at(self, clock: u64) -> bool {
+        self.recorded_at <= clock
+            && self.due_at >= self.recorded_at
+            && self.due_at - self.recorded_at <= MAX_DELAY
+    }
+}
 #[derive(Serialize, Deserialize)]
 struct Cached {
     source: String,
     etag: Option<String>,
     checked_at: u64,
+    #[serde(default)]
+    schedule: Option<Schedule>,
     document: CatalogDocument,
+}
+fn entropy() -> u64 {
+    // Per-call random hash keys, not a user/device identifier; never transmitted.
+    RandomState::new().hash_one(())
+}
+fn retry_delay(failures: u32, random: u64) -> u64 {
+    let base = (3600_u64 << failures.saturating_sub(1).min(5)).min(INTERVAL);
+    base + random % (base / 4 + 1)
+}
+impl Cached {
+    fn prepare_schedule(&mut self, clock: u64, random: u64, startup: bool) -> bool {
+        let valid = self.schedule.filter(|s| s.valid_at(clock));
+        if valid.is_some_and(|s| {
+            s.due_at > clock || (!startup && clock.saturating_sub(s.due_at) <= OVERDUE_GRACE)
+        }) {
+            return false;
+        }
+        // Preserve the remaining 24-hour interval when migrating the old cache format.
+        let remaining =
+            if self.schedule.is_none() && self.checked_at > 0 && self.checked_at <= clock {
+                INTERVAL.saturating_sub(clock - self.checked_at)
+            } else {
+                0
+            };
+        let delay = STARTUP_MIN + random % (STARTUP_MAX - STARTUP_MIN + 1);
+        self.schedule = Some(Schedule {
+            recorded_at: clock,
+            due_at: clock.saturating_add(remaining + delay),
+            failures: valid.map_or(0, |s| s.failures),
+        });
+        true
+    }
+    fn record_attempt(&mut self, clock: u64, random: u64, succeeded: bool) {
+        let failures = if succeeded {
+            0
+        } else {
+            self.schedule.map_or(0, |s| s.failures).saturating_add(1)
+        };
+        let delay = if succeeded {
+            INTERVAL + random % (INTERVAL / 4 + 1)
+        } else {
+            retry_delay(failures, random)
+        };
+        self.checked_at = clock;
+        self.schedule = Some(Schedule {
+            recorded_at: clock,
+            due_at: clock.saturating_add(delay),
+            failures,
+        });
+    }
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -72,16 +143,26 @@ fn accept(previous: &CatalogDocument, bytes: &[u8]) -> Result<CatalogDocument, S
     }
     Ok(next)
 }
-fn refresh(path: &Path, source: &str) -> Result<(), String> {
+fn refresh_at(
+    path: &Path,
+    source: &str,
+    clock: u64,
+    random: u64,
+    startup: bool,
+) -> Result<(), String> {
     let mut cached = read_cache(path, source).unwrap_or_else(|| Cached {
         source: source.into(),
         etag: None,
         checked_at: 0,
+        schedule: None,
         document: CatalogDocument::bundled(),
     });
-    let clock = now();
-    // A future timestamp must not freeze updates indefinitely after a clock adjustment.
-    if cached.checked_at <= clock && clock - cached.checked_at < INTERVAL {
+    // Persist before contacting the server: repeated restarts keep the same deadline.
+    // Cold starts and resume after sleep with an overdue cache also spread out.
+    if cached.prepare_schedule(clock, random, startup) {
+        return save(path, &cached);
+    }
+    if cached.schedule.is_some_and(|s| clock < s.due_at) {
         return Ok(());
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -117,12 +198,7 @@ fn refresh(path: &Path, source: &str) -> Result<(), String> {
         }
         Ok(())
     })();
-    // Back off on failure too; restarting the app does not hammer the host.
-    cached.checked_at = if result.is_ok() {
-        clock
-    } else {
-        clock.saturating_sub(INTERVAL - 3600)
-    };
+    cached.record_attempt(clock, random, result.is_ok());
     save(path, &cached)?;
     if result.is_ok() {
         *active().write().map_err(|e| e.to_string())? = Some(cached.document);
@@ -150,14 +226,33 @@ pub fn start(directory: PathBuf) {
     }
     let _ = std::thread::Builder::new()
         .name("catalog-sync".into())
-        .spawn(move || loop {
-            if let Err(error) = refresh(&path, &source) {
-                eprintln!("catalog: keeping offline data: {error}");
+        .spawn(move || {
+            let mut startup = true;
+            loop {
+                let result = refresh_at(&path, &source, now(), entropy(), startup);
+                if let Err(error) = &result {
+                    eprintln!("catalog: keeping offline data: {error}");
+                }
+                startup = false;
+                let clock = now();
+                let delay = read_cache(&path, &source)
+                    .and_then(|c| c.schedule)
+                    .map(|s| {
+                        if s.valid_at(clock) {
+                            s.due_at.saturating_sub(clock).clamp(1, 3600)
+                        } else {
+                            1 // Re-schedule promptly after the system clock moves backwards.
+                        }
+                    })
+                    .unwrap_or_else(|| retry_delay(1, entropy()));
+                // A full/read-only disk must not turn a failed cache write into one GET per second.
+                let minimum = if result.is_err() {
+                    retry_delay(1, entropy())
+                } else {
+                    1
+                };
+                std::thread::sleep(Duration::from_secs(delay.max(minimum)));
             }
-            // Small stable process jitter spreads startup cohorts; only one GET per day on success.
-            std::thread::sleep(Duration::from_secs(
-                3600 + u64::from(std::process::id() % 300),
-            ));
         });
 }
 #[cfg(test)]
@@ -189,6 +284,7 @@ mod tests {
         let mut next = CatalogDocument::bundled();
         next.version += 1;
         let body = serde_json::to_string(&next).unwrap();
+        let clock = 1_800_000_000;
         let server = std::thread::spawn(move || {
             for (index, response) in [
                 format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"version-8\"\r\nConnection: close\r\n\r\n{}", body.len(), body),
@@ -204,20 +300,35 @@ mod tests {
                 stream.write_all(response.as_bytes()).unwrap();
             }
         });
-        refresh(&path, &source).unwrap();
+        refresh_at(&path, &source, clock, 123, true).unwrap();
+        let initial = read_cache(&path, &source).unwrap().schedule.unwrap();
+        // A restart before the deadline neither contacts the server nor moves the deadline.
+        refresh_at(&path, &source, clock + 1, 789, true).unwrap();
+        assert_eq!(
+            read_cache(&path, &source).unwrap().schedule.unwrap().due_at,
+            initial.due_at
+        );
+        refresh_at(&path, &source, initial.due_at, 123, false).unwrap();
         assert_eq!(
             read_cache(&path, &source).unwrap().document.version,
             next.version
         );
         for attempt in 0..2 {
-            let mut cached = read_cache(&path, &source).unwrap();
-            cached.checked_at = 0;
-            save(&path, &cached).unwrap();
-            let result = refresh(&path, &source);
+            let due = read_cache(&path, &source).unwrap().schedule.unwrap().due_at;
+            // No request one second before the persisted deadline.
+            refresh_at(&path, &source, due - 1, 456, false).unwrap();
+            let result = refresh_at(&path, &source, due, 456, false);
             assert_eq!(result.is_ok(), attempt == 0);
             assert_eq!(
                 read_cache(&path, &source).unwrap().document.version,
                 next.version
+            );
+            let scheduled = read_cache(&path, &source).unwrap().schedule.unwrap();
+            assert_eq!(scheduled.failures, if attempt == 0 { 0 } else { 1 });
+            refresh_at(&path, &source, due + 1, 789, true).unwrap();
+            assert_eq!(
+                read_cache(&path, &source).unwrap().schedule.unwrap().due_at,
+                scheduled.due_at
             );
         }
         server.join().unwrap();
@@ -235,6 +346,7 @@ mod tests {
             source: "https://example.test/catalog.json".into(),
             etag: Some("etag".into()),
             checked_at: now(),
+            schedule: None,
             document: CatalogDocument::bundled(),
         };
         save(&path, &cache).unwrap();
@@ -243,5 +355,77 @@ mod tests {
         std::fs::write(&path, b"truncated").unwrap();
         assert!(read_cache(&path, &cache.source).is_none());
         std::fs::remove_file(path).unwrap();
+    }
+
+    fn offline_cache() -> Cached {
+        Cached {
+            source: "https://example.test/catalog.json".into(),
+            etag: None,
+            checked_at: 0,
+            schedule: None,
+            document: CatalogDocument::bundled(),
+        }
+    }
+    #[test]
+    fn startup_spreads_cohorts_and_restarts_preserve_future_deadlines() {
+        let clock = 1_800_000_000;
+        let mut cache = offline_cache();
+        let mut bins = [0; 30];
+        for random in 0..100_000 {
+            cache.schedule = None;
+            assert!(cache.prepare_schedule(clock, random, true));
+            let due = cache.schedule.unwrap().due_at;
+            assert!((clock + STARTUP_MIN..=clock + STARTUP_MAX).contains(&due));
+            bins[((due - clock - STARTUP_MIN) / 60) as usize] += 1;
+            assert!(!cache.prepare_schedule(clock + 1, random + 500, true));
+            assert_eq!(cache.schedule.unwrap().due_at, due);
+        }
+        assert!(bins.into_iter().all(|count| count > 1000 && count < 4000));
+        // A cohort starting after days offline is staggered again.
+        assert!(cache.prepare_schedule(clock + INTERVAL * 3, 90, true));
+        assert_eq!(cache.schedule.unwrap().due_at, clock + INTERVAL * 3 + 120);
+        // Running processes resuming together after sleep must also avoid a request burst.
+        let due = cache.schedule.unwrap().due_at;
+        assert!(!cache.prepare_schedule(due + OVERDUE_GRACE, 90, false));
+        assert!(cache.prepare_schedule(due + OVERDUE_GRACE + 1, 90, false));
+        assert_eq!(
+            cache.schedule.unwrap().due_at,
+            due + OVERDUE_GRACE + 1 + 120
+        );
+    }
+    #[test]
+    fn failed_requests_back_off_exponentially_and_success_resets_backoff() {
+        let mut cache = offline_cache();
+        let mut clock = 1_800_000_000;
+        for expected in [3600, 7200, 14400, 28800, 57600, 86400, 86400] {
+            cache.record_attempt(clock, 0, false);
+            assert_eq!(cache.schedule.unwrap().due_at - clock, expected);
+            clock = cache.schedule.unwrap().due_at;
+        }
+        assert_eq!(cache.schedule.unwrap().failures, 7);
+        cache.record_attempt(clock, INTERVAL / 4, true);
+        assert_eq!(cache.schedule.unwrap().failures, 0);
+        assert_eq!(cache.schedule.unwrap().due_at - clock, MAX_DELAY);
+        for failures in 1..100 {
+            let minimum = retry_delay(failures, 0);
+            let spread = retry_delay(failures, minimum / 4);
+            assert_eq!(spread, minimum + minimum / 4);
+            assert!(spread <= MAX_DELAY);
+        }
+    }
+    #[test]
+    fn migrates_old_cache_and_recovers_after_clock_rollback() {
+        let clock = 1_800_000_000;
+        let mut json = serde_json::to_value(offline_cache()).unwrap();
+        json.as_object_mut().unwrap().remove("schedule");
+        json["checked_at"] = (clock - 3600).into();
+        let mut cache: Cached = serde_json::from_value(json).unwrap();
+        assert!(cache.prepare_schedule(clock, 0, true));
+        assert_eq!(
+            cache.schedule.unwrap().due_at,
+            clock + INTERVAL - 3600 + STARTUP_MIN
+        );
+        assert!(cache.prepare_schedule(clock - 3600, 0, false));
+        assert_eq!(cache.schedule.unwrap().due_at, clock - 3600 + STARTUP_MIN);
     }
 }
