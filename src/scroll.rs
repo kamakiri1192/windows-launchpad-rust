@@ -1173,11 +1173,20 @@ impl Spring {
 
     /// Advance one step. Returns `true` while still animating.
     pub fn step(&mut self, dt: f32, cfg: &PhysicsConfig) -> bool {
-        let dx = self.value - self.target;
-        let acc = -cfg.spring_omega * cfg.spring_omega * dx
-            - 2.0 * cfg.spring_zeta * cfg.spring_omega * self.velocity;
-        self.velocity += acc * dt;
-        self.value += self.velocity * dt;
+        // As with Scroller::tick, integrate all elapsed time in bounded steps.
+        // A slow startup/render frame must not send tiles and folder previews
+        // offscreen by destabilizing the semi-implicit Euler spring. At native
+        // cadence this is exactly the original single step.
+        let mut remaining = dt;
+        while remaining > 0.0 {
+            let step = remaining.min(cfg.max_dt);
+            remaining -= step;
+            let dx = self.value - self.target;
+            let acc = -cfg.spring_omega * cfg.spring_omega * dx
+                - 2.0 * cfg.spring_zeta * cfg.spring_omega * self.velocity;
+            self.velocity += acc * step;
+            self.value += self.velocity * step;
+        }
         if self.settled(cfg) {
             self.value = self.target;
             self.velocity = 0.0;
@@ -2864,6 +2873,52 @@ mod tests {
         }
         assert!(!animating, "spring must come to rest");
         assert!((s.value - 100.0).abs() < cfg.settle_eps);
+    }
+
+    #[test]
+    fn spring_survives_slow_startup_frames_and_retargets_without_flying_away() {
+        let cfg = PhysicsConfig::default();
+        let mut spring = Spring2::at(300.0, 900.0);
+        spring.glide_to(1500.0, 100.0);
+        for frame in 0..240 {
+            if frame == 12 {
+                spring.glide_to(600.0, 400.0);
+            }
+            let dt = [0.1, 1.0 / 18.0, 1.0 / 35.0][frame % 3];
+            spring.step(dt, &cfg);
+            for value in [spring.x.value, spring.y.value] {
+                assert!(
+                    value.is_finite() && (-100.0..1700.0).contains(&value),
+                    "position diverged on slow frame {frame}: {value}"
+                );
+            }
+        }
+        assert!(spring.settled(&cfg));
+        assert_eq!((spring.x.value, spring.y.value), (600.0, 400.0));
+    }
+
+    #[test]
+    fn spring_keeps_the_existing_step_at_native_or_faster_cadence() {
+        let cfg = PhysicsConfig::default();
+        for dt in [1.0 / 60.0, 1.0 / 120.0, 1.0 / 144.0] {
+            let mut actual = Spring::at(100.0);
+            actual.glide_to(600.0);
+            let mut expected = actual;
+            for _ in 0..120 {
+                let acc = -cfg.spring_omega * cfg.spring_omega * (expected.value - expected.target)
+                    - 2.0 * cfg.spring_zeta * cfg.spring_omega * expected.velocity;
+                expected.velocity += acc * dt;
+                expected.value += expected.velocity * dt;
+                if expected.settled(&cfg) {
+                    expected.snap_to(expected.target);
+                }
+                actual.step(dt, &cfg);
+                assert_eq!(
+                    (actual.value, actual.velocity),
+                    (expected.value, expected.velocity)
+                );
+            }
+        }
     }
 
     #[test]
