@@ -43,7 +43,10 @@ PR headの汎用`Spring::step`は、最大100msの実フレーム時間を1回�
    背景の画素更新だけではgeometryを無効にしない。
 2. **空の画素でのSDF評価を削減。** smooth unionと揺れの最大範囲、
    2×2 derivative quadを含めた、重複しないscissorの和集合を使う。
-   広く連なる範囲も256px単位に分けて形状の距離判定を絞る。
+   Macでは広く連なる範囲も256px単位に分けて形状の距離判定を絞る。
+   Windowsは全unionを保持するため分割でshader loopは減らない。`edeef48`で
+   merged scissorを維持し、各範囲で同じstorage buffer rangeを共有するようにした。
+   無益なdraw増加と形状データの重複転送を避ける。
    出現アニメーション中は元の全画面評価へ戻す。viewport、texture解像度、
    サンプリング座標、unionの順序、陰影の式は変えない。
    Macでは各scissorでSDFの上下限を保守的に評価し、smooth unionが既存入力をそのまま
@@ -244,3 +247,81 @@ capsule/gear lifecycle比較も実GPU経路で成功。
 - 動く背景は通常経路のcaptureを止めずに実測した。SCKの毎frame取り込みと
   背景差し替えGPUテストを確認したが、全種類の動画・外部アプリ背景は網羅していない。
 
+
+## 追加依頼: 編集時のアプリ名も一緒に揺らす
+
+`59d86a3`で、トップ画面のアプリ/フォルダー名とフォルダー内のアプリ名を、
+影ごとアイコンと同じpivot・位相・回転・上下動・scale/liftへ追従させた。
+閉じたフォルダーはミニアイコン群のrigid motionに合わせる。通常の設定文字、
+フォルダーの見出しは動かさない。glyph/atlasは時刻だけでは作り直さず、
+既存のGPU uniform clockで動かす。ownerの位置/flag変更時には文字bufferも更新する。
+
+自己レビューでフォルダー端のdrag中に文字がscissorで切れるケースを見つけ、
+ドラッグ文字を同じownerの前景drawへ移した。安定したowner IDで対応づけるので、
+並べ替えでdraw順が変わっても別アイコンの位相を使わない。
+文字/影を同じbuffer内で安定分割して既存drag passへ描くため、描画passは増やさない。
+
+`qa/edit_label_wiggle.json` と `scripts/verify_edit_label_wiggle.py` を追加。
+Latin/Japanese/折返し、トップ3件/フォルダー内3件、左右の揺れ、編集終了、
+フォルダー端を越えるドラッグをPNG画素から確認する。各frameのGPU時計とownerの
+位置・位相を記録し、静止画の文字をアイコンと同じ剛体変換で予測した結果と比較する。
+文字が静止したままの変更前PNGを代入すると検証が失敗することも確認した。
+
+最終の7条件は**2,120 frames**（倍率1/1.5/2の専用連番、既存edit/drag、folder
+interaction、folder page drag、label-click exit）。汎用artifact verifierは全成功。
+専用画素検証も3倍率すべて成功。編集終了後はidle画像と一致、端を越えるdragの
+最低画像類似度は0.979 / 0.990 / 0.993（合格閾値0.85）。この指標は本fixtureの
+白い文字maskの類似度で、任意の画面全体の同一性を表すものではない。
+
+画像: `target/pr237-label-final-qa/qa-sequences`。
+動画: `target/pr237-evidence/edit-label-wiggle.mp4`。
+手順: [EDIT_MODE_VISUAL_QA.md](EDIT_MODE_VISUAL_QA.md#automated-label-motion-regression)。
+通常の設定toggle/sliderとfolder top-level dragも追加前後の連番で確認した。
+
+最終の標準Macチェックは `cargo test --all-targets --locked` **1,713 passed /
+0 failed / 2 ignored**、all-target/all-feature Clippy（warnings denied）、fmt、
+Release buildが成功。
+
+### 文字の揺れ追加後の性能再確認
+
+同じMac/画面/背景/配置/Releaseと8秒warmup・12秒測定で、追加前後を交互に
+3回ずつ比較した（2巡目は逆順）。今回は両側とも `caffeinate -di` で無操作時の
+sleepを抑止した。計測中のビルド・GPU QA・PNG readbackは行っていない。
+追加前は `target/pr237-bounded-profile`、追加後は `59d86a3` の
+`target/pr237-label-profile`。`edeef48`の変更はWindows専用の範囲削減と
+同一形状range再利用なので、このMac計測の通常描画には影響しない。
+
+| 編集・動く背景（各runの中央値） | 文字追加前 | 文字追加後 |
+|---|---:|---:|
+| FPS | 60.00 | 60.00 |
+| 平均 / p50 ms | 16.667 / 16.699 | 16.665 / 16.689 |
+| p95 / p99 ms | 18.188 / 18.909 | 18.325 / 18.793 |
+| 標準偏差 ms | 0.998 | 1.089 |
+
+全3回のFPSは追加前59.999 / 59.989 / 60.000、追加後60.004 / 60.013 /
+60.002。静止時も1回ずつ追試し、60.017→59.998fps、平均16.662→16.667ms、
+p95 17.639→17.717ms、σ 0.663→0.770msだった。
+文字の揺れを加えた条件でも通常の60Hz描画を維持できた。
+この追試は先の全4条件で観測した長いsurface取得待ちが解消した証明ではない。
+生CSVは `target/pr237-label-perf-{before,after}-{edit,live}-*`、
+集計は `target/pr237-evidence/label-performance.json`。
+
+追加後の計測binary SHA256:
+`b5612cd6b2e4c912d5286377b50a854f77c515af94de8523f07aaa6eb4bbbc09`。
+
+### 最終コードのWindows確認
+
+`edeef48`の[Windows checks](https://github.com/kamakiri1192/windows-launchpad-rust/actions/runs/42404966098)
+でfmt / all-target・all-feature Clippy / 全テスト / buildが成功。
+[Liquid Glass GPU regressions](https://github.com/kamakiri1192/windows-launchpad-rust/actions/runs/42404966140)
+も成功。文字shaderの96-byte instance layoutを含む実GPU pipeline検証と、
+grid/full-redraw参照、bar/gear lifecycle参照を通過した。
+[Windows binary](https://github.com/kamakiri1192/windows-launchpad-rust/actions/runs/42404966146)と
+[Mac application](https://github.com/kamakiri1192/windows-launchpad-rust/actions/runs/42404966143)
+のartifact buildも成功。既存条件によりMac CI checksとnative-input E2Eはskipされるため、
+Macの検証根拠は上記の実機テスト・連番・計測とする。
+
+自己レビューではcache key/invalidation、共有textureの全writer、色変換の境界、
+GPU buffer stride、文字と影のowner追従、drag時のclipとdraw順、Windowsの無益な
+細分化を点検した。見つけたdrag文字の欠けとWindowsの重複処理は修正済み。
+常用の `Launchpad 5.app` は計測後に再起動した。既存bundleは上書きしていない。
