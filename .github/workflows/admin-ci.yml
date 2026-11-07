@@ -38,7 +38,9 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: mkdir -p ../target
       - run: npm run test:e2e
+      - run: mkdir -p public/catalog && echo '{"private":"runtime fixture"}' > public/catalog/private-test.json
       - run: npm run package
+      - run: test ! -e ../target/admin-package/public_html/catalog/private-test.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
