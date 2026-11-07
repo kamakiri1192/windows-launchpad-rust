@@ -29,6 +29,15 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     if u.alpha_mode == 0u { return color; }
     let alpha = clamp(color.a, 0.0, 1.0);
     if alpha <= 0.0 { return vec4<f32>(0.0); }
+    // For a straight-alpha sRGB attachment, decode(encode(straight)) is
+    // identity: hardware still performs the required final sRGB encoding.
+    // Opaque pixels have the same identity in either explicit alpha mode.
+    // Keep encoded-premultiplication below for partially covered PreMultiplied
+    // pixels; moving alpha across the transfer function would change the glass.
+    if u.target_srgb != 0u {
+        if u.alpha_mode == 2u { return vec4<f32>(color.rgb / alpha, alpha); }
+        if alpha == 1.0 { return color; }
+    }
     var encoded = encode_srgb(color.rgb / alpha);
     if u.alpha_mode == 1u { encoded *= alpha; }
     // Cancel the attachment's hardware encoding, but only at this final,

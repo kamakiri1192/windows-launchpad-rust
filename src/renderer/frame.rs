@@ -225,6 +225,7 @@ impl Renderer {
 
         let profile_scope = self.gpu_profiler.begin("folder_grid_glass", &mut encoder);
         self.liquid_glass.render_grid_overlay(
+            &self.device,
             &self.queue,
             &mut encoder,
             scene_view,
@@ -394,7 +395,8 @@ impl Renderer {
         // dragged icon) before drawing either; never sample their own glass/ink.
         if self.liquid_glass.has_bottom_bar_glass() {
             self.gpu_profiler.resolve(&mut encoder);
-            self.queue.submit(std::iter::once(encoder.finish()));
+            let submission = self.queue.submit(std::iter::once(encoder.finish()));
+            self.frame_metrics.wait_for_gpu(&self.device, submission, 4);
             self.liquid_glass.prepare_bottom_bar_scene_blur(
                 &self.device,
                 &self.queue,
@@ -469,7 +471,8 @@ impl Renderer {
         // The pyramid uses separate submissions because wgpu/D3D12 cannot
         // read and write successive levels inside one texture usage scope.
         self.gpu_profiler.resolve(&mut encoder);
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_metrics.wait_for_gpu(&self.device, submission, 5);
         if focus_blur_params.strength > 0.001 {
             // The veil pyramid depends only on the lower-scene texture, not on
             // the animating veil strength; skip it while that content is
@@ -899,7 +902,8 @@ impl Renderer {
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
         self.gpu_profiler.resolve(&mut encoder);
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_metrics.wait_for_gpu(&self.device, submission, 6);
         self.liquid_glass.begin_auto_darkness_debug_readback();
 
         // Debug HUD pass: drawn last, on the completed in-app view, so
@@ -966,7 +970,7 @@ impl Renderer {
         );
         self.gpu_profiler.end(&mut present_encoder, profile_scope);
         self.gpu_profiler.resolve(&mut present_encoder);
-        self.queue.submit(std::iter::once(present_encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(present_encoder.finish()));
         self.gpu_profiler.finish_frame(&self.queue);
 
         // Optional QA self-capture: copy the surface texture to a host-readable
@@ -976,6 +980,7 @@ impl Renderer {
         }
 
         self.frame_metrics.mark(2);
+        self.frame_metrics.wait_for_gpu(&self.device, submission, 7);
         frame.present();
         self.frame_metrics.mark(3);
         self.frame_metrics.finish();

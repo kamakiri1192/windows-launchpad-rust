@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 mod bottom_bar;
 mod frame;
+mod geometry_regions;
 use bottom_bar::BottomBarLane;
 mod resources;
 use resources::*;
@@ -258,6 +259,13 @@ pub struct LiquidGlassRenderer {
     grid_overlay_shape_count: u32,
     grid_overlay_shape_capacity: usize,
     grid_overlay_shapes: Vec<GlassShape>,
+    active_grid_shapes: Vec<GlassShape>,
+    grid_shape_scratch: Vec<GlassShape>,
+    // Valid only while the shared overlay geometry/tint textures still hold
+    // this lane. Backdrop pixel updates do not overwrite these textures.
+    grid_geometry_uniforms: Option<GlassUniforms>,
+    #[cfg(test)]
+    force_full_grid_redraw: bool,
     drag_overlay_shape_buffer: wgpu::Buffer,
     drag_overlay_shape_count: u32,
     drag_overlay_shape_capacity: usize,
@@ -403,7 +411,6 @@ pub struct LiquidGlassRenderer {
     modal_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     context_menu_final_bind_group: wgpu::BindGroup,
-    grid_overlay_geometry_bind_group: wgpu::BindGroup,
     drag_overlay_geometry_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
     modal_badge_geometry_bind_group: wgpu::BindGroup,
@@ -866,12 +873,6 @@ impl LiquidGlassRenderer {
             &geometry_bind_group_layout,
             &uniform_buffer,
             &shape_buffer,
-        );
-        let grid_overlay_geometry_bind_group = create_geometry_bind_group(
-            device,
-            &geometry_bind_group_layout,
-            &grid_overlay_uniform_buffer,
-            &grid_overlay_shape_buffer,
         );
         let drag_overlay_geometry_bind_group = create_geometry_bind_group(
             device,
@@ -1343,6 +1344,11 @@ impl LiquidGlassRenderer {
             grid_overlay_shape_count: 0,
             grid_overlay_shape_capacity,
             grid_overlay_shapes: Vec::new(),
+            active_grid_shapes: Vec::new(),
+            grid_shape_scratch: Vec::new(),
+            grid_geometry_uniforms: None,
+            #[cfg(test)]
+            force_full_grid_redraw: false,
             drag_overlay_shape_buffer,
             drag_overlay_shape_count: 0,
             drag_overlay_shape_capacity,
@@ -1459,7 +1465,6 @@ impl LiquidGlassRenderer {
             modal_final_bind_group,
             settings_panel_final_bind_group,
             context_menu_final_bind_group,
-            grid_overlay_geometry_bind_group,
             drag_overlay_geometry_bind_group,
             badge_geometry_bind_group,
             modal_badge_geometry_bind_group,
@@ -1535,6 +1540,7 @@ impl LiquidGlassRenderer {
         self.geometry_tint_texture = geometry_tint_texture;
         self.geometry_tint_view = geometry_tint_view;
         self.overlay_geometry_texture = overlay_geometry_texture;
+        self.grid_geometry_uniforms = None;
         self.overlay_geometry_view = overlay_geometry_view;
         self.overlay_tint_texture = overlay_tint_texture;
         self.overlay_tint_view = overlay_tint_view;
@@ -2235,6 +2241,8 @@ impl LiquidGlassRenderer {
         }
         self.grid_overlay_shapes.clear();
         self.grid_overlay_shapes.extend_from_slice(shapes);
+        self.active_grid_shapes.clear();
+        self.grid_geometry_uniforms = None;
         self.grid_overlay_shape_count = self.grid_overlay_shapes.len() as u32;
         if self.grid_overlay_shapes.len() > self.grid_overlay_shape_capacity {
             self.grid_overlay_shape_capacity = next_shape_capacity(
@@ -2245,12 +2253,6 @@ impl LiquidGlassRenderer {
                 device,
                 self.grid_overlay_shape_capacity,
                 "liquid glass grid overlay shape buffer",
-            );
-            self.grid_overlay_geometry_bind_group = create_geometry_bind_group(
-                device,
-                &self.geometry_bind_group_layout,
-                &self.grid_overlay_uniform_buffer,
-                &self.grid_overlay_shape_buffer,
             );
         }
         if !self.grid_overlay_shapes.is_empty() {

@@ -253,14 +253,60 @@ impl LiquidGlassRenderer {
     /// being swallowed by the page frame's union.
     pub fn render_grid_overlay(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scroll_x: f32,
         time: f32,
     ) {
-        if !self.params.enabled || self.grid_overlay_shape_count == 0 {
+        if !self.params.enabled || self.grid_overlay_shapes.is_empty() {
             return;
+        }
+
+        // Keep all launch-transformed shapes until presentation settles.
+        // Outside that transition, exclude only shapes too far outside the
+        // viewport to affect even the worst-case sequence of smooth unions.
+        #[cfg(test)]
+        let force_full = self.force_full_grid_redraw;
+        #[cfg(not(test))]
+        let force_full = false;
+        // Positive distances can carry influence through successive unions;
+        // bound that chain by one blend radius per shape, not only its outline.
+        let padding =
+            self.params.blend.max(0.0) * (1.0 + self.grid_overlay_shapes.len() as f32) + 3.0;
+        self.grid_shape_scratch.clear();
+        self.grid_shape_scratch
+            .extend(self.grid_overlay_shapes.iter().copied().filter(|shape| {
+                if force_full
+                    || self.params.presentation[0] < 1.0
+                    || shape.is_clip_only()
+                    || shape.is_frame()
+                {
+                    return true;
+                }
+                let bounds = shape.screen_bounds(scroll_x);
+                bounds[2] >= -padding
+                    && bounds[3] >= -padding
+                    && bounds[0] <= self.texture_size.0 as f32 + padding
+                    && bounds[1] <= self.texture_size.1 as f32 + padding
+            }));
+        if !force_full {
+            for shape in &mut self.grid_shape_scratch {
+                if matches!(shape.shape_type, 4..=6) {
+                    let wave = ((time + shape.motion[2]) * 8.0).sin();
+                    let (sin, cos) = (wave * 0.06).sin_cos();
+                    shape.motion_resolved = 1;
+                    shape.resolved_motion = [cos, sin, wave.abs() * 2.0];
+                }
+            }
+        }
+        if self.grid_shape_scratch != self.active_grid_shapes
+            || self.grid_shape_scratch.len() != self.grid_overlay_shape_count as usize
+        {
+            std::mem::swap(&mut self.active_grid_shapes, &mut self.grid_shape_scratch);
+            self.grid_overlay_shape_count = self.active_grid_shapes.len() as u32;
+            self.grid_geometry_uniforms = None;
         }
 
         let (width, height) = self.texture_size;
@@ -284,7 +330,90 @@ impl LiquidGlassRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        {
+        let reuse_geometry = self
+            .grid_geometry_uniforms
+            .as_ref()
+            .is_some_and(|previous| bytemuck::bytes_of(previous) == bytemuck::bytes_of(&uniforms));
+        if !reuse_geometry || force_full {
+            let regions = if force_full || self.params.presentation[0] < 1.0 {
+                vec![(0, 0, width, height)]
+            } else {
+                geometry_regions::regions(
+                    &self.active_grid_shapes,
+                    scroll_x,
+                    self.params.blend,
+                    self.texture_size,
+                )
+            };
+            let stride = std::mem::size_of::<GlassShape>();
+            let alignment = device.limits().min_storage_buffer_offset_alignment as usize;
+            let mut packed = Vec::new();
+            let mut slices = Vec::new();
+            for rect in regions {
+                let shapes = if force_full || self.params.presentation[0] < 1.0 {
+                    self.active_grid_shapes.clone()
+                } else {
+                    geometry_regions::contributing_shapes(
+                        &self.active_grid_shapes,
+                        scroll_x,
+                        self.params.blend,
+                        rect,
+                    )
+                };
+                if shapes.is_empty() {
+                    continue;
+                }
+                while packed.len() * stride % alignment != 0 {
+                    packed.push(shapes[0]);
+                }
+                let offset = (packed.len() * stride) as u64;
+                let size = (shapes.len() * stride) as u64;
+                packed.extend(shapes);
+                slices.push((rect, offset, size));
+            }
+            if packed.len() > self.grid_overlay_shape_capacity {
+                self.grid_overlay_shape_capacity =
+                    next_shape_capacity(self.grid_overlay_shape_capacity, packed.len());
+                self.grid_overlay_shape_buffer = create_shape_buffer_with_capacity(
+                    device,
+                    self.grid_overlay_shape_capacity,
+                    "grid regional shapes",
+                );
+            }
+            if !packed.is_empty() {
+                queue.write_buffer(
+                    &self.grid_overlay_shape_buffer,
+                    0,
+                    bytemuck::cast_slice(&packed),
+                );
+            }
+            // Separate binding ranges make arrayLength expose exactly this
+            // region's shapes. Uniforms and all SDF/material equations remain
+            // shared. All writes precede the single existing geometry pass.
+            let batches: Vec<_> = slices
+                .into_iter()
+                .map(|(rect, offset, size)| {
+                    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("grid regional geometry"),
+                        layout: &self.geometry_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: self.grid_overlay_uniform_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &self.grid_overlay_shape_buffer,
+                                    offset,
+                                    size: std::num::NonZeroU64::new(size),
+                                }),
+                            },
+                        ],
+                    });
+                    (rect, group)
+                })
+                .collect();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass grid overlay geometry pass"),
                 color_attachments: &[
@@ -313,8 +442,12 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.grid_overlay_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            for ((x, y, w, h), group) in &batches {
+                pass.set_bind_group(0, group, &[]);
+                pass.set_scissor_rect(*x, *y, *w, *h);
+                pass.draw(0..3, 0..1);
+            }
+            self.grid_geometry_uniforms = Some(uniforms);
         }
 
         {
@@ -355,6 +488,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(
             &self.params,
@@ -446,6 +580,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(
             &self.params,
@@ -528,6 +663,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(
             &self.params,
@@ -834,6 +970,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let mut uniforms = uniforms_from_params(
             &self.params,
@@ -1292,6 +1429,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let mut uniforms = uniforms_from_params(
             &self.params,

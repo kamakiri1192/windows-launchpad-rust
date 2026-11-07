@@ -48,7 +48,6 @@ if [[ -e "$output_dir" ]]; then
 fi
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
-export LAUNCHPAD_FRAME_METRICS="$output_dir/frame-metrics.csv"
 
 {
   echo "commit=$(git rev-parse HEAD)"
@@ -72,7 +71,9 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
-binary="$repo_root/target/release/launchpad-windows"
+binary="${PROFILE_BINARY:-$repo_root/target/release/launchpad-windows}"
+shasum -a 256 "$binary" > "$output_dir/binary-sha256.txt"
+git status --short > "$output_dir/source-status.txt"
 
 case "$mode" in
   qa|folder-scroll)
@@ -109,6 +110,7 @@ PY
     fi
     ;;
   live|gpu|scroll|scroll-gpu|edit|edit-gpu)
+    export LAUNCHPAD_FRAME_METRICS="$output_dir/frame-metrics.csv"
     if pgrep -x launchpad-windows >/dev/null; then
       echo "another launchpad-windows process is running" >&2
       exit 1
@@ -211,4 +213,8 @@ PY
 esac
 
 python3 scripts/summarize_macos_profile.py "$output_dir"
+if [[ -f "$output_dir/frame-metrics.csv" ]]; then
+  python3 scripts/summarize_frame_metrics.py "$output_dir/frame-metrics.csv" \
+    --warmup "${FRAME_WARMUP_SECONDS:-10}" > "$output_dir/frame-summary.json"
+fi
 echo "reports: $output_dir"
