@@ -40,3 +40,5 @@
   (added / updated / removed) and click-stability via stable app ids.
 - [EDIT_MODE_VISUAL_QA.md](EDIT_MODE_VISUAL_QA.md) — manual visual QA for
   edit-mode reordering, screenshots, persistence checks, and hit-test logic.
+
+- [Liquid Start Console](../admin/README.md) — 分類カタログの自動収集、管理画面、Xサーバー配置、MCP、Rust連携。

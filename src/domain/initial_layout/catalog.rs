@@ -1,12 +1,13 @@
 //! Embedded product catalog; identifiers and sources are documented in
 //! docs/INITIAL_FOLDER_LAYOUT_CATALOG.md.
 use super::super::app_diff::SnapshotEntry;
-mod macos;
+
 mod products;
 pub(super) mod windows;
 
 pub const VERSION: u32 = 7;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Platform {
     Windows,
     Macos,
@@ -21,62 +22,76 @@ impl Platform {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Preset {
-    pub id: &'static str,
-    pub japanese_name: &'static str,
-    pub english_name: &'static str,
-    pub platforms: &'static [Platform],
-    pub evidence: &'static str,
+    pub id: String,
+    pub japanese_name: String,
+    pub english_name: String,
+    pub platforms: Vec<Platform>,
+    pub evidence: String,
     pub rules: Vec<Rule>,
 }
 impl Preset {
     pub fn name(&self, japanese: bool) -> &str {
         if japanese {
-            self.japanese_name
+            &self.japanese_name
         } else {
-            self.english_name
+            &self.english_name
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Rule {
     WindowsPackage {
-        aumid: &'static str,
-        product: &'static str,
+        aumid: String,
+        product: String,
     },
-    SteamApp(&'static str),
+    SteamApp {
+        id: String,
+    },
     MacBundle {
-        bundle: &'static str,
-        product: &'static str,
+        bundle: String,
+        product: String,
     },
     MacVersionedBundle {
-        prefix: &'static str,
-        product: &'static str,
+        prefix: String,
+        product: String,
     },
     MacBundleInDirectory {
-        bundle: &'static str,
-        directory: &'static str,
-        product: &'static str,
+        bundle: String,
+        directory: String,
+        product: String,
     },
     MacCorelSuite,
     WindowsProduct {
-        executable: &'static str,
-        directory: &'static str,
-        product: &'static str,
+        executable: String,
+        directory: String,
+        product: String,
         versioned_executable: bool,
     },
+    WindowsMetadata {
+        executable: String,
+        publisher: String,
+        product_name: String,
+        product: String,
+    },
     WindowsOffice,
-    WindowsSystem(&'static str),
+    WindowsSystem {
+        group: String,
+    },
     VisualStudio,
     LibreOffice,
     JetBrains,
     AdobeCreative,
-    RelatedWindows(&'static str),
+    RelatedWindows {
+        group: String,
+    },
     Steam,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Catalog {
+    pub version: u32,
     pub presets: Vec<Preset>,
     pub windows_directory: Option<String>,
 }
@@ -88,221 +103,7 @@ pub enum Classification<'a> {
 
 impl Catalog {
     pub fn bundled(windows_directory: Option<String>) -> Self {
-        use Platform::{Macos as M, Windows as W};
-        let definitions = [
-            ("windows-tools", "PC管理", "PC Management", &[W][..]),
-            (
-                "windows-accessories",
-                "Windowsアクセサリ",
-                "Windows Accessories",
-                &[W][..],
-            ),
-            (
-                "macos-utilities",
-                "macOSユーティリティ",
-                "macOS Utilities",
-                &[M][..],
-            ),
-            (
-                "microsoft-office",
-                "Microsoft Office",
-                "Microsoft Office",
-                &[W, M][..],
-            ),
-            (
-                "apple-documents",
-                "Apple文書アプリ",
-                "Apple Documents",
-                &[M][..],
-            ),
-            (
-                "macos-accessories",
-                "Macアクセサリ",
-                "Mac Accessories",
-                &[M][..],
-            ),
-            (
-                "google-workspace",
-                "Google Workspace",
-                "Google Workspace",
-                &[M][..],
-            ),
-            ("clip-studio", "CLIP STUDIO", "CLIP STUDIO", &[M][..]),
-            ("vocaloid", "VOCALOID", "VOCALOID", &[M][..]),
-            ("macos-development", "開発ツール", "Development", &[M][..]),
-            (
-                "macos-ai-assistants",
-                "AI・音声入力",
-                "AI & Dictation",
-                &[M][..],
-            ),
-            ("macos-avatar-3d", "3D・アバター", "3D & Avatars", &[M][..]),
-            ("macos-design", "デザイン", "Design", &[M][..]),
-            ("macos-image", "写真・画像", "Photos & Images", &[M][..]),
-            (
-                "macos-video-live",
-                "映像・配信・演出",
-                "Video & Live Production",
-                &[M][..],
-            ),
-            (
-                "macos-music-production",
-                "音楽制作",
-                "Music Production",
-                &[M][..],
-            ),
-            (
-                "macos-voice-synthesis",
-                "音声・歌声合成",
-                "Voice Synthesis",
-                &[M][..],
-            ),
-            (
-                "macos-communication",
-                "連絡・通話",
-                "Communication",
-                &[M][..],
-            ),
-            (
-                "macos-productivity",
-                "メモ・予定・作業",
-                "Notes & Planning",
-                &[M][..],
-            ),
-            ("macos-media", "メディア再生", "Media", &[M][..]),
-            (
-                "macos-files",
-                "ファイル転送・同期",
-                "File Transfer & Sync",
-                &[M][..],
-            ),
-            (
-                "macos-virtual-machines",
-                "仮想マシン",
-                "Virtual Machines",
-                &[M][..],
-            ),
-            (
-                "macos-customization",
-                "Macカスタマイズ",
-                "Mac Customization",
-                &[M][..],
-            ),
-            (
-                "macos-devices",
-                "デバイス連携",
-                "Connected Devices",
-                &[M][..],
-            ),
-            (
-                "macos-information",
-                "生活情報",
-                "Everyday Information",
-                &[M][..],
-            ),
-            ("macos-games", "ゲーム", "Games", &[M][..]),
-            ("macos-pdf", "PDF", "PDF", &[M][..]),
-            ("libreoffice", "LibreOffice", "LibreOffice", &[W, M][..]),
-            (
-                "adobe-creative-cloud",
-                "Adobe Creative Cloud",
-                "Adobe Creative Cloud",
-                &[W, M][..],
-            ),
-            ("affinity-legacy", "Affinity", "Affinity", &[W, M][..]),
-            ("coreldraw-suite", "CorelDRAW", "CorelDRAW", &[W, M][..]),
-            (
-                "cyberlink-director-suite",
-                "CyberLink",
-                "CyberLink",
-                &[W, M][..],
-            ),
-            (
-                "final-cut-suite",
-                "Final Cut関連",
-                "Final Cut Apps",
-                &[M][..],
-            ),
-            ("logic-suite", "Logic関連", "Logic Apps", &[M][..]),
-            (
-                "blackmagic-creative",
-                "Blackmagic Design",
-                "Blackmagic Design",
-                &[W, M][..],
-            ),
-            ("maxon-creative", "Maxon", "Maxon", &[W, M][..]),
-            ("steinberg-creative", "Steinberg", "Steinberg", &[W, M][..]),
-            (
-                "native-instruments-standalone",
-                "Native Instruments",
-                "Native Instruments",
-                &[W, M][..],
-            ),
-            ("git-tools", "Git", "Git", &[W][..]),
-            ("vr-tools", "VRツール", "VR Tools", &[W][..]),
-            ("vr-games", "VR Games", "VR Games", &[W][..]),
-            (
-                "remote-desktop",
-                "リモートデスクトップ",
-                "Remote Desktop",
-                &[W, M][..],
-            ),
-            (
-                "windows-dev-tools",
-                "Windows Dev tools",
-                "Windows Dev tools",
-                &[W][..],
-            ),
-            ("omen", "OMEN", "OMEN", &[W][..]),
-            ("unity-tools", "Unity", "Unity", &[W, M][..]),
-            (
-                "live2d-cubism",
-                "Live2D Cubism",
-                "Live2D Cubism",
-                &[W, M][..],
-            ),
-            ("razer-tools", "Razer", "Razer", &[W][..]),
-            (
-                "windows-accessibility",
-                "アクセシビリティ",
-                "Accessibility",
-                &[W][..],
-            ),
-            ("jetbrains-ides", "JetBrains", "JetBrains", &[W, M][..]),
-            ("autodesk-creative", "Autodesk", "Autodesk", &[W, M][..]),
-            (
-                "visual-studio-tools",
-                "Visual Studioツール",
-                "Visual Studio Tools",
-                &[W][..],
-            ),
-            (
-                "steam-library",
-                "Steamライブラリ",
-                "Steam Library",
-                &[W, M][..],
-            ),
-        ];
-        let presets = definitions.into_iter().map(|(id, ja, en, platforms)| {
-            let (evidence, rules) = match id {
-                "windows-tools" | "windows-accessories" => ("Windows 11 local AppsFolder / Start Menu / version resources, 2026-09-25", vec![Rule::WindowsSystem(id)]),
-                "visual-studio-tools" => ("Visual Studio 18 Build Tools local shortcuts, 2026-09-25", vec![Rule::VisualStudio]),
-                "jetbrains-ides" => ("JetBrains launcher documentation and Homebrew signed bundle recipes", vec![Rule::JetBrains]),
-                "adobe-creative-cloud" => ("Installed Adobe Windows 2025/2026 shortcuts and executable product/publisher metadata, 2026-09-25", vec![Rule::AdobeCreative]),
-                "libreoffice" => ("https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html", vec![Rule::LibreOffice]),
-                "microsoft-office" => ("https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac and Microsoft Office command-line documentation", vec![Rule::WindowsOffice]),
-                "steam-library" => ("src/workers/steam_scan.rs manifest records (not name-based)", vec![Rule::Steam]),
-                _ => ("docs/INITIAL_FOLDER_LAYOUT_CATALOG.md", Vec::new()),
-            };
-            let mut rules = rules;
-            products::append_rules(id, &mut rules);
-            macos::append_rules(id, &mut rules);
-            Preset { id, japanese_name: ja, english_name: en, platforms, evidence, rules }
-        }).collect();
-        Self {
-            presets,
-            windows_directory: windows_directory.map(|p| windows_path(&p)),
-        }
+        super::document::CatalogDocument::bundled().into_catalog(windows_directory)
     }
 
     pub fn classify(
@@ -325,7 +126,17 @@ impl Catalog {
                     | "acrord32.exe"
                     | "calc.exe"
             ))
-            || (platform == Platform::Macos && macos::keep_top_level(&entry.identifier))
+            || (platform == Platform::Macos
+                && matches!(
+                    entry.identifier.as_str(),
+                    "com.apple.AppStore"
+                        | "com.apple.Safari"
+                        | "com.google.Chrome"
+                        | "com.microsoft.edgemac"
+                        | "com.apple.systempreferences"
+                        | "com.apple.calculator"
+                        | "com.valvesoftware.steam"
+                ))
             || (platform == Platform::Windows
                 && matches!(
                     entry.identifier.as_str(),
@@ -343,19 +154,26 @@ impl Catalog {
             for preset in &self.presets {
                 if preset.platforms.contains(&platform)
                     && preset.rules.iter().any(
-                        |rule| matches!(rule, Rule::SteamApp(id) if entry.app_id.as_str() == *id),
+                        |rule| matches!(rule, Rule::SteamApp { id } if entry.app_id.as_str() == *id),
                     )
                 {
                     return Some(Classification::Product {
-                        preset: preset.id,
+                        preset: &preset.id,
                         product: entry.app_id.to_string(),
                     });
                 }
             }
-            return Some(Classification::Product {
-                preset: "steam-library",
-                product: entry.app_id.to_string(),
-            });
+            return self
+                .presets
+                .iter()
+                .find(|p| {
+                    p.platforms.contains(&platform)
+                        && p.rules.iter().any(|r| matches!(r, Rule::Steam))
+                })
+                .map(|p| Classification::Product {
+                    preset: &p.id,
+                    product: entry.app_id.to_string(),
+                });
         }
         let mut matches = Vec::new();
         for preset in &self.presets {
@@ -364,12 +182,12 @@ impl Catalog {
             }
             for rule in &preset.rules {
                 if let Some(product) = self.match_rule(rule, entry, platform) {
-                    let priority = if matches!(rule, Rule::WindowsSystem(_)) {
+                    let priority = if matches!(rule, Rule::WindowsSystem { .. }) {
                         1
                     } else {
                         0
                     };
-                    matches.push((priority, preset.id, product));
+                    matches.push((priority, preset.id.as_str(), product));
                 }
             }
         }
@@ -398,7 +216,7 @@ impl Catalog {
                 && std::path::Path::new(&e.link_path).components().any(|part| {
                     part.as_os_str().to_str().is_some_and(|part| {
                         part == *directory
-                            || part.strip_prefix(directory).is_some_and(|suffix| {
+                            || part.strip_prefix(directory.as_str()).is_some_and(|suffix| {
                                 suffix.strip_prefix(' ').is_some_and(|year| {
                                     year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit())
                                 })
@@ -414,7 +232,7 @@ impl Catalog {
         if let Rule::MacVersionedBundle { prefix, product } = rule {
             return (platform == Platform::Macos
                 && e.identifier
-                    .strip_prefix(prefix)
+                    .strip_prefix(prefix.as_str())
                     .is_some_and(products::version_suffix))
             .then(|| product.to_string());
         }
@@ -435,18 +253,18 @@ impl Catalog {
             return None;
         }
         if let Rule::WindowsPackage { aumid, product } = rule {
-            return (entry_aumid(e) == Some(*aumid)).then(|| product.to_string());
+            return (entry_aumid(e) == Some(aumid.as_str())).then(|| product.to_string());
         }
-        if let Rule::WindowsSystem(group) = rule {
+        if let Rule::WindowsSystem { group } = rule {
             return windows::identify(e, self.windows_directory.as_deref())
-                .filter(|(_, found)| *found == Some(*group))
+                .filter(|(_, found)| *found == Some(group.as_str()))
                 .map(|(product, _)| product.to_owned());
         }
         let path = windows_path(&e.target_path);
         let file = basename(&path);
         let args = e.launch_arguments.as_deref()?;
         match rule {
-            Rule::RelatedWindows(group) => products::related_windows(
+            Rule::RelatedWindows { group } => products::related_windows(
                 group,
                 file,
                 &path,
@@ -471,6 +289,18 @@ impl Catalog {
                             .is_some_and(products::version_suffix))) =>
             {
                 Some(product.to_string())
+            }
+            Rule::WindowsMetadata {
+                executable,
+                publisher,
+                product_name,
+                product,
+            } if args.is_empty()
+                && file == executable
+                && e.publisher == *publisher
+                && e.identifier == *product_name =>
+            {
+                Some(product.clone())
             }
             Rule::AdobeCreative if args.is_empty() => {
                 adobe_creative_product(file, e).map(str::to_owned)

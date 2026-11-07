@@ -4,10 +4,7 @@ use super::state::App;
 impl App {
     pub(crate) fn reset_settings_and_layout(&mut self) {
         use crate::domain::{
-            initial_layout::{
-                self,
-                catalog::{Catalog, Platform},
-            },
+            initial_layout::{self, catalog::Platform},
             settings::Settings,
         };
         if !self.layout_writable || !self.initial_layout_store_writable() {
@@ -19,7 +16,7 @@ impl App {
             Platform::current(),
             initial_layout::japanese_locale(sys_locale::get_locale().as_deref()),
             self.launcher_state.layout_revision,
-            &Catalog::bundled(std::env::var("SystemRoot").ok()),
+            &crate::catalog_sync::current(std::env::var("SystemRoot").ok()),
         );
         if !self.qa_enabled() {
             if let Err(error) = self.save_initial_layout_candidate(&state, Some(&settings)) {

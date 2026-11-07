@@ -1,0 +1,53 @@
+name: Admin Console CI
+on:
+  pull_request:
+    paths:
+      - 'admin/**'
+      - 'assets/catalog/**'
+      - '.github/workflows/admin-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'admin/**'
+      - 'assets/catalog/**'
+      - '.github/workflows/admin-ci.yml'
+permissions:
+  contents: read
+jobs:
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, gd, session, fileinfo
+          coverage: none
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: mkdir -p ../target
+      - run: npm run test:e2e
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: admin-console-qa
+          path: |
+            target/qa-catalog-*.png
+            admin/test-results/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: admin-console-xserver
+          path: target/admin-package/

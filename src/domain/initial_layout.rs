@@ -1,5 +1,6 @@
 //! One-shot, offline initial placement. No OS calls or persistence in this module.
 pub mod catalog;
+pub mod document;
 mod order;
 
 use super::{
@@ -172,6 +173,7 @@ pub fn generate(
         InitializationStatus::Applied
     };
     let mut record = InitialLayoutRecord::new(status, generation);
+    record.catalog_version = catalog.version;
     state.layout_revision = 1;
     if status == InitializationStatus::Applied {
         record.undo = Some(InitialLayoutUndo {

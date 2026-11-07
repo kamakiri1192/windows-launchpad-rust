@@ -38,3 +38,14 @@ Desktop.ini
 
 # Local-only scratch / generated logs
 tmp/
+
+# Classification console dependencies, runtime state and build output
+/admin/node_modules/
+/admin/dist/
+/admin/server/config.php
+/admin/storage/
+/admin/public/catalog/
+/admin/playwright-report/
+/admin/test-results/
+/admin/.env*
+/admin/*.tsbuildinfo

@@ -1,0 +1,4302 @@
+{
+  "schema_version": 1,
+  "version": 7,
+  "published_at": null,
+  "folders": [
+    {
+      "id": "windows-tools",
+      "names": {
+        "ja": "PC管理",
+        "en": "PC Management"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "Windows 11 local AppsFolder / Start Menu / version resources, 2026-09-25"
+    },
+    {
+      "id": "windows-accessories",
+      "names": {
+        "ja": "Windowsアクセサリ",
+        "en": "Windows Accessories"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "Windows 11 local AppsFolder / Start Menu / version resources, 2026-09-25"
+    },
+    {
+      "id": "macos-utilities",
+      "names": {
+        "ja": "macOSユーティリティ",
+        "en": "macOS Utilities"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "microsoft-office",
+      "names": {
+        "ja": "Microsoft Office",
+        "en": "Microsoft Office"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac and Microsoft Office command-line documentation"
+    },
+    {
+      "id": "apple-documents",
+      "names": {
+        "ja": "Apple文書アプリ",
+        "en": "Apple Documents"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-accessories",
+      "names": {
+        "ja": "Macアクセサリ",
+        "en": "Mac Accessories"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "google-workspace",
+      "names": {
+        "ja": "Google Workspace",
+        "en": "Google Workspace"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "clip-studio",
+      "names": {
+        "ja": "CLIP STUDIO",
+        "en": "CLIP STUDIO"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "vocaloid",
+      "names": {
+        "ja": "VOCALOID",
+        "en": "VOCALOID"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-development",
+      "names": {
+        "ja": "開発ツール",
+        "en": "Development"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-ai-assistants",
+      "names": {
+        "ja": "AI・音声入力",
+        "en": "AI & Dictation"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-avatar-3d",
+      "names": {
+        "ja": "3D・アバター",
+        "en": "3D & Avatars"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-design",
+      "names": {
+        "ja": "デザイン",
+        "en": "Design"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-image",
+      "names": {
+        "ja": "写真・画像",
+        "en": "Photos & Images"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-video-live",
+      "names": {
+        "ja": "映像・配信・演出",
+        "en": "Video & Live Production"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-music-production",
+      "names": {
+        "ja": "音楽制作",
+        "en": "Music Production"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-voice-synthesis",
+      "names": {
+        "ja": "音声・歌声合成",
+        "en": "Voice Synthesis"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-communication",
+      "names": {
+        "ja": "連絡・通話",
+        "en": "Communication"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-productivity",
+      "names": {
+        "ja": "メモ・予定・作業",
+        "en": "Notes & Planning"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-media",
+      "names": {
+        "ja": "メディア再生",
+        "en": "Media"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-files",
+      "names": {
+        "ja": "ファイル転送・同期",
+        "en": "File Transfer & Sync"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-virtual-machines",
+      "names": {
+        "ja": "仮想マシン",
+        "en": "Virtual Machines"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-customization",
+      "names": {
+        "ja": "Macカスタマイズ",
+        "en": "Mac Customization"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-devices",
+      "names": {
+        "ja": "デバイス連携",
+        "en": "Connected Devices"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-information",
+      "names": {
+        "ja": "生活情報",
+        "en": "Everyday Information"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-games",
+      "names": {
+        "ja": "ゲーム",
+        "en": "Games"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "macos-pdf",
+      "names": {
+        "ja": "PDF",
+        "en": "PDF"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "libreoffice",
+      "names": {
+        "ja": "LibreOffice",
+        "en": "LibreOffice"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html"
+    },
+    {
+      "id": "adobe-creative-cloud",
+      "names": {
+        "ja": "Adobe Creative Cloud",
+        "en": "Adobe Creative Cloud"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "Installed Adobe Windows 2025/2026 shortcuts and executable product/publisher metadata, 2026-09-25"
+    },
+    {
+      "id": "affinity-legacy",
+      "names": {
+        "ja": "Affinity",
+        "en": "Affinity"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "coreldraw-suite",
+      "names": {
+        "ja": "CorelDRAW",
+        "en": "CorelDRAW"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "cyberlink-director-suite",
+      "names": {
+        "ja": "CyberLink",
+        "en": "CyberLink"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "final-cut-suite",
+      "names": {
+        "ja": "Final Cut関連",
+        "en": "Final Cut Apps"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "logic-suite",
+      "names": {
+        "ja": "Logic関連",
+        "en": "Logic Apps"
+      },
+      "platforms": [
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "blackmagic-creative",
+      "names": {
+        "ja": "Blackmagic Design",
+        "en": "Blackmagic Design"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "maxon-creative",
+      "names": {
+        "ja": "Maxon",
+        "en": "Maxon"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "steinberg-creative",
+      "names": {
+        "ja": "Steinberg",
+        "en": "Steinberg"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "native-instruments-standalone",
+      "names": {
+        "ja": "Native Instruments",
+        "en": "Native Instruments"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "git-tools",
+      "names": {
+        "ja": "Git",
+        "en": "Git"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "vr-tools",
+      "names": {
+        "ja": "VRツール",
+        "en": "VR Tools"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "vr-games",
+      "names": {
+        "ja": "VR Games",
+        "en": "VR Games"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "remote-desktop",
+      "names": {
+        "ja": "リモートデスクトップ",
+        "en": "Remote Desktop"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "windows-dev-tools",
+      "names": {
+        "ja": "Windows Dev tools",
+        "en": "Windows Dev tools"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "omen",
+      "names": {
+        "ja": "OMEN",
+        "en": "OMEN"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "unity-tools",
+      "names": {
+        "ja": "Unity",
+        "en": "Unity"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "live2d-cubism",
+      "names": {
+        "ja": "Live2D Cubism",
+        "en": "Live2D Cubism"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "razer-tools",
+      "names": {
+        "ja": "Razer",
+        "en": "Razer"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "windows-accessibility",
+      "names": {
+        "ja": "アクセシビリティ",
+        "en": "Accessibility"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "jetbrains-ides",
+      "names": {
+        "ja": "JetBrains",
+        "en": "JetBrains"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "JetBrains launcher documentation and Homebrew signed bundle recipes"
+    },
+    {
+      "id": "autodesk-creative",
+      "names": {
+        "ja": "Autodesk",
+        "en": "Autodesk"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "docs/INITIAL_FOLDER_LAYOUT_CATALOG.md"
+    },
+    {
+      "id": "visual-studio-tools",
+      "names": {
+        "ja": "Visual Studioツール",
+        "en": "Visual Studio Tools"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "evidence": "Visual Studio 18 Build Tools local shortcuts, 2026-09-25"
+    },
+    {
+      "id": "steam-library",
+      "names": {
+        "ja": "Steamライブラリ",
+        "en": "Steam Library"
+      },
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "evidence": "src/workers/steam_scan.rs manifest records (not name-based)"
+    }
+  ],
+  "apps": [
+    {
+      "id": "windows-tools-windows-system",
+      "name": "Windows標準アプリ",
+      "folder_id": "windows-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_system",
+          "group": "windows-tools"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "windows-accessories-windows-system",
+      "name": "Windows標準アプリ",
+      "folder_id": "windows-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_system",
+          "group": "windows-accessories"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-daisydisk",
+      "name": "Daisydisk",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.daisydiskapp.DaisyDiskStandAlone",
+          "product": "daisydisk"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-mission-control",
+      "name": "Mission Control",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.exposelauncher",
+          "product": "mission-control"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-runcat",
+      "name": "Runcat",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.kyome.RunCat",
+          "product": "runcat"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-siri",
+      "name": "Siri",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.siri.launcher",
+          "product": "siri"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-time-machine",
+      "name": "Time Machine",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.backup.launcher",
+          "product": "time-machine"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-shortcuts",
+      "name": "Shortcuts",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.shortcuts",
+          "product": "shortcuts"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-passwords",
+      "name": "Passwords",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Passwords",
+          "product": "passwords"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-tips",
+      "name": "Tips",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.helpviewer",
+          "product": "tips"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-airport-utility",
+      "name": "Airport Utility",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.airport.airportutility",
+          "product": "airport-utility"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-audio-midi-setup",
+      "name": "Audio Midi Setup",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.audio.AudioMIDISetup",
+          "product": "audio-midi-setup"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-bluetooth-file-exchange",
+      "name": "Bluetooth File Exchange",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.BluetoothFileExchange",
+          "product": "bluetooth-file-exchange"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-boot-camp-assistant",
+      "name": "Boot Camp Assistant",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.bootcampassistant",
+          "product": "boot-camp-assistant"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-colorsync-utility",
+      "name": "Colorsync Utility",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ColorSyncUtility",
+          "product": "colorsync-utility"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-digital-color-meter",
+      "name": "Digital Color Meter",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.DigitalColorMeter",
+          "product": "digital-color-meter"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-grapher",
+      "name": "Grapher",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.grapher",
+          "product": "grapher"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-migration-assistant",
+      "name": "Migration Assistant",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.MigrateAssistant",
+          "product": "migration-assistant"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-print-center",
+      "name": "Print Center",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.printcenter",
+          "product": "print-center"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-script-editor",
+      "name": "Script Editor",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ScriptEditor2",
+          "product": "script-editor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-system-information",
+      "name": "System Information",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.SystemProfiler",
+          "product": "system-information"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-terminal",
+      "name": "Terminal",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Terminal",
+          "product": "terminal"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-voiceover-utility",
+      "name": "Voiceover Utility",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.VoiceOverUtility",
+          "product": "voiceover-utility"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-automator",
+      "name": "Automator",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Automator",
+          "product": "automator"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-font-book",
+      "name": "Font Book",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.FontBook",
+          "product": "font-book"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-image-capture",
+      "name": "Image Capture",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Image_Capture",
+          "product": "image-capture"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-activity-monitor",
+      "name": "Activity Monitor",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ActivityMonitor",
+          "product": "activity-monitor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-console",
+      "name": "Console",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Console",
+          "product": "console"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-utilities-disk-utility",
+      "name": "Disk Utility",
+      "folder_id": "macos-utilities",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.DiskUtility",
+          "product": "disk-utility"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "microsoft-office-windows-office",
+      "name": "Microsoft Office",
+      "folder_id": "microsoft-office",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_office"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "microsoft-office-word",
+      "name": "Word",
+      "folder_id": "microsoft-office",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.microsoft.Word",
+          "product": "word"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "microsoft-office-excel",
+      "name": "Excel",
+      "folder_id": "microsoft-office",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.microsoft.Excel",
+          "product": "excel"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "microsoft-office-powerpoint",
+      "name": "Powerpoint",
+      "folder_id": "microsoft-office",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.microsoft.Powerpoint",
+          "product": "powerpoint"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "apple-documents-pages",
+      "name": "Pages",
+      "folder_id": "apple-documents",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.iWork.Pages",
+          "product": "pages"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Pages",
+          "product": "pages"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "apple-documents-numbers",
+      "name": "Numbers",
+      "folder_id": "apple-documents",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.iWork.Numbers",
+          "product": "numbers"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Numbers",
+          "product": "numbers"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "apple-documents-keynote",
+      "name": "Keynote",
+      "folder_id": "apple-documents",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.iWork.Keynote",
+          "product": "keynote"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Keynote",
+          "product": "keynote"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-accessories-textedit",
+      "name": "Textedit",
+      "folder_id": "macos-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.TextEdit",
+          "product": "textedit"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-accessories-screenshot",
+      "name": "Screenshot",
+      "folder_id": "macos-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.screenshot.launcher",
+          "product": "screenshot"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-accessories-quicktime-player",
+      "name": "Quicktime Player",
+      "folder_id": "macos-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.QuickTimePlayerX",
+          "product": "quicktime-player"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-accessories-dictionary",
+      "name": "Dictionary",
+      "folder_id": "macos-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Dictionary",
+          "product": "dictionary"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-accessories-voice-memos",
+      "name": "Voice Memos",
+      "folder_id": "macos-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.VoiceMemos",
+          "product": "voice-memos"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-accessories-stickies",
+      "name": "Stickies",
+      "folder_id": "macos-accessories",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Stickies",
+          "product": "stickies"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "google-workspace-docs",
+      "name": "Docs",
+      "folder_id": "google-workspace",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.drivefs.shortcuts.docs",
+          "product": "docs"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "google-workspace-sheets",
+      "name": "Sheets",
+      "folder_id": "google-workspace",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.drivefs.shortcuts.sheets",
+          "product": "sheets"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "google-workspace-slides",
+      "name": "Slides",
+      "folder_id": "google-workspace",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.drivefs.shortcuts.slides",
+          "product": "slides"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "clip-studio-launcher",
+      "name": "Launcher",
+      "folder_id": "clip-studio",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.co.celsys.AggregateMdul",
+          "product": "launcher"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.co.celsys.CertMdul",
+          "product": "launcher"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.co.celsys.CLIPSTUDIO",
+          "product": "launcher"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "clip-studio-paint",
+      "name": "Paint",
+      "folder_id": "clip-studio",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.co.celsys.CLIPSTUDIOPAINT",
+          "product": "paint"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vocaloid-authorizer",
+      "name": "Authorizer",
+      "folder_id": "vocaloid",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ScriptEditor.id.VOCALOID_Authorizer-Uninstaller",
+          "product": "authorizer"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.yamaha.VOCALOID-Authorizer",
+          "product": "authorizer"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vocaloid-editor",
+      "name": "Editor",
+      "folder_id": "vocaloid",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ScriptEditor.id.VOCALOID-Uninstaller",
+          "product": "editor"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ScriptEditor.id.VOCALOID4-API-Uninstaller",
+          "product": "editor"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.yamaha.VOCALOID6-Editor",
+          "product": "editor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-antigravity",
+      "name": "Antigravity",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.antigravity",
+          "product": "antigravity"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-vscode",
+      "name": "Vscode",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.microsoft.VSCode",
+          "product": "vscode"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-cursor",
+      "name": "Cursor",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.todesktop.230313mzl4w4u92",
+          "product": "cursor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-fork",
+      "name": "Fork",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.DanPristupov.Fork",
+          "product": "fork"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-iterm",
+      "name": "Iterm",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.googlecode.iterm2",
+          "product": "iterm"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.googlecode.iterm2.iTermBrowserPlugin",
+          "product": "iterm"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-kiro",
+      "name": "Kiro",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "dev.kiro.desktop",
+          "product": "kiro"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-opencode",
+      "name": "Opencode",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "ai.opencode.desktop",
+          "product": "opencode"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-rapidapi",
+      "name": "Rapidapi",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.luckymarmot.Paw",
+          "product": "rapidapi"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-remote-codetrol",
+      "name": "Remote Codetrol",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.scicotherapylabs.RemoteCodetrolServer",
+          "product": "remote-codetrol"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-tableplus",
+      "name": "Tableplus",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.tinyapp.TablePlus",
+          "product": "tableplus"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-visual-studio",
+      "name": "Visual Studio",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.microsoft.visual-studio",
+          "product": "visual-studio"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-xcode",
+      "name": "Xcode",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.dt.Xcode",
+          "product": "xcode"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-development-zcode",
+      "name": "Zcode",
+      "folder_id": "macos-development",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "dev.zcode.app",
+          "product": "zcode"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-ai-assistants-chatbot-ui",
+      "name": "Chatbot Ui",
+      "folder_id": "macos-ai-assistants",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.Chrome.app.hbblfifohofgngfbjbiimbbcimepbdcb",
+          "product": "chatbot-ui"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-ai-assistants-chatgpt-codex",
+      "name": "Chatgpt Codex",
+      "folder_id": "macos-ai-assistants",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.openai.codex",
+          "product": "chatgpt-codex"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-ai-assistants-lm-studio",
+      "name": "Lm Studio",
+      "folder_id": "macos-ai-assistants",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "ai.elementlabs.lmstudio",
+          "product": "lm-studio"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-ai-assistants-macgpt",
+      "name": "Macgpt",
+      "folder_id": "macos-ai-assistants",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.goodsnooze.MenuGPT",
+          "product": "macgpt"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-ai-assistants-perplexity",
+      "name": "Perplexity",
+      "folder_id": "macos-ai-assistants",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "ai.perplexity.mac",
+          "product": "perplexity"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-ai-assistants-superwhisper",
+      "name": "Superwhisper",
+      "folder_id": "macos-ai-assistants",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.superduper.superwhisper",
+          "product": "superwhisper"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-3tene",
+      "name": "3Tene",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.plusplus.virtualyoutuber",
+          "product": "3tene"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-blender",
+      "name": "Blender",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "org.blenderfoundation.blender",
+          "product": "blender"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-looking-glass-bridge",
+      "name": "Looking Glass Bridge",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.lookingglassfactory.bridge",
+          "product": "looking-glass-bridge"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-nanoem",
+      "name": "Nanoem",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.github.nanoem",
+          "product": "nanoem"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-quixel-mixer",
+      "name": "Quixel Mixer",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "unity.Quixel.Mixer",
+          "product": "quixel-mixer"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-vrm-posing",
+      "name": "Vrm Posing",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.soarhap.vrmposing",
+          "product": "vrm-posing"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-vroid-studio",
+      "name": "Vroid Studio",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "net.pixiv.vroid.macosx",
+          "product": "vroid-studio"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-webcam-motion-capture",
+      "name": "Webcam Motion Capture",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "Webcam Motion Capture",
+          "product": "webcam-motion-capture"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-avatar-3d-webcam-motion-receiver",
+      "name": "Webcam Motion Receiver",
+      "folder_id": "macos-avatar-3d",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "info.kwcl.WebcamMotionReceiver",
+          "product": "webcam-motion-receiver"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-design-cavalry",
+      "name": "Cavalry",
+      "folder_id": "macos-design",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.scenegroup.cavalry",
+          "product": "cavalry"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-design-figma",
+      "name": "Figma",
+      "folder_id": "macos-design",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.figma.Desktop",
+          "product": "figma"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-design-pencil",
+      "name": "Pencil",
+      "folder_id": "macos-design",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "dev.pencil.desktop",
+          "product": "pencil"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-image-comfyui",
+      "name": "Comfyui",
+      "folder_id": "macos-image",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.todesktop.241012ess7yxs0e",
+          "product": "comfyui"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-image-photo-booth",
+      "name": "Photo Booth",
+      "folder_id": "macos-image",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.PhotoBooth",
+          "product": "photo-booth"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-image-image-playground",
+      "name": "Image Playground",
+      "folder_id": "macos-image",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.GenerativePlaygroundApp",
+          "product": "image-playground"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-image-animation-image-converter",
+      "name": "Animation Image Converter",
+      "folder_id": "macos-image",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "media.ics.AnimationImageConverter",
+          "product": "animation-image-converter"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-image-photos",
+      "name": "Photos",
+      "folder_id": "macos-image",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Photos",
+          "product": "photos"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-video-live-imovie",
+      "name": "Imovie",
+      "folder_id": "macos-video-live",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.iMovieApp",
+          "product": "imovie"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-video-live-lightkey",
+      "name": "Lightkey",
+      "folder_id": "macos-video-live",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "de.monospc.Lightkey",
+          "product": "lightkey"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-video-live-obs",
+      "name": "Obs",
+      "folder_id": "macos-video-live",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.obsproject.obs-studio",
+          "product": "obs"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-video-live-obsctl",
+      "name": "Obsctl",
+      "folder_id": "macos-video-live",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.wails.obsctl",
+          "product": "obsctl"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-music-production-capo",
+      "name": "Capo",
+      "folder_id": "macos-music-production",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.supermegaultragroovy.capo3.mac",
+          "product": "capo"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-music-production-garageband",
+      "name": "Garageband",
+      "folder_id": "macos-music-production",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.garageband10",
+          "product": "garageband"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-music-production-midi-monitor",
+      "name": "Midi Monitor",
+      "folder_id": "macos-music-production",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.snoize.MIDIMonitor",
+          "product": "midi-monitor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-music-production-touchosc",
+      "name": "Touchosc",
+      "folder_id": "macos-music-production",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "net.hexler.lex",
+          "product": "touchosc"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-voice-synthesis-crypton-product-manager",
+      "name": "Crypton Product Manager",
+      "folder_id": "macos-voice-synthesis",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.co.crypton.CryptonProductManager",
+          "product": "crypton-product-manager"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-voice-synthesis-piapro-studio",
+      "name": "Piapro Studio",
+      "folder_id": "macos-voice-synthesis",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.co.crypton.PiaproStudio",
+          "product": "piapro-studio"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-voice-synthesis-sbv2-gui",
+      "name": "Sbv2 Gui",
+      "folder_id": "macos-voice-synthesis",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.tuna2134.sbv2-gui",
+          "product": "sbv2-gui"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-voice-synthesis-synthesizer-v",
+      "name": "Synthesizer V",
+      "folder_id": "macos-voice-synthesis",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.dreamtonics.svstudio2.pro",
+          "product": "synthesizer-v"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.dreamtonics.svstudio.basic",
+          "product": "synthesizer-v"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.dreamtonics.svstudio.pro",
+          "product": "synthesizer-v"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-discord",
+      "name": "Discord",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.hnc.Discord",
+          "product": "discord"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-facetime",
+      "name": "Facetime",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.FaceTime",
+          "product": "facetime"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-line",
+      "name": "Line",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "jp.naver.line.mac",
+          "product": "line"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-x",
+      "name": "X",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.atebits.Tweetie2",
+          "product": "x"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-zoom",
+      "name": "Zoom",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "us.zoom.xos",
+          "product": "zoom"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-messages",
+      "name": "Messages",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.MobileSMS",
+          "product": "messages"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-mail",
+      "name": "Mail",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.mail",
+          "product": "mail"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-communication-contacts",
+      "name": "Contacts",
+      "folder_id": "macos-communication",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.AddressBook",
+          "product": "contacts"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-goodnotes",
+      "name": "Goodnotes",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.goodnotesapp.x",
+          "product": "goodnotes"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-koucha",
+      "name": "Koucha",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.hakocat.Koucha",
+          "product": "koucha"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-notion",
+      "name": "Notion",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "notion.id",
+          "product": "notion"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "notion.id.NotionSafariExtension",
+          "product": "notion"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-calendar",
+      "name": "Calendar",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.iCal",
+          "product": "calendar"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-cheerpro",
+      "name": "Cheerpro",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.gateboxlab.cheerpro",
+          "product": "cheerpro"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-freeform",
+      "name": "Freeform",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.freeform",
+          "product": "freeform"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-notes",
+      "name": "Notes",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Notes",
+          "product": "notes"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-reminders",
+      "name": "Reminders",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.reminders",
+          "product": "reminders"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-productivity-clock",
+      "name": "Clock",
+      "folder_id": "macos-productivity",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.clock",
+          "product": "clock"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-media-tv",
+      "name": "Tv",
+      "folder_id": "macos-media",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.TV",
+          "product": "tv"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-media-vlc",
+      "name": "Vlc",
+      "folder_id": "macos-media",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "org.videolan.vlc",
+          "product": "vlc"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-media-youtube-music",
+      "name": "Youtube Music",
+      "folder_id": "macos-media",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.github.th-ch.youtube-music",
+          "product": "youtube-music"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-media-books",
+      "name": "Books",
+      "folder_id": "macos-media",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.iBooksX",
+          "product": "books"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-media-podcasts",
+      "name": "Podcasts",
+      "folder_id": "macos-media",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.podcasts",
+          "product": "podcasts"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-media-music",
+      "name": "Music",
+      "folder_id": "macos-media",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Music",
+          "product": "music"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-files-filezilla",
+      "name": "Filezilla",
+      "folder_id": "macos-files",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "org.filezilla-project.filezilla",
+          "product": "filezilla"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-files-google-drive",
+      "name": "Google Drive",
+      "folder_id": "macos-files",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.drivefs",
+          "product": "google-drive"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-files-mountain-duck",
+      "name": "Mountain Duck",
+      "folder_id": "macos-files",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "io.mountainduck",
+          "product": "mountain-duck"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-files-nextcloud",
+      "name": "Nextcloud",
+      "folder_id": "macos-files",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.nextcloud.desktopclient",
+          "product": "nextcloud"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-files-remotedrive",
+      "name": "Remotedrive",
+      "folder_id": "macos-files",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "org.filezilla-project.remotedrive",
+          "product": "remotedrive"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-virtual-machines-parallels",
+      "name": "Parallels",
+      "folder_id": "macos-virtual-machines",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.parallels.desktop.console",
+          "product": "parallels"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-virtual-machines-vmware-fusion",
+      "name": "Vmware Fusion",
+      "folder_id": "macos-virtual-machines",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.vmware.fusion",
+          "product": "vmware-fusion"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-bettertouchtool",
+      "name": "Bettertouchtool",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.hegenberg.BetterTouchTool",
+          "product": "bettertouchtool"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-launcher-turbo",
+      "name": "Launcher Turbo",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.turbo.LauncherTurbo",
+          "product": "launcher-turbo"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-apple-launchpad",
+      "name": "Apple Launchpad",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.launchpad.launcher",
+          "product": "apple-launchpad"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-liquid-start",
+      "name": "Liquid Start",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.kamakiri1192.launchpad",
+          "product": "liquid-start"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-launchpad-plus",
+      "name": "Launchpad Plus",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "waikiki.program.Launchpad",
+          "product": "launchpad-plus"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-notchnook",
+      "name": "Notchnook",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "lo.cafe.NotchNook",
+          "product": "notchnook"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-screen-note",
+      "name": "Screen Note",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.kyome.ScreenNote",
+          "product": "screen-note"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-screen-pointer",
+      "name": "Screen Pointer",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.kyome.ScreenPointer",
+          "product": "screen-pointer"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-customization-scroll-reverser",
+      "name": "Scroll Reverser",
+      "folder_id": "macos-customization",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.pilotmoon.scroll-reverser",
+          "product": "scroll-reverser"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-devices-iphone-mirroring",
+      "name": "Iphone Mirroring",
+      "folder_id": "macos-devices",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ScreenContinuity",
+          "product": "iphone-mirroring"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-devices-home",
+      "name": "Home",
+      "folder_id": "macos-devices",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Home",
+          "product": "home"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-devices-find-my",
+      "name": "Find My",
+      "folder_id": "macos-devices",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.findmy",
+          "product": "find-my"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-information-news",
+      "name": "News",
+      "folder_id": "macos-information",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.news",
+          "product": "news"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-information-maps",
+      "name": "Maps",
+      "folder_id": "macos-information",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Maps",
+          "product": "maps"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-information-weather",
+      "name": "Weather",
+      "folder_id": "macos-information",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.weather",
+          "product": "weather"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-information-stocks",
+      "name": "Stocks",
+      "folder_id": "macos-information",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.stocks",
+          "product": "stocks"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-games-nte",
+      "name": "Nte",
+      "folder_id": "macos-games",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.hottagames.nte",
+          "product": "nte"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-games-chess",
+      "name": "Chess",
+      "folder_id": "macos-games",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Chess",
+          "product": "chess"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-games-trickcal",
+      "name": "Trickcal",
+      "folder_id": "macos-games",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.bilibili.trickcal",
+          "product": "trickcal"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-pdf-acrobat",
+      "name": "Acrobat",
+      "folder_id": "macos-pdf",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.Acrobat.Pro",
+          "product": "acrobat"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-pdf-distiller",
+      "name": "Distiller",
+      "folder_id": "macos-pdf",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.distiller",
+          "product": "distiller"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "macos-pdf-preview",
+      "name": "Preview",
+      "folder_id": "macos-pdf",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Preview",
+          "product": "preview"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "libreoffice-libre-office",
+      "name": "LibreOffice",
+      "folder_id": "libreoffice",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "libre_office"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "libreoffice-libreoffice",
+      "name": "Libreoffice",
+      "folder_id": "libreoffice",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "org.libreoffice.script",
+          "product": "libreoffice"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-adobe-creative",
+      "name": "Adobe Creative Cloud",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "adobe_creative"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-after-effects",
+      "name": "After Effects",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.AfterEffectsRenderEngine",
+          "product": "after-effects"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.borisfx.mocha4ae_adobe",
+          "product": "after-effects"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.AfterEffects.application",
+          "product": "after-effects"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.AfterEffects",
+          "product": "after-effects"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-creative-cloud",
+      "name": "Creative Cloud",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.accmac",
+          "product": "creative-cloud"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.cc.Adobe-Creative-Cloud-Diagnostics",
+          "product": "creative-cloud"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.Creative-Cloud-Desktop-App",
+          "product": "creative-cloud"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.Install",
+          "product": "creative-cloud"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.ACCC.Uninstaller",
+          "product": "creative-cloud"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.acc.AdobeCreativeCloud",
+          "product": "creative-cloud"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-bridge",
+      "name": "Bridge",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.bridge",
+          "product": "bridge"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-indesign",
+      "name": "Indesign",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.InDesign",
+          "product": "indesign"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-photoshop",
+      "name": "Photoshop",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.Photoshop",
+          "product": "photoshop"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-illustrator",
+      "name": "Illustrator",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.illustrator",
+          "product": "illustrator"
+        },
+        {
+          "type": "mac_bundle_in_directory",
+          "bundle": "com.apple.ScriptEditor.id.Contact-Sheets",
+          "directory": "Adobe Illustrator",
+          "product": "illustrator"
+        },
+        {
+          "type": "mac_bundle_in_directory",
+          "bundle": "com.apple.ScriptEditor.id.Make-Calendar",
+          "directory": "Adobe Illustrator",
+          "product": "illustrator"
+        },
+        {
+          "type": "mac_bundle_in_directory",
+          "bundle": "com.apple.ScriptEditor.id.Web-Gallery",
+          "directory": "Adobe Illustrator",
+          "product": "illustrator"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-audition",
+      "name": "Audition",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.adobe.Audition",
+          "product": "audition"
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.adobe.Audition.",
+          "product": "audition"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-premiere-pro",
+      "name": "Premiere Pro",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.adobe.PremierePro.",
+          "product": "premiere-pro"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "adobe-creative-cloud-media-encoder",
+      "name": "Media Encoder",
+      "folder_id": "adobe-creative-cloud",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.adobe.ame.application.",
+          "product": "media-encoder"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "affinity-legacy-designer",
+      "name": "Designer",
+      "folder_id": "affinity-legacy",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "designer.exe",
+          "directory": "affinity",
+          "product": "designer",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.seriflabs.affinitydesigner",
+          "product": "designer"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.seriflabs.affinitydesigner2",
+          "product": "designer"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "affinity-legacy-photo",
+      "name": "Photo",
+      "folder_id": "affinity-legacy",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "photo.exe",
+          "directory": "affinity",
+          "product": "photo",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.seriflabs.affinityphoto",
+          "product": "photo"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.seriflabs.affinityphoto2",
+          "product": "photo"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "affinity-legacy-publisher",
+      "name": "Publisher",
+      "folder_id": "affinity-legacy",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "publisher.exe",
+          "directory": "affinity",
+          "product": "publisher",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.seriflabs.affinitypublisher",
+          "product": "publisher"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.seriflabs.affinitypublisher2",
+          "product": "publisher"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "coreldraw-suite-draw",
+      "name": "Draw",
+      "folder_id": "coreldraw-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "coreldrw.exe",
+          "directory": "corel",
+          "product": "draw",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.corel.CorelDRAW",
+          "product": "draw"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "coreldraw-suite-photo-paint",
+      "name": "Photo Paint",
+      "folder_id": "coreldraw-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "corelpp.exe",
+          "directory": "corel",
+          "product": "photo-paint",
+          "versioned_executable": false
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "coreldraw-suite-mac-corel-suite",
+      "name": "CorelDRAW スイート",
+      "folder_id": "coreldraw-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_corel_suite"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "cyberlink-director-suite-powerdirector",
+      "name": "Powerdirector",
+      "folder_id": "cyberlink-director-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "pdr.exe",
+          "directory": "cyberlink",
+          "product": "powerdirector",
+          "versioned_executable": true
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.cyberlink.powerdirectormac",
+          "product": "powerdirector"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "cyberlink-director-suite-photodirector",
+      "name": "Photodirector",
+      "folder_id": "cyberlink-director-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "photodirector.exe",
+          "directory": "cyberlink",
+          "product": "photodirector",
+          "versioned_executable": true
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.cyberlink.photodirectormac",
+          "product": "photodirector"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "cyberlink-director-suite-audiodirector",
+      "name": "Audiodirector",
+      "folder_id": "cyberlink-director-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "audiodirector.exe",
+          "directory": "cyberlink",
+          "product": "audiodirector",
+          "versioned_executable": true
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "cyberlink-director-suite-colordirector",
+      "name": "Colordirector",
+      "folder_id": "cyberlink-director-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "colordirector.exe",
+          "directory": "cyberlink",
+          "product": "colordirector",
+          "versioned_executable": true
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "final-cut-suite-final-cut",
+      "name": "Final Cut",
+      "folder_id": "final-cut-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.FinalCut",
+          "product": "final-cut"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.FinalCutApp",
+          "product": "final-cut"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "final-cut-suite-motion",
+      "name": "Motion",
+      "folder_id": "final-cut-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.motionapp",
+          "product": "motion"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.motionappApp",
+          "product": "motion"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "final-cut-suite-compressor",
+      "name": "Compressor",
+      "folder_id": "final-cut-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.Compressor",
+          "product": "compressor"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.CompressorApp",
+          "product": "compressor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "logic-suite-logic",
+      "name": "Logic",
+      "folder_id": "logic-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.logic10",
+          "product": "logic"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "logic-suite-mainstage",
+      "name": "Mainstage",
+      "folder_id": "logic-suite",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.mainstage3",
+          "product": "mainstage"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "blackmagic-creative-resolve",
+      "name": "Resolve",
+      "folder_id": "blackmagic-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "resolve.exe",
+          "directory": "blackmagic design",
+          "product": "resolve",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.blackmagic-design.DaVinciResolve",
+          "product": "resolve"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.blackmagic-design.DaVinciResolveLite",
+          "product": "resolve"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "blackmagic-creative-fusion",
+      "name": "Fusion",
+      "folder_id": "blackmagic-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "fusion.exe",
+          "directory": "blackmagic design",
+          "product": "fusion",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.blackmagic-design.fusion",
+          "product": "fusion"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "maxon-creative-commandline",
+      "name": "Commandline",
+      "folder_id": "maxon-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "commandline.exe",
+          "directory": "maxon cinema 4d",
+          "product": "commandline",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.maxon.commandline",
+          "product": "commandline"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "maxon-creative-team-render-client",
+      "name": "Team Render Client",
+      "folder_id": "maxon-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "cinema 4d team render client.exe",
+          "directory": "maxon cinema 4d",
+          "product": "team-render-client",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.maxon.cinema4dclient",
+          "product": "team-render-client"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "maxon-creative-team-render-server",
+      "name": "Team Render Server",
+      "folder_id": "maxon-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "cinema 4d team render server.exe",
+          "directory": "maxon cinema 4d",
+          "product": "team-render-server",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.maxon.cinema4dserver",
+          "product": "team-render-server"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "maxon-creative-cinema-4d",
+      "name": "Cinema 4D",
+      "folder_id": "maxon-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "cinema 4d.exe",
+          "directory": "maxon cinema 4d",
+          "product": "cinema-4d",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.maxon.python",
+          "product": "cinema-4d"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.maxon.cinema4d.installer.uninstall",
+          "product": "cinema-4d"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.maxon.cinema4d",
+          "product": "cinema-4d"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "maxon-creative-zbrush",
+      "name": "Zbrush",
+      "folder_id": "maxon-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "zbrush.exe",
+          "directory": "maxon zbrush",
+          "product": "zbrush",
+          "versioned_executable": false
+        },
+        {
+          "type": "windows_product",
+          "executable": "zbrush.exe",
+          "directory": "pixologic",
+          "product": "zbrush",
+          "versioned_executable": false
+        },
+        {
+          "type": "windows_product",
+          "executable": "zbrush.exe",
+          "directory": "zbrush",
+          "product": "zbrush",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.pixologic.zbrush",
+          "product": "zbrush"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-cubase",
+      "name": "Cubase",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "cubase.exe",
+          "directory": "steinberg",
+          "product": "cubase",
+          "versioned_executable": true
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.steinberg.cubase",
+          "product": "cubase"
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.steinberg.cubasesoft",
+          "product": "cubase"
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.steinberg.cubase",
+          "product": "cubase"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-dorico",
+      "name": "Dorico",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "dorico.exe",
+          "directory": "steinberg",
+          "product": "dorico",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.steinberg.dorico",
+          "product": "dorico"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-wavelab",
+      "name": "Wavelab",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "wavelab.exe",
+          "directory": "steinberg",
+          "product": "wavelab",
+          "versioned_executable": true
+        },
+        {
+          "type": "windows_product",
+          "executable": "wavelabpro.exe",
+          "directory": "steinberg",
+          "product": "wavelab",
+          "versioned_executable": true
+        },
+        {
+          "type": "windows_product",
+          "executable": "wavelabpro_.exe",
+          "directory": "steinberg",
+          "product": "wavelab",
+          "versioned_executable": true
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "net.steinberg.WaveLab-",
+          "product": "wavelab"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-elicenser",
+      "name": "Elicenser",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.Syncrosoft.LCC",
+          "product": "elicenser"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-download-assistant",
+      "name": "Download Assistant",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "net.steinberg.eLicenser.installer.SteinbergDownloadAssistant.uninstall",
+          "product": "download-assistant"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "net.steinberg.elicenser.SteinbergDownloadAssistant",
+          "product": "download-assistant"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-groove-agent-se",
+      "name": "Groove Agent Se",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.steinberg.vst3.GrooveAgentSEStandalone",
+          "product": "groove-agent-se"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-halion-sonic",
+      "name": "Halion Sonic",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.steinberg.vst3.HALionSonicStandalone",
+          "product": "halion-sonic"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-activation-manager",
+      "name": "Activation Manager",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.steinberg.SteinbergActivationManager",
+          "product": "activation-manager"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steinberg-creative-library-manager",
+      "name": "Library Manager",
+      "folder_id": "steinberg-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.steinberg.HALionLibraryManager",
+          "product": "library-manager"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "native-instruments-standalone-kontakt",
+      "name": "Kontakt",
+      "folder_id": "native-instruments-standalone",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "kontakt.exe",
+          "directory": "native instruments",
+          "product": "kontakt",
+          "versioned_executable": true
+        },
+        {
+          "type": "windows_product",
+          "executable": "kontakt 5.exe",
+          "directory": "native instruments",
+          "product": "kontakt",
+          "versioned_executable": false
+        },
+        {
+          "type": "windows_product",
+          "executable": "kontakt 7.exe",
+          "directory": "native instruments",
+          "product": "kontakt",
+          "versioned_executable": false
+        },
+        {
+          "type": "windows_product",
+          "executable": "kontakt 8.exe",
+          "directory": "native instruments",
+          "product": "kontakt",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.native-instruments.Kontakt Application",
+          "product": "kontakt"
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.native-instruments.Kontakt ",
+          "product": "kontakt"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "native-instruments-standalone-reaktor",
+      "name": "Reaktor",
+      "folder_id": "native-instruments-standalone",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "reaktor 5.exe",
+          "directory": "native instruments",
+          "product": "reaktor",
+          "versioned_executable": false
+        },
+        {
+          "type": "windows_product",
+          "executable": "reaktor 6.exe",
+          "directory": "native instruments",
+          "product": "reaktor",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.native-instruments.Reaktor 6",
+          "product": "reaktor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "git-tools-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "git-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "git-tools"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vr-tools-steam-250820",
+      "name": "Steam:250820",
+      "folder_id": "vr-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "steam_app",
+          "id": "steam:250820"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vr-tools-steam-1173510",
+      "name": "Steam:1173510",
+      "folder_id": "vr-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "steam_app",
+          "id": "steam:1173510"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vr-tools-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "vr-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "vr-tools"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vr-games-steam-438100",
+      "name": "Steam:438100",
+      "folder_id": "vr-games",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "steam_app",
+          "id": "steam:438100"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vr-games-steam-620980",
+      "name": "Steam:620980",
+      "folder_id": "vr-games",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "steam_app",
+          "id": "steam:620980"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "vr-games-steam-546560",
+      "name": "Steam:546560",
+      "folder_id": "vr-games",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "steam_app",
+          "id": "steam:546560"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "remote-desktop-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "remote-desktop",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "remote-desktop"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "remote-desktop-barrier",
+      "name": "Barrier",
+      "folder_id": "remote-desktop",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "barrier",
+          "product": "barrier"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "remote-desktop-chrome-remote-desktop",
+      "name": "Chrome Remote Desktop",
+      "folder_id": "remote-desktop",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.google.chromeremotedesktop.me2me-host-uninstaller",
+          "product": "chrome-remote-desktop"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "remote-desktop-parsec",
+      "name": "Parsec",
+      "folder_id": "remote-desktop",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "tv.parsec.www",
+          "product": "parsec"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "remote-desktop-screen-sharing",
+      "name": "Screen Sharing",
+      "folder_id": "remote-desktop",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.apple.ScreenSharing",
+          "product": "screen-sharing"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "windows-dev-tools-windbg",
+      "name": "Windbg",
+      "folder_id": "windows-dev-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_package",
+          "aumid": "Microsoft.WinDbg_8wekyb3d8bbwe!Microsoft.WinDbg",
+          "product": "windbg"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "windows-dev-tools-dev-home",
+      "name": "Dev Home",
+      "folder_id": "windows-dev-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_package",
+          "aumid": "Microsoft.Windows.DevHome_8wekyb3d8bbwe!App",
+          "product": "dev-home"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "windows-dev-tools-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "windows-dev-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "windows-dev-tools"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "omen-audio-control",
+      "name": "Audio Control",
+      "folder_id": "omen",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_package",
+          "aumid": "AD2F1837.OMENAudioControl_v10z8vjag6ke6!App",
+          "product": "audio-control"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "omen-gaming-hub",
+      "name": "Gaming Hub",
+      "folder_id": "omen",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_package",
+          "aumid": "AD2F1837.OMENCommandCenter_v10z8vjag6ke6!AD2F1837.OMENCommandCenter",
+          "product": "gaming-hub"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "unity-tools-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "unity-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "unity-tools"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "unity-tools-hub",
+      "name": "Hub",
+      "folder_id": "unity-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.unity3d.unityhub",
+          "product": "hub"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "unity-tools-editor",
+      "name": "Editor",
+      "folder_id": "unity-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.unity3d.UnityEditor5.x",
+          "product": "editor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "unity-tools-bug-reporter",
+      "name": "Bug Reporter",
+      "folder_id": "unity-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.unity3d.bugreporter",
+          "product": "bug-reporter"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "live2d-cubism-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "live2d-cubism",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "live2d-cubism"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "live2d-cubism-editor",
+      "name": "Editor",
+      "folder_id": "live2d-cubism",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.live2d.cubism.CECubismEditorApp",
+          "product": "editor"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "live2d-cubism-viewer",
+      "name": "Viewer",
+      "folder_id": "live2d-cubism",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.live2d.cubism.doc.modeling.ui.viewerForOriginalWorkflow.OWViewerDropFrame",
+          "product": "viewer"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "razer-tools-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "razer-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "razer-tools"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "windows-accessibility-related-windows",
+      "name": "製品付属アプリ",
+      "folder_id": "windows-accessibility",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "related_windows",
+          "group": "windows-accessibility"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-jet-brains",
+      "name": "JetBrains IDE",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "jet_brains"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-rustrover",
+      "name": "Rustrover",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.rustrover",
+          "product": "rustrover"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-air",
+      "name": "Air",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.air",
+          "product": "air"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-toolbox",
+      "name": "Toolbox",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.toolbox",
+          "product": "toolbox"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-idea",
+      "name": "Idea",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.intellij",
+          "product": "idea"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.intellij.ce",
+          "product": "idea"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-pycharm",
+      "name": "Pycharm",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.pycharm",
+          "product": "pycharm"
+        },
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.pycharm.ce",
+          "product": "pycharm"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-webstorm",
+      "name": "Webstorm",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.WebStorm",
+          "product": "webstorm"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-phpstorm",
+      "name": "Phpstorm",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.PhpStorm",
+          "product": "phpstorm"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-clion",
+      "name": "Clion",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.CLion",
+          "product": "clion"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-goland",
+      "name": "Goland",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.goland",
+          "product": "goland"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-rider",
+      "name": "Rider",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.rider",
+          "product": "rider"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-rubymine",
+      "name": "Rubymine",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.rubymine",
+          "product": "rubymine"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "jetbrains-ides-datagrip",
+      "name": "Datagrip",
+      "folder_id": "jetbrains-ides",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "mac_bundle",
+          "bundle": "com.jetbrains.datagrip",
+          "product": "datagrip"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "autodesk-creative-autocad",
+      "name": "Autocad",
+      "folder_id": "autodesk-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "acad.exe",
+          "directory": "autodesk",
+          "product": "autocad",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.autodesk.AutoCAD",
+          "product": "autocad"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "autodesk-creative-maya",
+      "name": "Maya",
+      "folder_id": "autodesk-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "maya.exe",
+          "directory": "autodesk",
+          "product": "maya",
+          "versioned_executable": false
+        },
+        {
+          "type": "mac_versioned_bundle",
+          "prefix": "com.autodesk.Maya.",
+          "product": "maya"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "autodesk-creative-3ds-max",
+      "name": "3Ds Max",
+      "folder_id": "autodesk-creative",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "windows_product",
+          "executable": "3dsmax.exe",
+          "directory": "autodesk",
+          "product": "3ds-max",
+          "versioned_executable": false
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "visual-studio-tools-visual-studio",
+      "name": "Visual Studio 開発ツール",
+      "folder_id": "visual-studio-tools",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "visual_studio"
+        }
+      ],
+      "icon": null
+    },
+    {
+      "id": "steam-library-steam",
+      "name": "Steam ゲーム",
+      "folder_id": "steam-library",
+      "enabled": true,
+      "rules": [
+        {
+          "type": "steam"
+        }
+      ],
+      "icon": null
+    }
+  ]
+}

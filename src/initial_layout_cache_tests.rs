@@ -1,6 +1,7 @@
 //! Persistence tests included inside icon_cache, exercising real SQLite transactions.
 use super::*;
 use crate::domain::app_diff::SnapshotEntry;
+use crate::domain::initial_layout::catalog::Catalog;
 use std::collections::BTreeMap;
 
 fn cache() -> IconCache {

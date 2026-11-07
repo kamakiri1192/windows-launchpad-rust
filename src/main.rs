@@ -26,6 +26,8 @@
 
 mod app;
 mod app_icon;
+mod catalog_export;
+mod catalog_sync;
 mod database;
 mod debug_logger;
 mod domain;
@@ -159,6 +161,22 @@ pub(crate) fn dump_atlas_png(atlas: &IconAtlas) {
 }
 
 fn main() {
+    if let Some(index) = std::env::args().position(|arg| arg == "--export-catalog-inventory") {
+        let Some(path) = std::env::args().nth(index + 1) else {
+            eprintln!("Expected output JSON path");
+            std::process::exit(2);
+        };
+        match catalog_export::export(std::path::Path::new(&path)) {
+            Ok(count) => {
+                println!("Exported {count} apps locally to {path}; nothing was uploaded.");
+                return;
+            }
+            Err(error) => {
+                eprintln!("catalog export: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     #[cfg(windows)]
     let _single_instance = if std::env::var_os(qa::SCENARIO_ENV).is_some()
         || std::env::var_os(input_probe_protocol::INPUT_ROUTING_QA_ENV).is_some()
@@ -201,6 +219,11 @@ fn main() {
         Ok(cache) => Arc::new(cache),
         Err(_) => std::process::exit(1),
     };
+    if std::env::var_os(qa::SCENARIO_ENV).is_none() {
+        if let Some(directory) = cache.path().parent() {
+            catalog_sync::start(directory.to_path_buf());
+        }
+    }
     debug_logger::init();
     if reset_cache_requested {
         if let Err(e) = cache.clear_all() {
