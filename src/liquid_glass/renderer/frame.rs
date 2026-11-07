@@ -291,7 +291,11 @@ impl LiquidGlassRenderer {
                     && bounds[0] <= self.texture_size.0 as f32 + padding
                     && bounds[1] <= self.texture_size.1 as f32 + padding
             }));
-        if !force_full {
+        // Metal readback stays within one RGBA8 unit with CPU-resolved motion.
+        // D3D12's shader trig differs enough to perturb refracted edge pixels;
+        // keep its original shader math rather than relaxing visual tolerances.
+        // Both backends retain the geometry cache and regional SDF reduction.
+        if !force_full && cfg!(target_os = "macos") {
             for shape in &mut self.grid_shape_scratch {
                 if matches!(shape.shape_type, 4..=6) {
                     let wave = ((time + shape.motion[2]) * 8.0).sin();
