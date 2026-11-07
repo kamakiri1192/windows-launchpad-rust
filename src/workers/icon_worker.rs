@@ -245,7 +245,7 @@ fn process_one(
 }
 
 /// Artwork selection depends on provider metadata, never the chosen launch URI.
-fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
+pub(crate) fn extract_request_icon(req: &IconRequest) -> Option<DecodedIcon> {
     if let Some(icon) = req.provider_icon.as_ref().and_then(extract_provider_icon) {
         return Some(icon);
     }

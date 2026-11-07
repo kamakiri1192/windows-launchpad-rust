@@ -1,0 +1,41 @@
+{
+  "name": "launchpad-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "api": "php -S 127.0.0.1:8787 -t public",
+    "build": "tsc -b && vite build",
+    "test": "vitest run tests/schema.test.ts && php tests/server.php",
+    "test:e2e": "playwright test",
+    "package": "npm run build && node scripts/package.mjs",
+    "format": "prettier --plugin @prettier/plugin-php --write src tests server scripts *.ts *.json",
+    "format:check": "prettier --plugin @prettier/plugin-php --check src tests server scripts *.ts *.json"
+  },
+  "dependencies": {
+    "@radix-ui/themes": "^3.2.1",
+    "@tanstack/react-query": "^5.90.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@playwright/test": "^1.56.0",
+    "@prettier/plugin-php": "^0.26.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0"
+  }
+}

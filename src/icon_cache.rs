@@ -12,9 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::domain::app_diff::IconSource;
 use crate::domain::app_id::AppId;
 use crate::domain::initial_layout::{
-    self,
-    catalog::{Catalog, Platform},
-    InitialLayoutRecord, InitializationStatus,
+    self, catalog::Platform, InitialLayoutRecord, InitializationStatus,
 };
 use crate::domain::launcher_state::LauncherState;
 use crate::domain::settings::Settings;
@@ -424,7 +422,7 @@ impl IconCache {
                     .unwrap_or_default()
                     .as_nanos()
             );
-            let catalog = Catalog::bundled(std::env::var("SystemRoot").ok());
+            let catalog = crate::catalog_sync::current(std::env::var("SystemRoot").ok());
             if loaded.fresh {
                 loaded.state = initial_layout::generate(
                     snapshot, &settings, platform, japanese, generation, &catalog,

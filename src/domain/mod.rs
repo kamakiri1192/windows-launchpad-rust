@@ -26,3 +26,5 @@ pub mod launcher_item;
 pub mod launcher_state;
 pub mod name_order;
 pub mod settings;
+
+pub mod catalog_inventory;

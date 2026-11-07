@@ -54,9 +54,7 @@ impl App {
                     && self.catalog_store_writable,
                 complete,
                 crate::domain::initial_layout::japanese_locale(sys_locale::get_locale().as_deref()),
-                &crate::domain::initial_layout::catalog::Catalog::bundled(
-                    std::env::var("SystemRoot").ok(),
-                ),
+                &crate::catalog_sync::current(std::env::var("SystemRoot").ok()),
             );
         }
         // Persist identity and placement in one transaction before changing the UI.

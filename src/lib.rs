@@ -24,3 +24,5 @@ pub mod scroll;
 pub mod spring_anim;
 pub mod ui;
 pub mod ui_model;
+
+pub mod catalog_sync;

@@ -489,8 +489,8 @@ fn steam_display_filter_precedence_and_conflicts() {
         .unwrap()
         .rules
         .push(Rule::MacBundle {
-            bundle: "com.microsoft.Word",
-            product: "word",
+            bundle: "com.microsoft.Word".into(),
+            product: "word".into(),
         });
     let word = entry(
         "word",
@@ -632,7 +632,7 @@ fn original_nineteen_and_added_catalog_presets_have_active_rules() {
         catalog
             .presets
             .iter()
-            .map(|p| p.id)
+            .map(|p| p.id.as_str())
             .collect::<BTreeSet<_>>()
             .len(),
         52
