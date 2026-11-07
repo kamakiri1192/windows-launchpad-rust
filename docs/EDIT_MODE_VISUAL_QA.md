@@ -19,6 +19,9 @@ click tests:
 
 - Long-pressing an app enters edit mode.
 - Icons wiggle, the dragged icon lifts/scales, and delete badges appear.
+- App/folder names and their shadows rotate around the same icon pivot and
+  share its phase. This includes children inside an open folder; the folder
+  heading and ordinary controls stay stationary.
 - Dragging an icon to another visible cell reorders the grid immediately.
 - Dragging to an empty cell on the current page works.
 - Dragging to the rightmost two columns works.
@@ -30,6 +33,33 @@ click tests:
   a child name exits edit mode without lifting that child.
 - Clicking a delete badge hides that app from the visible grid.
 - Reorder and hidden-app state survive a full process restart.
+
+## Automated label-motion regression
+
+`qa/edit_label_wiggle.json` holds edit mode on the main grid and inside a
+folder, exits both, then drags a child across the folder's right clipping edge.
+It includes Latin, Japanese and wrapped labels. The normal documented headless
+GPU sequence runner can execute this scenario on Windows or macOS.
+
+```bash
+cargo build --release --locked --features gpu-profile
+SKIP_BUILD=1 RUNS=1 SCENARIOS=qa/edit_label_wiggle.json \
+  OUTPUT_DIR=target/label-wiggle-qa bash scripts/profile_macos.sh qa
+python3 -m pip install Pillow numpy
+python3 scripts/verify_edit_label_wiggle.py \
+  target/label-wiggle-qa/qa-sequences/edit-label-wiggle-<timestamp>
+```
+
+The manifest records label bounds, owner pivot/motion and the actual shader
+clock. The verifier compares PNG ink against a rigidly transformed idle label,
+checks both rotation directions and editing exit, and checks the full dragged
+label beyond the panel edge. It does not accept edit-state flags as visual
+proof. `--frames-dir <pre-fix-sequence>` substitutes baseline PNGs with the same
+fixture to confirm that stationary labels fail the motion assertion.
+
+For DPI coverage, copy the JSON, set `scale_factor` to `1.5` or `2`, and use a
+name starting with `edit-label-wiggle`. Repeat with `viewport` scaled as needed.
+GPU readback sequences are correctness tests, **not native-window FPS tests**.
 
 ## Required Environment
 

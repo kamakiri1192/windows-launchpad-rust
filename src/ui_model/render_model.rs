@@ -300,7 +300,8 @@ pub struct GlyphBatch {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlyphView {
-    /// Shared owner pivot for a launch reveal; absent for non-grid text.
+    /// Shared owner pivot for launch reveal and optional label edit motion.
+    /// Absent for ordinary UI text. `id` identifies the owning launcher tile.
     pub presentation_pivot: Option<Point>,
     pub id: UiId,
     pub rect: Rect,

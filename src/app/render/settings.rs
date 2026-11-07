@@ -1669,6 +1669,7 @@ mod tests {
             color: [1.0; 4],
             clip_rect: [10.0, 20.0, 30.0, 40.0],
             clip_radius: [5.0, 0.0, 0.0, 0.0],
+            motion: [0.0; 4],
         };
 
         let views = glyph_views(&[quad]);

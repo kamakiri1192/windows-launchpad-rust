@@ -716,6 +716,8 @@ impl Renderer {
                 "context menu icon instance buffer",
             ),
             dragged_icon_instance_count: 0,
+            dragged_text_instance_count: 0,
+            modal_dragged_text_instance_count: 0,
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),

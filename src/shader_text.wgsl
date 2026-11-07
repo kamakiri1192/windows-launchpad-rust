@@ -35,6 +35,7 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) presentation_alpha: f32,
+    @interpolate(flat) @location(3) motion_flags: u32,
 };
 
 
@@ -45,7 +46,8 @@ fn vs_main(
     @location(1) uvrect: vec4<f32>, // (u0, v0, u1, v1)
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
     @location(4) radius_pivot: vec4<f32>, // (clip radius, owner x/y, has owner)
-    // Grid text shares the 80-byte GlyphQuad layout. Location 3 is unused;
+    @location(5) motion: vec4<f32>, // owner (phase, lift, scale, flags)
+    // Grid text shares the 96-byte GlyphQuad layout. Location 3 is unused;
     // location 4 carries the explicit owner pivot in the radius padding.
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
@@ -64,12 +66,26 @@ fn vs_main(
         radius_pivot.yz + vec2<f32>(u.scroll_x, 0.0),
         radius_pivot.w > 0.5,
     );
-    let item_progress = launch_item_progress(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation);
+    let flags = u32(motion.w);
+    let wiggling = (flags & 1u) != 0u;
+    let dragged = (flags & 2u) != 0u && u.drag_active > 0.5;
+    let owner_center = select(glyph_center, u.drag_pos, dragged);
+    var local = vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w) - glyph_center;
+    if wiggling {
+        // Identical phase, angular speed and vertical motion to shader_icon.
+        // Rotate every glyph AND its shadows around the shared icon pivot.
+        let wave = sin((u.time + motion.x) * 8.0);
+        let angle = wave * 0.06;
+        local *= motion.z;
+        local = vec2<f32>(local.x * cos(angle) - local.y * sin(angle), local.x * sin(angle) + local.y * cos(angle));
+        // Closed-folder miniatures use rigid group motion without extra lift.
+        let lift = select(motion.y, 0.0, (flags & 8u) != 0u);
+        local.y -= abs(wave) * 2.0 + lift;
+    }
+    let item_progress = select(launch_item_progress(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), u.presentation), 1.0, dragged);
     let reveal_scale = mix(u.presentation.z, 1.0, item_progress);
-    let gather_offset = launch_gather_offset(glyph_center, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
-    let world = glyph_center + gather_offset
-        + (vec2<f32>(origin.x + c.x * xywh.z, origin.y + (1.0 - c.y) * xywh.w) - glyph_center)
-            * reveal_scale;
+    let gather_offset = launch_gather_offset(owner_center, vec4<f32>(u.frame_center, u.frame_half_size), item_progress, u.presentation_motion.x);
+    let world = owner_center + gather_offset + local * reveal_scale;
 
     let half_vp = u.viewport * 0.5;
     let clip = vec2<f32>(
@@ -87,6 +103,7 @@ fn vs_main(
     );
     out.color = color;
     out.presentation_alpha = u.presentation.y * item_progress;
+    out.motion_flags = flags;
     return out;
 }
 
@@ -103,7 +120,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Clip labels to the fixed page frame so they never spill past its edge.
     let local = in.pos.xy - u.frame_center;
     let fd = sdRoundBox(local, u.frame_half_size, u.frame_radius);
-    let frame_alpha = smoothstep(1.0, -1.0, fd);
+    let frame_alpha = select(smoothstep(1.0, -1.0, fd), 1.0, (in.motion_flags & 2u) != 0u && u.drag_active > 0.5);
     // Atlas stores RGBA; alpha is coverage. Color stays non-premultiplied for
     // the pipeline's standard alpha blending.
     return vec4<f32>(in.color.rgb, sampled.a * in.color.a * frame_alpha * in.presentation_alpha);

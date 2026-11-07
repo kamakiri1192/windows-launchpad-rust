@@ -127,6 +127,8 @@ pub struct Renderer {
     /// Number of trailing top-level icon instances belonging to the dragged
     /// visual unit. Apps use one; a closed folder uses all preview miniatures.
     dragged_icon_instance_count: u32,
+    dragged_text_instance_count: u32,
+    modal_dragged_text_instance_count: u32,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
 

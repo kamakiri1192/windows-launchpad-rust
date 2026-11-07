@@ -190,6 +190,10 @@ impl Renderer {
         let dragged_icon_count = self.dragged_icon_instance_count.min(icon_instance_count);
         let drag_icon_active = dragged_icon_count > 0;
         let normal_icon_count = icon_instance_count - dragged_icon_count;
+        let normal_text_count = self
+            .text_instance_buffer
+            .len()
+            .saturating_sub(self.dragged_text_instance_count);
 
         let profile_scope = self.gpu_profiler.begin("grid_tile_fill", &mut encoder);
         {
@@ -266,12 +270,12 @@ impl Renderer {
 
             // Text labels: same pass, third draw call. Uses the same
             // uniform (scroll/viewport) plus the atlas texture.
-            if self.text_instance_buffer.len() > 0 {
+            if normal_text_count > 0 {
                 if let Some(buf) = self.text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.text_pipeline);
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.text_instance_buffer.len());
+                    pass.draw(0..6, 0..normal_text_count);
                 }
             }
         }
@@ -289,8 +293,8 @@ impl Renderer {
                     args.scroll_x,
                     args.time,
                 ],
-                frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
-                frame_half_size: [clip.2, clip.3, 0.0, 0.0],
+                frame_center_radius: [clip.0, clip.1, clip.4, args.drag_active],
+                frame_half_size: [clip.2, clip.3, args.drag_pos.0, args.drag_pos.1],
                 presentation: args.presentation,
                 presentation_motion: args.presentation_motion,
             }),
@@ -378,6 +382,14 @@ impl Renderer {
                     pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(offset..));
                     pass.draw(0..6, 0..dragged_icon_count);
+                }
+            }
+            if self.dragged_text_instance_count > 0 {
+                if let Some(buf) = self.text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.text_pipeline);
+                    pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, normal_text_count..self.text_instance_buffer.len());
                 }
             }
         }
@@ -619,6 +631,10 @@ impl Renderer {
             let modal_icon_count = self.modal_icon_instance_buffer.len();
             let normal_modal_icon_count =
                 modal_icon_count.saturating_sub(u32::from(self.modal_dragged_icon_instance));
+            let normal_modal_text_count = self
+                .modal_text_instance_buffer
+                .len()
+                .saturating_sub(self.modal_dragged_text_instance_count);
             let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
             let content_scissor = self
                 .modal_clip_rect
@@ -680,12 +696,12 @@ impl Renderer {
                         pass.draw(0..6, 0..self.modal_instance_buffer.len());
                     }
                 }
-                if self.modal_text_instance_buffer.len() > 0 {
+                if normal_modal_text_count > 0 {
                     if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
                         pass.set_pipeline(&self.control_text_pipeline);
                         pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                         pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                        pass.draw(0..6, 0..normal_modal_text_count);
                     }
                 }
                 if self.settings_text_instance_buffer.len() > 0 {
@@ -738,7 +754,10 @@ impl Renderer {
             }
 
             // Keep the pointer-attached child above every non-dragged badge.
-            if self.modal_dragged_tile_instance || self.modal_dragged_icon_instance {
+            if self.modal_dragged_tile_instance
+                || self.modal_dragged_icon_instance
+                || self.modal_dragged_text_instance_count > 0
+            {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("modal drag overlay pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -777,6 +796,17 @@ impl Renderer {
                         pass.set_bind_group(0, &self.icon_atlas_bind_group, &[]);
                         pass.set_vertex_buffer(0, buf.slice(offset..));
                         pass.draw(0..6, 0..1);
+                    }
+                }
+                if self.modal_dragged_text_instance_count > 0 {
+                    if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_text_pipeline);
+                        pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(
+                            0..6,
+                            normal_modal_text_count..self.modal_text_instance_buffer.len(),
+                        );
                     }
                 }
             }

@@ -27,7 +27,7 @@ use cosmic_text::{
 };
 
 /// A drawable glyph quad, matching the WGSL instance attributes for the text
-/// pipeline. 80 bytes for clean GPU alignment (5 vec4s).
+/// pipeline. 96 bytes for clean GPU alignment (6 vec4s).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlyphQuad {
@@ -48,17 +48,22 @@ pub struct GlyphQuad {
     pub clip_rect: [f32; 4],
     /// Clip corner radius in physical px (0 = sharp corners).
     /// Packed as (radius, presentation_pivot_x, presentation_pivot_y, has_pivot).
-    /// Only grid text consumes the pivot; other text shaders use radius only.
+    /// Grid and folder-child labels consume the pivot; other text uses radius only.
     pub clip_radius: [f32; 4],
+    /// Owner's TileAnim payload. Zero flags keep ordinary UI text stationary.
+    /// The clock remains a per-frame uniform; glyphs/atlas are not rebuilt for
+    /// every wiggle frame.
+    pub motion: [f32; 4],
 }
 
 impl GlyphQuad {
-    pub const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    pub const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
         0 => Float32x4,
         1 => Float32x4,
         2 => Float32x4,
         3 => Float32x4,
-        4 => Float32x4
+        4 => Float32x4,
+        5 => Float32x4
     ];
 
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
@@ -661,6 +666,7 @@ impl TextRenderer {
                 clip_radius: g
                     .presentation_pivot
                     .map_or([0.0; 4], |p| [0.0, p[0], p[1], 1.0]),
+                motion: [0.0; 4],
             });
         }
 
