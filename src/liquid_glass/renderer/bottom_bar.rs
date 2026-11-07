@@ -438,7 +438,11 @@ mod tests {
                             optimized,
                             "retained grid drift"
                         );
-                        if progress == 1.0 && step == 0 && width != 640 {
+                        if progress == 1.0
+                            && step == 0
+                            && width != 640
+                            && !cfg!(target_os = "windows")
+                        {
                             assert!(renderer.active_grid_shapes.len() < shapes.len());
                         }
                         renderer.force_full_grid_redraw = true;

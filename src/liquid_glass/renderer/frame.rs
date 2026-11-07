@@ -279,6 +279,7 @@ impl LiquidGlassRenderer {
         self.grid_shape_scratch
             .extend(self.grid_overlay_shapes.iter().copied().filter(|shape| {
                 if force_full
+                    || cfg!(target_os = "windows")
                     || self.params.presentation[0] < 1.0
                     || shape.is_clip_only()
                     || shape.is_frame()
@@ -292,9 +293,9 @@ impl LiquidGlassRenderer {
                     && bounds[1] <= self.texture_size.1 as f32 + padding
             }));
         // Metal readback stays within one RGBA8 unit with CPU-resolved motion.
-        // D3D12's shader trig differs enough to perturb refracted edge pixels;
-        // keep its original shader math rather than relaxing visual tolerances.
-        // Both backends retain the geometry cache and regional SDF reduction.
+        // Keep Windows on its original shader math. Regional union reduction
+        // there also changes edge rounding even without CPU-resolved motion.
+        // Both backends retain geometry caching and bounded scissor coverage.
         if !force_full && cfg!(target_os = "macos") {
             for shape in &mut self.grid_shape_scratch {
                 if matches!(shape.shape_type, 4..=6) {
@@ -354,7 +355,13 @@ impl LiquidGlassRenderer {
             let mut packed = Vec::new();
             let mut slices = Vec::new();
             for rect in regions {
-                let shapes = if force_full || self.params.presentation[0] < 1.0 {
+                // On Windows preserve every sequential union operation: even
+                // mix(b, a, 1) can round differently from a in shader codegen.
+                // The strict GPU reference, not algebra alone, is authoritative.
+                let shapes = if force_full
+                    || cfg!(target_os = "windows")
+                    || self.params.presentation[0] < 1.0
+                {
                     self.active_grid_shapes.clone()
                 } else {
                     geometry_regions::contributing_shapes(
