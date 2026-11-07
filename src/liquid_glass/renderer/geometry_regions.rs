@@ -173,6 +173,12 @@ pub(super) fn regions(
     if area * 4 >= u64::from(size.0) * u64::from(size.1) * 3 {
         result = full();
     }
+    // Windows retains the complete union for GPU rounding fidelity. Smaller
+    // cells cannot reduce its shader loop, so keep the merged coverage and
+    // avoid extra draws/shape uploads there. Empty pixels are still skipped.
+    if cfg!(target_os = "windows") {
+        return result;
+    }
     let mut bounded = Vec::new();
     for (x, y, width, height) in result {
         // Even boundaries keep derivative helper quads inside one draw.

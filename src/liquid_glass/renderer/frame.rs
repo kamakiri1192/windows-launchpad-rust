@@ -354,14 +354,19 @@ impl LiquidGlassRenderer {
             let alignment = device.limits().min_storage_buffer_offset_alignment as usize;
             let mut packed = Vec::new();
             let mut slices = Vec::new();
+            let keep_full_union =
+                force_full || cfg!(target_os = "windows") || self.params.presentation[0] < 1.0;
             for rect in regions {
                 // On Windows preserve every sequential union operation: even
                 // mix(b, a, 1) can round differently from a in shader codegen.
                 // The strict GPU reference, not algebra alone, is authoritative.
-                let shapes = if force_full
-                    || cfg!(target_os = "windows")
-                    || self.params.presentation[0] < 1.0
-                {
+                if keep_full_union && !packed.is_empty() {
+                    // Every region uses the same immutable shape range. Upload
+                    // it once instead of duplicating it for each Windows band.
+                    slices.push((rect, 0, (self.active_grid_shapes.len() * stride) as u64));
+                    continue;
+                }
+                let shapes = if keep_full_union {
                     self.active_grid_shapes.clone()
                 } else {
                     geometry_regions::contributing_shapes(
