@@ -1,4 +1,4 @@
-//! The bottom capsule has a completed-scene backdrop, unlike interaction lenses.
+//! The bottom capsule and gear share a completed-scene backdrop, unlike interaction lenses.
 //! Keep its storage/uniforms separate: queued buffer writes are not draw snapshots.
 use super::*;
 
@@ -202,7 +202,7 @@ impl LiquidGlassRenderer {
         uniforms.backdrop_replacement = if self.has_captured_backdrop { 1.0 } else { 0.0 };
         queue.write_buffer(&lane.uniforms, 0, bytemuck::bytes_of(&uniforms));
         // Re-evaluate animated shape coverage each frame, independently of the
-        // interaction/gear SDF and without merging nearby unrelated surfaces.
+        // interaction SDF and without merging nearby unrelated surfaces.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bottom bar glass geometry"),
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_bottom_bar_lane_preserves_lower_content_fallback_and_resize() {
+    fn actual_bottom_bar_lane_preserves_capsule_and_gear_backdrop_lifecycle() {
         pollster::block_on(async {
             let instance =
                 wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -375,84 +375,126 @@ mod tests {
             renderer.params.glass_color = [0.0; 4];
             renderer.params.light_intensity = 0.0;
             renderer.params.ambient_strength = 0.0;
-            renderer.set_bottom_bar_shapes(
-                &device,
-                &queue,
-                &[GlassShape::control_rounded_rect(
-                    [16.0, 16.0],
-                    [24.0, 20.0],
-                    8.0,
-                )],
-            );
+            let capsule = GlassShape::control_rounded_rect([24.0, 24.0], [32.0, 20.0], 10.0);
+            let gear = GlassShape::control_rounded_rect([72.0, 24.0], [20.0, 20.0], 10.0);
+            renderer.set_bottom_bar_shapes(&device, &queue, &[capsule, gear]);
+            assert_eq!(renderer.bottom_bar_shapes().len(), 2);
             let mut profiler = crate::renderer::gpu_profile::GpuProfilerState::new(&device);
-            for width in [32, 48] {
+            for width in [96, 112] {
                 renderer.params.blur_radius = 0.0;
                 renderer.params.presentation_alpha = 1.0;
-                renderer.resize(&device, &queue, width, 32);
+                renderer.resize(&device, &queue, width, 48);
                 assert!(
                     !renderer.has_captured_backdrop,
                     "resize must restore no-capture policy"
                 );
-                let output = target(&device, width, 32);
+                let output = target(&device, width, 48);
                 let view = output.create_view(&Default::default());
+                let centers = [24, 72].map(|x| ((24 * width + x) * 4) as usize);
+                let gap = ((24 * width + 50) * 4) as usize;
+                let draw = |renderer: &LiquidGlassRenderer| {
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    renderer.render_bottom_bar(&queue, &mut encoder, &view);
+                    queue.submit([encoder.finish()]);
+                    pixels(&device, &queue, &output)
+                };
                 fill(&queue, &output, [0; 4]);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                renderer.render_bottom_bar(&queue, &mut encoder, &view);
-                queue.submit([encoder.finish()]);
-                let fallback = pixels(&device, &queue, &output);
-                let center = ((16 * width + 16) * 4) as usize;
-                assert!(
-                    (150..180).contains(&fallback[center + 3]),
-                    "fallback alpha: {}",
-                    fallback[center + 3]
-                );
-                assert_eq!(&fallback[..4], &[0; 4], "outside shape stays uncovered");
+                let fallback = draw(&renderer);
+                for center in centers {
+                    assert!(
+                        (150..180).contains(&fallback[center + 3]),
+                        "fallback alpha at {center}: {}",
+                        fallback[center + 3]
+                    );
+                }
+                for outside in [0, gap] {
+                    assert_eq!(&fallback[outside..outside + 4], &[0; 4]);
+                }
 
                 renderer.has_captured_backdrop = true;
                 renderer.params.blur_radius = 16.0;
-                // A dragged red icon / foreground overlaps the bar. Desktop is
-                // black, so a desktop-only replacement would erase this red.
+                // Foreground overlaps both surfaces. Desktop is black, so a
+                // desktop-only replacement would erase the completed red scene.
                 fill(&queue, &output, [255, 0, 0, 255]);
                 renderer.prepare_bottom_bar_scene_blur(&device, &queue, &mut profiler, &output);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                renderer.render_bottom_bar(&queue, &mut encoder, &view);
-                queue.submit([encoder.finish()]);
-                let completed = pixels(&device, &queue, &output);
-                assert!(
-                    completed[center] > 220
-                        && completed[center + 1] < 80
-                        && completed[center + 2] < 80,
-                    "completed foreground was lost: {:?}",
-                    &completed[center..center + 4]
-                );
-                assert_eq!(completed[center + 3], 255);
-                assert_eq!(
-                    &completed[..4],
-                    &[255, 0, 0, 255],
-                    "outside shape preserves lower scene"
-                );
-                // Preparation is a snapshot. Clear the destination after that
-                // checkpoint: the lane must still sample the completed red
-                // scene, not feed its own current output back into the blur.
-                fill(&queue, &output, [0; 4]);
+                let completed = draw(&renderer);
+                for center in centers {
+                    assert!(
+                        completed[center] > 220
+                            && completed[center + 1] < 80
+                            && completed[center + 2] < 80,
+                        "completed foreground was lost: {:?}",
+                        &completed[center..center + 4]
+                    );
+                    assert_eq!(completed[center + 3], 255);
+                }
+                for outside in [0, gap] {
+                    assert_eq!(&completed[outside..outside + 4], &[255, 0, 0, 255]);
+                }
+                // Both shapes must sample the same checkpoint, not themselves
+                // or one another. Repeated draws with a cleared destination
+                // must reproduce identical faded pixels without re-preparation.
                 renderer.params.presentation_alpha = 0.5;
-                let mut encoder = device.create_command_encoder(&Default::default());
-                renderer.render_bottom_bar(&queue, &mut encoder, &view);
-                queue.submit([encoder.finish()]);
-                let faded = pixels(&device, &queue, &output);
-                assert!((127..=129).contains(&faded[center + 3]));
-                assert!(
-                    faded[center] > 170 && faded[center + 1] < 80,
-                    "faded glass lost captured foreground: {:?}",
-                    &faded[center..center + 4]
-                );
-                assert_eq!(&faded[..4], &[0; 4]);
+                fill(&queue, &output, [0; 4]);
+                let faded = draw(&renderer);
+                for center in centers {
+                    assert!((127..=129).contains(&faded[center + 3]));
+                    assert!(
+                        faded[center] > 170 && faded[center + 1] < 80,
+                        "faded glass lost captured foreground: {:?}",
+                        &faded[center..center + 4]
+                    );
+                }
+                for outside in [0, gap] {
+                    assert_eq!(&faded[outside..outside + 4], &[0; 4]);
+                }
                 assert!(
                     faded
                         .chunks_exact(4)
                         .any(|pixel| pixel[3] > 0 && pixel[3] < 127),
                     "real geometry must preserve partial AA coverage during fade"
                 );
+                fill(&queue, &output, [0; 4]);
+                assert_eq!(draw(&renderer), faded, "snapshot must remain stable");
+
+                // Losing capture must not reuse an opaque completed snapshot;
+                // recovery must refresh both controls with the new scene.
+                renderer.has_captured_backdrop = false;
+                renderer.params.presentation_alpha = 1.0;
+                fill(&queue, &output, [0; 4]);
+                let lost = draw(&renderer);
+                for center in centers {
+                    assert!((150..180).contains(&lost[center + 3]));
+                }
+                renderer.has_captured_backdrop = true;
+                fill(&queue, &output, [0, 255, 0, 255]);
+                renderer.prepare_bottom_bar_scene_blur(&device, &queue, &mut profiler, &output);
+                fill(&queue, &output, [0; 4]);
+                let recovered = draw(&renderer);
+                for center in centers {
+                    assert!(recovered[center] < 80 && recovered[center + 1] > 220);
+                    assert_eq!(recovered[center + 3], 255);
+                }
+
+                // During edit entry, the gear intentionally buds from Done.
+                // The bridge pixel is outside either standalone shape, yet
+                // covered by their smooth union. Unrelated interaction shapes
+                // never enter this lane.
+                let budding_gear =
+                    GlassShape::control_rounded_rect([54.0, 24.0], [20.0, 20.0], 10.0);
+                let bridge = ((24 * width + 42) * 4) as usize;
+                for shape in [capsule, budding_gear] {
+                    renderer.set_bottom_bar_shapes(&device, &queue, &[shape]);
+                    fill(&queue, &output, [0; 4]);
+                    assert_eq!(draw(&renderer)[bridge + 3], 0);
+                }
+                renderer.set_bottom_bar_shapes(&device, &queue, &[capsule, budding_gear]);
+                fill(&queue, &output, [0; 4]);
+                assert!(
+                    draw(&renderer)[bridge + 3] > 0,
+                    "intended liquid bridge missing"
+                );
+                renderer.set_bottom_bar_shapes(&device, &queue, &[capsule, gear]);
             }
         });
     }

@@ -123,8 +123,8 @@ pub enum GlassLayer {
     /// the same SDF union, and is composited immediately before drag content.
     DragOverlay,
     Overlay,
-    /// Bottom search/page/Done capsule. Samples the completed lower scene,
-    /// separate from interaction lenses and gear even when their bounds overlap.
+    /// Bottom search/page/Done capsule and edit-mode gear. Sample the completed
+    /// lower scene, separate from interaction lenses even when bounds overlap.
     BottomBar,
     Modal,
     /// Settings panel glass. Isolated from folder/modal glass so its completed

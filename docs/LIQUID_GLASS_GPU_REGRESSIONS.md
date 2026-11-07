@@ -47,9 +47,11 @@ pipeline. Toggle lenses likewise decode only their desktop fallback.
 
 Base panels replace the captured desktop only after
 an actual frame has arrived; resize resets this availability. Initial fallback
-pixels keep the prior translucent behavior. The search/page/Done bottom bar uses its own pre-bar completed-scene
-checkpoint and replaces that filtered backdrop when capture is ready. Gear,
-interaction outlines, grid/drag overlays, and badges retain their material policies: their desktop-only sources do not contain all lower
+pixels keep the prior translucent behavior. The search/page/Done bottom bar and
+edit-mode gear share a pre-bar completed-scene checkpoint and replace that
+filtered backdrop when capture is ready. Their intended liquid budding geometry
+is retained; the gear ink is drawn afterward. Interaction outlines, grid/drag
+overlays, and badges retain their material policies: their desktop-only sources do not contain all lower
 in-app content, so forcing them opaque would punch through that content. Menu/settings transition replacement values and tint
 defaults are unchanged.
 

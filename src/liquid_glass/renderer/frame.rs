@@ -938,8 +938,8 @@ impl LiquidGlassRenderer {
             && self.settings_panel_shape_count > 0
     }
 
-    /// Prepare only the bottom capsule from the completed lower in-app scene.
-    /// Interaction/gear glass remains on its existing translucent lane.
+    /// Prepare the bottom capsule and gear from the completed lower in-app scene.
+    /// Interaction glass remains on its existing translucent lane.
     pub fn prepare_bottom_bar_scene_blur(
         &mut self,
         device: &wgpu::Device,

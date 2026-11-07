@@ -388,9 +388,9 @@ impl Renderer {
             .render_control(&self.queue, &mut encoder, scene_view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
-        // The bottom capsule is a backdrop-replacing surface, unlike hover/
+        // The bottom capsule and gear replace their backdrop, unlike hover/
         // interaction glass. Capture the finished lower scene (including a
-        // dragged icon) before drawing it; never sample the capsule itself.
+        // dragged icon) before drawing either; never sample their own glass/ink.
         if self.liquid_glass.has_bottom_bar_glass() {
             self.gpu_profiler.resolve(&mut encoder);
             self.queue.submit(std::iter::once(encoder.finish()));

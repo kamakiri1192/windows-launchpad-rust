@@ -1,6 +1,6 @@
 # Bottom-bar completed-scene GPU QA
 
-The bottom bar must sample the completed **pre-bar** scene, flattened over the
+The bottom bar and edit-mode gear must sample the completed **pre-bar** scene, flattened over the
 captured desktop. Using desktop capture alone discards in-app icons and dragged
 content; retaining material translucency also lets unfiltered content show
 through the settled interior. Neither requires changing the bar's silhouette,
@@ -28,7 +28,7 @@ second executes 26 bottom-bar cases using the production flatten and final WGSL:
 
 The no-feedback check verifies the GPU input/output contract. It does **not**
 prove that the application checkpoints at the right time. Rust lane/routing
-checks execute the production lane and verify search/page/Done membership.
+checks execute the production lane and verify search/page/Done/gear membership.
 Application checkpoint ordering is additionally code-reviewed, not exercised
 by these isolated fixtures. Windows/macOS integration QA must check real
 dragging, repeated frames, capture loss, and recovery. The GPU fixtures do not create a real application window.
@@ -58,15 +58,19 @@ but does not validate Windows Graphics Capture or DirectComposition drivers.
 
 ## Production lane checks and cost
 
-`cargo test actual_bottom_bar_lane_preserves_lower_content_fallback_and_resize`
+`cargo test actual_bottom_bar_lane_preserves_capsule_and_gear_backdrop_lifecycle`
 executes the real Rust renderer, geometry and final pipelines, completed-scene
-copy/flatten/blur (radius 16), and readback. It verifies foreground preservation,
-no-capture alpha, resize/rebinding, half-fade, uncovered pixels, and partial
-geometry coverage. Routing tests keep search/page/Done capsules separate from
-interaction glass and the gear; the gear deliberately keeps its existing material.
+copy/flatten/blur (radius 16), and readback. It verifies foreground preservation
+at both the capsule and circular gear, no-capture alpha, resize/rebinding,
+half-fade, repeated snapshot stability, capture-loss recovery, uncovered pixels,
+partial geometry coverage, and the intended liquid bridge during the edit morph.
+Routing tests keep search/page/Done capsules and the gear in the completed-scene
+lane while leaving interaction glass separate, including when either control hides.
 
-The bottom capsule adds an ROI completed-scene checkpoint/blur on rendered
+The bottom controls share one ROI completed-scene checkpoint/blur on rendered
 frames and a separate geometry lane. Because settings/menu reuse that workspace,
 their completed-scene cache is invalidated after the bar checkpoint. Native
 Windows/macOS performance and interactive capture/DPI behavior still need QA;
-software GPU regression passes do not establish those properties.
+software GPU regression passes do not establish those properties. Including the
+gear reuses this same checkpoint and geometry/material passes; it does not add a
+second blur or an extra render pass.
