@@ -96,7 +96,9 @@ pub const KIND_TRASH: f32 = 21.0;
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ControlUniforms {
     pub(super) viewport_scroll: [f32; 4],
+    /// Frame center/radius plus whether a label's owner follows the pointer.
     pub(super) frame_center_radius: [f32; 4],
+    /// Frame half-size plus pointer position for a dragged folder-child label.
     pub(super) frame_half_size: [f32; 4],
     pub(super) presentation: [f32; 4],
     pub(super) presentation_motion: [f32; 4],

@@ -39,16 +39,16 @@ struct GlassShape {
     shape_type: u32,
     // offset 24
     activation: f32,
-    // offset 28 — explicit pad so clip_rect starts at 32 (16-byte aligned)
-    _pad1: u32,
+    // offset 28 — cached per-frame motion flag
+    motion_resolved: u32,
     // offset 32
     clip_rect: vec4<f32>,
     // offset 48
     clip_radius: f32,
-    // offset 52 — explicit pad so motion starts at 64 (16-byte aligned)
-    _pad2_a: u32,
-    _pad2_b: u32,
-    _pad2_c: u32,
+    // offset 52 — cached cos(angle), sin(angle), vertical offset
+    motion_cos: f32,
+    motion_sin: f32,
+    motion_dy: f32,
     // offset 64
     motion: vec4<f32>,
     // offset 80; alpha < 0 uses the global glass tint
@@ -123,16 +123,24 @@ fn shape_launch_scale(shape: GlassShape) -> f32 {
     return mix(u.presentation.z, 1.0, shape_launch_progress(shape));
 }
 
+fn resolved_motion(shape: GlassShape) -> vec3<f32> {
+    if shape.motion_resolved != 0u {
+        return vec3<f32>(shape.motion_cos, shape.motion_sin, shape.motion_dy);
+    }
+    let wave = sin((u.time + shape.motion.z) * 8.0);
+    let rot = wave * 0.06;
+    return vec3<f32>(cos(rot), sin(rot), abs(wave) * 2.0);
+}
+
 fn resolved_center(shape: GlassShape) -> vec2<f32> {
     var center = shape.center;
     if shape.shape_type == 4u || shape.shape_type == 5u || shape.shape_type == 6u {
-        let t = u.time + shape.motion.z;
-        let rot = sin(t * 8.0) * 0.06;
-        let dy = abs(sin(t * 8.0)) * 2.0;
+        let motion = resolved_motion(shape);
+        let dy = motion.z;
         let pivot = shape.motion.xy;
         let rel = center - pivot;
-        let cosr = cos(rot);
-        let sinr = sin(rot);
+        let cosr = motion.x;
+        let sinr = motion.y;
         center = pivot + vec2<f32>(
             rel.x * cosr - rel.y * sinr,
             rel.x * sinr + rel.y * cosr - dy,
@@ -156,10 +164,9 @@ fn resolved_local(shape: GlassShape, pixel: vec2<f32>) -> vec2<f32> {
     if shape.shape_type == 5u || shape.shape_type == 6u {
         // Rotate the sample point by the inverse parent wiggle so the rounded
         // folder rect and its miniature children behave as one rigid body.
-        let t = u.time + shape.motion.z;
-        let rot = -sin(t * 8.0) * 0.06;
-        let cosr = cos(rot);
-        let sinr = sin(rot);
+        let motion = resolved_motion(shape);
+        let cosr = motion.x;
+        let sinr = -motion.y;
         local = vec2<f32>(
             local.x * cosr - local.y * sinr,
             local.x * sinr + local.y * cosr,

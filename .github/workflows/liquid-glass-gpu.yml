@@ -1,0 +1,36 @@
+name: Liquid Glass GPU regressions
+
+on:
+  pull_request:
+    paths:
+      - 'assets/shaders/**'
+      - 'src/liquid_glass/**'
+      - 'src/renderer/**'
+      - 'src/shader_surface_present.wgsl'
+      - 'tools/liquid_glass_*'
+      - '.github/workflows/liquid-glass-gpu.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  readback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install software Vulkan and Python harness
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          python -m pip install -r tools/liquid_glass_gpu_requirements.txt
+      - name: Render production shaders and verify readback
+        env:
+          WGPU_BACKEND_TYPE: Vulkan
+        run: python tools/liquid_glass_gpu_test.py --output /tmp/liquid-glass-results
+      - name: Verify bottom-bar completed-scene readback
+        env:
+          WGPU_BACKEND_TYPE: Vulkan
+        run: python tools/liquid_glass_bar_gpu_test.py --output /tmp/liquid-glass-bar-results

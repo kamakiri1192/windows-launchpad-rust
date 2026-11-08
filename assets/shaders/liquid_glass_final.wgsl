@@ -136,7 +136,7 @@ fn auto_glass_darkness() -> f32 {
 // BEGIN PERCEPTUAL_DARKNESS (pure functions; exercised by the QA harness)
 // The backdrop color handled here follows the existing encoded-sRGB domain.
 // Decode it once for this SDR adjustment, then return to that same domain.
-// Render-target/OS color management and the rest of the renderer are unchanged.
+// Material math stays encoded; decode at the linear-premultiplied scene boundary.
 fn darkness_srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
     let c = max(rgb, vec3<f32>(0.0));
     return select(c / 12.92, pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
@@ -251,7 +251,7 @@ fn fs_toggle(in: VsOut) -> @location(0) vec4<f32> {
     let scene = textureSampleLevel(backdrop_texture, backdrop_sampler, uv, 0.0);
     let desktop = textureSampleLevel(blur_texture, backdrop_sampler,
         clamp(backdrop_uv(uv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
-    var rgb = scene.rgb + desktop.rgb * (1.0 - scene.a);
+    var rgb = scene.rgb + darkness_srgb_to_linear(desktop.rgb) * (1.0 - scene.a);
     let normal = normalize(displacement + vec2<f32>(0.001));
     let light = max(dot(normal, normalize(vec2<f32>(-0.6, -0.8))), 0.0);
     // A narrow light/dark rim keeps the deforming silhouette readable without
@@ -271,7 +271,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     if has_flag(0u) {
         let bg = sample_backdrop(screen_uv);
-        return vec4<f32>(bg.rgb * u.presentation_alpha, u.presentation_alpha);
+        return vec4<f32>(darkness_srgb_to_linear(bg.rgb) * u.presentation_alpha, u.presentation_alpha);
     }
     if has_flag(1u) {
         return vec4<f32>(geometry_data.rgb * u.presentation_alpha, max(geometry_data.a, 0.35) * u.presentation_alpha);
@@ -320,7 +320,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // ordinary lanes bind the captured desktop. Geometry alpha still
         // provides antialiased edge coverage.
         let interior_alpha = mix(translucent_alpha, alpha, replacement);
-        return vec4<f32>(interior_rgb * interior_alpha * u.presentation_alpha, interior_alpha * u.presentation_alpha);
+        return vec4<f32>(darkness_srgb_to_linear(interior_rgb) * interior_alpha * u.presentation_alpha, interior_alpha * u.presentation_alpha);
     }
 
     let refract_uv = screen_uv + displacement * inv_viewport;
@@ -420,8 +420,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let glass_alpha = mix(translucent_alpha, alpha, replacement);
 
     if has_flag(4u) {
-        return vec4<f32>(final_rgb * glass_alpha * u.presentation_alpha, glass_alpha * u.presentation_alpha);
+        return vec4<f32>(darkness_srgb_to_linear(final_rgb) * glass_alpha * u.presentation_alpha, glass_alpha * u.presentation_alpha);
     }
 
-    return vec4<f32>(final_rgb * glass_alpha * u.presentation_alpha, glass_alpha * u.presentation_alpha);
+    return vec4<f32>(darkness_srgb_to_linear(final_rgb) * glass_alpha * u.presentation_alpha, glass_alpha * u.presentation_alpha);
 }
+

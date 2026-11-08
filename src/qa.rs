@@ -766,8 +766,21 @@ pub enum QaTarget {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct QaLabelRecord {
+    id: String,
+    lane: String,
+    /// Unrotated ink bounds and icon pivot in screen pixels.
+    bounds: [f32; 4],
+    pivot: [f32; 2],
+    /// Same phase/lift/scale/flags as the owning icon; clock is frame-level.
+    motion: [f32; 4],
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct QaFrameRecord {
     pub index: u64,
+    pub animation_time_s: f32,
+    pub labels: Vec<QaLabelRecord>,
     /// Physical [x, y, width, height] of each active settings thumb lens.
     pub settings_toggle_lenses: Vec<[f32; 4]>,
     pub settings_slider_lenses: Vec<[f32; 4]>,
@@ -827,6 +840,8 @@ pub struct QaFrameRecord {
 }
 
 struct QaFrameState {
+    animation_time_s: f32,
+    labels: Vec<QaLabelRecord>,
     settings_slider_lenses: Vec<[f32; 4]>,
     settings_slider_drag: Option<String>,
     settings_slider_values: [f32; 9],
@@ -1117,6 +1132,8 @@ impl QaRunner {
             .and_then(|scroll| folder_scroll_input_target_x.map(|target| scroll.0 - target));
         self.frames.push(QaFrameRecord {
             index: self.frame_index,
+            animation_time_s: state.animation_time_s,
+            labels: state.labels,
             settings_toggle_lenses: state.settings_toggle_lenses,
             settings_slider_lenses: state.settings_slider_lenses,
             settings_slider_drag: state.settings_slider_drag,
@@ -1924,6 +1941,72 @@ impl App {
         }
     }
 
+    fn qa_label_records(&self) -> Vec<QaLabelRecord> {
+        use crate::ui_model::{grid::TileAnim, render_model::GlyphLane};
+        let mut labels: Vec<QaLabelRecord> = Vec::new();
+        for batch in &self.render_model.glyphs {
+            let (owners, lane, scroll) = match batch.lane {
+                GlyphLane::Grid => (
+                    self.render_model.tiles.as_deref().unwrap_or_default(),
+                    "grid",
+                    self.scroller.as_ref().map_or(0.0, |s| s.position),
+                ),
+                GlyphLane::Modal => (
+                    self.render_model.modal_tiles.as_deref().unwrap_or_default(),
+                    "folder",
+                    0.0,
+                ),
+                _ => continue,
+            };
+            for glyph in &batch.views {
+                // Measure the white ink, excluding its black shadow quads.
+                if glyph.color.r < 0.9
+                    || glyph.color.g < 0.9
+                    || glyph.color.b < 0.9
+                    || glyph.color.a <= 0.01
+                {
+                    continue;
+                }
+                let Some(home) = glyph.presentation_pivot else {
+                    continue;
+                };
+                let Some(owner) = owners.iter().find(|tile| tile.id == glyph.id) else {
+                    continue;
+                };
+                let editing = owner.motion.flags & TileAnim::FLAG_WIGGLE != 0;
+                let center = if editing && owner.motion.flags & TileAnim::FLAG_DRAG != 0 {
+                    Point::new(self.drag_x - scroll, self.drag_y)
+                } else if editing {
+                    owner.rect.center()
+                } else {
+                    home
+                };
+                let x = glyph.rect.x + center.x - home.x + scroll;
+                let y = glyph.rect.y + center.y - home.y;
+                if let Some(record) = labels
+                    .iter_mut()
+                    .find(|r| r.id == glyph.id.as_str() && r.lane == lane)
+                {
+                    let right = (record.bounds[0] + record.bounds[2]).max(x + glyph.rect.width);
+                    let bottom = (record.bounds[1] + record.bounds[3]).max(y + glyph.rect.height);
+                    record.bounds[0] = record.bounds[0].min(x);
+                    record.bounds[1] = record.bounds[1].min(y);
+                    record.bounds[2] = right - record.bounds[0];
+                    record.bounds[3] = bottom - record.bounds[1];
+                } else {
+                    labels.push(QaLabelRecord {
+                        id: glyph.id.as_str().to_owned(),
+                        lane: lane.to_owned(),
+                        bounds: [x, y, glyph.rect.width, glyph.rect.height],
+                        pivot: [center.x + scroll, center.y],
+                        motion: owner.motion.shader_payload(),
+                    });
+                }
+            }
+        }
+        labels
+    }
+
     fn qa_pager_snapshot(&self) -> Option<QaPagerSnapshot> {
         let (surface, scroller) = if self.folders.is_active() {
             ("folder", self.folder_scroller.as_ref()?)
@@ -2144,7 +2227,13 @@ impl App {
             .render_model
             .glass
             .iter()
-            .filter(|batch| batch.layer == crate::ui_model::render_model::GlassLayer::Overlay)
+            .filter(|batch| {
+                matches!(
+                    batch.layer,
+                    crate::ui_model::render_model::GlassLayer::Overlay
+                        | crate::ui_model::render_model::GlassLayer::BottomBar
+                )
+            })
             .flat_map(|batch| &batch.surfaces)
             .map(|surface| {
                 [
@@ -2173,6 +2262,7 @@ impl App {
                 ]
             })
             .collect();
+        let labels = self.qa_label_records();
         self.qa_runner.as_mut()?.next_capture_path(QaFrameState {
             settings_slider_lenses: self
                 .render_model
@@ -2197,6 +2287,8 @@ impl App {
                 .map(|field| field.get(&self.settings.liquid_glass)),
             settings_toggle_lenses,
             bottom_glass_rects,
+            animation_time_s: self.wiggle_phase,
+            labels,
             editing,
             context_menu_active,
             context_menu_phase,

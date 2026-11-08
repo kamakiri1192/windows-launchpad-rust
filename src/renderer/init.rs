@@ -135,6 +135,13 @@ impl Renderer {
         if let Some(surface) = &surface {
             surface.configure(&device, &config);
         }
+        eprintln!(
+            "render configuration: adapter={:?} viewport={}x{} scale={} present={:?} alpha={:?} compositor_alpha={:?} format={:?}",
+            adapter.get_info(), config.width, config.height, window.scale_factor(),
+            config.present_mode, config.alpha_mode,
+            super::presentation::compositor_alpha_mode(adapter.get_info().backend, config.alpha_mode),
+            config.format,
+        );
         let qa_offscreen = qa_headless.then(|| create_qa_offscreen_texture(&device, &config));
 
         // Shaders
@@ -486,6 +493,11 @@ impl Renderer {
         );
         let focus_blur =
             FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
+        let presentation = super::presentation::SurfacePresentation::new(
+            &device,
+            &config,
+            adapter.get_info().backend,
+        );
         let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
@@ -672,6 +684,10 @@ impl Renderer {
             device,
             queue,
             surface,
+            #[cfg(target_os = "macos")]
+            native_reveal_pending: false,
+            #[cfg(target_os = "macos")]
+            native_reveal_capture_sequence: 0,
             qa_offscreen,
             config,
             pipeline,
@@ -688,7 +704,9 @@ impl Renderer {
             surface_format,
             liquid_glass,
             focus_blur,
+            presentation,
             gpu_profiler,
+            frame_metrics: super::frame_metrics::FrameMetrics::new(),
             below_settings_epoch: 0,
             below_menu_epoch: 0,
             completed_scene_cache: None,
@@ -708,6 +726,8 @@ impl Renderer {
                 "context menu icon instance buffer",
             ),
             dragged_icon_instance_count: 0,
+            dragged_text_instance_count: 0,
+            modal_dragged_text_instance_count: 0,
             icon_atlas_texture,
             icon_atlas_bind_group,
             frame_clip: frame_clip(layout, size.width),
@@ -782,6 +802,8 @@ impl Renderer {
             self.config.height,
         );
         self.focus_blur
+            .resize(&self.device, self.config.width, self.config.height);
+        self.presentation
             .resize(&self.device, self.config.width, self.config.height);
     }
 

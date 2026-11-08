@@ -59,9 +59,8 @@ impl App {
         let scale = self.scale_factor;
         let (grid_glyphs, dirty) = if let Some(t) = self.text.as_mut() {
             let labels = self.layout.build_labels(w as f32, &items);
-            let pivots: Vec<_> = self
-                .layout
-                .build_instances(w as f32, &items, &[])
+            let label_owners = self.layout.build_instances(w as f32, &items, &[]);
+            let pivots: Vec<_> = label_owners
                 .iter()
                 .map(|tile| {
                     let center = tile.rect.center();
@@ -82,7 +81,7 @@ impl App {
             // Grid lane. Clear it so the frame-top / mid-frame checks in
             // `tick_frame` don't trigger a wasted second relayout.
             let _ = t.take_atlas_grew();
-            (grid_glyph_views(&quads), dirty)
+            (grid_glyph_views(&quads, &label_owners), dirty)
         } else {
             (Vec::new(), false)
         };
@@ -548,14 +547,24 @@ fn launcher_item_tile_flags(item: &LauncherItem) -> u32 {
     }
 }
 
-fn grid_glyph_views(quads: &[crate::renderer::text_engine::GlyphQuad]) -> Vec<GlyphView> {
+fn grid_glyph_views(
+    quads: &[crate::renderer::text_engine::GlyphQuad],
+    owners: &[TileView],
+) -> Vec<GlyphView> {
     quads
         .iter()
         .map(|quad| GlyphView {
             presentation_pivot: (quad.clip_radius[3] > 0.5).then(|| {
                 crate::ui_model::geometry::Point::new(quad.clip_radius[1], quad.clip_radius[2])
             }),
-            id: UiId::backdrop("grid-label"),
+            id: owners
+                .iter()
+                .find(|tile| {
+                    let center = tile.rect.center();
+                    quad.clip_radius[3] > 0.5
+                        && [center.x, center.y] == [quad.clip_radius[1], quad.clip_radius[2]]
+                })
+                .map_or_else(|| UiId::backdrop("grid-label"), |tile| tile.id.clone()),
             rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
             uv: UvRect {
                 u0: quad.u0,

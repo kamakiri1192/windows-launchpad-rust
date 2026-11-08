@@ -36,6 +36,7 @@ fn vs_main(
     @location(2) color: vec4<f32>,  // non-premultiplied RGBA tint
     @location(3) clip_rect: vec4<f32>,  // (min_x, min_y, width, height); width<=0 → no clip
     @location(4) clip_radius: vec4<f32>, // (radius, 0, 0, 0)
+    @location(5) motion: vec4<f32>, // optional label owner (phase, lift, scale, flags)
 ) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
@@ -48,7 +49,22 @@ fn vs_main(
     let c = corners[vi];
 
     // No scroll offset: control text is fixed on screen.
-    let world = vec2<f32>(xywh.x + c.x * xywh.z, xywh.y + (1.0 - c.y) * xywh.w);
+    var world = vec2<f32>(xywh.x + c.x * xywh.z, xywh.y + (1.0 - c.y) * xywh.w);
+    let flags = u32(motion.w);
+    if (flags & 1u) != 0u {
+        // Folder-child labels share the icon's pivot/phase and the same clock
+        // as grid text. Ordinary controls and the folder title keep zero flags.
+        let pivot = clip_radius.yz;
+        let dragged = (flags & 2u) != 0u && u.frame_center_radius.w > 0.5;
+        let center = select(pivot, u.frame_half_size.zw, dragged);
+        let wave = sin((u.viewport_scroll.w + motion.x) * 8.0);
+        let angle = wave * 0.06;
+        let local = (world - pivot) * motion.z;
+        world = center + vec2<f32>(
+            local.x * cos(angle) - local.y * sin(angle),
+            local.x * sin(angle) + local.y * cos(angle) - abs(wave) * 2.0 - motion.y,
+        );
+    }
 
     let half_vp = u.viewport_scroll.xy * 0.5;
     let clip = vec2<f32>(

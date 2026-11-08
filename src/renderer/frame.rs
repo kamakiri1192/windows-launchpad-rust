@@ -101,9 +101,13 @@ impl Renderer {
             eprintln!("renderer has neither a surface nor an offscreen target");
             return;
         };
-        let view = frame
+        self.frame_metrics.mark(1);
+        let surface_view = frame
             .texture()
             .create_view(&TextureViewDescriptor::default());
+        // Keep every in-app layer in linear-premultiplied sample space. Only
+        // the final unblended pass converts to the OS stored-channel contract.
+        let view = self.presentation.view();
         let focus_blur_params = self
             .prepared_model
             .ink
@@ -186,6 +190,10 @@ impl Renderer {
         let dragged_icon_count = self.dragged_icon_instance_count.min(icon_instance_count);
         let drag_icon_active = dragged_icon_count > 0;
         let normal_icon_count = icon_instance_count - dragged_icon_count;
+        let normal_text_count = self
+            .text_instance_buffer
+            .len()
+            .saturating_sub(self.dragged_text_instance_count);
 
         let profile_scope = self.gpu_profiler.begin("grid_tile_fill", &mut encoder);
         {
@@ -221,6 +229,7 @@ impl Renderer {
 
         let profile_scope = self.gpu_profiler.begin("folder_grid_glass", &mut encoder);
         self.liquid_glass.render_grid_overlay(
+            &self.device,
             &self.queue,
             &mut encoder,
             scene_view,
@@ -261,12 +270,12 @@ impl Renderer {
 
             // Text labels: same pass, third draw call. Uses the same
             // uniform (scroll/viewport) plus the atlas texture.
-            if self.text_instance_buffer.len() > 0 {
+            if normal_text_count > 0 {
                 if let Some(buf) = self.text_instance_buffer.as_ref() {
                     pass.set_pipeline(&self.text_pipeline);
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..self.text_instance_buffer.len());
+                    pass.draw(0..6, 0..normal_text_count);
                 }
             }
         }
@@ -284,8 +293,8 @@ impl Renderer {
                     args.scroll_x,
                     args.time,
                 ],
-                frame_center_radius: [clip.0, clip.1, clip.4, 0.0],
-                frame_half_size: [clip.2, clip.3, 0.0, 0.0],
+                frame_center_radius: [clip.0, clip.1, clip.4, args.drag_active],
+                frame_half_size: [clip.2, clip.3, args.drag_pos.0, args.drag_pos.1],
                 presentation: args.presentation,
                 presentation_motion: args.presentation_motion,
             }),
@@ -375,6 +384,14 @@ impl Renderer {
                     pass.draw(0..6, 0..dragged_icon_count);
                 }
             }
+            if self.dragged_text_instance_count > 0 {
+                if let Some(buf) = self.text_instance_buffer.as_ref() {
+                    pass.set_pipeline(&self.text_pipeline);
+                    pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, normal_text_count..self.text_instance_buffer.len());
+                }
+            }
         }
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
@@ -384,6 +401,37 @@ impl Renderer {
         self.liquid_glass
             .render_control(&self.queue, &mut encoder, scene_view);
         self.gpu_profiler.end(&mut encoder, profile_scope);
+
+        // The bottom capsule and gear replace their backdrop, unlike hover/
+        // interaction glass. Capture the finished lower scene (including a
+        // dragged icon) before drawing either; never sample their own glass/ink.
+        if self.liquid_glass.has_bottom_bar_glass() {
+            self.gpu_profiler.resolve(&mut encoder);
+            let submission = self.queue.submit(std::iter::once(encoder.finish()));
+            self.frame_metrics.wait_for_gpu(&self.device, submission, 4);
+            self.liquid_glass.prepare_bottom_bar_scene_blur(
+                &self.device,
+                &self.queue,
+                &mut self.gpu_profiler,
+                self.focus_blur.scene_texture(),
+            );
+            // The completed-scene workspace is shared serially with settings/
+            // menus. Their cached pixels no longer describe its contents.
+            self.completed_scene_cache = None;
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("bottom bar and control content encoder"),
+                });
+            let profile_scope = self.gpu_profiler.begin("bottom_bar_glass", &mut encoder);
+            self.liquid_glass.render_bottom_bar(
+                &self.queue,
+                &mut encoder,
+                scene_view,
+                &self.gpu_profiler,
+            );
+            self.gpu_profiler.end(&mut encoder, profile_scope);
+        }
 
         let profile_scope = self.gpu_profiler.begin("control_content", &mut encoder);
         {
@@ -435,7 +483,8 @@ impl Renderer {
         // The pyramid uses separate submissions because wgpu/D3D12 cannot
         // read and write successive levels inside one texture usage scope.
         self.gpu_profiler.resolve(&mut encoder);
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_metrics.wait_for_gpu(&self.device, submission, 5);
         if focus_blur_params.strength > 0.001 {
             // The veil pyramid depends only on the lower-scene texture, not on
             // the animating veil strength; skip it while that content is
@@ -502,7 +551,7 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 &mut self.gpu_profiler,
-                frame.texture(),
+                &self.presentation.texture,
             );
             self.completed_scene_cache = Some((settings_scene_key, CompletedSceneLane::Settings));
             encoder = self
@@ -556,7 +605,7 @@ impl Renderer {
         // so each thumb can refract the actual green/white track below it.
         if self.liquid_glass.has_settings_control_glass() {
             self.liquid_glass
-                .prepare_settings_control_scene(&mut encoder, frame.texture());
+                .prepare_settings_control_scene(&mut encoder, &self.presentation.texture);
         }
 
         let profile_scope = self
@@ -582,6 +631,10 @@ impl Renderer {
             let modal_icon_count = self.modal_icon_instance_buffer.len();
             let normal_modal_icon_count =
                 modal_icon_count.saturating_sub(u32::from(self.modal_dragged_icon_instance));
+            let normal_modal_text_count = self
+                .modal_text_instance_buffer
+                .len()
+                .saturating_sub(self.modal_dragged_text_instance_count);
             let full_scissor = (0, 0, self.config.width.max(1), self.config.height.max(1));
             let content_scissor = self
                 .modal_clip_rect
@@ -643,12 +696,12 @@ impl Renderer {
                         pass.draw(0..6, 0..self.modal_instance_buffer.len());
                     }
                 }
-                if self.modal_text_instance_buffer.len() > 0 {
+                if normal_modal_text_count > 0 {
                     if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
                         pass.set_pipeline(&self.control_text_pipeline);
                         pass.set_bind_group(0, &self.control_text_bind_group, &[]);
                         pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..6, 0..self.modal_text_instance_buffer.len());
+                        pass.draw(0..6, 0..normal_modal_text_count);
                     }
                 }
                 if self.settings_text_instance_buffer.len() > 0 {
@@ -701,7 +754,10 @@ impl Renderer {
             }
 
             // Keep the pointer-attached child above every non-dragged badge.
-            if self.modal_dragged_tile_instance || self.modal_dragged_icon_instance {
+            if self.modal_dragged_tile_instance
+                || self.modal_dragged_icon_instance
+                || self.modal_dragged_text_instance_count > 0
+            {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("modal drag overlay pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -742,13 +798,24 @@ impl Renderer {
                         pass.draw(0..6, 0..1);
                     }
                 }
+                if self.modal_dragged_text_instance_count > 0 {
+                    if let Some(buf) = self.modal_text_instance_buffer.as_ref() {
+                        pass.set_pipeline(&self.control_text_pipeline);
+                        pass.set_bind_group(0, &self.control_text_bind_group, &[]);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(
+                            0..6,
+                            normal_modal_text_count..self.modal_text_instance_buffer.len(),
+                        );
+                    }
+                }
             }
         }
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
         // The context blur must see the exact pixels below the menu, including
         // top-level icons and any modal/folder content. Finish those writes,
-        // copy the pre-menu swapchain, flatten it over the desktop capture,
+        // copy the completed in-app target, flatten it over the desktop capture,
         // and blur that completed scene before encoding the menu itself.
         if self.liquid_glass.has_context_menu_glass()
             && self.completed_scene_cache != Some((menu_scene_key, CompletedSceneLane::ContextMenu))
@@ -759,7 +826,7 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 &mut self.gpu_profiler,
-                frame.texture(),
+                &self.presentation.texture,
             );
             self.completed_scene_cache = Some((menu_scene_key, CompletedSceneLane::ContextMenu));
             encoder = self
@@ -865,11 +932,11 @@ impl Renderer {
         self.gpu_profiler.end(&mut encoder, profile_scope);
 
         self.gpu_profiler.resolve(&mut encoder);
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_metrics.wait_for_gpu(&self.device, submission, 6);
         self.liquid_glass.begin_auto_darkness_debug_readback();
-        self.gpu_profiler.finish_frame(&self.queue);
 
-        // Debug HUD pass: drawn last, directly on the final surface view, so
+        // Debug HUD pass: drawn last, on the completed in-app view, so
         // diagnostics sit above every glass/modal layer. Reuses the
         // control-text pipeline (screen-fixed, no page-frame clip). It runs in
         // its own command buffer after the scene submit so it can `Load` the
@@ -918,13 +985,38 @@ impl Renderer {
             self.queue.submit(std::iter::once(overlay_encoder.finish()));
         }
 
+        let mut present_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("OS presentation encoder"),
+                });
+        let profile_scope = self
+            .gpu_profiler
+            .begin_pass("surface_presentation", &mut present_encoder);
+        self.presentation.present_with_timestamps(
+            &mut present_encoder,
+            &surface_view,
+            profile_scope.timestamp_writes(),
+        );
+        self.gpu_profiler.end(&mut present_encoder, profile_scope);
+        self.gpu_profiler.resolve(&mut present_encoder);
+        let submission = self.queue.submit(std::iter::once(present_encoder.finish()));
+        self.gpu_profiler.finish_frame(&self.queue);
+
         // Optional QA self-capture: copy the surface texture to a host-readable
         // buffer and save it as PNG. Driven by `LAUNCHPAD_QA_SHOT_FILE`.
         if let Some(path) = self.qa_shot.take() {
             self.save_frame_png(frame.texture(), path);
         }
 
+        self.frame_metrics.mark(2);
+        self.frame_metrics.wait_for_gpu(&self.device, submission, 7);
+        #[cfg(target_os = "macos")]
+        self.present_resident_frame(|| frame.present());
+        #[cfg(not(target_os = "macos"))]
         frame.present();
+        self.frame_metrics.mark(3);
+        self.frame_metrics.finish();
         self.note_presentation();
     }
 

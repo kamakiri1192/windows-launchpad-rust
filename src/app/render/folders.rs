@@ -318,6 +318,24 @@ impl App {
         let text_scale = model.effective_scale;
         let mut glyphs = Vec::new();
         if let Some(text) = self.text.as_mut() {
+            let label_pivots: Vec<_> = model
+                .result
+                .render
+                .text
+                .iter()
+                .filter(|view| view.style.role == TextRole::FolderItemLabel)
+                .map(|view| {
+                    let center = model
+                        .result
+                        .render
+                        .modal_tiles
+                        .iter()
+                        .flatten()
+                        .find(|tile| tile.id == view.id)
+                        .map_or_else(|| view.rect.center(), |tile| tile.rect.center());
+                    [center.x, center.y]
+                })
+                .collect();
             let labels: Vec<_> = model
                 .result
                 .render
@@ -337,7 +355,7 @@ impl App {
                     ],
                 })
                 .collect();
-            glyphs.extend(text.layout_labels(&labels, text_scale));
+            glyphs.extend(text.layout_labels_with_pivots(&labels, text_scale, &label_pivots));
 
             for view in model
                 .result
@@ -480,8 +498,18 @@ impl App {
         self.render_model.set_ink_batch(InkLane::Modal, ink);
         self.render_model.modal_tiles = model.result.render.modal_tiles.clone();
         self.render_model.modal_icons = model.result.render.modal_icons.clone();
-        self.render_model
-            .set_glyph_batch(GlyphLane::Modal, glyph_views(&glyphs));
+        self.render_model.set_glyph_batch(
+            GlyphLane::Modal,
+            glyph_views(
+                &glyphs,
+                model
+                    .result
+                    .render
+                    .modal_tiles
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
+        );
         self.folder_layout = Some(model);
     }
 
@@ -661,12 +689,21 @@ fn cosmic_weight(weight: TextWeight) -> Weight {
     }
 }
 
-fn glyph_views(quads: &[GlyphQuad]) -> Vec<GlyphView> {
+fn glyph_views(quads: &[GlyphQuad], owners: &[TileView]) -> Vec<GlyphView> {
     quads
         .iter()
         .map(|quad| GlyphView {
-            presentation_pivot: None,
-            id: UiId::backdrop("folder-text"),
+            presentation_pivot: (quad.clip_radius[3] > 0.5).then(|| {
+                crate::ui_model::geometry::Point::new(quad.clip_radius[1], quad.clip_radius[2])
+            }),
+            id: owners
+                .iter()
+                .find(|tile| {
+                    let center = tile.rect.center();
+                    quad.clip_radius[3] > 0.5
+                        && [center.x, center.y] == [quad.clip_radius[1], quad.clip_radius[2]]
+                })
+                .map_or_else(|| UiId::backdrop("folder-text"), |tile| tile.id.clone()),
             rect: Rect::new(quad.x, quad.y, quad.w, quad.h),
             uv: UvRect {
                 u0: quad.u0,

@@ -178,7 +178,7 @@ pub(super) fn create_context_menu_scene_texture(
         "liquid glass context menu pre-menu scene texture",
         width,
         height,
-        surface_format.remove_srgb_suffix(),
+        surface_format,
         wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
     )
 }

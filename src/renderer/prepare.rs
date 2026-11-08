@@ -209,7 +209,28 @@ fn glyph_quad(view: &GlyphView) -> GlyphQuad {
         clip_radius: view
             .presentation_pivot
             .map_or(clip.1, |pivot| [clip.1[0], pivot.x, pivot.y, 1.0]),
+        motion: [0.0; 4],
     }
+}
+
+/// Labels and shadows keep stable owner IDs even while a dragged tile moves
+/// to the end of its draw list. Only edit-mode labels follow that owner's
+/// spring position and GPU motion; other text retains its previous geometry.
+fn glyph_quad_with_owner(view: &GlyphView, owners: &[TileView]) -> GlyphQuad {
+    let mut quad = glyph_quad(view);
+    let Some(home) = view.presentation_pivot else {
+        return quad;
+    };
+    if let Some(owner) = owners.iter().find(|tile| tile.id == view.id) {
+        if owner.motion.flags & crate::ui_model::grid::TileAnim::FLAG_WIGGLE != 0 {
+            let center = owner.rect.center();
+            quad.x += center.x - home.x;
+            quad.y += center.y - home.y;
+            quad.clip_radius[1..3].copy_from_slice(&[center.x, center.y]);
+            quad.motion = owner.motion.shader_payload();
+        }
+    }
+    quad
 }
 
 fn tile_instance(view: &TileView, index: usize) -> TileInstance {
@@ -302,6 +323,8 @@ impl Renderer {
 
     pub fn prepare(&mut self, model: &RenderModel) {
         self.counters.record_prepare();
+        let grid_owners_changed = model.tiles != self.prepared_model.tiles;
+        let modal_owners_changed = model.modal_tiles != self.prepared_model.modal_tiles;
         // Diff the lanes composited below each completed-scene checkpoint
         // BEFORE prepare updates `prepared_model`, so the checkpoint caches
         // are not invalidated by the checkpoint's own animated lanes.
@@ -436,6 +459,11 @@ impl Renderer {
                         .collect();
                     self.liquid_glass
                         .set_drag_overlay_shapes(&self.device, &self.queue, &shapes);
+                }
+                GlassLayer::BottomBar => {
+                    let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
+                    self.liquid_glass
+                        .set_bottom_bar_shapes(&self.device, &self.queue, &shapes);
                 }
                 GlassLayer::Overlay => {
                     let shapes: Vec<_> = batch.surfaces.iter().map(shape_for).collect();
@@ -681,17 +709,48 @@ impl Renderer {
         }
 
         for batch in &model.glyphs {
-            if self
-                .prepared_model
-                .glyphs
-                .iter()
-                .find(|old| old.lane == batch.lane)
-                == Some(batch)
+            let (owners, owners_changed) = match batch.lane {
+                GlyphLane::Grid => (
+                    model.tiles.as_deref().unwrap_or_default(),
+                    grid_owners_changed,
+                ),
+                GlyphLane::Modal => (
+                    model.modal_tiles.as_deref().unwrap_or_default(),
+                    modal_owners_changed,
+                ),
+                _ => (&[][..], false),
+            };
+            if !owners_changed
+                && self
+                    .prepared_model
+                    .glyphs
+                    .iter()
+                    .find(|old| old.lane == batch.lane)
+                    == Some(batch)
             {
                 self.counters.record_dirty_skip();
                 continue;
             }
-            let quads: Vec<_> = batch.views.iter().map(glyph_quad).collect();
+            let mut quads: Vec<_> = batch
+                .views
+                .iter()
+                .map(|view| glyph_quad_with_owner(view, owners))
+                .collect();
+            // Keep shadows before foreground glyphs within each group. The
+            // trailing dragged label shares the existing icon overlay pass,
+            // so folder-panel scissors cannot cut it off at an edge.
+            let is_dragged = |quad: &GlyphQuad| {
+                quad.motion[3] as u32 & crate::ui_model::grid::TileAnim::FLAG_DRAG != 0
+            };
+            let dragged_count = quads.iter().filter(|quad| is_dragged(quad)).count() as u32;
+            if dragged_count > 0 {
+                quads.sort_by_key(is_dragged);
+            }
+            match batch.lane {
+                GlyphLane::Grid => self.dragged_text_instance_count = dragged_count,
+                GlyphLane::Modal => self.modal_dragged_text_instance_count = dragged_count,
+                _ => {}
+            }
             match batch.lane {
                 GlyphLane::Grid => set_instances(
                     &self.device,
@@ -799,6 +858,19 @@ mod tests {
             backdrop_replacement: 0.0,
             tint: None,
         }
+    }
+
+    #[test]
+    fn bottom_bar_changes_invalidate_both_completed_scene_caches() {
+        let mut model = RenderModel::new();
+        model.set_glass_batch(GlassLayer::BottomBar, vec![surface("capsule", 0, 100.0)]);
+        let prepared = RenderModel::new();
+        assert!(Renderer::below_lanes_differ(&model, &prepared, false));
+        assert!(Renderer::below_lanes_differ(&model, &prepared, true));
+        let mut moved = model.clone();
+        moved.glass[0].surfaces[0].rect.x += 10.0;
+        assert!(Renderer::below_lanes_differ(&moved, &model, false));
+        assert!(Renderer::below_lanes_differ(&moved, &model, true));
     }
 
     #[test]
@@ -989,6 +1061,68 @@ mod tests {
             [0.1, 0.2, 0.3, 0.4]
         );
         assert_eq!(packed.color, [0.5, 0.6, 0.7, 0.8]);
+        assert_eq!(packed.motion, [0.0; 4]);
+    }
+
+    #[test]
+    fn label_and_shadow_keep_their_owner_through_reorder_drag_and_edit_exit() {
+        use crate::ui_model::grid::TileAnim;
+        for id in [
+            UiId::launcher_item("app:label"),
+            UiId::folder_child("folder", "label"),
+        ] {
+            let mut owner = TileView {
+                id: id.clone(),
+                rect: Rect::new(160.0, 110.0, 80.0, 80.0),
+                radius: 18.0,
+                color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                has_icon: true,
+                motion: TileAnim {
+                    phase: 1.11,
+                    lift: 12.0,
+                    scale: 1.15,
+                    flags: TileAnim::FLAG_WIGGLE | TileAnim::FLAG_DRAG,
+                },
+                z: 0,
+            };
+            let view = GlyphView {
+                presentation_pivot: Some(crate::ui_model::geometry::Point::new(100.0, 60.0)),
+                id,
+                rect: Rect::new(85.0, 110.0, 12.0, 16.0),
+                uv: UvRect {
+                    u0: 0.1,
+                    v0: 0.2,
+                    u1: 0.3,
+                    v1: 0.4,
+                },
+                color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                z: 0,
+                clip: None,
+            };
+            let mut unrelated = owner.clone();
+            unrelated.id = UiId::launcher_item("other");
+            unrelated.motion.phase = 5.0;
+            let mut shadow = view.clone();
+            shadow.rect.y += 2.0;
+            shadow.color = Color::rgba(0.0, 0.0, 0.0, 0.4);
+            for owners in [
+                vec![owner.clone(), unrelated.clone()],
+                vec![unrelated, owner.clone()],
+            ] {
+                let quad = glyph_quad_with_owner(&view, &owners);
+                let shade = glyph_quad_with_owner(&shadow, &owners);
+                assert_eq!([quad.x, quad.y], [185.0, 200.0]);
+                assert_eq!(quad.clip_radius, [0.0, 200.0, 150.0, 1.0]);
+                assert_eq!(quad.motion, owner.motion.shader_payload());
+                assert_eq!(shade.motion, quad.motion);
+                assert_eq!(shade.clip_radius, quad.clip_radius);
+                assert_eq!(shade.y - quad.y, 2.0);
+            }
+            owner.motion = TileAnim::IDLE;
+            let idle = glyph_quad_with_owner(&view, &[owner]);
+            assert_eq!([idle.x, idle.y], [view.rect.x, view.rect.y]);
+            assert_eq!(idle.motion, [0.0; 4]);
+        }
     }
 
     #[test]

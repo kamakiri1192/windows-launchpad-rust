@@ -43,16 +43,16 @@ struct GlassShape {
     shape_type: u32,
     // offset 24
     activation: f32,
-    // offset 28 — explicit pad so clip_rect starts at 32 (16-byte aligned)
-    _pad1: u32,
+    // offset 28 — cached motion flag (unused in this lane)
+    motion_resolved: u32,
     // offset 32
     clip_rect: vec4<f32>,
     // offset 48
     clip_radius: f32,
-    // offset 52 — explicit pad so motion starts at 64 (16-byte aligned)
-    _pad2_a: u32,
-    _pad2_b: u32,
-    _pad2_c: u32,
+    // offset 52 — cached motion (unused in this lane)
+    motion_cos: f32,
+    motion_sin: f32,
+    motion_dy: f32,
     // offset 64
     motion: vec4<f32>,
     // offset 80; alpha < 0 uses the global glass tint

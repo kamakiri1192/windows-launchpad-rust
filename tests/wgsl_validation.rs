@@ -721,9 +721,9 @@ const TILE_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout 
     attributes: &TILE_ATTRIBS,
 };
 
-const GLYPH_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
+const GLYPH_ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
 const GLYPH_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-    array_stride: 80,
+    array_stride: 96,
     step_mode: wgpu::VertexStepMode::Instance,
     attributes: &GLYPH_ATTRIBS,
 };

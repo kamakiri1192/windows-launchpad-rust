@@ -4,7 +4,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+mod bottom_bar;
 mod frame;
+mod geometry_regions;
+use bottom_bar::BottomBarLane;
 mod resources;
 use resources::*;
 
@@ -256,6 +259,13 @@ pub struct LiquidGlassRenderer {
     grid_overlay_shape_count: u32,
     grid_overlay_shape_capacity: usize,
     grid_overlay_shapes: Vec<GlassShape>,
+    active_grid_shapes: Vec<GlassShape>,
+    grid_shape_scratch: Vec<GlassShape>,
+    // Valid only while the shared overlay geometry/tint textures still hold
+    // this lane. Backdrop pixel updates do not overwrite these textures.
+    grid_geometry_uniforms: Option<GlassUniforms>,
+    #[cfg(test)]
+    force_full_grid_redraw: bool,
     drag_overlay_shape_buffer: wgpu::Buffer,
     drag_overlay_shape_count: u32,
     drag_overlay_shape_capacity: usize,
@@ -276,6 +286,7 @@ pub struct LiquidGlassRenderer {
     control_shape_count: u32,
     control_shape_capacity: usize,
     control_shapes: Vec<GlassShape>,
+    bottom_bar: Option<BottomBarLane>,
     control_geometry_texture: wgpu::Texture,
     control_geometry_view: wgpu::TextureView,
     control_tint_texture: wgpu::Texture,
@@ -325,12 +336,15 @@ pub struct LiquidGlassRenderer {
     overlay_tint_view: wgpu::TextureView,
     backdrop_texture: wgpu::Texture,
     backdrop_view: wgpu::TextureView,
+    bound_backdrop_view: wgpu::TextureView,
     backdrop_mapping: BackdropMapping,
     /// Monotonic counters feeding the renderer's scene-content epoch: any
     /// change to glass params/debug state, or any newly consumed desktop
     /// capture frame, invalidates caches derived from the rendered scene.
     content_epoch: u64,
     capture_sequence: u64,
+    // Initial/fallback pixels are not a captured desktop and must not hide it.
+    has_captured_backdrop: bool,
     gpu_backdrop_texture: Option<wgpu::Texture>,
     using_gpu_backdrop: bool,
     gpu_backdrop_is_copy_target: bool,
@@ -397,7 +411,6 @@ pub struct LiquidGlassRenderer {
     modal_final_bind_group: wgpu::BindGroup,
     settings_panel_final_bind_group: wgpu::BindGroup,
     context_menu_final_bind_group: wgpu::BindGroup,
-    grid_overlay_geometry_bind_group: wgpu::BindGroup,
     drag_overlay_geometry_bind_group: wgpu::BindGroup,
     badge_geometry_bind_group: wgpu::BindGroup,
     modal_badge_geometry_bind_group: wgpu::BindGroup,
@@ -860,12 +873,6 @@ impl LiquidGlassRenderer {
             &geometry_bind_group_layout,
             &uniform_buffer,
             &shape_buffer,
-        );
-        let grid_overlay_geometry_bind_group = create_geometry_bind_group(
-            device,
-            &geometry_bind_group_layout,
-            &grid_overlay_uniform_buffer,
-            &grid_overlay_shape_buffer,
         );
         let drag_overlay_geometry_bind_group = create_geometry_bind_group(
             device,
@@ -1337,6 +1344,11 @@ impl LiquidGlassRenderer {
             grid_overlay_shape_count: 0,
             grid_overlay_shape_capacity,
             grid_overlay_shapes: Vec::new(),
+            active_grid_shapes: Vec::new(),
+            grid_shape_scratch: Vec::new(),
+            grid_geometry_uniforms: None,
+            #[cfg(test)]
+            force_full_grid_redraw: false,
             drag_overlay_shape_buffer,
             drag_overlay_shape_count: 0,
             drag_overlay_shape_capacity,
@@ -1355,6 +1367,7 @@ impl LiquidGlassRenderer {
             control_shape_count: 0,
             control_shape_capacity: 2,
             control_shapes: Vec::new(),
+            bottom_bar: None,
             control_geometry_texture,
             control_geometry_view,
             control_tint_texture,
@@ -1398,6 +1411,7 @@ impl LiquidGlassRenderer {
             overlay_tint_texture,
             overlay_tint_view,
             backdrop_texture,
+            bound_backdrop_view: backdrop_view.clone(),
             backdrop_view,
             backdrop_mapping,
             gpu_backdrop_texture: None,
@@ -1451,7 +1465,6 @@ impl LiquidGlassRenderer {
             modal_final_bind_group,
             settings_panel_final_bind_group,
             context_menu_final_bind_group,
-            grid_overlay_geometry_bind_group,
             drag_overlay_geometry_bind_group,
             badge_geometry_bind_group,
             modal_badge_geometry_bind_group,
@@ -1469,6 +1482,7 @@ impl LiquidGlassRenderer {
             blur_dirty: true,
             content_epoch: 0,
             capture_sequence: 0,
+            has_captured_backdrop: false,
             last_geometry_key: None,
             stats: RenderStats::new(),
         }
@@ -1526,6 +1540,7 @@ impl LiquidGlassRenderer {
         self.geometry_tint_texture = geometry_tint_texture;
         self.geometry_tint_view = geometry_tint_view;
         self.overlay_geometry_texture = overlay_geometry_texture;
+        self.grid_geometry_uniforms = None;
         self.overlay_geometry_view = overlay_geometry_view;
         self.overlay_tint_texture = overlay_tint_texture;
         self.overlay_tint_view = overlay_tint_view;
@@ -1543,6 +1558,7 @@ impl LiquidGlassRenderer {
         ) = create_settings_control_scene_texture(device, width, height, self.surface_format);
         self.backdrop_texture = backdrop_texture;
         self.backdrop_view = backdrop_view;
+        self.has_captured_backdrop = false;
         self.backdrop_stats_dirty = true;
         self.backdrop_mapping = BackdropMapping::full(width, height);
         self.gpu_backdrop_texture = None;
@@ -1922,6 +1938,8 @@ impl LiquidGlassRenderer {
             &self.auto_darkness_state_buffer,
             &self.auto_darkness_uniform_buffer,
         );
+        self.bound_backdrop_view = backdrop_view.clone();
+        self.rebuild_bottom_bar_bind_groups(device);
     }
 
     fn bind_cpu_backdrop(&mut self, device: &wgpu::Device) {
@@ -1935,13 +1953,16 @@ impl LiquidGlassRenderer {
         if self.debug.show_backdrop_texture {
             return CaptureRegion::full(width, height);
         }
-        let groups: [&[GlassShape]; 9] = [
+        let groups: [&[GlassShape]; 10] = [
             &self.base_shapes,
             &self.grid_overlay_shapes,
             &self.drag_overlay_shapes,
             &self.badge_shapes,
             &self.modal_badge_shapes,
             &self.control_shapes,
+            self.bottom_bar
+                .as_ref()
+                .map_or(&[], |lane| lane.shapes.as_slice()),
             &self.settings_control_shapes,
             &self.settings_panel_shapes,
             &self.context_menu_shapes,
@@ -2220,6 +2241,8 @@ impl LiquidGlassRenderer {
         }
         self.grid_overlay_shapes.clear();
         self.grid_overlay_shapes.extend_from_slice(shapes);
+        self.active_grid_shapes.clear();
+        self.grid_geometry_uniforms = None;
         self.grid_overlay_shape_count = self.grid_overlay_shapes.len() as u32;
         if self.grid_overlay_shapes.len() > self.grid_overlay_shape_capacity {
             self.grid_overlay_shape_capacity = next_shape_capacity(
@@ -2230,12 +2253,6 @@ impl LiquidGlassRenderer {
                 device,
                 self.grid_overlay_shape_capacity,
                 "liquid glass grid overlay shape buffer",
-            );
-            self.grid_overlay_geometry_bind_group = create_geometry_bind_group(
-                device,
-                &self.geometry_bind_group_layout,
-                &self.grid_overlay_uniform_buffer,
-                &self.grid_overlay_shape_buffer,
             );
         }
         if !self.grid_overlay_shapes.is_empty() {
@@ -2288,9 +2305,8 @@ impl LiquidGlassRenderer {
         }
     }
 
-    /// Replace the fixed overlay lane atomically. The bottom control and gear
-    /// share one SDF field, so updating them together avoids rebuilding or
-    /// uploading the lane twice when both shapes change in the same frame.
+    /// Replace interaction lenses and the gear atomically. The bottom capsule
+    /// has a separate completed-scene lane and must never enter this SDF union.
     pub fn set_overlay_shapes(
         &mut self,
         device: &wgpu::Device,
@@ -2790,6 +2806,15 @@ impl LiquidGlassRenderer {
     /// Number of desktop capture frames consumed so far.
     pub fn capture_sequence(&self) -> u64 {
         self.capture_sequence
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn needs_fresh_capture(&self, since: u64) -> bool {
+        self.params.enabled
+            && !self.base_shapes.is_empty()
+            && self.shape_count > 0
+            && self.capture_status == CaptureStatus::Ready
+            && self.capture_sequence == since
     }
 
     /// Whether auto-darkness classification is active (time-varying glass

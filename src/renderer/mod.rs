@@ -26,14 +26,18 @@ mod counters;
 mod focus_blur;
 mod fps;
 mod frame;
+mod frame_metrics;
 pub(crate) mod gpu_profile;
 pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
 mod icons;
 mod init;
+#[cfg(target_os = "macos")]
+mod macos_presentation;
 mod prepare;
 #[cfg(target_os = "windows")]
 mod present_stats;
+mod presentation;
 mod resources;
 mod text;
 pub(crate) mod text_engine;
@@ -61,6 +65,10 @@ pub struct Renderer {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
     pub surface: Option<Surface<'static>>,
+    #[cfg(target_os = "macos")]
+    native_reveal_pending: bool,
+    #[cfg(target_os = "macos")]
+    native_reveal_capture_sequence: u64,
     /// Surface-free render target for deterministic QA on hosted macOS
     /// runners, where the Actions service has no WindowServer surface.
     qa_offscreen: Option<Texture>,
@@ -85,7 +93,9 @@ pub struct Renderer {
     surface_format: TextureFormat,
     liquid_glass: LiquidGlassRenderer,
     focus_blur: focus_blur::FocusBlurRenderer,
+    presentation: presentation::SurfacePresentation,
     gpu_profiler: gpu_profile::GpuProfilerState,
+    pub(crate) frame_metrics: frame_metrics::FrameMetrics,
     /// Bumped whenever `prepare` observes changes in the model lanes that are
     /// composited below each completed-scene checkpoint, so the checkpoint
     /// caches can detect stale inputs without being invalidated by the
@@ -123,6 +133,8 @@ pub struct Renderer {
     /// Number of trailing top-level icon instances belonging to the dragged
     /// visual unit. Apps use one; a closed folder uses all preview miniatures.
     dragged_icon_instance_count: u32,
+    dragged_text_instance_count: u32,
+    modal_dragged_text_instance_count: u32,
     icon_atlas_texture: wgpu::Texture,
     icon_atlas_bind_group: wgpu::BindGroup,
 

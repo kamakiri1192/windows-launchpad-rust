@@ -95,6 +95,7 @@ impl LiquidGlassRenderer {
             self.last_capture_at = Some(Instant::now());
         }
         if captured {
+            self.has_captured_backdrop = true;
             self.capture_sequence = self.capture_sequence.wrapping_add(1);
         }
         let next_status = self.capture.status();
@@ -113,7 +114,7 @@ impl LiquidGlassRenderer {
             }
         }
 
-        let uniforms = uniforms_from_params(
+        let mut uniforms = uniforms_from_params(
             &self.params,
             self.debug,
             (width, height),
@@ -123,6 +124,9 @@ impl LiquidGlassRenderer {
             0.0,
             self.backdrop_mapping,
         );
+        // The sampled backdrop is already in this pixel. Alpha is coverage,
+        // not material transparency; otherwise the OS adds sharp desktop again.
+        uniforms.backdrop_replacement = if self.has_captured_backdrop { 1.0 } else { 0.0 };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let global_blur = self.blur_profile(self.params.blur_radius);
@@ -249,14 +253,65 @@ impl LiquidGlassRenderer {
     /// being swallowed by the page frame's union.
     pub fn render_grid_overlay(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         scroll_x: f32,
         time: f32,
     ) {
-        if !self.params.enabled || self.grid_overlay_shape_count == 0 {
+        if !self.params.enabled || self.grid_overlay_shapes.is_empty() {
             return;
+        }
+
+        // Keep all launch-transformed shapes until presentation settles.
+        // Outside that transition, exclude only shapes too far outside the
+        // viewport to affect even the worst-case sequence of smooth unions.
+        #[cfg(test)]
+        let force_full = self.force_full_grid_redraw;
+        #[cfg(not(test))]
+        let force_full = false;
+        // Positive distances can carry influence through successive unions;
+        // bound that chain by one blend radius per shape, not only its outline.
+        let padding =
+            self.params.blend.max(0.0) * (1.0 + self.grid_overlay_shapes.len() as f32) + 3.0;
+        self.grid_shape_scratch.clear();
+        self.grid_shape_scratch
+            .extend(self.grid_overlay_shapes.iter().copied().filter(|shape| {
+                if force_full
+                    || cfg!(target_os = "windows")
+                    || self.params.presentation[0] < 1.0
+                    || shape.is_clip_only()
+                    || shape.is_frame()
+                {
+                    return true;
+                }
+                let bounds = shape.screen_bounds(scroll_x);
+                bounds[2] >= -padding
+                    && bounds[3] >= -padding
+                    && bounds[0] <= self.texture_size.0 as f32 + padding
+                    && bounds[1] <= self.texture_size.1 as f32 + padding
+            }));
+        // Metal readback stays within one RGBA8 unit with CPU-resolved motion.
+        // Keep Windows on its original shader math. Regional union reduction
+        // there also changes edge rounding even without CPU-resolved motion.
+        // Both backends retain geometry caching and bounded scissor coverage.
+        if !force_full && cfg!(target_os = "macos") {
+            for shape in &mut self.grid_shape_scratch {
+                if matches!(shape.shape_type, 4..=6) {
+                    let wave = ((time + shape.motion[2]) * 8.0).sin();
+                    let (sin, cos) = (wave * 0.06).sin_cos();
+                    shape.motion_resolved = 1;
+                    shape.resolved_motion = [cos, sin, wave.abs() * 2.0];
+                }
+            }
+        }
+        if self.grid_shape_scratch != self.active_grid_shapes
+            || self.grid_shape_scratch.len() != self.grid_overlay_shape_count as usize
+        {
+            std::mem::swap(&mut self.active_grid_shapes, &mut self.grid_shape_scratch);
+            self.grid_overlay_shape_count = self.active_grid_shapes.len() as u32;
+            self.grid_geometry_uniforms = None;
         }
 
         let (width, height) = self.texture_size;
@@ -280,7 +335,101 @@ impl LiquidGlassRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        {
+        let reuse_geometry = self
+            .grid_geometry_uniforms
+            .as_ref()
+            .is_some_and(|previous| bytemuck::bytes_of(previous) == bytemuck::bytes_of(&uniforms));
+        if !reuse_geometry || force_full {
+            let regions = if force_full || self.params.presentation[0] < 1.0 {
+                vec![(0, 0, width, height)]
+            } else {
+                geometry_regions::regions(
+                    &self.active_grid_shapes,
+                    scroll_x,
+                    self.params.blend,
+                    self.texture_size,
+                )
+            };
+            let stride = std::mem::size_of::<GlassShape>();
+            let alignment = device.limits().min_storage_buffer_offset_alignment as usize;
+            let mut packed = Vec::new();
+            let mut slices = Vec::new();
+            let keep_full_union =
+                force_full || cfg!(target_os = "windows") || self.params.presentation[0] < 1.0;
+            for rect in regions {
+                // On Windows preserve every sequential union operation: even
+                // mix(b, a, 1) can round differently from a in shader codegen.
+                // The strict GPU reference, not algebra alone, is authoritative.
+                if keep_full_union && !packed.is_empty() {
+                    // Every region uses the same immutable shape range. Upload
+                    // it once instead of duplicating it for each Windows band.
+                    slices.push((rect, 0, (self.active_grid_shapes.len() * stride) as u64));
+                    continue;
+                }
+                let shapes = if keep_full_union {
+                    self.active_grid_shapes.clone()
+                } else {
+                    geometry_regions::contributing_shapes(
+                        &self.active_grid_shapes,
+                        scroll_x,
+                        self.params.blend,
+                        rect,
+                    )
+                };
+                if shapes.is_empty() {
+                    continue;
+                }
+                while packed.len() * stride % alignment != 0 {
+                    packed.push(shapes[0]);
+                }
+                let offset = (packed.len() * stride) as u64;
+                let size = (shapes.len() * stride) as u64;
+                packed.extend(shapes);
+                slices.push((rect, offset, size));
+            }
+            if packed.len() > self.grid_overlay_shape_capacity {
+                self.grid_overlay_shape_capacity =
+                    next_shape_capacity(self.grid_overlay_shape_capacity, packed.len());
+                self.grid_overlay_shape_buffer = create_shape_buffer_with_capacity(
+                    device,
+                    self.grid_overlay_shape_capacity,
+                    "grid regional shapes",
+                );
+            }
+            if !packed.is_empty() {
+                queue.write_buffer(
+                    &self.grid_overlay_shape_buffer,
+                    0,
+                    bytemuck::cast_slice(&packed),
+                );
+            }
+            // Separate binding ranges make arrayLength expose exactly this
+            // region's shapes. Uniforms and all SDF/material equations remain
+            // shared. All writes precede the single existing geometry pass.
+            let batches: Vec<_> = slices
+                .into_iter()
+                .map(|(rect, offset, size)| {
+                    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("grid regional geometry"),
+                        layout: &self.geometry_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: self.grid_overlay_uniform_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &self.grid_overlay_shape_buffer,
+                                    offset,
+                                    size: std::num::NonZeroU64::new(size),
+                                }),
+                            },
+                        ],
+                    });
+                    (rect, group)
+                })
+                .collect();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass grid overlay geometry pass"),
                 color_attachments: &[
@@ -309,8 +458,12 @@ impl LiquidGlassRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.geometry_pipeline);
-            pass.set_bind_group(0, &self.grid_overlay_geometry_bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            for ((x, y, w, h), group) in &batches {
+                pass.set_bind_group(0, group, &[]);
+                pass.set_scissor_rect(*x, *y, *w, *h);
+                pass.draw(0..3, 0..1);
+            }
+            self.grid_geometry_uniforms = Some(uniforms);
         }
 
         {
@@ -351,6 +504,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(
             &self.params,
@@ -442,6 +596,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(
             &self.params,
@@ -524,6 +679,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let uniforms = uniforms_from_params(
             &self.params,
@@ -830,6 +986,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let mut uniforms = uniforms_from_params(
             &self.params,
@@ -932,6 +1089,33 @@ impl LiquidGlassRenderer {
         self.params.enabled
             && self.settings_panel_completed_scene_enabled
             && self.settings_panel_shape_count > 0
+    }
+
+    /// Prepare the bottom capsule and gear from the completed lower in-app scene.
+    /// Interaction glass remains on its existing translucent lane.
+    pub fn prepare_bottom_bar_scene_blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        profiler: &mut GpuProfilerState,
+        pre_bar_scene: &wgpu::Texture,
+    ) {
+        if !self.has_bottom_bar_glass() || !self.has_captured_backdrop {
+            return;
+        }
+        let bounds = completed_scene_screen_bounds(
+            self.bottom_bar_shapes(),
+            self.texture_size.0,
+            self.texture_size.1,
+        );
+        self.prepare_completed_scene_blur(
+            device,
+            queue,
+            profiler,
+            pre_bar_scene,
+            self.params.blur_radius,
+            bounds,
+        );
     }
 
     /// Capture every layer already rendered to the transparent swapchain,
@@ -1082,7 +1266,7 @@ impl LiquidGlassRenderer {
         let mut flatten_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("liquid glass context menu scene flatten encoder"),
         });
-        let flatten_scope = profiler.begin("completed_scene_flatten", &mut flatten_encoder);
+        let flatten_scope = profiler.begin_pass("completed_scene_flatten", &mut flatten_encoder);
         {
             let mut pass = flatten_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquid glass context menu scene flatten pass"),
@@ -1096,7 +1280,7 @@ impl LiquidGlassRenderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: flatten_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1261,6 +1445,7 @@ impl LiquidGlassRenderer {
             return;
         }
 
+        self.grid_geometry_uniforms = None;
         let (width, height) = self.texture_size;
         let mut uniforms = uniforms_from_params(
             &self.params,
@@ -1402,7 +1587,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
-        let profile_scope = profiler.begin(down_scopes[i], &mut encoder);
+        let profile_scope = profiler.begin_pass(down_scopes[i], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1416,7 +1601,7 @@ fn encode_blur_profile(
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: profile_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1444,7 +1629,7 @@ fn encode_blur_profile(
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(label.as_str()),
         });
-        let profile_scope = profiler.begin(up_scopes[j], &mut encoder);
+        let profile_scope = profiler.begin_pass(up_scopes[j], &mut encoder);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label.as_str()),
@@ -1458,7 +1643,7 @@ fn encode_blur_profile(
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: profile_scope.timestamp_writes(),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
