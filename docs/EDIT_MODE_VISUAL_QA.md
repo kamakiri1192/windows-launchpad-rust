@@ -8,6 +8,10 @@ This document records the manual visual QA process used for the iOS-style
 edit-mode work: long-press entry, wiggle/lift visuals, drag reordering, edge
 autoscroll, Done exit, delete-badge hiding, and persistence across launches.
 
+For macOS launch/reveal color and live capture verification, use
+[MACOS_REVEAL_COLOR_QA.md](MACOS_REVEAL_COLOR_QA.md). GPU self-capture alone does
+not include WindowServer's alpha composition or retained-window behavior.
+
 The app is a transparent, capture-excluded Windows overlay, so ordinary
 screenshot tools can produce misleading results unless the app is launched with
 the right environment.

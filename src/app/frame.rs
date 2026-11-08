@@ -38,6 +38,13 @@ impl App {
     }
 
     pub(crate) fn tick_frame(&mut self) {
+        // A redraw queued before hide (or by hide's relayout) can still arrive
+        // before AppKit reports Occluded. Do not render the cancelled, settled
+        // presentation into that hidden resident window or unmask its old scene.
+        // Headless QA intentionally drives logically hidden scenarios itself.
+        if !self.visible && !self.qa_enabled() {
+            return;
+        }
         let now = Instant::now();
         let vp = self.viewport_phys();
 
@@ -132,7 +139,20 @@ impl App {
         // larger than the scenario step. Keep tile springs on the same clock
         // as the menu to avoid invalid anchors during search transitions.
         let anim_dt = context_menu_anim_dt;
-        let launch_animating = self.launch_presentation.tick(context_menu_anim_dt);
+        // Metal cannot acquire a drawable while the native window is hidden.
+        // Keep the reveal at alpha=0 until its first real drawable is ready.
+        #[cfg(target_os = "macos")]
+        let waiting_for_surface = self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.native_reveal_pending());
+        #[cfg(not(target_os = "macos"))]
+        let waiting_for_surface = false;
+        let launch_animating = self.launch_presentation.tick(if waiting_for_surface {
+            0.0
+        } else {
+            context_menu_anim_dt
+        });
         if self.editing {
             self.wiggle_phase += anim_dt;
         }

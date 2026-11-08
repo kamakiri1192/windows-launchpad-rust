@@ -136,9 +136,11 @@ impl Renderer {
             surface.configure(&device, &config);
         }
         eprintln!(
-            "render configuration: adapter={:?} viewport={}x{} scale={} present={:?} alpha={:?} format={:?}",
+            "render configuration: adapter={:?} viewport={}x{} scale={} present={:?} alpha={:?} compositor_alpha={:?} format={:?}",
             adapter.get_info(), config.width, config.height, window.scale_factor(),
-            config.present_mode, config.alpha_mode, config.format,
+            config.present_mode, config.alpha_mode,
+            super::presentation::compositor_alpha_mode(adapter.get_info().backend, config.alpha_mode),
+            config.format,
         );
         let qa_offscreen = qa_headless.then(|| create_qa_offscreen_texture(&device, &config));
 
@@ -491,7 +493,11 @@ impl Renderer {
         );
         let focus_blur =
             FocusBlurRenderer::new(&device, surface_format, config.width, config.height);
-        let presentation = super::presentation::SurfacePresentation::new(&device, &config);
+        let presentation = super::presentation::SurfacePresentation::new(
+            &device,
+            &config,
+            adapter.get_info().backend,
+        );
         let gpu_profiler = super::gpu_profile::GpuProfilerState::new(&device);
 
         // ---- Bottom-control overlay pipelines ---------------------------
@@ -678,6 +684,10 @@ impl Renderer {
             device,
             queue,
             surface,
+            #[cfg(target_os = "macos")]
+            native_reveal_pending: false,
+            #[cfg(target_os = "macos")]
+            native_reveal_capture_sequence: 0,
             qa_offscreen,
             config,
             pipeline,

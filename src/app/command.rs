@@ -134,6 +134,8 @@ impl App {
         self.cancel_and_reset_scroll_input(super::update::ScrollLifecycleBoundary::HideWindow);
         if let Some(r) = self.renderer.as_mut() {
             r.set_backdrop_capture_active(false);
+            #[cfg(target_os = "macos")]
+            r.prepare_native_reveal();
             r.window.set_visible(false);
             r.window.set_ime_allowed(false);
         }
@@ -215,9 +217,8 @@ impl App {
         }
         let was_visible = self.visible;
         // Arm the transition before the native window becomes visible. The
-        // first summon frame is rendered while the window is still hidden so
-        // a resident window cannot expose its old settled swapchain buffer
-        // before the new reveal has reached the compositor.
+        // Windows stages a frame before showing. Metal skips hidden drawables;
+        // its masked layer is published with the first fresh drawable instead.
         if !was_visible {
             self.launch_presentation.begin();
         }
@@ -240,11 +241,9 @@ impl App {
         self.last_summon = Some(Instant::now());
 
         if !was_visible {
-            // A hidden native window may retain the last fully-rendered frame
-            // in DWM/CoreAnimation. Render the animation's first frame before
-            // showing it, otherwise the compositor can briefly present the
-            // settled scene and then jump back to the animation's transparent
-            // start state (the visible whole-window flash reported on reopen).
+            // Stage the start frame where hidden acquisition is supported.
+            // Metal can return Occluded here: native_reveal_pending keeps the
+            // clock at zero and masks the old drawable until a visible render.
             self.tick_frame();
         }
 

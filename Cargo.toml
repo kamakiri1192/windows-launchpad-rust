@@ -71,6 +71,7 @@ block2 = "0.6.2"
 global-hotkey = "0.7.0"
 icns = "0.3.1"
 objc2 = "0.6.4"
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CATransaction"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSBitmapImageRep",

@@ -2,6 +2,22 @@
 //! Never sample this converted surface for another glass layer.
 use wgpu::util::DeviceExt;
 
+/// wgpu 29 advertises PostMultiplied for Metal, but its transparent
+/// CAMetalLayer consumes premultiplied stored channels. Keep the advertised
+/// mode for surface.configure; correct only the final color conversion.
+/// Upstream: https://github.com/gfx-rs/wgpu/pull/9922
+pub(super) fn compositor_alpha_mode(
+    backend: wgpu::Backend,
+    advertised: wgpu::CompositeAlphaMode,
+) -> wgpu::CompositeAlphaMode {
+    match (backend, advertised) {
+        (wgpu::Backend::Metal, wgpu::CompositeAlphaMode::PostMultiplied) => {
+            wgpu::CompositeAlphaMode::PreMultiplied
+        }
+        _ => advertised,
+    }
+}
+
 pub(super) struct SurfacePresentation {
     pub texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -21,7 +37,11 @@ fn alpha_mode_code(mode: wgpu::CompositeAlphaMode) -> u32 {
 }
 
 impl SurfacePresentation {
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        backend: wgpu::Backend,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("OS surface presentation shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shader_surface_present.wgsl").into()),
@@ -52,7 +72,7 @@ impl SurfacePresentation {
             cache: None,
         });
         let values = [
-            alpha_mode_code(config.alpha_mode),
+            alpha_mode_code(compositor_alpha_mode(backend, config.alpha_mode)),
             u32::from(config.format.is_srgb()),
             0,
             0,
@@ -171,8 +191,34 @@ impl SurfacePresentation {
 
 #[cfg(test)]
 mod tests {
-    use super::alpha_mode_code;
+    use super::{alpha_mode_code, compositor_alpha_mode};
     use wgpu::CompositeAlphaMode::*;
+
+    #[test]
+    fn metal_legacy_postmultiplied_surface_uses_premultiplied_storage() {
+        assert_eq!(
+            compositor_alpha_mode(wgpu::Backend::Metal, PostMultiplied),
+            PreMultiplied
+        );
+        for mode in [PreMultiplied, Auto, Inherit, Opaque] {
+            assert_eq!(compositor_alpha_mode(wgpu::Backend::Metal, mode), mode);
+        }
+    }
+
+    #[test]
+    fn other_backends_keep_their_advertised_alpha_contract() {
+        for backend in [
+            wgpu::Backend::Dx12,
+            wgpu::Backend::Vulkan,
+            wgpu::Backend::Gl,
+            wgpu::Backend::BrowserWebGpu,
+            wgpu::Backend::Noop,
+        ] {
+            for mode in [PreMultiplied, PostMultiplied, Auto, Inherit, Opaque] {
+                assert_eq!(compositor_alpha_mode(backend, mode), mode);
+            }
+        }
+    }
 
     #[test]
     fn explicit_alpha_modes_select_their_stored_channel_contract() {

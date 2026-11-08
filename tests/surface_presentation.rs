@@ -34,9 +34,15 @@ fn production_presentation_preserves_color_alpha_and_resize() {
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Bgra8Unorm,
         ] {
-            for mode in [
-                wgpu::CompositeAlphaMode::PreMultiplied,
-                wgpu::CompositeAlphaMode::PostMultiplied,
+            use wgpu::{Backend::*, CompositeAlphaMode::*};
+            // Exercise native compositor contracts independently of the GPU
+            // running this readback test. Metal's legacy advertised Post mode
+            // must store premultiplied pixels; genuine Post modes stay straight.
+            for (backend, mode, expected_mode) in [
+                (Dx12, PreMultiplied, PreMultiplied),
+                (Vulkan, PostMultiplied, PostMultiplied),
+                (Metal, PostMultiplied, PreMultiplied),
+                (Metal, PreMultiplied, PreMultiplied),
             ] {
                 let config = wgpu::SurfaceConfiguration {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -48,7 +54,7 @@ fn production_presentation_preserves_color_alpha_and_resize() {
                     alpha_mode: mode,
                     view_formats: vec![],
                 };
-                let mut presentation = SurfacePresentation::new(&device, &config);
+                let mut presentation = SurfacePresentation::new(&device, &config, backend);
                 for (width, height) in [(1, 1), (3, 2)] {
                     // The second iteration exercises actual target/view/group
                     // recreation rather than constructing another renderer.
@@ -64,7 +70,7 @@ fn production_presentation_preserves_color_alpha_and_resize() {
                                 &queue,
                                 &presentation,
                                 format,
-                                mode,
+                                expected_mode,
                                 width,
                                 height,
                                 rgb,

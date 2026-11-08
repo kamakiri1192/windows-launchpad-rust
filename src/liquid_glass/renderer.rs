@@ -2808,6 +2808,15 @@ impl LiquidGlassRenderer {
         self.capture_sequence
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn needs_fresh_capture(&self, since: u64) -> bool {
+        self.params.enabled
+            && !self.base_shapes.is_empty()
+            && self.shape_count > 0
+            && self.capture_status == CaptureStatus::Ready
+            && self.capture_sequence == since
+    }
+
     /// Whether auto-darkness classification is active (time-varying glass
     /// output that scene caches must not ignore).
     pub fn auto_darkness_enabled(&self) -> bool {

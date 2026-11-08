@@ -62,6 +62,13 @@ pass; native GPU performance remains to be measured. Auto/Inherit/Opaque retain
 the prior attachment behavior because they do not specify the same transparent
 stored-channel contract as PreMultiplied/PostMultiplied.
 
+On wgpu 29 Metal, the advertised PostMultiplied mode is an upstream bug:
+CAMetalLayer actually consumes premultiplied stored channels. The surface keeps
+the supported advertised configuration, while the final conversion applies the
+actual compositor contract. Other backends are unchanged. See
+[native macOS reveal QA](MACOS_REVEAL_COLOR_QA.md) for the WindowServer recording
+that reproduces the washed-out fade and checks the correction.
+
 ## Coverage and limitations
 
 The 65 readback fixtures include a grayscale ramp, saturated and mixed colors, direct capture

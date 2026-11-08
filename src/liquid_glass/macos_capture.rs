@@ -91,6 +91,18 @@ enum CaptureOutcome {
 struct SharedCaptureState {
     configured_geometry: Option<CaptureGeometry>,
     latest: Option<CaptureOutcome>,
+    accepting_frames: bool,
+}
+
+impl SharedCaptureState {
+    fn set_active(&mut self, active: bool) {
+        self.accepting_frames = active;
+        // Do not let a pre-hide frame satisfy a new reveal. Keep failures so
+        // a denied/stopped stream still enters fallback instead of waiting.
+        if matches!(self.latest, Some(CaptureOutcome::Frame(_))) {
+            self.latest = None;
+        }
+    }
 }
 
 struct StreamStats {
@@ -214,7 +226,10 @@ pub fn create_monitor_capture(
         geometry,
         active: true,
     }));
-    let shared = Arc::new(Mutex::new(SharedCaptureState::default()));
+    let shared = Arc::new(Mutex::new(SharedCaptureState {
+        accepting_frames: true,
+        ..Default::default()
+    }));
     let (control_tx, control_rx) = mpsc::sync_channel(1);
     let worker_control = Arc::clone(&control);
     let worker_shared = Arc::clone(&shared);
@@ -295,6 +310,9 @@ fn capture_worker(
 
             let replaced = {
                 let mut state = callback_shared.lock().unwrap();
+                if !state.accepting_frames {
+                    return;
+                }
                 let Some(geometry) = state.configured_geometry else {
                     return;
                 };
@@ -502,6 +520,7 @@ impl BackdropCapture for MacOsScreenCapture {
             return;
         }
         self.active = active;
+        self.shared.lock().unwrap().set_active(active);
         self.publish_control();
     }
 
@@ -651,6 +670,39 @@ fn import_iosurface_texture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pause_and_resume_release_old_pixels_without_losing_geometry() {
+        let geometry = geometry();
+        let mut state = SharedCaptureState {
+            configured_geometry: Some(geometry),
+            ..Default::default()
+        };
+        for active in [false, true] {
+            state.latest = Some(CaptureOutcome::Frame(StreamFrame {
+                geometry,
+                pixel_buffer: CVPixelBuffer::create(1, 1, BGRA_PIXEL_FORMAT).unwrap(),
+            }));
+            state.set_active(active);
+            assert!(state.latest.is_none());
+            assert_eq!(state.accepting_frames, active);
+            assert_eq!(state.configured_geometry, Some(geometry));
+        }
+    }
+
+    #[test]
+    fn stream_failure_survives_pause_and_resume_for_fallback() {
+        let mut state = SharedCaptureState {
+            latest: Some(CaptureOutcome::Failed("permission denied".into())),
+            ..Default::default()
+        };
+        for active in [false, true] {
+            state.set_active(active);
+            assert!(
+                matches!(&state.latest, Some(CaptureOutcome::Failed(reason)) if reason == "permission denied")
+            );
+        }
+    }
 
     fn geometry() -> CaptureGeometry {
         CaptureGeometry {

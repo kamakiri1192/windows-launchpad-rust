@@ -1011,6 +1011,9 @@ impl Renderer {
 
         self.frame_metrics.mark(2);
         self.frame_metrics.wait_for_gpu(&self.device, submission, 7);
+        #[cfg(target_os = "macos")]
+        self.present_resident_frame(|| frame.present());
+        #[cfg(not(target_os = "macos"))]
         frame.present();
         self.frame_metrics.mark(3);
         self.frame_metrics.finish();

@@ -32,6 +32,8 @@ pub(crate) mod icon_atlas;
 pub(crate) mod icon_pipeline;
 mod icons;
 mod init;
+#[cfg(target_os = "macos")]
+mod macos_presentation;
 mod prepare;
 #[cfg(target_os = "windows")]
 mod present_stats;
@@ -63,6 +65,10 @@ pub struct Renderer {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
     pub surface: Option<Surface<'static>>,
+    #[cfg(target_os = "macos")]
+    native_reveal_pending: bool,
+    #[cfg(target_os = "macos")]
+    native_reveal_capture_sequence: u64,
     /// Surface-free render target for deterministic QA on hosted macOS
     /// runners, where the Actions service has no WindowServer surface.
     qa_offscreen: Option<Texture>,
